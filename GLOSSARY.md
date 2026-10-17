@@ -112,3 +112,4 @@ The project approves these names as exceptions to ASD-STE100. This section gives
 | Name | Chinese term | Source | Avoid |
 |---|---|---|---|
 | DNS rebinding | DNS 重绑定 | C. Jackson, A. Barth, A. Bortz, W. Shao, and D. Boneh, "Protecting Browsers from DNS Rebinding Attacks", ACM CCS 2007 | DNS rebind attack |
+| slash command | 斜杠命令 | ACP specification, `docs/protocol/v1/slash-commands.mdx` in `agentclientprotocol/agent-client-protocol` | command (alone) |
