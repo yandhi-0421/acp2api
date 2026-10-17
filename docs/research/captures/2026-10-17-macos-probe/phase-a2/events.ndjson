@@ -1,0 +1,3 @@
+{"t_ms":8,"srv":"p3","event":"spawn","exe":"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par","args":[],"cwd":"/private/tmp/claude-501/-Users-<user>-Desktop-acp2api/74a71995-5add-47d0-a3ad-f09e14ec1263/scratchpad/probe-8/ws/a2proc-lcKL1A","pid":61496,"envKeys":["HOME","PATH","USER","LOGNAME","SHELL","TMPDIR","__CF_USER_TEXT_ENCODING","HTTP_PROXY","HTTPS_PROXY","NO_PROXY"]}
+{"t_ms":23789,"srv":"p3","event":"stdin-end"}
+{"t_ms":24338,"srv":"p3","event":"exit","code":0,"signal":null}

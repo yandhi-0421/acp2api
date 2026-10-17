@@ -1,0 +1,16 @@
+{
+  "markerKey": "k2-01102d40",
+  "markerOffset": 47512,
+  "bigTextLength": 49994,
+  "imageId": "img-c38522b5",
+  "colors": [
+    "red",
+    "blue",
+    "green"
+  ],
+  "colorKey": "red-blue-green",
+  "errCode": "E-20fb",
+  "final": "FINAL-71da8efa",
+  "resourceCode": "RESOURCE-b71f27a7",
+  "canaryCode": "CANARY-096891df"
+}

@@ -1,0 +1,154 @@
+{
+  "step": "phase-a2",
+  "startedAt": "2026-10-17T12:25:44.105Z",
+  "promptsSent": 0,
+  "marks": [
+    {
+      "t_ms": 9741,
+      "label": "after session/new",
+      "mcpRequests": 0,
+      "mcpByMethod": {}
+    },
+    {
+      "t_ms": 13742,
+      "label": "session/new + 4 s",
+      "mcpRequests": 0,
+      "mcpByMethod": {}
+    },
+    {
+      "t_ms": 13747,
+      "label": "after set low",
+      "mcpRequests": 0,
+      "mcpByMethod": {}
+    },
+    {
+      "t_ms": 19748,
+      "label": "set low + 6 s",
+      "mcpRequests": 0,
+      "mcpByMethod": {}
+    },
+    {
+      "t_ms": 19789,
+      "label": "after set high",
+      "mcpRequests": 0,
+      "mcpByMethod": {}
+    },
+    {
+      "t_ms": 23789,
+      "label": "set high + 4 s",
+      "mcpRequests": 0,
+      "mcpByMethod": {}
+    }
+  ],
+  "tmpdirParentCheck": [
+    {
+      "dir": "$TMPDIR",
+      "found": []
+    },
+    {
+      "dir": "<per-user-tmp>",
+      "found": []
+    },
+    {
+      "dir": "/private/var/folders/r9",
+      "found": []
+    },
+    {
+      "dir": "/private/var/folders",
+      "found": []
+    },
+    {
+      "dir": "/private/var",
+      "found": []
+    },
+    {
+      "dir": "/private",
+      "found": []
+    },
+    {
+      "dir": "/",
+      "found": []
+    }
+  ],
+  "workspace": {
+    "dir": "/private/tmp/claude-501/-Users-<user>-Desktop-acp2api/74a71995-5add-47d0-a3ad-f09e14ec1263/scratchpad/probe-8/ws/a2-q3cEuq",
+    "parentCheck": {
+      "markers": [
+        ".agents",
+        ".gemini",
+        ".git",
+        "AGENTS.md",
+        "GEMINI.md"
+      ],
+      "checked": 10,
+      "hits": [],
+      "dirs": [
+        "/private/tmp/claude-501/-Users-<user>-Desktop-acp2api/74a71995-5add-47d0-a3ad-f09e14ec1263/scratchpad/probe-8/ws/a2-q3cEuq",
+        "/private/tmp/claude-501/-Users-<user>-Desktop-acp2api/74a71995-5add-47d0-a3ad-f09e14ec1263/scratchpad/probe-8/ws",
+        "/private/tmp/claude-501/-Users-<user>-Desktop-acp2api/74a71995-5add-47d0-a3ad-f09e14ec1263/scratchpad/probe-8",
+        "/private/tmp/claude-501/-Users-<user>-Desktop-acp2api/74a71995-5add-47d0-a3ad-f09e14ec1263/scratchpad",
+        "/private/tmp/claude-501/-Users-<user>-Desktop-acp2api/74a71995-5add-47d0-a3ad-f09e14ec1263",
+        "/private/tmp/claude-501/-Users-<user>-Desktop-acp2api",
+        "/private/tmp/claude-501",
+        "/private/tmp",
+        "/private",
+        "/"
+      ]
+    }
+  },
+  "init": 1481,
+  "sessionNewMs": 8252,
+  "setLow": {
+    "ms": 4,
+    "values": [
+      "model=gemini-3.8-flash",
+      "thinking_level=low",
+      "mode=default"
+    ]
+  },
+  "treeAfterLow": [
+    {
+      "pid": 61514,
+      "ppid": 61496,
+      "comm": "localharness_external",
+      "depth": 1
+    }
+  ],
+  "setHigh": {
+    "ms": 2,
+    "values": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "stop": {
+    "code": 0,
+    "signal": null,
+    "t_ms": 24338,
+    "stoppedBy": "stdin-end"
+  },
+  "workspaceAfter": [
+    ".agents/",
+    ".agents/skills/",
+    ".gemini/",
+    ".gemini/skills/"
+  ],
+  "procWorkspaceAfter": [],
+  "mcpStats": {
+    "requests": 0,
+    "byMethod": {},
+    "toolCalls": [],
+    "resourceReads": [],
+    "resourceLists": 0,
+    "byEndpoint": {}
+  },
+  "guard": {
+    "trip": null,
+    "all": []
+  },
+  "redactionCounts": {
+    "home": 6,
+    "user": 2
+  }
+}

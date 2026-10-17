@@ -1,0 +1,6 @@
+{"t_ms":10,"srv":"p1","event":"spawn","exe":"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par","args":[],"cwd":"$TMPDIR/acp2api-probe8/proc-7wcXm6","pid":62128,"envKeys":["HOME","PATH","USER","LOGNAME","SHELL","TMPDIR","__CF_USER_TEXT_ENCODING","HTTP_PROXY","HTTPS_PROXY","NO_PROXY"]}
+{"t_ms":49929,"srv":"p1","event":"stdin-end"}
+{"t_ms":50405,"srv":"p1","event":"exit","code":0,"signal":null}
+{"t_ms":50406,"srv":"p2","event":"spawn","exe":"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par","args":[],"cwd":"$TMPDIR/acp2api-probe8/proc-7wcXm6","pid":62313,"envKeys":["HOME","PATH","USER","LOGNAME","SHELL","TMPDIR","__CF_USER_TEXT_ENCODING","HTTP_PROXY","HTTPS_PROXY","NO_PROXY"]}
+{"t_ms":77274,"srv":"p2","event":"stdin-end"}
+{"t_ms":78037,"srv":"p2","event":"exit","code":0,"signal":null}
