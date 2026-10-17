@@ -1,0 +1,176 @@
+{
+  "phase": "a",
+  "startedAt": "2026-10-17T13:57:10.323Z",
+  "init": {
+    "p0": {
+      "ms": 1519,
+      "agentInfo": {
+        "name": "antigravity-acp",
+        "title": "Google Antigravity",
+        "version": "1.4.0"
+      },
+      "protocolVersion": 1,
+      "authMethods": [
+        "oauth-personal",
+        "oauth-business",
+        "gemini-api-key",
+        "agent-platform"
+      ]
+    }
+  },
+  "turns": [],
+  "outsideTurn": {
+    "p0:A0": {
+      "available_commands_update": 1
+    }
+  },
+  "commands": {
+    "p0:A0": [
+      {
+        "t_ms": 9003,
+        "commands": [
+          {
+            "name": "plan",
+            "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval).",
+            "input": null
+          },
+          {
+            "name": "logout",
+            "description": "Log out and clear stored credentials.",
+            "input": null
+          },
+          {
+            "name": "usage",
+            "description": "Show model token usage and quota limits.",
+            "input": null
+          }
+        ]
+      }
+    ]
+  },
+  "agentRequests": [],
+  "errors": [],
+  "notes": [],
+  "workspaces": {
+    "root": "$TMPDIR/acp2api-probe26",
+    "proc": {
+      "dir": "$TMPDIR/acp2api-probe26/proc-DFOpro",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 9,
+        "hits": [],
+        "dirs": [
+          "$TMPDIR/acp2api-probe26/proc-DFOpro",
+          "$TMPDIR/acp2api-probe26",
+          "$TMPDIR",
+          "/private/var/folders/r9/<per-user-tmp>",
+          "/private/var/folders/r9",
+          "/private/var/folders",
+          "/private/var",
+          "/private",
+          "/"
+        ]
+      }
+    },
+    "A0": {
+      "dir": "$TMPDIR/acp2api-probe26/a0-yIZExK",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 9,
+        "hits": [],
+        "dirs": [
+          "$TMPDIR/acp2api-probe26/a0-yIZExK",
+          "$TMPDIR/acp2api-probe26",
+          "$TMPDIR",
+          "/private/var/folders/r9/<per-user-tmp>",
+          "/private/var/folders/r9",
+          "/private/var/folders",
+          "/private/var",
+          "/private",
+          "/"
+        ]
+      }
+    }
+  },
+  "sessionNew_A0": {
+    "ms": 7474,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "tier": "g1-pro-tier"
+  },
+  "thinking_A0": [
+    "model=gemini-3.8-flash",
+    "thinking_level=high",
+    "mode=default"
+  ],
+  "processTree_p0": [
+    {
+      "pid": 68874,
+      "ppid": 68871,
+      "comm": "localharness_external",
+      "depth": 1
+    }
+  ],
+  "stop_p0": {
+    "code": 0,
+    "signal": null,
+    "t_ms": 13411,
+    "stoppedBy": "stdin-end"
+  },
+  "eval": {
+    "promptsSent": 0,
+    "turns": []
+  },
+  "workspaceContentsAfter": {
+    "proc": [],
+    "A0": [
+      ".agents/",
+      ".agents/skills/",
+      ".gemini/",
+      ".gemini/skills/"
+    ]
+  },
+  "mcpStats": {
+    "requests": 0,
+    "byMethod": {},
+    "toolCalls": [],
+    "resourceReads": [],
+    "resourceLists": 0,
+    "byEndpoint": {}
+  },
+  "guard": {
+    "trip": null,
+    "all": []
+  },
+  "budget": {
+    "approved": 0,
+    "sent": 0,
+    "approvedBy": null,
+    "log": []
+  },
+  "redactionCounts": {
+    "tmpdir": 2,
+    "home": 6
+  },
+  "endedAt": "2026-10-17T13:57:23.735Z"
+}

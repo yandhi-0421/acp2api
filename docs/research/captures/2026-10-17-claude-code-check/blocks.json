@@ -1,0 +1,99 @@
+{
+ "pdfToolResult": {
+  "role": "user",
+  "content": [
+   {
+    "tool_use_id": "toolu_probe_1",
+    "type": "tool_result",
+    "content": [
+     {
+      "type": "text",
+      "text": "PDF file read: $SCRATCH/probe-27/runs/p2-pdf/work/probe.pdf (626 bytes)"
+     },
+     {
+      "type": "document",
+      "source": {
+       "type": "base64",
+       "media_type": "application/pdf",
+       "data": "<base64, 836 characters>"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "messageRolesAfterPdfRead": [
+  "user",
+  "system",
+  "assistant",
+  "user",
+  "system"
+ ],
+ "advisorToolEntry": [
+  {
+   "type": "advisor_20260301",
+   "name": "advisor",
+   "model": "claude-opus-5-5",
+   "defer_loading": true
+  }
+ ],
+ "advisorLastUserBlocks": [
+  {
+   "type": "tool_addition",
+   "tool": {
+    "type": "tool_reference",
+    "name": "advisor"
+   },
+   "cache_control": {
+    "type": "ephemeral"
+   }
+  }
+ ],
+ "advisorRetryDifference": {
+  "first": {
+   "thinking": {
+    "type": "adaptive",
+    "display": "updates"
+   },
+   "toolsWithType": [
+    "advisor_20260301"
+   ]
+  },
+  "second": {
+   "thinking": {
+    "type": "adaptive"
+   },
+   "toolsWithType": [
+    "advisor_20260301"
+   ]
+  }
+ },
+ "inputTagRetry": {
+  "toolsWithType": [],
+  "lastUserBlockTypes": [
+   "text"
+  ]
+ },
+ "webSearchRequest": {
+  "model": "claude-opus-5-5",
+  "tools": [
+   {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 8
+   }
+  ],
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "Perform a web search for the query: acp2api probe query"
+     }
+    ]
+   }
+  ],
+  "max_tokens": 128000
+ }
+}

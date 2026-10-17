@@ -1,0 +1,9 @@
+{"t_ms":11,"srv":"p1","event":"spawn","exe":"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par","args":[],"cwd":"$TMPDIR/acp2api-probe26/proc-QaW9s1","pid":68948,"envKeys":["HOME","PATH","USER","LOGNAME","SHELL","TMPDIR","__CF_USER_TEXT_ENCODING","HTTP_PROXY","HTTPS_PROXY","NO_PROXY"]}
+{"t_ms":32173,"srv":"p1","event":"stdin-end"}
+{"t_ms":32790,"srv":"p1","event":"exit","code":0,"signal":null}
+{"t_ms":32791,"srv":"p2","event":"spawn","exe":"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par","args":[],"cwd":"$TMPDIR/acp2api-probe26/proc-QaW9s1","pid":68972,"envKeys":["HOME","PATH","USER","LOGNAME","SHELL","TMPDIR","__CF_USER_TEXT_ENCODING","HTTP_PROXY","HTTPS_PROXY","NO_PROXY"]}
+{"t_ms":68300,"srv":"p2","event":"stdin-end"}
+{"t_ms":69036,"srv":"p2","event":"exit","code":0,"signal":null}
+{"t_ms":69037,"srv":"p3","event":"spawn","exe":"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par","args":[],"cwd":"$TMPDIR/acp2api-probe26/proc-QaW9s1","pid":69003,"envKeys":["HOME","PATH","USER","LOGNAME","SHELL","TMPDIR","__CF_USER_TEXT_ENCODING","HTTP_PROXY","HTTPS_PROXY","NO_PROXY"]}
+{"t_ms":161249,"srv":"p3","event":"stdin-end"}
+{"t_ms":161843,"srv":"p3","event":"exit","code":0,"signal":null}

@@ -1,0 +1,3947 @@
+{
+ "claudeCode": "2.1.299 (Bun 1.4.3, macOS arm64)",
+ "fake": "fake.mjs on 127.0.0.1; a refusing proxy on 127.0.0.1; sandbox-exec denies each other network connection",
+ "runs": {
+  "p1-usage": {
+   "what": "print mode, one prompt; the fake sends input_tokens 1000 in message_start and 50000 in the last message_delta",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 340,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 340,
+     "id": 1,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "terminal_reason": "completed",
+    "result": "PROBE-REPLY: usage probe reply.",
+    "usage": {
+     "input_tokens": 50000,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 12,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 50000,
+      "outputTokens": 12,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.20024,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  },
+  "p2-pdf": {
+   "what": "print mode; the fake model calls Read on a one-page PDF",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 326,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 326,
+     "id": 1,
+     "reply": {
+      "kind": "tool",
+      "name": "Read",
+      "input": {
+       "file_path": "$SCRATCH/probe-27/runs/p2-pdf/work/probe.pdf"
+      }
+     }
+    },
+    {
+     "t": 346,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 5,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 346,
+     "id": 2,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-DONE: the tool result arrived."
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "terminal_reason": "completed",
+    "result": "PROBE-DONE: the tool result arrived.",
+    "usage": {
+     "input_tokens": 100000,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 24,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 100000,
+      "outputTokens": 24,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.40048,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   },
+   "toolResults": [
+    {
+     "tool_use_result": {
+      "type": "pdf",
+      "file": {
+       "filePath": "$SCRATCH/probe-27/runs/p2-pdf/work/probe.pdf",
+       "base64": "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggODIgPj4Kc3RyZWFtCkJUIC9GMSAxOCBUZiA3MiA3MjAgVGQgKFRoZSBjb2Rld29yZCBvZiB0aGlzIHByb2JlIGRvY3VtZW50IGlzIENDLVBERi03UTRLLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDMxMSAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjQ0MwolJUVPRgo=",
+       "originalSize": 626
+      }
+     },
+     "content": [
+      {
+       "tool_use_id": "toolu_probe_1",
+       "type": "tool_result",
+       "content": [
+        {
+         "type": "text",
+         "text": "PDF file read: $SCRATCH/probe-27/runs/p2-pdf/work/probe.pdf (626 bytes)"
+        },
+        {
+         "type": "document",
+         "source": {
+          "type": "base64",
+          "media_type": "application/pdf",
+          "data": "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggODIgPj4Kc3RyZWFtCkJUIC9GMSAxOCBUZiA3MiA3MjAgVGQgKFRoZSBjb2Rld29yZCBvZiB0aGlzIHByb2JlIGRvY3VtZW50IGlzIENDLVBERi03UTRLLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDMxMSAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjQ0MwolJUVPRgo="
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "p3-search": {
+   "what": "print mode; the fake model calls WebSearch; the fake rejects the request with web_search_20250305 (capability_rejected wording)",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 327,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 328,
+     "id": 1,
+     "reply": {
+      "kind": "tool",
+      "name": "WebSearch",
+      "input": {
+       "query": "acp2api probe query"
+      }
+     }
+    },
+    {
+     "t": 336,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 1,
+     "serverTools": [
+      {
+       "name": "web_search",
+       "type": "web_search_20250305"
+      }
+     ],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 400,
+      "message": "capability_rejected: server tool web_search_20250305 (name web_search) is not supported by this endpoint"
+     }
+    },
+    {
+     "t": 346,
+     "id": 3,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 5,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 346,
+     "id": 3,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-DONE: the tool result arrived."
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "terminal_reason": "completed",
+    "result": "PROBE-DONE: the tool result arrived.",
+    "usage": {
+     "input_tokens": 100000,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 24,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 100000,
+      "outputTokens": 24,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.40048,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   },
+   "toolResults": [
+    {
+     "tool_use_result": "Error: API Error: 400 capability_rejected: server tool web_search_20250305 (name web_search) is not supported by this endpoint",
+     "content": [
+      {
+       "type": "tool_result",
+       "content": "API Error: 400 capability_rejected: server tool web_search_20250305 (name web_search) is not supported by this endpoint",
+       "is_error": true,
+       "tool_use_id": "toolu_probe_1"
+      }
+     ]
+    }
+   ]
+  },
+  "p4-advisor": {
+   "what": "print mode with --advisor opus; the fake rejects the advisor tool with the capability_rejected wording",
+   "exit": "exit=1",
+   "requests": [
+    {
+     "t": 337,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 24,
+     "serverTools": [
+      {
+       "name": "advisor",
+       "type": "advisor_20260301"
+      }
+     ],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text",
+      "tool_addition"
+     ],
+     "response": {
+      "status": 400,
+      "message": "capability_rejected: server tool advisor_20260301 (name advisor) is not supported by this endpoint"
+     }
+    },
+    {
+     "t": 340,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 24,
+     "serverTools": [
+      {
+       "name": "advisor",
+       "type": "advisor_20260301"
+      }
+     ],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text",
+      "tool_addition"
+     ],
+     "response": {
+      "status": 400,
+      "message": "capability_rejected: server tool advisor_20260301 (name advisor) is not supported by this endpoint"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "terminal_reason": "api_error",
+    "result": "API Error: 400 capability_rejected: server tool advisor_20260301 (name advisor) is not supported by this endpoint",
+    "usage": {
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "input_tokens": 0,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 0,
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {}
+   },
+   "syntheticErrors": [
+    [
+     "API Error: 400 capability_rejected: server tool advisor_20260301 (name advisor) is not supported by this endpoint"
+    ]
+   ]
+  },
+  "p5-advisor-inputtag": {
+   "what": "print mode with --advisor opus; the fake rejects the advisor tool with the Input tag wording",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 336,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 24,
+     "serverTools": [
+      {
+       "name": "advisor",
+       "type": "advisor_20260301"
+      }
+     ],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text",
+      "tool_addition"
+     ],
+     "response": {
+      "status": 400,
+      "message": "Input tag 'advisor_20260301' found using 'type' does not match any of the expected tags"
+     }
+    },
+    {
+     "t": 339,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,effort-2025-11-24,thinking-display-updates-2026-08-18",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 339,
+     "id": 2,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "terminal_reason": "completed",
+    "result": "PROBE-REPLY: usage probe reply.",
+    "usage": {
+     "input_tokens": 50000,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 12,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 50000,
+      "outputTokens": 12,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.20024,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  },
+  "p6-context-a": {
+   "what": "print mode, one prompt (50000 in the last message_delta)",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 352,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 352,
+     "id": 1,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "terminal_reason": "completed",
+    "result": "PROBE-REPLY: usage probe reply.",
+    "usage": {
+     "input_tokens": 50000,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 12,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 50000,
+      "outputTokens": 12,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.20024,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  },
+  "p6-context-b": {
+   "what": "print mode, /context after p6-context-a (--continue)",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 348,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 350,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 351,
+     "id": 3,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 351,
+     "id": 4,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 352,
+     "id": 5,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 352,
+     "id": 6,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 353,
+     "id": 7,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 354,
+     "id": 8,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 354,
+     "id": 9,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 355,
+     "id": 10,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 355,
+     "id": 11,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 355,
+     "id": 12,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 356,
+     "id": 13,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 10,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 358,
+     "id": 14,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 13,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 360,
+     "id": 15,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "output": "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 50k / 1m (5%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|----------|--------|------------|\n| System prompt | 2.1k | 0.2% |\n| System tools | 31.4k | 3.1% |\n| Skills | 2.1k | 0.2% |\n| Messages | 14.4k | 1.4% |\n| Free space | 917k | 91.7% |\n| Autocompact buffer | 33k | 3.3% |\n\n### Skills\n\n| Skill | Source | Tokens |\n|-------|--------|--------|\n| dataviz | Built-in | ~480 |\n| update-config | Built-in | ~240 |\n| keybindings-help | Built-in | ~80 |\n| code-review | Built-in | ~340 |\n| simplify | Built-in | ~60 |\n| fewer-permission-prompts | Built-in | ~60 |\n| loop | Built-in | ~120 |\n| claude-api | Built-in | ~360 |\n| workflow-authoring | Built-in | ~80 |\n| run | Built-in | ~120 |\n| plugin-authoring | Built-in | ~90 |\n| init | Built-in | ~20 |\n| security-review | Built-in | ~30 |\n\n"
+  },
+  "p8-control-a": {
+   "what": "print mode, one prompt (80000 in the last message_delta)",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 332,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 23,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 332,
+     "id": 1,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "terminal_reason": "completed",
+    "result": "PROBE-REPLY: usage probe reply.",
+    "usage": {
+     "input_tokens": 80000,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 12,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 80000,
+      "outputTokens": 12,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.32024,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  },
+  "p8-control-b": {
+   "what": "print mode, /context after p8-control-a (--continue)",
+   "exit": "exit=0",
+   "requests": [
+    {
+     "t": 314,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 315,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 315,
+     "id": 3,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 316,
+     "id": 4,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 316,
+     "id": 5,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 316,
+     "id": 6,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 317,
+     "id": 7,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 317,
+     "id": 8,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 318,
+     "id": 9,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 318,
+     "id": 10,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 319,
+     "id": 11,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 319,
+     "id": 12,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 319,
+     "id": 13,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 10,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 322,
+     "id": 14,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 13,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 323,
+     "id": 15,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "output": "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 80k / 1m (8%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|----------|--------|------------|\n| System prompt | 2.1k | 0.2% |\n| System tools | 31.4k | 3.1% |\n| Skills | 2.1k | 0.2% |\n| Messages | 44.4k | 4.4% |\n| Free space | 887k | 88.7% |\n| Autocompact buffer | 33k | 3.3% |\n\n### Skills\n\n| Skill | Source | Tokens |\n|-------|--------|--------|\n| dataviz | Built-in | ~480 |\n| update-config | Built-in | ~240 |\n| keybindings-help | Built-in | ~80 |\n| code-review | Built-in | ~340 |\n| simplify | Built-in | ~60 |\n| fewer-permission-prompts | Built-in | ~60 |\n| loop | Built-in | ~120 |\n| claude-api | Built-in | ~360 |\n| workflow-authoring | Built-in | ~80 |\n| run | Built-in | ~120 |\n| plugin-authoring | Built-in | ~90 |\n| init | Built-in | ~20 |\n| security-review | Built-in | ~30 |\n\n"
+  },
+  "p7-tui": {
+   "what": "interactive mode in a pseudo-terminal: one prompt, then /context; status line command records its input",
+   "exit": null,
+   "requests": [
+    {
+     "t": 12886,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,structured-outputs-2025-12-15",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 12886,
+     "id": 1,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    },
+    {
+     "t": 12889,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,dangerous-tool-use-2026-09-03,thinking-display-updates-2026-08-18,afk-mode-2026-01-31",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 29,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 12889,
+     "id": 2,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    },
+    {
+     "t": 20164,
+     "id": 3,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20165,
+     "id": 4,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20165,
+     "id": 5,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20166,
+     "id": 6,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20166,
+     "id": 7,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20166,
+     "id": 8,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20167,
+     "id": 9,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20168,
+     "id": 10,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20168,
+     "id": 11,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20168,
+     "id": 12,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20168,
+     "id": 13,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20168,
+     "id": 14,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20169,
+     "id": 15,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 12,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20172,
+     "id": 16,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 17,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20173,
+     "id": 17,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "statusLineStates": [
+    {
+     "epoch": null,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": null,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    }
+   ],
+   "contextScreen": [
+    "B\u000f \r ❯ /add-dir Add a new working directory\r /advisor Let Claude consult a stronger model at key moments\r /auto-mode-setup Teach auto mode about your environment, plus optional rule tweaks\r /autocompact Set how full the context gets before auto-summarizing\r /background Send this session to the background and free the terminal\r /\r \r c Move this sess on to a new working dire c tory\r c opy C opy Claude's las re ponse to clipboard (or /copy N for the Nth-latest)\r c lear St rt new session with empty c t x ; revi us session stays on disk (resumable with /resume)\r c ol r the promp bar c olor for this s ssion \r c onfig Open setting \r c \r o py Co py Claude' last response to clipboard (or /copy N for the Nth-latest)\r o lor Set the prompt bar co lor for this session \r o nfig Open setting \r o mpact Free up co ntext by summarizing the conversation so far\r o text Visualize current co ntext usage as a colored grid\r o \r n fig Open setting \r n text Visualize current con text usage as a colored grid\r resume ( con tinue) Resume a previous con versation\r update- con fig Us this skill to con figure the Claude Code harness via settings.json. Automated behaviors (\"from now on\r when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks con figured in settings.json - the h…\r n \r t ext Visualize current cont ext usage as a colored grid\r resume ( cont inue) Re me a previous conv rsation \r config Open settings \r con con\r con\r t \r e e\r \r d ctor Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude\r doctor` terminal diagnostics cover — from loc l data (duplicate or leftover installs, PATH, unparseable s…\r /autocompact Set how full the conte xt gets b fore auto-summ rizing \r e \r x x\r doctor H alth-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude\r doctor` t rminal diagnostics cover — from local data (duplic te or lef over nstalls, PATH, unparseable s…\r /autocompact Set how full the contex t gets before auto-summarizing \r s btask nd a subagent off with your full contex t; its result comes back here\r x \r t t\r t\r t\r /context \r ❯ /context \r \r \r · Wandering… \r ⎿  Tip: Start with small featur s or bug fixes, tell Claude to p opose a plan, and verify its suggested edits\r \r ❯  \r · ← for agents \r \r ⎿ Context Usage\r ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ Opus 5.5\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ claude-opus-5-5\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ 66k/1m tokens (7%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ \r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ Estimated usage by category\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ System prompt: 2.2k tokens (0.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ System tools: 61.6k tokens (6.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ Skills: 2.2k tokens (0.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ Free space: 901k (90.1%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ Autocompact buffer: 33k tokens (3.3%)\r Auto-compact window: 1m tokens\r Skills · /skills\r └ 15 skills · 2.2k tokens\r /context all to expand\r \r \r ❯"
+   ]
+  },
+  "p9-tui-slow": {
+   "what": "interactive mode: 200000 in the last message_delta, 6 s between message_start and message_delta",
+   "exit": null,
+   "requests": [
+    {
+     "t": 12914,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,structured-outputs-2025-12-15",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 12914,
+     "id": 1,
+     "epoch": 1792245098503,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    },
+    {
+     "t": 12917,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,dangerous-tool-use-2026-09-03,thinking-display-updates-2026-08-18,afk-mode-2026-01-31",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 29,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 12917,
+     "id": 2,
+     "epoch": 1792245098506,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    },
+    {
+     "t": 18915,
+     "id": 1,
+     "epoch": 1792245104504,
+     "event": "message_delta"
+    },
+    {
+     "t": 18918,
+     "id": 2,
+     "epoch": 1792245104507,
+     "event": "message_delta"
+    },
+    {
+     "t": 26234,
+     "id": 3,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26234,
+     "id": 4,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26235,
+     "id": 5,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26236,
+     "id": 6,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26236,
+     "id": 7,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26236,
+     "id": 8,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26237,
+     "id": 9,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26238,
+     "id": 10,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26238,
+     "id": 11,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26239,
+     "id": 12,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26239,
+     "id": 13,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26239,
+     "id": 14,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26240,
+     "id": 15,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 12,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26243,
+     "id": 16,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 17,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 26244,
+     "id": 17,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "statusLineStates": [
+    {
+     "epoch": 1792245085966,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245087270,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245088266,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245089265,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245090268,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245091266,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245092271,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245093271,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245094274,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245095271,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245096272,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245097259,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245098274,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245099273,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245100274,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245101274,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245102277,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245103282,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245104277,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245104907,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245105277,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245106280,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245107283,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245108286,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245109286,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245110269,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245111279,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245112285,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245113270,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245114288,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245115285,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245116285,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245117289,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245118289,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245119290,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245120292,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245121296,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245122293,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245123296,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245124278,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245125296,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    },
+    {
+     "epoch": 1792245126291,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 200000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 200000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 20,
+      "remaining_percentage": 80
+     },
+     "exceeds_200k_tokens": true
+    }
+   ],
+   "contextScreen": [
+    "B\u000f \r ❯ /add-dir Add a new working directory\r /advisor Let Claude consult a stronger model at key moments\r /auto-mode-setup Teach auto mode about your environment, plus optional rule tweaks\r /autocompact Set how full the context gets before auto-summarizing\r /background Send this session to the background and free the terminal\r /\r \r c Move this sess on to a new working dire c tory\r c opy C opy Claude's las re ponse to clipboard (or /copy N for the Nth-latest)\r c lear St rt new session with empty c t x ; revi us session stays on disk (resumable with /resume)\r c ol r the promp bar c olor for this s ssion \r c onfig Open setting \r c \r o py Co py Claude' last response to clipboard (or /copy N for the Nth-latest)\r o lor Set the prompt bar co lor for this session \r o nfig Open setting \r o mpact Free up co ntext by summarizing the conversation so far\r o text Visualize current co ntext usage as a colored grid\r o \r n fig Open setting \r n text Visualize current con text usage as a colored grid\r resume ( con tinue) Resume a previous con versation\r update- con fig Us this skill to con figure the Claude Code harness via settings.json. Automated behaviors (\"from now on\r when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks con figured in settings.json - the h…\r n \r t ext Visualize current cont ext usage as a colored grid\r resume ( cont inue) Re me a previous conv rsation \r config Open settings \r con con\r con\r t \r e e\r \r d ctor Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude\r doctor` terminal diagnostics cover — from loc l data (duplicate or leftover installs, PATH, unparseable s…\r /autocompact Set how full the conte xt gets b fore auto-summ rizing \r e \r x x\r doctor H alth-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude\r doctor` t rminal diagnostics cover — from local data (duplic te or lef over nstalls, PATH, unparseable s…\r /autocompact Set how full the contex t gets before auto-summarizing \r s btask nd a subagent off with your full contex t; its result comes back here\r x \r t t\r t\r t\r /context \r ❯ /context \r \r \r · Vibing… \r ⎿  Tip: Start with small featur s or bug fixes, tell Claude to p opose a plan, and verify its suggested edits\r \r ❯  \r · ← for agents \r \r ⎿ Context Usage\r ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ Opus 5.5\r ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ claude-opus-5-5\r ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ 200k/1m tokens (20%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ \r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ Estimated usage by category\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ System prompt: 2.2k tokens (0.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ System tools: 61.6k tokens (6.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ Skills: 2.2k tokens (0.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ Messages: 134k tokens (13.4%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛶ Free space: 767k (76.7%)\r ⛝ Autocompact buffer: 33k tokens (3.3%)\r Auto-compact window: 1m tokens\r Skills · /skills\r └ 15 skills · 2.2k tokens\r /context all to expand\r \r \r ❯"
+   ]
+  },
+  "p10-tui-search": {
+   "what": "interactive mode: the fake model calls WebSearch; the fake rejects web_search_20250305",
+   "exit": null,
+   "requests": [
+    {
+     "t": 12814,
+     "id": 1,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,structured-outputs-2025-12-15",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 12814,
+     "id": 1,
+     "epoch": 1792245170075,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-REPLY: usage probe reply."
+     }
+    },
+    {
+     "t": 12815,
+     "id": 1,
+     "epoch": 1792245170076,
+     "event": "message_delta"
+    },
+    {
+     "t": 12817,
+     "id": 2,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,dangerous-tool-use-2026-09-03,thinking-display-updates-2026-08-18,afk-mode-2026-01-31",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 29,
+     "serverTools": [],
+     "messageCount": 2,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 12817,
+     "id": 2,
+     "epoch": 1792245170078,
+     "reply": {
+      "kind": "tool",
+      "name": "WebSearch",
+      "input": {
+       "query": "acp2api probe query"
+      }
+     }
+    },
+    {
+     "t": 12818,
+     "id": 2,
+     "epoch": 1792245170079,
+     "event": "message_delta"
+    },
+    {
+     "t": 12839,
+     "id": 3,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,dangerous-tool-use-2026-09-03",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [
+      {
+       "name": "web_search",
+       "type": "web_search_20250305"
+      }
+     ],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 400,
+      "message": "capability_rejected: server tool web_search_20250305 (name web_search) is not supported by this endpoint"
+     }
+    },
+    {
+     "t": 12845,
+     "id": 4,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [
+      {
+       "name": "web_search",
+       "type": "web_search_20250305"
+      }
+     ],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 400,
+      "message": "capability_rejected: server tool web_search_20250305 (name web_search) is not supported by this endpoint"
+     }
+    },
+    {
+     "t": 12861,
+     "id": 5,
+     "method": "POST",
+     "url": "/v1/messages?beta=true",
+     "model": "claude-opus-5-5",
+     "stream": true,
+     "max_tokens": 128000,
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,dangerous-tool-use-2026-09-03,thinking-display-updates-2026-08-18,afk-mode-2026-01-31",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 29,
+     "serverTools": [],
+     "messageCount": 5,
+     "lastRole": "system",
+     "lastBlocks": [
+      "text"
+     ],
+     "response": {
+      "status": 200
+     }
+    },
+    {
+     "t": 12861,
+     "id": 5,
+     "epoch": 1792245170122,
+     "reply": {
+      "kind": "text",
+      "text": "PROBE-DONE: the tool result arrived."
+     }
+    },
+    {
+     "t": 12861,
+     "id": 5,
+     "epoch": 1792245170122,
+     "event": "message_delta"
+    },
+    {
+     "t": 20149,
+     "id": 6,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20150,
+     "id": 7,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20150,
+     "id": 8,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20151,
+     "id": 9,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20151,
+     "id": 10,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20152,
+     "id": 11,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20152,
+     "id": 12,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20152,
+     "id": 13,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20152,
+     "id": 14,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20153,
+     "id": 15,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20153,
+     "id": 16,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 0,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20153,
+     "id": 17,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20154,
+     "id": 18,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 12,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20157,
+     "id": 19,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 17,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    },
+    {
+     "t": 20159,
+     "id": 20,
+     "method": "POST",
+     "url": "/v1/messages/count_tokens?beta=true",
+     "model": "claude-opus-5-5",
+     "anthropicBeta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,token-counting-2024-11-01",
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "toolCount": 1,
+     "serverTools": [],
+     "messageCount": 1,
+     "lastRole": "user",
+     "lastBlocks": [
+      "string"
+     ],
+     "response": {
+      "status": 404
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "statusLineStates": [
+    {
+     "epoch": 1792245157661,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245158961,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245159960,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245160960,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245161958,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245162960,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245163961,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245164959,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245165961,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245166966,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245167963,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245168965,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245169967,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 0,
+      "total_output_tokens": 0,
+      "context_window_size": 1000000,
+      "current_usage": null,
+      "used_percentage": null,
+      "remaining_percentage": null
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245170499,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245170966,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245171969,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245172967,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245173969,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245174970,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245175972,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245176974,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245177970,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245178971,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245179972,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245180976,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245181974,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245182978,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245183975,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245184960,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245185977,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245186970,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245187970,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245188966,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245189969,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245190972,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    },
+    {
+     "epoch": 1792245191984,
+     "version": "2.1.299",
+     "model": "claude-opus-5-5",
+     "context_window": {
+      "total_input_tokens": 50000,
+      "total_output_tokens": 12,
+      "context_window_size": 1000000,
+      "current_usage": {
+       "input_tokens": 50000,
+       "output_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      },
+      "used_percentage": 5,
+      "remaining_percentage": 95
+     },
+     "exceeds_200k_tokens": false
+    }
+   ],
+   "contextScreen": [
+    "B\u000f \r ❯ /add-dir Add a new working directory\r /advisor Let Claude consult a stronger model at key moments\r /auto-mode-setup Teach auto mode about your environment, plus optional rule tweaks\r /autocompact Set how full the context gets before auto-summarizing\r /background Send this session to the background and free the terminal\r /\r \r c Move this sess on to a new working dire c tory\r c opy C opy Claude's las re ponse to clipboard (or /copy N for the Nth-latest)\r c lear St rt new session with empty c t x ; revi us session stays on disk (resumable with /resume)\r c ol r the promp bar c olor for this s ssion \r c onfig Open setting \r c \r o py Co py Claude' last response to clipboard (or /copy N for the Nth-latest)\r o lor Set the prompt bar co lor for this session \r o nfig Open setting \r o mpact Free up co ntext by summarizing the conversation so far\r o text Visualize current co ntext usage as a colored grid\r o \r n fig Open setting \r n text Visualize current con text usage as a colored grid\r resume ( con tinue) Resume a previous con versation\r update- con fig Us this skill to con figure the Claude Code harness via settings.json. Automated behaviors (\"from now on\r when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks con figured in settings.json - the h…\r n \r t ext Visualize current cont ext usage as a colored grid\r resume ( cont inue) Re me a previous conv rsation \r config Open settings \r con con\r con\r t \r e e\r \r d ctor Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude\r doctor` terminal diagnostics cover — from loc l data (duplicate or leftover installs, PATH, unparseable s…\r /autocompact Set how full the conte xt gets b fore auto-summ rizing \r e \r x x\r doctor H alth-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude\r doctor` t rminal diagnostics cover — from local data (duplic te or lef over nstalls, PATH, unparseable s…\r /autocompact Set how full the contex t gets before auto-summarizing \r s btask nd a subagent off with your full contex t; its result comes back here\r x \r t t\r t\r t\r /context \r ❯ /context \r \r \r · Shenaniganing… \r ⎿  Tip: Start with small featur s or bug fixes, tell Claude to p opose a plan, and verify its suggested edits\r \r ❯  \r · ← for agents \r \r ⎿ Context Usage\r ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ Opus 5.5\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ claude-opus-5-5\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ 66k/1m tokens (7%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ \r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ Estimated usage by category\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ System prompt: 2.2k tokens (0.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ System tools: 61.6k tokens (6.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛁ Skills: 2.2k tokens (0.2%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ Free space: 901k (90.1%)\r ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ Autocompact buffer: 33k tokens (3.3%)\r Auto-compact window: 1m tokens\r Skills · /skills\r └ 15 skills · 2.2k tokens\r \r /context all o expand \r ❯"
+   ]
+  }
+ }
+}
