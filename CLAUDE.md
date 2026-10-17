@@ -33,3 +33,8 @@ The issues are GitHub issues in `yandhi-0421/acp2api`. See `docs/agents/issue-tr
 
 One bounded context: `GLOSSARY.md` at the root, and ADRs in `docs/adr/`.
 <!-- workflow-setup:end -->
+
+## Directories
+
+- `.claude/`: the workflow skills and the workflow manifest. The setup skill `/workflow-setup` writes them.
+- `docs/`: the instructions for the issue tracker in `docs/agents/`, and the ADRs in `docs/adr/`.
