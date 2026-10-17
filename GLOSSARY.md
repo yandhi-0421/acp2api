@@ -100,6 +100,9 @@ The setup skill `/workflow-setup` writes the text between the two markers. Its n
 | management panel | 管理面板 | The web page of acp2api on 127.0.0.1 where the user sees the state of acp2api and changes its settings. | dashboard, admin page, web UI, console |
 | management password | 管理密码 | The secret that the user enters to open the management panel and to change the state or the settings of acp2api. | admin password, panel key, secret key, local API key (a different secret) |
 | lockout | 锁死 | The state in which acp2api sends no request to the official runtime, after a response that shows a risk to the Google account. Only the user ends it. | ban (an action of Google on the account), pause, circuit breaker (it closes again without the user) |
+| lockout signal | 锁死信号 | A response or an event of the official runtime that shows a risk to the Google account. It starts a lockout. | ban signal (a ban is an action of Google), trigger |
+| quota wait | 配额等待 | The state in which acp2api starts no prompt turn on the official runtime until the reset time of an exhausted Google quota. It ends without the user. | cooldown, rate limit (a limit of Google, not a state of acp2api), pause, lockout (only the user ends a lockout) |
+| sign-in required | 需要登录 | The state in which the official runtime has no valid sign-in, so acp2api starts no prompt turn on it. It ends when a sign-in succeeds. | signed out, logged out, unauthenticated, lockout (a sign-in error is not a lockout signal) |
 
 ## Technical names
 
