@@ -1,0 +1,575 @@
+{
+  "checkpoint": "macOS P complete; stopped before S0b",
+  "promptCountsByTranscript": {
+    "config-model": 0,
+    "tool-task": 7,
+    "load-model": 2,
+    "esc-continue": 2,
+    "tool-set-change": 2,
+    "error-order": 1,
+    "session-files": 0
+  },
+  "actualPrompts": 14,
+  "authorizedMaximum": 16,
+  "unusedCapacity": 2,
+  "newSessions": 6,
+  "serverProcesses": 7,
+  "steps": {
+    "config-model": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptCountByTranscript": 0,
+      "summaryPath": "~/agy-acp-probe/p-live-20261015T060907Z/config-model/summary.json",
+      "transcriptPath": "~/agy-acp-probe/p-live-20261015T060907Z/config-model/transcript.ndjson",
+      "permissionCount": 0,
+      "MCPToolsCallCount": 0,
+      "safetyFailure": null,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "serverExits": [
+        {
+          "run": 1,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "pass": true,
+      "confirmedOptions": {
+        "model": "gemini-3.8-flash",
+        "thinking_level": "low",
+        "mode": "default"
+      }
+    },
+    "tool-task": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptCountByTranscript": 7,
+      "summaryPath": "~/agy-acp-probe/p-live-20261015T060907Z/tool-task/summary.json",
+      "transcriptPath": "~/agy-acp-probe/p-live-20261015T060907Z/tool-task/transcript.ndjson",
+      "permissionCount": 6,
+      "MCPToolsCallCount": 0,
+      "safetyFailure": null,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "serverExits": [
+        {
+          "run": 1,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "pass": true,
+      "finalAnswer": "AUDIT-72-RED",
+      "callKeys": [
+        "alpha",
+        "ledger-2026",
+        "returns-primary",
+        "returns-backup",
+        "label-image",
+        "audit-close"
+      ]
+    },
+    "load-model": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptCountByTranscript": 2,
+      "summaryPath": "~/agy-acp-probe/p-live-20261015T060907Z/load-model/summary.json",
+      "transcriptPath": "~/agy-acp-probe/p-live-20261015T060907Z/load-model/transcript.ndjson",
+      "permissionCount": 0,
+      "MCPToolsCallCount": 0,
+      "safetyFailure": null,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "serverExits": [
+        {
+          "run": 1,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        },
+        {
+          "run": 2,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "pass": true,
+      "contextRetained": true,
+      "contentLeaked": false,
+      "toolFilterHeld": true,
+      "modelSelections": [
+        {
+          "requested": "gemini-3.8-flash-low",
+          "thinkingLevel": "low",
+          "used": "session/set_model"
+        },
+        {
+          "requested": "gemini-3.8-flash-medium",
+          "thinkingLevel": "medium",
+          "used": "session/set_model"
+        }
+      ],
+      "replayKinds": {
+        "user_message_chunk": 1,
+        "available_commands_update": 1,
+        "agent_message_chunk": 1
+      },
+      "liveKinds": {
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      }
+    },
+    "esc-continue": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptCountByTranscript": 2,
+      "summaryPath": "~/agy-acp-probe/p-live-20261015T060907Z/esc-continue/summary.json",
+      "transcriptPath": "~/agy-acp-probe/p-live-20261015T060907Z/esc-continue/transcript.ndjson",
+      "permissionCount": 0,
+      "MCPToolsCallCount": 0,
+      "safetyFailure": null,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "serverExits": [
+        {
+          "run": 1,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "cancelledAt": 11121,
+      "resultAt": 11127,
+      "latencyMs": 6,
+      "pass": true,
+      "continuationAnswer": "READY"
+    },
+    "tool-set-change": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptCountByTranscript": 2,
+      "summaryPath": "~/agy-acp-probe/p-live-20261015T060907Z/tool-set-change/summary.json",
+      "transcriptPath": "~/agy-acp-probe/p-live-20261015T060907Z/tool-set-change/transcript.ndjson",
+      "permissionCount": 2,
+      "MCPToolsCallCount": 0,
+      "safetyFailure": null,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "serverExits": [
+        {
+          "run": 1,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "pass": true,
+      "selectedStage": "notification",
+      "notification": {
+        "sentAt": 12242,
+        "listeners": 1,
+        "toolsListBefore": 1,
+        "toolsListAfter": 2
+      },
+      "attempts": [
+        {
+          "stage": "baseline",
+          "calls": [
+            {
+              "title": "Run probe_first?",
+              "rawInput": {
+                "value": "BASELINE"
+              }
+            }
+          ],
+          "pass": true,
+          "stopReason": "cancelled",
+          "schemaFetchCountBefore": 0,
+          "schemaFetchCountAfter": 1
+        },
+        {
+          "stage": "notification",
+          "calls": [
+            {
+              "title": "Run probe_checksum?",
+              "rawInput": {
+                "batch": 19
+              }
+            }
+          ],
+          "pass": true,
+          "stopReason": "cancelled",
+          "schemaFetchCountBefore": 2,
+          "schemaFetchCountAfter": 2
+        }
+      ],
+      "loadAttempted": false,
+      "catalogAttempted": false,
+      "schemaFetchEvidence": [
+        {
+          "requestAtMs": 6710,
+          "responseAtMs": 6710,
+          "tools": [
+            {
+              "name": "probe_first",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "value"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "requestAtMs": 12243,
+          "responseAtMs": 12244,
+          "tools": [
+            {
+              "name": "probe_first",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "value"
+                ]
+              }
+            },
+            {
+              "name": "probe_checksum",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "batch": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "batch"
+                ],
+                "additionalProperties": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "error-order": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptCountByTranscript": 1,
+      "summaryPath": "~/agy-acp-probe/p-live-20261015T060907Z/error-order/summary.json",
+      "transcriptPath": "~/agy-acp-probe/p-live-20261015T060907Z/error-order/transcript.ndjson",
+      "permissionCount": 0,
+      "MCPToolsCallCount": 0,
+      "safetyFailure": null,
+      "accountSignal": false,
+      "upstreamErrorCodes": [
+        "400"
+      ],
+      "serverExits": [
+        {
+          "run": 1,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "errorOrder": {
+        "stderrAtMs": 7337,
+        "promptResultAtMs": 7351,
+        "stderrEventSeq": 30,
+        "promptResultEventSeq": 50,
+        "deltaMs": -14,
+        "order": "stderr-before-result",
+        "timestampMeaning": "Client receipt time for complete stderr line and resolved prompt result; shared event sequence resolves equal milliseconds",
+        "stopReason": "end_turn",
+        "error": null
+      },
+      "expectedHarmless400Only": true
+    },
+    "session-files": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptCountByTranscript": 0,
+      "summaryPath": "~/agy-acp-probe/p-live-20261015T060907Z/session-files/summary.json",
+      "transcriptPath": "~/agy-acp-probe/p-live-20261015T060907Z/session-files/transcript.ndjson",
+      "permissionCount": 0,
+      "MCPToolsCallCount": 0,
+      "safetyFailure": null,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "serverExits": [],
+      "contentReads": 0,
+      "metadataEntryCount": 58,
+      "fileNamesAndSizesOnly": [
+        {
+          "name": "066f59d0-b2d0-4e07-8348-fd5968e63b97.db",
+          "size": 393216
+        },
+        {
+          "name": "066f59d0-b2d0-4e07-8348-fd5968e63b97.meta",
+          "size": 98
+        },
+        {
+          "name": "1c269fc5-badc-4ead-85f3-9473738f55e3.db",
+          "size": 524288
+        },
+        {
+          "name": "1c269fc5-badc-4ead-85f3-9473738f55e3.meta",
+          "size": 96
+        },
+        {
+          "name": "2fe2a11d-ae87-42d8-afc7-1712de6d9390.db",
+          "size": 393216
+        },
+        {
+          "name": "2fe2a11d-ae87-42d8-afc7-1712de6d9390.meta",
+          "size": 98
+        },
+        {
+          "name": "3c9c7a95-778d-423c-9849-f9a80d432089.db",
+          "size": 425984
+        },
+        {
+          "name": "3c9c7a95-778d-423c-9849-f9a80d432089.meta",
+          "size": 137
+        },
+        {
+          "name": "4feb1414-e203-40a2-96cc-6d45449b242c.db",
+          "size": 458752
+        },
+        {
+          "name": "4feb1414-e203-40a2-96cc-6d45449b242c.meta",
+          "size": 95
+        },
+        {
+          "name": "524c01bb-4f73-401e-be55-5b49826935cb.db",
+          "size": 524288
+        },
+        {
+          "name": "524c01bb-4f73-401e-be55-5b49826935cb.meta",
+          "size": 93
+        },
+        {
+          "name": "71ab054f-a4d8-403b-b2b1-dd542565f5dd.db",
+          "size": 491520
+        },
+        {
+          "name": "71ab054f-a4d8-403b-b2b1-dd542565f5dd.meta",
+          "size": 137
+        },
+        {
+          "name": "7f6358c3-8874-48e1-972d-e6a117701b45.db",
+          "size": 425984
+        },
+        {
+          "name": "7f6358c3-8874-48e1-972d-e6a117701b45.meta",
+          "size": 148
+        },
+        {
+          "name": "89e7d9ff-a7d6-4ee7-a943-7a140bb8e5a9.db",
+          "size": 524288
+        },
+        {
+          "name": "89e7d9ff-a7d6-4ee7-a943-7a140bb8e5a9.meta",
+          "size": 93
+        },
+        {
+          "name": "8b49a19a-0fc7-484b-ba65-fe4006a1784b.db",
+          "size": 393216
+        },
+        {
+          "name": "8b49a19a-0fc7-484b-ba65-fe4006a1784b.meta",
+          "size": 137
+        },
+        {
+          "name": "8caa2117-e7b6-48cf-b290-3f76012c7ba4.db",
+          "size": 458752
+        },
+        {
+          "name": "8caa2117-e7b6-48cf-b290-3f76012c7ba4.meta",
+          "size": 100
+        },
+        {
+          "name": "9ec03ab6-7b71-4003-be60-f0c2ef67d022.db",
+          "size": 458752
+        },
+        {
+          "name": "9ec03ab6-7b71-4003-be60-f0c2ef67d022.meta",
+          "size": 95
+        },
+        {
+          "name": "a677aa01-e2ac-42b1-854b-1be0ac50a577.db",
+          "size": 458752
+        },
+        {
+          "name": "a677aa01-e2ac-42b1-854b-1be0ac50a577.meta",
+          "size": 98
+        },
+        {
+          "name": "a74f4c20-5933-4f52-90a3-4a6144c6632e.db",
+          "size": 524288
+        },
+        {
+          "name": "a74f4c20-5933-4f52-90a3-4a6144c6632e.meta",
+          "size": 143
+        },
+        {
+          "name": "a8525ba5-433b-42e7-844d-7a7611fc2dbe.db",
+          "size": 491520
+        },
+        {
+          "name": "a8525ba5-433b-42e7-844d-7a7611fc2dbe.meta",
+          "size": 150
+        },
+        {
+          "name": "ae127a42-97da-44ad-ad81-6aec0da5085b.db",
+          "size": 425984
+        },
+        {
+          "name": "ae127a42-97da-44ad-ad81-6aec0da5085b.meta",
+          "size": 143
+        },
+        {
+          "name": "bc06f19f-25cb-4bc9-bed6-0d6a4239cbfe.db",
+          "size": 393216
+        },
+        {
+          "name": "bc06f19f-25cb-4bc9-bed6-0d6a4239cbfe.meta",
+          "size": 94
+        },
+        {
+          "name": "bc27c55a-1489-4ebb-b5dc-483fd094f948.db",
+          "size": 491520
+        },
+        {
+          "name": "bc27c55a-1489-4ebb-b5dc-483fd094f948.meta",
+          "size": 150
+        },
+        {
+          "name": "c5767aeb-3e7d-4ddb-8a72-6626c5b8c8d3.db",
+          "size": 491520
+        },
+        {
+          "name": "c5767aeb-3e7d-4ddb-8a72-6626c5b8c8d3.meta",
+          "size": 146
+        },
+        {
+          "name": "c9900cd4-70f5-4170-bc62-eb3ec26afedb.db",
+          "size": 393216
+        },
+        {
+          "name": "c9900cd4-70f5-4170-bc62-eb3ec26afedb.meta",
+          "size": 100
+        },
+        {
+          "name": "d529a475-4e61-4981-8fdc-49ce004b6d7a.db",
+          "size": 425984
+        },
+        {
+          "name": "d529a475-4e61-4981-8fdc-49ce004b6d7a.meta",
+          "size": 143
+        },
+        {
+          "name": "d9114e1b-093b-466a-a9ef-540afe83a5c2.db",
+          "size": 425984
+        },
+        {
+          "name": "d9114e1b-093b-466a-a9ef-540afe83a5c2.meta",
+          "size": 137
+        },
+        {
+          "name": "dfb31862-f7db-42bc-9f25-22d87c01aa2d.db",
+          "size": 425984
+        },
+        {
+          "name": "dfb31862-f7db-42bc-9f25-22d87c01aa2d.meta",
+          "size": 137
+        },
+        {
+          "name": "e9eb24d6-9e84-427a-8a9b-0ec8bc69adc1.db",
+          "size": 524288
+        },
+        {
+          "name": "e9eb24d6-9e84-427a-8a9b-0ec8bc69adc1.meta",
+          "size": 93
+        },
+        {
+          "name": "ea1a86d4-3773-465a-a6be-97586d9b65f2.db",
+          "size": 524288
+        },
+        {
+          "name": "ea1a86d4-3773-465a-a6be-97586d9b65f2.meta",
+          "size": 93
+        },
+        {
+          "name": "f251514c-e79c-41df-be39-a5e6cbdb06a3.db",
+          "size": 720896
+        },
+        {
+          "name": "f251514c-e79c-41df-be39-a5e6cbdb06a3.meta",
+          "size": 137
+        },
+        {
+          "name": "f6d03b0d-3c72-44bd-a765-bb0e02c902db.db",
+          "size": 425984
+        },
+        {
+          "name": "f6d03b0d-3c72-44bd-a765-bb0e02c902db.meta",
+          "size": 148
+        },
+        {
+          "name": "fc34e73a-3c09-4e28-bc5f-9fe747e1f457.db",
+          "size": 425984
+        },
+        {
+          "name": "fc34e73a-3c09-4e28-bc5f-9fe747e1f457.meta",
+          "size": 148
+        },
+        {
+          "name": "fc94b74e-e6fd-455a-96b4-942059be4683.db",
+          "size": 458752
+        },
+        {
+          "name": "fc94b74e-e6fd-455a-96b4-942059be4683.meta",
+          "size": 95
+        }
+      ]
+    }
+  },
+  "sourceHashesMatchFrozen": true,
+  "repoHEAD": "69dbd59c4cc25fa562797a38b693426e57631d1f",
+  "repoStatus": "?? docs/research/2026-10-13-gemini-thinking-controls.md",
+  "remainingLiveProcessNameMatches": [],
+  "cleanupLimit": "All seven server processes exited code 0 with stdin-end. Probe group sweeps and empty process-name checks do not establish natural child exit timing.",
+  "errorOrderLimit": "Receipt order only; it does not prove server write order.",
+  "Windows": "Pending manual check; no Windows execution.",
+  "noFurtherWorkStarted": true
+}

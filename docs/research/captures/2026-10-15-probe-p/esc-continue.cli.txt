@@ -1,0 +1,17 @@
+acp-probe step=esc-continue server=~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par out=~/agy-acp-probe/p-live-20261015T060907Z/esc-continue workspace=/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-Um8Uqp
+prompt[cancel-at-first-text] sent: Write the integers from 1 to 400, one on each line.
+prompt[cancel-at-first-text] done: stopReason=cancelled error=none in 4635 ms
+prompt[same-session-continuation] sent: Reply with the word READY and nothing else.
+prompt[same-session-continuation] done: stopReason=end_turn error=none in 3420 ms
+
+== acp-probe step=esc-continue status=ok (15207 ms) ==
+server: antigravity-acp 1.4.0  protocol=1
+prompts sent: 2  stopReasons: cancelled, end_turn
+model selection: requested=gemini-3.8-flash-low used=session/set_model attempts=session/set_model:ok
+updates: available_commands_update=1 agent_message_chunk=3 usage_update=2
+mcp: 12 requests {"server/discover":1,"initialize":1,"notifications/initialized":1,"tools/list":1,"notifications/roots/list_changed":5}  tools/call: 0  notifications/cancelled: 0
+reply: "READY"
+usage: 2 usage_update, 0 prompt result usage
+check escContinue: {"cancelledAt":11121,"resultAt":11127,"latencyMs":6,"pass":true}
+errors: none
+files: ~/agy-acp-probe/p-live-20261015T060907Z/esc-continue/{transcript.ndjson,stderr.txt,mcp.ndjson,summary.json}

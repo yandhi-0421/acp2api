@@ -1,0 +1,6 @@
+I1015 10:51:17.695907 8612627200 main.py:118] Starting AGY ACP Server...
+I1015 10:51:17.695971 8612627200 main.py:119] Gemini home resolved to ~/.gemini (default; $GEMINI_HOME is unset)
+I1015 10:51:17.696014 8612627200 settings.py:302] settings: path=~/.gemini/antigravity-acp/settings.json status=missing
+I1015 10:51:17.701306 8612627200 settings.py:302] settings: path=~/.gemini/antigravity-acp/settings.json status=missing
+I1015 10:51:17.701347 8612627200 settings.py:302] settings: path=~/.gemini/antigravity-acp/settings.json status=missing
+I1015 10:51:17.702134 8612627200 main.py:136] Shutting down AGY ACP Server...

@@ -1,0 +1,380 @@
+{
+  "step": "bad-image",
+  "status": "ok",
+  "startedAt": "2026-10-15T03:26:00.394Z",
+  "durationMs": 9519,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/agy-acp-probe-ws/g2-bad-image",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 67827,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 11651,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1255,
+    "session_new_run1_ms": 4148,
+    "prompt_bad-image_ms": 1767
+  },
+  "sessions": [
+    {
+      "sessionId": "7f6358c3-8874-48e1-972d-e6a117701b45",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-low",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model"
+  },
+  "modeSelection": null,
+  "modelPromptsSent": 1,
+  "prompts": [
+    {
+      "label": "bad-image",
+      "sessionId": "7f6358c3-8874-48e1-972d-e6a117701b45",
+      "text": "Describe this image in one word.",
+      "sentAtMs": 5411,
+      "doneAtMs": 7178,
+      "durationMs": 1767,
+      "agentText": "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null
+    }
+  ],
+  "stopReasons": [
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 1,
+    "agent_message_chunk": 1
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [],
+  "permissionRequests": [],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1262,
+      "value": "424da75e970ed0e7"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:50457/mcp/b1a7237e41e6871635a2422f",
+    "tools": [
+      "probe_echo"
+    ],
+    "requestCount": 7,
+    "byMethod": {
+      "server/discover": 1,
+      "initialize": 1,
+      "notifications/initialized": 1,
+      "tools/list": 1
+    },
+    "connectionsSeen": 1,
+    "toolsListCalls": 1,
+    "initializes": [
+      {
+        "t_ms": 5533,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "424da75e970ed0e7",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 7,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "badImage": {
+      "imageCapability": true,
+      "stopReason": "end_turn",
+      "error": null,
+      "reply": "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting",
+      "stderrNewLines": 31,
+      "stderrErrorLines": [
+        "W1015 11:26:05.810661 8612627200 mcp_servers.py:169] Failed to load/parse MCP config at ~/.gemini/config/mcp_config.json: Expecting value: line 1 column 1 (char 0)",
+        "I1015 11:26:05.932081 6141063168 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1015 11:26:05.931829      71 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF",
+        "I1015 11:26:05.932410 6141063168 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1015 11:26:05.932399      71 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF",
+        "I1015 11:26:05.933318 6141063168 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1015 11:26:05.933308      71 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF",
+        "I1015 11:26:07.556780 6141063168 local_connection.py:551] harness stderr: received model response error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []",
+        "I1015 11:26:07.557669 6141063168 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1015 11:26:07.556773      71 stream_handler.go:107] error encountered while processing planner output: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []",
+        "I1015 11:26:07.561189 6141063168 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1015 11:26:07.561077      71 executor.go:521] error in generator: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []",
+        "I1015 11:26:07.563644 6141063168 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1015 11:26:07.562630      71 errorreport.go:224] agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []",
+        "E1015 11:26:07.563983 8612627200 server.py:5558] Antigravity SDK error processing prompt for session 7f6358c3-8874-48e1-972d-e6a117701b45",
+        "    raise types.AntigravityConnectionError(",
+        "        step_obj.error or \"System error occurred.\"",
+        "google.antigravity.types.AntigravityConnectionError: Agent execution terminated due to error. (\"agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []\")",
+        "I1015 11:26:07.564404 6141063168 local_connection.py:551] harness stderr: Agent run failed: executor run failed: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: []"
+      ]
+    }
+  },
+  "notes": [],
+  "errors": [],
+  "sessionNewMeta": {
+    "antigravity": {
+      "enabledTools": [],
+      "eagerMcpServers": [
+        "agy-bridge"
+      ]
+    }
+  },
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 2
+}

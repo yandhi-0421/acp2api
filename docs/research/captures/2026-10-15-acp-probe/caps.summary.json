@@ -1,0 +1,218 @@
+{
+  "step": "caps",
+  "status": "ok",
+  "startedAt": "2026-10-15T02:51:13.577Z",
+  "durationMs": 4553,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/agy-acp-probe-ws/caps",
+    "model": null,
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 59611,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 692,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 4076
+  },
+  "sessions": [],
+  "modelSelection": null,
+  "modeSelection": null,
+  "modelPromptsSent": 0,
+  "prompts": [],
+  "stopReasons": [],
+  "updateKindCounts": {},
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {},
+  "toolCalls": [],
+  "permissionRequests": [],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [],
+    "promptResults": []
+  },
+  "availableCommands": null,
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 4124,
+      "value": "d88ad59a5e71f9b4"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:63307/mcp/e7d29074ffaa2f32139676ea",
+    "tools": [
+      "probe_echo"
+    ],
+    "requestCount": 0,
+    "byMethod": {},
+    "connectionsSeen": 0,
+    "toolsListCalls": 0,
+    "initializes": [],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 0,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ],
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "sessionNew": {
+      "ok": false,
+      "error": {
+        "code": -32000,
+        "message": "Authentication required",
+        "data": {
+          "message": "No authentication method selected. Either call the `authenticate` method (supports oauth-personal, gemini-api-key, agent-platform), or set `auth.type` in settings.json (~/.gemini/antigravity-acp/settings.json) to one of: oauth-personal, gemini-api-key (requires GEMINI_API_KEY env var), oauth-business (Gemini Enterprise; requires gcp.project/location), agent-platform (formerly 'vertex-ai', still accepted; requires GOOGLE_API_KEY, or a project and location from GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION or gcp.project/gcp.location with Application Default Credentials), gateway (custom AI API Gateway; requires AGY_LLM_GATEWAY_URL or an enterprise admin_settings.json)."
+        }
+      }
+    }
+  },
+  "notes": [
+    {
+      "t_ms": 4125,
+      "msg": "session/new was refused without authenticate (code -32000); expected when signed out (-32000)"
+    }
+  ],
+  "errors": [
+    {
+      "t_ms": 4125,
+      "where": "session/new (no authenticate)",
+      "code": -32000,
+      "message": "Authentication required",
+      "data": {
+        "message": "No authentication method selected. Either call the `authenticate` method (supports oauth-personal, gemini-api-key, agent-platform), or set `auth.type` in settings.json (~/.gemini/antigravity-acp/settings.json) to one of: oauth-personal, gemini-api-key (requires GEMINI_API_KEY env var), oauth-business (Gemini Enterprise; requires gcp.project/location), agent-platform (formerly 'vertex-ai', still accepted; requires GOOGLE_API_KEY, or a project and location from GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION or gcp.project/gcp.location with Application Default Credentials), gateway (custom AI API Gateway; requires AGY_LLM_GATEWAY_URL or an enterprise admin_settings.json)."
+      }
+    }
+  ],
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 0
+}

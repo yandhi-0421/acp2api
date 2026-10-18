@@ -1,0 +1,686 @@
+{
+  "step": "load-model",
+  "status": "ok",
+  "startedAt": "2026-10-15T06:11:46.570Z",
+  "durationMs": 21759,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-PTRbUJ",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 8989,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 7185,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    },
+    {
+      "run": 2,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 9011,
+      "stderrFile": "stderr-2.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 7373,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 2104,
+    "session_new_run1_ms": 4135,
+    "prompt_remember_ms": 3945,
+    "initialize_run2_ms": 1475,
+    "prompt_recall-and-read_ms": 4001
+  },
+  "sessions": [
+    {
+      "sessionId": "3c9c7a95-778d-423c-9849-f9a80d432089",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    },
+    {
+      "sessionId": "3c9c7a95-778d-423c-9849-f9a80d432089",
+      "how": "session/load",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-medium",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model",
+    "sessionId": "3c9c7a95-778d-423c-9849-f9a80d432089",
+    "thinkingLevel": "medium",
+    "confirmation": "Server acknowledged the exact requested model ID; no separate current-model event is required by this probe"
+  },
+  "modelSelections": [
+    {
+      "requested": "gemini-3.8-flash-low",
+      "attempts": [
+        {
+          "method": "session/set_model",
+          "ok": true,
+          "result": {}
+        }
+      ],
+      "used": "session/set_model",
+      "sessionId": "3c9c7a95-778d-423c-9849-f9a80d432089",
+      "thinkingLevel": "low",
+      "confirmation": "Server acknowledged the exact requested model ID; no separate current-model event is required by this probe"
+    },
+    {
+      "requested": "gemini-3.8-flash-medium",
+      "attempts": [
+        {
+          "method": "session/set_model",
+          "ok": true,
+          "result": {}
+        }
+      ],
+      "used": "session/set_model",
+      "sessionId": "3c9c7a95-778d-423c-9849-f9a80d432089",
+      "thinkingLevel": "medium",
+      "confirmation": "Server acknowledged the exact requested model ID; no separate current-model event is required by this probe"
+    }
+  ],
+  "modeSelection": null,
+  "modelPromptsSent": 2,
+  "prompts": [
+    {
+      "label": "remember",
+      "sessionId": "3c9c7a95-778d-423c-9849-f9a80d432089",
+      "text": "Remember the codeword 5fd0b692. Reply with OK only.",
+      "sentAtMs": 6249,
+      "doneAtMs": 10194,
+      "durationMs": 3945,
+      "agentText": "OK",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null,
+      "doneEventSeq": 27
+    },
+    {
+      "label": "recall-and-read",
+      "sessionId": "3c9c7a95-778d-423c-9849-f9a80d432089",
+      "text": "What is the codeword I gave you? Also read probe-note.txt in the current workspace. If no file tool exists, do not use any other tool. Reply with exactly <codeword>|BLOCKED when the read is unavailable.",
+      "sentAtMs": 17057,
+      "doneAtMs": 21058,
+      "durationMs": 4001,
+      "agentText": "5fd0b692|BLOCKED",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null,
+      "doneEventSeq": 59
+    }
+  ],
+  "stopReasons": [
+    "end_turn",
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 2,
+    "agent_message_chunk": 3,
+    "usage_update": 2,
+    "user_message_chunk": 1
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 2,
+    "user_message_chunk": 1,
+    "agent_message_chunk": 1
+  },
+  "toolCalls": [],
+  "permissionRequests": [],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "5fd0b692|BLOCKED",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [
+      {
+        "t_ms": 10188,
+        "used": 3938,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 21052,
+        "used": 4152,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    ],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 2113,
+      "value": "972780eebca0fc8a"
+    },
+    {
+      "t_ms": 12371,
+      "value": "1f6388e5f2bcd454"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:56050/mcp/2d35c4b8f95cbed447d0fd24",
+    "tools": [],
+    "requestCount": 14,
+    "byMethod": {
+      "server/discover": 2,
+      "initialize": 2,
+      "notifications/initialized": 2,
+      "tools/list": 2
+    },
+    "connectionsSeen": 4,
+    "toolsListCalls": 2,
+    "initializes": [
+      {
+        "t_ms": 6436,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "972780eebca0fc8a",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      },
+      {
+        "t_ms": 17259,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "1f6388e5f2bcd454",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 14,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "loadModel": {
+      "pass": true,
+      "historyReplay": [
+        {
+          "kind": "user_message_chunk",
+          "at": 17054
+        },
+        {
+          "kind": "available_commands_update",
+          "at": 17054
+        },
+        {
+          "kind": "agent_message_chunk",
+          "at": 17054
+        }
+      ],
+      "liveEvents": [
+        {
+          "kind": "agent_message_chunk",
+          "at": 21006
+        },
+        {
+          "kind": "usage_update",
+          "at": 21052
+        }
+      ],
+      "reply": "5fd0b692|BLOCKED",
+      "contextRetained": true,
+      "contentLeaked": false,
+      "toolFilterHeld": true
+    }
+  },
+  "notes": [],
+  "errors": [],
+  "sessionNewMeta": {
+    "antigravity": {
+      "enabledTools": [],
+      "eagerMcpServers": [
+        "agy-bridge"
+      ],
+      "systemPrompt": {
+        "append": "# Harness instructions\n\nThis conversation has no tools. Never call a tool. This rule includes each built-in tool, for example manage_task, run_command, browser tools, search_web, send_message, and schedule, also when a tool seems available. If the user asks for an action that needs a tool, reply in text that you cannot do it in this conversation."
+      }
+    }
+  },
+  "serverRun2": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 8
+}

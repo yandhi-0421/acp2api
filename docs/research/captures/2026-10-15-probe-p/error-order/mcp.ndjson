@@ -1,0 +1,33 @@
+{"t_ms":1508,"event":"listening","url":"http://127.0.0.1:56492/mcp/2499f8a6081064c1701fed74","tools":[]}
+{"t_ms":5587,"event":"request","id":1,"socket":1,"method":"POST","path":"/mcp/2499f8a6081064c1701fed74","headers":{"x-probe-session":"db4e860c0e64eedf","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2026-07-28","content-length":"324"},"phase":"run","body":{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}},"io.modelcontextprotocol/clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}}
+{"t_ms":5588,"event":"response","id":1,"status":200,"headers":{},"body":{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}}
+{"t_ms":5588,"event":"close","which":"res","id":1,"socket":1,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":5588,"event":"close","which":"req","id":1,"socket":1,"complete":true,"phase":"run"}
+{"t_ms":5589,"event":"request","id":2,"socket":1,"method":"POST","path":"/mcp/2499f8a6081064c1701fed74","headers":{"x-probe-session":"db4e860c0e64eedf","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","content-length":"231"},"phase":"run","body":{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}}}}}
+{"t_ms":5589,"event":"response","id":2,"status":200,"headers":{"Mcp-Session-Id":"1a3a36f867aa607293a9eee3b9b3a97d"},"body":{"jsonrpc":"2.0","id":2,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"agy-bridge-probe","version":"0"}}}}
+{"t_ms":5589,"event":"close","which":"res","id":2,"socket":1,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":5589,"event":"close","which":"req","id":2,"socket":1,"complete":true,"phase":"run"}
+{"t_ms":5589,"event":"request","id":3,"socket":1,"method":"GET","path":"/mcp/2499f8a6081064c1701fed74","headers":{"mcp-session-id":"1a3a36f867aa607293a9eee3b9b3a97d","x-probe-session":"db4e860c0e64eedf","user-agent":"Go-http-client/1.1","accept":"text/event-stream","mcp-protocol-version":"2025-11-25"},"phase":"run","body":null}
+{"t_ms":5589,"event":"sse-open","id":3}
+{"t_ms":5589,"event":"close","which":"req","id":3,"socket":1,"complete":true,"phase":"run"}
+{"t_ms":5589,"event":"request","id":4,"socket":2,"method":"POST","path":"/mcp/2499f8a6081064c1701fed74","headers":{"mcp-session-id":"1a3a36f867aa607293a9eee3b9b3a97d","x-probe-session":"db4e860c0e64eedf","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"66"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}}
+{"t_ms":5589,"event":"response","id":4,"status":202,"headers":{},"body":null}
+{"t_ms":5589,"event":"close","which":"res","id":4,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":5589,"event":"close","which":"req","id":4,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":5590,"event":"request","id":5,"socket":2,"method":"GET","path":"/.well-known/oauth-protected-resource/mcp/2499f8a6081064c1701fed74","headers":{"user-agent":"Go-http-client/1.1"},"phase":"run","body":null}
+{"t_ms":5590,"event":"response","id":5,"status":404,"headers":{},"body":{"error":"no route: /.well-known/oauth-protected-resource/mcp/2499f8a6081064c1701fed74"}}
+{"t_ms":5590,"event":"close","which":"res","id":5,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":5590,"event":"close","which":"req","id":5,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":5590,"event":"request","id":6,"socket":2,"method":"GET","path":"/.well-known/oauth-protected-resource","headers":{"user-agent":"Go-http-client/1.1"},"phase":"run","body":null}
+{"t_ms":5590,"event":"response","id":6,"status":404,"headers":{},"body":{"error":"no route: /.well-known/oauth-protected-resource"}}
+{"t_ms":5590,"event":"close","which":"res","id":6,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":5590,"event":"close","which":"req","id":6,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":5590,"event":"request","id":7,"socket":2,"method":"POST","path":"/mcp/2499f8a6081064c1701fed74","headers":{"mcp-session-id":"1a3a36f867aa607293a9eee3b9b3a97d","x-probe-session":"db4e860c0e64eedf","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"58"},"phase":"run","body":{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}}
+{"t_ms":5590,"event":"response","id":7,"status":200,"headers":{},"body":{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}}
+{"t_ms":5590,"event":"close","which":"res","id":7,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":5590,"event":"close","which":"req","id":7,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":8365,"event":"socket-end","socket":2,"phase":"shutdown"}
+{"t_ms":8366,"event":"socket-end","socket":1,"phase":"shutdown"}
+{"t_ms":8368,"event":"socket-close","socket":1,"phase":"shutdown"}
+{"t_ms":8368,"event":"close","which":"res","id":3,"socket":1,"finished":false,"phase":"shutdown","peerGone":{"t_ms":8366,"how":"end","phase":"shutdown"}}
+{"t_ms":8368,"event":"socket-close","socket":2,"phase":"shutdown"}

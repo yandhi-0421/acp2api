@@ -1,0 +1,112 @@
+{
+  "checkpoint": "config-model and tool-task only",
+  "sourceHashesVerified": true,
+  "initialProcessPreflightClear": true,
+  "repoHEAD": "69dbd59c4cc25fa562797a38b693426e57631d1f",
+  "repoStatus": "?? docs/research/2026-10-13-gemini-thinking-controls.md",
+  "outputRoot": "~/agy-acp-probe/p-live-20261015T060907Z",
+  "approvedPromptCap": 16,
+  "cumulativePromptsByTranscript": 7,
+  "remainingAuthorizedPromptCapacity": 9,
+  "steps": {
+    "config-model": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptsByTranscript": 0,
+      "newSessionsByTranscript": 1,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "summary": "~/agy-acp-probe/p-live-20261015T060907Z/config-model/summary.json",
+      "transcript": "~/agy-acp-probe/p-live-20261015T060907Z/config-model/transcript.ndjson",
+      "serverRuns": [
+        {
+          "pid": 8750,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "configModel": {
+        "pass": true,
+        "requestedOptions": [
+          {
+            "configId": "model",
+            "value": "gemini-3.8-flash"
+          },
+          {
+            "configId": "thinking_level",
+            "value": "low"
+          }
+        ],
+        "confirmedFinalOptions": {
+          "model": "gemini-3.8-flash",
+          "thinking_level": "low",
+          "mode": "default"
+        }
+      }
+    },
+    "tool-task": {
+      "exitCode": 0,
+      "status": "ok",
+      "promptsByTranscript": 7,
+      "newSessionsByTranscript": 1,
+      "accountSignal": false,
+      "upstreamErrorCodes": [],
+      "summary": "~/agy-acp-probe/p-live-20261015T060907Z/tool-task/summary.json",
+      "transcript": "~/agy-acp-probe/p-live-20261015T060907Z/tool-task/transcript.ndjson",
+      "serverRuns": [
+        {
+          "pid": 8796,
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stoppedBy": "stdin-end"
+        }
+      ],
+      "pass": true,
+      "callKeys": [
+        "alpha",
+        "ledger-2026",
+        "returns-primary",
+        "returns-backup",
+        "label-image",
+        "audit-close"
+      ],
+      "finalAnswer": "AUDIT-72-RED",
+      "MCPToolsCalls": 0,
+      "permissionCount": 6,
+      "allPermissionsCancelled": true,
+      "cancelNotifications": 6,
+      "toolSafetyFailure": null,
+      "rejectedClientRequests": 0,
+      "errorEnvelopeCorrect": true,
+      "longResultChars": 21242,
+      "PNGMatchesManifest": true,
+      "modelSelections": [
+        {
+          "requested": "gemini-3.8-flash-low",
+          "attempts": [
+            {
+              "method": "session/set_model",
+              "ok": true,
+              "result": {}
+            }
+          ],
+          "used": "session/set_model",
+          "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+          "thinkingLevel": "low",
+          "confirmation": "Server acknowledged the exact requested model ID; no separate current-model event is required by this probe"
+        }
+      ],
+      "initialSessionModes": [
+        "default"
+      ]
+    }
+  },
+  "remainingLiveProcessNameMatches": [],
+  "childCleanupEvidence": "Both servers exited code 0 on stdin-end. Probe also sweeps the process group. Post-check finds no bridge/ACP/localharness executable name remaining; per-child natural-exit timing was not independently tracked.",
+  "laterStepsStarted": false
+}

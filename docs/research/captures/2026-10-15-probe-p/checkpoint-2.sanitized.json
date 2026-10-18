@@ -1,0 +1,103 @@
+{
+  "checkpoint": "load-model only",
+  "outputRoot": "~/agy-acp-probe/p-live-20261015T060907Z",
+  "exitCode": 0,
+  "pass": true,
+  "promptsByTranscript": {
+    "config-model": 0,
+    "tool-task": 7,
+    "load-model": 2
+  },
+  "cumulativePrompts": 9,
+  "authorizedCap": 16,
+  "remainingCapacity": 7,
+  "summary": "~/agy-acp-probe/p-live-20261015T060907Z/load-model/summary.json",
+  "transcript": "~/agy-acp-probe/p-live-20261015T060907Z/load-model/transcript.ndjson",
+  "setupChecks": [
+    {
+      "method": "session/new",
+      "serverRun": 1,
+      "absoluteCwd": true,
+      "sameCwdAsNew": true,
+      "MCPServerCount": 1,
+      "MCPServerName": "agy-bridge",
+      "MCPURLIsLoopback": true,
+      "MCPHeadersPresent": true,
+      "fullMetaMatchesNoToolsManifest": true
+    },
+    {
+      "method": "session/load",
+      "serverRun": 2,
+      "absoluteCwd": true,
+      "sameCwdAsNew": true,
+      "MCPServerCount": 1,
+      "MCPServerName": "agy-bridge",
+      "MCPURLIsLoopback": true,
+      "MCPHeadersPresent": true,
+      "fullMetaMatchesNoToolsManifest": true
+    }
+  ],
+  "modelSelections": [
+    {
+      "requested": "gemini-3.8-flash-low",
+      "thinkingLevel": "low",
+      "used": "session/set_model",
+      "serverAcknowledged": true
+    },
+    {
+      "requested": "gemini-3.8-flash-medium",
+      "thinkingLevel": "medium",
+      "used": "session/set_model",
+      "serverAcknowledged": true
+    }
+  ],
+  "newProcessLoad": true,
+  "sessionModes": [
+    "default",
+    "default"
+  ],
+  "contextRetained": true,
+  "answerMatchesRememberedCodewordPlusBlocked": true,
+  "fileContentLeaked": false,
+  "toolFilterHeld": true,
+  "historyReplayKinds": {
+    "user_message_chunk": 1,
+    "available_commands_update": 1,
+    "agent_message_chunk": 1
+  },
+  "liveEventKinds": {
+    "agent_message_chunk": 1,
+    "usage_update": 1
+  },
+  "permissionCount": 0,
+  "MCPToolsCallCount": 0,
+  "rejectedClientRequestCount": 0,
+  "toolSafetyFailure": null,
+  "upstreamErrorCodes": [],
+  "accountSignal": false,
+  "serverRuns": [
+    {
+      "run": 1,
+      "pid": 8989,
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end"
+    },
+    {
+      "run": 2,
+      "pid": 9011,
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end"
+    }
+  ],
+  "remainingLiveProcessNameMatches": [],
+  "childCleanupEvidence": "Both server processes exited code 0 on stdin-end; the probe also sweeps their process groups. No matching ACP/localharness name remains. Per-child natural-exit timing was not independently tracked.",
+  "laterStepsStarted": false,
+  "repoHEAD": "69dbd59c4cc25fa562797a38b693426e57631d1f",
+  "repoStatus": "?? docs/research/2026-10-13-gemini-thinking-controls.md"
+}

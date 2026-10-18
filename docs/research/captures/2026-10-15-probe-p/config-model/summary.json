@@ -1,0 +1,428 @@
+{
+  "step": "config-model",
+  "status": "ok",
+  "startedAt": "2026-10-15T06:09:07.085Z",
+  "durationMs": 8358,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-RrnSkp",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 8750,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 6363,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1644,
+    "session_new_run1_ms": 6191
+  },
+  "sessions": [
+    {
+      "sessionId": "8b49a19a-0fc7-484b-ba65-fe4006a1784b",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": null,
+  "modelSelections": [],
+  "modeSelection": null,
+  "modelPromptsSent": 0,
+  "prompts": [],
+  "stopReasons": [],
+  "updateKindCounts": {
+    "available_commands_update": 1
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [],
+  "permissionRequests": [],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1665,
+      "value": "e776ea90baa57f49"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:55591/mcp/f4f0eac9ea85f6e80d6bf375",
+    "tools": [],
+    "requestCount": 0,
+    "byMethod": {},
+    "connectionsSeen": 0,
+    "toolsListCalls": 0,
+    "initializes": [],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 0,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "configModel": {
+      "results": [
+        {
+          "configOptions": [
+            {
+              "currentValue": "gemini-3.8-flash",
+              "options": [
+                {
+                  "value": "gemini-3.8-flash",
+                  "name": "Gemini 3.8 Flash"
+                }
+              ],
+              "id": "model",
+              "name": "Model",
+              "category": "model",
+              "type": "select"
+            },
+            {
+              "currentValue": "high",
+              "options": [
+                {
+                  "value": "low",
+                  "name": "Low"
+                },
+                {
+                  "value": "medium",
+                  "name": "Medium"
+                },
+                {
+                  "value": "high",
+                  "name": "High"
+                }
+              ],
+              "id": "thinking_level",
+              "name": "Thinking Level",
+              "category": "thought_level",
+              "type": "select"
+            },
+            {
+              "currentValue": "default",
+              "options": [
+                {
+                  "value": "default",
+                  "name": "Default",
+                  "description": "Default permission prompt flow"
+                },
+                {
+                  "value": "auto_edit",
+                  "name": "Auto Edit",
+                  "description": "Auto-approve file edit tools"
+                },
+                {
+                  "value": "yolo",
+                  "name": "YOLO",
+                  "description": "Auto-approve all tools"
+                }
+              ],
+              "id": "mode",
+              "name": "Session Mode",
+              "category": "mode",
+              "type": "select"
+            }
+          ]
+        },
+        {
+          "configOptions": [
+            {
+              "currentValue": "gemini-3.8-flash",
+              "options": [
+                {
+                  "value": "gemini-3.8-flash",
+                  "name": "Gemini 3.8 Flash"
+                }
+              ],
+              "id": "model",
+              "name": "Model",
+              "category": "model",
+              "type": "select"
+            },
+            {
+              "currentValue": "low",
+              "options": [
+                {
+                  "value": "low",
+                  "name": "Low"
+                },
+                {
+                  "value": "medium",
+                  "name": "Medium"
+                },
+                {
+                  "value": "high",
+                  "name": "High"
+                }
+              ],
+              "id": "thinking_level",
+              "name": "Thinking Level",
+              "category": "thought_level",
+              "type": "select"
+            },
+            {
+              "currentValue": "default",
+              "options": [
+                {
+                  "value": "default",
+                  "name": "Default",
+                  "description": "Default permission prompt flow"
+                },
+                {
+                  "value": "auto_edit",
+                  "name": "Auto Edit",
+                  "description": "Auto-approve file edit tools"
+                },
+                {
+                  "value": "yolo",
+                  "name": "YOLO",
+                  "description": "Auto-approve all tools"
+                }
+              ],
+              "id": "mode",
+              "name": "Session Mode",
+              "category": "mode",
+              "type": "select"
+            }
+          ]
+        }
+      ],
+      "pass": true
+    }
+  },
+  "notes": [],
+  "errors": [],
+  "sessionNewMeta": {
+    "antigravity": {
+      "enabledTools": [],
+      "eagerMcpServers": [
+        "agy-bridge"
+      ],
+      "systemPrompt": {
+        "append": "# Harness instructions\n\nThis conversation has no tools. Never call a tool. This rule includes each built-in tool, for example manage_task, run_command, browser tools, search_web, send_message, and schedule, also when a tool seems available. If the user asks for an action that needs a tool, reply in text that you cannot do it in this conversation."
+      }
+    }
+  },
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 1
+}

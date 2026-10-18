@@ -1,0 +1,22 @@
+acp-probe step=tool-set-change server=~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par out=~/agy-acp-probe/p-live-20261015T060907Z/tool-set-change workspace=/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-jD5Hrw
+prompt[baseline] sent: Call probe_first with value BASELINE. Do not call any other tool.
+permission request -> {"outcome":"cancelled"} (Run probe_first?, step hook)
+prompt[baseline] done: stopReason=cancelled error=none in 5691 ms
+prompt[notification] sent: Call the newly added audit tool that returns a checksum. Set its required argument to 19. ...
+permission request -> {"outcome":"cancelled"} (Run probe_checksum?, step hook)
+prompt[notification] done: stopReason=cancelled error=none in 5415 ms
+
+== acp-probe step=tool-set-change status=ok (19225 ms) ==
+server: antigravity-acp 1.4.0  protocol=1
+prompts sent: 2  stopReasons: cancelled, cancelled
+model selection: requested=gemini-3.8-flash-low used=session/set_model attempts=session/set_model:ok
+updates: available_commands_update=1 tool_call=2 tool_call_update=2 agent_message_chunk=2 usage_update=2
+tool_call 82d5e47088a44dc48c6d99a09240c5db: title="Run probe_first?" kind=other statuses=pending>failed rawInput={"value":"BASELINE"}
+tool_call 33202d3d2278431298bce82abb1889cd: title="Run probe_checksum?" kind=other statuses=pending>failed rawInput={"batch":19}
+permission requests: 2 (all answered: cancelled, cancelled)
+mcp: 13 requests {"server/discover":1,"initialize":1,"notifications/initialized":1,"tools/list":2,"notifications/roots/list_changed":5}  tools/call: 0  notifications/cancelled: 0
+reply: "The request was cancelled by the client."
+usage: 2 usage_update, 0 prompt result usage
+check toolSetChange: {"attempts":[{"stage":"baseline","calls":[{"title":"Run probe_first?","rawInput":{"value":"BASELINE"}}],"pass":true,"stopReason":"cancelled","error":null,"toolsListBefore":0,"toolsListAfter":1,"reply":"The request was cancelled by the client."},{"stage":"notification","calls":[{"title":"Run probe_checksum?","rawInput":{"batch":19}}],"pass":true,"stopReason":"cancelled","error":null,"toolsListBefor...
+errors: none
+files: ~/agy-acp-probe/p-live-20261015T060907Z/tool-set-change/{transcript.ndjson,stderr.txt,mcp.ndjson,summary.json}

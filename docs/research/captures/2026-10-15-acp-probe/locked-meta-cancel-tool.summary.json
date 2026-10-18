@@ -1,0 +1,613 @@
+{
+  "step": "cancel-tool",
+  "status": "ok",
+  "startedAt": "2026-10-15T03:25:40.333Z",
+  "durationMs": 19689,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/agy-acp-probe-ws/g2-cancel-tool",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 67658,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 8379,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1615,
+    "session_new_run1_ms": 4327,
+    "prompt_task_ms": 3553,
+    "prompt_result-2_ms": 3619,
+    "prompt_result-3_ms": 2822
+  },
+  "sessions": [
+    {
+      "sessionId": "a8525ba5-433b-42e7-844d-7a7611fc2dbe",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-low",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model"
+  },
+  "modeSelection": null,
+  "modelPromptsSent": 3,
+  "prompts": [
+    {
+      "label": "task",
+      "sessionId": "a8525ba5-433b-42e7-844d-7a7611fc2dbe",
+      "text": "Use the tool probe_lookup to read the value under the key \"alpha\". That value names a second key. Then use probe_lookup again to read the value under the second key. Reply with the second value only.",
+      "sentAtMs": 5964,
+      "doneAtMs": 9517,
+      "durationMs": 3553,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null
+    },
+    {
+      "label": "result-2",
+      "sessionId": "a8525ba5-433b-42e7-844d-7a7611fc2dbe",
+      "text": "Result of your tool call probe_lookup {\"key\":\"alpha\"}:\nnext key: k-8fc970e6",
+      "sentAtMs": 10519,
+      "doneAtMs": 14138,
+      "durationMs": 3619,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null
+    },
+    {
+      "label": "result-3",
+      "sessionId": "a8525ba5-433b-42e7-844d-7a7611fc2dbe",
+      "text": "Result of your tool call probe_lookup {\"key\":\"k-8fc970e6\"}:\nVALUE-81e5081d",
+      "sentAtMs": 15140,
+      "doneAtMs": 17962,
+      "durationMs": 2822,
+      "agentText": "VALUE-81e5081d",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null
+    }
+  ],
+  "stopReasons": [
+    "cancelled",
+    "cancelled",
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 1,
+    "tool_call": 2,
+    "tool_call_update": 2,
+    "agent_message_chunk": 3,
+    "usage_update": 3
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [
+    {
+      "toolCallId": "7e931d8911be4c888a3f73afba9c1022",
+      "firstMs": 9507,
+      "lastMs": 9510,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 9507,
+          "status": "pending"
+        },
+        {
+          "t_ms": 9510,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "alpha"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    },
+    {
+      "toolCallId": "ded980d3d20043d683208b121b7071fd",
+      "firstMs": 14125,
+      "lastMs": 14128,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 14125,
+          "status": "pending"
+        },
+        {
+          "t_ms": 14128,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "k-8fc970e6"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    }
+  ],
+  "permissionRequests": [
+    {
+      "t_ms": 9508,
+      "sessionId": "a8525ba5-433b-42e7-844d-7a7611fc2dbe",
+      "toolCall": {
+        "toolCallId": "7e931d8911be4c888a3f73afba9c1022",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "alpha"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    },
+    {
+      "t_ms": 14126,
+      "sessionId": "a8525ba5-433b-42e7-844d-7a7611fc2dbe",
+      "toolCall": {
+        "toolCallId": "ded980d3d20043d683208b121b7071fd",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "k-8fc970e6"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    }
+  ],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "VALUE-81e5081d",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [
+      {
+        "t_ms": 9517,
+        "used": 4521,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 14138,
+        "used": 4855,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 17954,
+        "used": 5107,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    ],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1634,
+      "value": "7faa902ca57116f1"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:50375/mcp/7a3daed75b698340b63e2146",
+    "tools": [
+      "probe_lookup"
+    ],
+    "requestCount": 17,
+    "byMethod": {
+      "server/discover": 1,
+      "initialize": 1,
+      "notifications/initialized": 1,
+      "tools/list": 1,
+      "notifications/roots/list_changed": 10
+    },
+    "connectionsSeen": 1,
+    "toolsListCalls": 1,
+    "initializes": [
+      {
+        "t_ms": 6116,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "7faa902ca57116f1",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 17,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "cancelTool": {
+      "calls": [
+        {
+          "t_ms": 9507,
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "alpha"
+          },
+          "key": "alpha",
+          "toolCallId": "7e931d8911be4c888a3f73afba9c1022"
+        },
+        {
+          "t_ms": 14125,
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "k-8fc970e6"
+          },
+          "key": "k-8fc970e6",
+          "toolCallId": "ded980d3d20043d683208b121b7071fd"
+        }
+      ],
+      "rounds": [
+        {
+          "label": "task",
+          "stopReason": "cancelled",
+          "error": null,
+          "reply": "The request was cancelled by the client.",
+          "calls": [
+            {
+              "title": "Run probe_lookup?",
+              "key": "alpha"
+            }
+          ],
+          "usageUpdates": 1
+        },
+        {
+          "label": "result-2",
+          "stopReason": "cancelled",
+          "error": null,
+          "reply": "The request was cancelled by the client.",
+          "calls": [
+            {
+              "title": "Run probe_lookup?",
+              "key": "k-8fc970e6"
+            }
+          ],
+          "usageUpdates": 1
+        },
+        {
+          "label": "result-3",
+          "stopReason": "end_turn",
+          "error": null,
+          "reply": "VALUE-81e5081d",
+          "calls": [],
+          "usageUpdates": 1
+        }
+      ],
+      "values": {
+        "alpha": "next key: k-8fc970e6",
+        "k-8fc970e6": "VALUE-81e5081d"
+      },
+      "keysInOrder": [
+        "alpha",
+        "k-8fc970e6"
+      ],
+      "firstCallKeyIsAlpha": true,
+      "secondCallUsesResult": true,
+      "finalReplyHasValue": true,
+      "finalHadNoToolCall": true,
+      "mcpToolsCalls": 0,
+      "pass": true
+    }
+  },
+  "notes": [],
+  "errors": [],
+  "sessionNewMeta": {
+    "antigravity": {
+      "enabledTools": [],
+      "eagerMcpServers": [
+        "agy-bridge"
+      ]
+    }
+  },
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 11
+}

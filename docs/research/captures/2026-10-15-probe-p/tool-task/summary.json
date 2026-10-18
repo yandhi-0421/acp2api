@@ -1,0 +1,954 @@
+{
+  "step": "tool-task",
+  "status": "ok",
+  "startedAt": "2026-10-15T06:09:34.597Z",
+  "durationMs": 37275,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-vPsakx",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 8796,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 10767,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1696,
+    "session_new_run1_ms": 4326,
+    "prompt_audit-task_ms": 4925,
+    "prompt_audit-result-1_ms": 3928,
+    "prompt_audit-result-2_ms": 4281,
+    "prompt_audit-result-3_ms": 4268,
+    "prompt_audit-result-4_ms": 4605,
+    "prompt_audit-result-5_ms": 4047,
+    "prompt_audit-result-6_ms": 4283
+  },
+  "sessions": [
+    {
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-low",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model",
+    "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+    "thinkingLevel": "low",
+    "confirmation": "Server acknowledged the exact requested model ID; no separate current-model event is required by this probe"
+  },
+  "modelSelections": [
+    {
+      "requested": "gemini-3.8-flash-low",
+      "attempts": [
+        {
+          "method": "session/set_model",
+          "ok": true,
+          "result": {}
+        }
+      ],
+      "used": "session/set_model",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "thinkingLevel": "low",
+      "confirmation": "Server acknowledged the exact requested model ID; no separate current-model event is required by this probe"
+    }
+  ],
+  "modeSelection": null,
+  "modelPromptsSent": 7,
+  "prompts": [
+    {
+      "label": "audit-task",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "text": "Audit warehouse batch alpha with probe_lookup. Follow the next key in each record, recover from errors using their recovery key, and inspect the image when supplied. Calculate the net units from the ledger and returns. Finish with exactly AUDIT-<net units>-<uppercase color of the image>. Call only probe_lookup, one call at a time. Start with key alpha. Do not guess missing data.",
+      "sentAtMs": 6031,
+      "doneAtMs": 10956,
+      "durationMs": 4925,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null,
+      "doneEventSeq": 30
+    },
+    {
+      "label": "audit-result-1",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "text": "Result of your tool call probe_lookup {\"key\":\"alpha\"}:\nAudit index. Next key: ledger-2026",
+      "sentAtMs": 10956,
+      "doneAtMs": 14884,
+      "durationMs": 3928,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null,
+      "doneEventSeq": 35
+    },
+    {
+      "label": "audit-result-2",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "text": "Result of your tool call probe_lookup {\"key\":\"ledger-2026\"}:\nWarehouse ledger for batch alpha.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nBillable rows: 3 cartons of 24 units and 2 cartons of 6 units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nArchived row: no billable units.\nNext key: returns-primary",
+      "sentAtMs": 14884,
+      "doneAtMs": 19165,
+      "durationMs": 4281,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null,
+      "doneEventSeq": 40
+    },
+    {
+      "label": "audit-result-3",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "text": "The tool call probe_lookup {\"key\":\"returns-primary\"} failed:\nERROR: primary returns index is unavailable. Recovery key: returns-backup",
+      "sentAtMs": 19166,
+      "doneAtMs": 23434,
+      "durationMs": 4268,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null,
+      "doneEventSeq": 45
+    },
+    {
+      "label": "audit-result-4",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "text": "Result of your tool call probe_lookup {\"key\":\"returns-backup\"}:\nVerified returned units: 12. Next key: label-image",
+      "sentAtMs": 23434,
+      "doneAtMs": 28039,
+      "durationMs": 4605,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null,
+      "doneEventSeq": 50
+    },
+    {
+      "label": "audit-result-5",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "text": "Result of your tool call probe_lookup {\"key\":\"label-image\"}:\nThe attached image is the batch label. Read its background color. Next key: audit-close",
+      "sentAtMs": 28039,
+      "doneAtMs": 32086,
+      "durationMs": 4047,
+      "agentText": "The request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null,
+      "doneEventSeq": 55
+    },
+    {
+      "label": "audit-result-6",
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "text": "Result of your tool call probe_lookup {\"key\":\"audit-close\"}:\nAudit complete. Compute net units as billable ledger units minus returned units. Reply in the requested format.",
+      "sentAtMs": 32086,
+      "doneAtMs": 36369,
+      "durationMs": 4283,
+      "agentText": "AUDIT-72-RED",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null,
+      "doneEventSeq": 57
+    }
+  ],
+  "stopReasons": [
+    "cancelled",
+    "cancelled",
+    "cancelled",
+    "cancelled",
+    "cancelled",
+    "cancelled",
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 1,
+    "tool_call": 6,
+    "tool_call_update": 6,
+    "agent_message_chunk": 7,
+    "usage_update": 7
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [
+    {
+      "toolCallId": "0ae7ed09397843ec8ac295ccaf9bf0f0",
+      "firstMs": 10943,
+      "lastMs": 10948,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 10943,
+          "status": "pending"
+        },
+        {
+          "t_ms": 10948,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "alpha"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    },
+    {
+      "toolCallId": "f0427a8d216846aaa5a95a87d84a606a",
+      "firstMs": 14878,
+      "lastMs": 14879,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 14878,
+          "status": "pending"
+        },
+        {
+          "t_ms": 14879,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "ledger-2026"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    },
+    {
+      "toolCallId": "04617b4a002e4a9abcfdf60c6bcc9b0a",
+      "firstMs": 19158,
+      "lastMs": 19160,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 19158,
+          "status": "pending"
+        },
+        {
+          "t_ms": 19160,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "returns-primary"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    },
+    {
+      "toolCallId": "5178b879325244c28fd07dec24a064be",
+      "firstMs": 23424,
+      "lastMs": 23428,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 23424,
+          "status": "pending"
+        },
+        {
+          "t_ms": 23428,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "returns-backup"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    },
+    {
+      "toolCallId": "0249a5e6c5be4abe9afba9e0e2f1b432",
+      "firstMs": 28022,
+      "lastMs": 28025,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 28022,
+          "status": "pending"
+        },
+        {
+          "t_ms": 28025,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "label-image"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    },
+    {
+      "toolCallId": "8760847abcbb4d21b4d0548ddf6e44f2",
+      "firstMs": 32058,
+      "lastMs": 32062,
+      "title": "Run probe_lookup?",
+      "titles": [
+        "Run probe_lookup?"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 32058,
+          "status": "pending"
+        },
+        {
+          "t_ms": 32062,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "key": "audit-close"
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    }
+  ],
+  "permissionRequests": [
+    {
+      "t_ms": 10946,
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "toolCall": {
+        "toolCallId": "0ae7ed09397843ec8ac295ccaf9bf0f0",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "alpha"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    },
+    {
+      "t_ms": 14878,
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "toolCall": {
+        "toolCallId": "f0427a8d216846aaa5a95a87d84a606a",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "ledger-2026"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    },
+    {
+      "t_ms": 19158,
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "toolCall": {
+        "toolCallId": "04617b4a002e4a9abcfdf60c6bcc9b0a",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "returns-primary"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    },
+    {
+      "t_ms": 23425,
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "toolCall": {
+        "toolCallId": "5178b879325244c28fd07dec24a064be",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "returns-backup"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    },
+    {
+      "t_ms": 28023,
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "toolCall": {
+        "toolCallId": "0249a5e6c5be4abe9afba9e0e2f1b432",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "label-image"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    },
+    {
+      "t_ms": 32059,
+      "sessionId": "f251514c-e79c-41df-be39-a5e6cbdb06a3",
+      "toolCall": {
+        "toolCallId": "8760847abcbb4d21b4d0548ddf6e44f2",
+        "kind": "other",
+        "status": "pending",
+        "title": "Run probe_lookup?",
+        "rawInput": {
+          "key": "audit-close"
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "cancelled"
+        }
+      },
+      "reason": "step hook"
+    }
+  ],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "AUDIT-72-RED",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [
+      {
+        "t_ms": 10955,
+        "used": 4758,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 14883,
+        "used": 5044,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 19165,
+        "used": 11792,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 23434,
+        "used": 12123,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 28038,
+        "used": 12401,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 32085,
+        "used": 13763,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 36362,
+        "used": 14308,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    ],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1704,
+      "value": "6b0fe3233fb44ac9"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:55777/mcp/02b484c30d099b0b092d76ad",
+    "tools": [
+      "probe_lookup"
+    ],
+    "requestCount": 37,
+    "byMethod": {
+      "server/discover": 1,
+      "initialize": 1,
+      "notifications/initialized": 1,
+      "tools/list": 1,
+      "notifications/roots/list_changed": 30
+    },
+    "connectionsSeen": 2,
+    "toolsListCalls": 1,
+    "initializes": [
+      {
+        "t_ms": 6209,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "6b0fe3233fb44ac9",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 37,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "toolTask": {
+      "calls": [
+        {
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "alpha"
+          }
+        },
+        {
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "ledger-2026"
+          }
+        },
+        {
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "returns-primary"
+          }
+        },
+        {
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "returns-backup"
+          }
+        },
+        {
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "label-image"
+          }
+        },
+        {
+          "title": "Run probe_lookup?",
+          "rawInput": {
+            "key": "audit-close"
+          }
+        }
+      ],
+      "expected": "AUDIT-72-RED",
+      "longResultChars": 21242,
+      "imageBytes": 80,
+      "pass": true
+    }
+  },
+  "notes": [],
+  "errors": [],
+  "sessionNewMeta": {
+    "antigravity": {
+      "enabledTools": [],
+      "eagerMcpServers": [
+        "agy-bridge"
+      ],
+      "systemPrompt": {
+        "append": "# Harness instructions\n\nUse only the tools that the server agy-bridge gives you. Never call a built-in tool, for example manage_task, run_command, browser tools, search_web, send_message, or schedule, also when it seems available. If a request needs a tool that you do not have, reply in text that you cannot do it in this conversation."
+      }
+    }
+  },
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 27
+}

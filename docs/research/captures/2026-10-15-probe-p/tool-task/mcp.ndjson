@@ -1,0 +1,153 @@
+{"t_ms":1703,"event":"listening","url":"http://127.0.0.1:55777/mcp/02b484c30d099b0b092d76ad","tools":["probe_lookup"]}
+{"t_ms":6208,"event":"request","id":1,"socket":1,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2026-07-28","content-length":"324"},"phase":"run","body":{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}},"io.modelcontextprotocol/clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}}
+{"t_ms":6208,"event":"response","id":1,"status":200,"headers":{},"body":{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}}
+{"t_ms":6209,"event":"close","which":"res","id":1,"socket":1,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":6209,"event":"close","which":"req","id":1,"socket":1,"complete":true,"phase":"run"}
+{"t_ms":6209,"event":"request","id":2,"socket":1,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","content-length":"231"},"phase":"run","body":{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"antigravity-client","version":"v1.0.0"},"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}},"roots":{"listChanged":true}}}}}
+{"t_ms":6209,"event":"response","id":2,"status":200,"headers":{"Mcp-Session-Id":"748827a70031223292c77b271413d0b4"},"body":{"jsonrpc":"2.0","id":2,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"agy-bridge-probe","version":"0"}}}}
+{"t_ms":6209,"event":"close","which":"res","id":2,"socket":1,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":6209,"event":"close","which":"req","id":2,"socket":1,"complete":true,"phase":"run"}
+{"t_ms":6210,"event":"request","id":3,"socket":1,"method":"GET","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","user-agent":"Go-http-client/1.1","accept":"text/event-stream","mcp-protocol-version":"2025-11-25"},"phase":"run","body":null}
+{"t_ms":6211,"event":"sse-open","id":3}
+{"t_ms":6211,"event":"close","which":"req","id":3,"socket":1,"complete":true,"phase":"run"}
+{"t_ms":6211,"event":"request","id":4,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"66"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}}
+{"t_ms":6211,"event":"response","id":4,"status":202,"headers":{},"body":null}
+{"t_ms":6212,"event":"close","which":"res","id":4,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":6212,"event":"close","which":"req","id":4,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":6212,"event":"request","id":5,"socket":2,"method":"GET","path":"/.well-known/oauth-protected-resource/mcp/02b484c30d099b0b092d76ad","headers":{"user-agent":"Go-http-client/1.1"},"phase":"run","body":null}
+{"t_ms":6212,"event":"response","id":5,"status":404,"headers":{},"body":{"error":"no route: /.well-known/oauth-protected-resource/mcp/02b484c30d099b0b092d76ad"}}
+{"t_ms":6212,"event":"close","which":"res","id":5,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":6212,"event":"close","which":"req","id":5,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":6212,"event":"request","id":6,"socket":2,"method":"GET","path":"/.well-known/oauth-protected-resource","headers":{"user-agent":"Go-http-client/1.1"},"phase":"run","body":null}
+{"t_ms":6212,"event":"response","id":6,"status":404,"headers":{},"body":{"error":"no route: /.well-known/oauth-protected-resource"}}
+{"t_ms":6212,"event":"close","which":"res","id":6,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":6212,"event":"close","which":"req","id":6,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":6213,"event":"request","id":7,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"58"},"phase":"run","body":{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}}
+{"t_ms":6213,"event":"response","id":7,"status":200,"headers":{},"body":{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"probe_lookup","description":"Read a warehouse audit record by key. Each result gives the next required record.","inputSchema":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}}]}}}
+{"t_ms":6213,"event":"close","which":"res","id":7,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":6213,"event":"close","which":"req","id":7,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":10959,"event":"request","id":8,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":10960,"event":"response","id":8,"status":202,"headers":{},"body":null}
+{"t_ms":10960,"event":"close","which":"res","id":8,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":10960,"event":"close","which":"req","id":8,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":10960,"event":"request","id":9,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":10960,"event":"response","id":9,"status":202,"headers":{},"body":null}
+{"t_ms":10961,"event":"close","which":"res","id":9,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":10961,"event":"close","which":"req","id":9,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":10961,"event":"request","id":10,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":10961,"event":"response","id":10,"status":202,"headers":{},"body":null}
+{"t_ms":10961,"event":"close","which":"res","id":10,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":10961,"event":"close","which":"req","id":10,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":10961,"event":"request","id":11,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":10961,"event":"response","id":11,"status":202,"headers":{},"body":null}
+{"t_ms":10961,"event":"close","which":"res","id":11,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":10961,"event":"close","which":"req","id":11,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":10962,"event":"request","id":12,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":10962,"event":"response","id":12,"status":202,"headers":{},"body":null}
+{"t_ms":10962,"event":"close","which":"res","id":12,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":10962,"event":"close","which":"req","id":12,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":14888,"event":"request","id":13,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":14888,"event":"response","id":13,"status":202,"headers":{},"body":null}
+{"t_ms":14888,"event":"close","which":"res","id":13,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":14888,"event":"close","which":"req","id":13,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":14889,"event":"request","id":14,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":14889,"event":"response","id":14,"status":202,"headers":{},"body":null}
+{"t_ms":14889,"event":"close","which":"res","id":14,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":14889,"event":"close","which":"req","id":14,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":14889,"event":"request","id":15,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":14889,"event":"response","id":15,"status":202,"headers":{},"body":null}
+{"t_ms":14889,"event":"close","which":"res","id":15,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":14889,"event":"close","which":"req","id":15,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":14889,"event":"request","id":16,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":14889,"event":"response","id":16,"status":202,"headers":{},"body":null}
+{"t_ms":14889,"event":"close","which":"res","id":16,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":14889,"event":"close","which":"req","id":16,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":14889,"event":"request","id":17,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":14889,"event":"response","id":17,"status":202,"headers":{},"body":null}
+{"t_ms":14889,"event":"close","which":"res","id":17,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":14890,"event":"close","which":"req","id":17,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":19168,"event":"request","id":18,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":19169,"event":"response","id":18,"status":202,"headers":{},"body":null}
+{"t_ms":19169,"event":"close","which":"res","id":18,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":19169,"event":"close","which":"req","id":18,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":19169,"event":"request","id":19,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":19170,"event":"response","id":19,"status":202,"headers":{},"body":null}
+{"t_ms":19170,"event":"close","which":"res","id":19,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":19171,"event":"close","which":"req","id":19,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":19171,"event":"request","id":20,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":19171,"event":"response","id":20,"status":202,"headers":{},"body":null}
+{"t_ms":19171,"event":"close","which":"res","id":20,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":19171,"event":"close","which":"req","id":20,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":19171,"event":"request","id":21,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":19171,"event":"response","id":21,"status":202,"headers":{},"body":null}
+{"t_ms":19171,"event":"close","which":"res","id":21,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":19171,"event":"close","which":"req","id":21,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":19172,"event":"request","id":22,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":19172,"event":"response","id":22,"status":202,"headers":{},"body":null}
+{"t_ms":19172,"event":"close","which":"res","id":22,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":19172,"event":"close","which":"req","id":22,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":23436,"event":"request","id":23,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":23436,"event":"response","id":23,"status":202,"headers":{},"body":null}
+{"t_ms":23436,"event":"close","which":"res","id":23,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":23436,"event":"close","which":"req","id":23,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":23436,"event":"request","id":24,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":23436,"event":"response","id":24,"status":202,"headers":{},"body":null}
+{"t_ms":23436,"event":"close","which":"res","id":24,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":23436,"event":"close","which":"req","id":24,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":23436,"event":"request","id":25,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":23436,"event":"response","id":25,"status":202,"headers":{},"body":null}
+{"t_ms":23436,"event":"close","which":"res","id":25,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":23437,"event":"close","which":"req","id":25,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":23437,"event":"request","id":26,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":23437,"event":"response","id":26,"status":202,"headers":{},"body":null}
+{"t_ms":23437,"event":"close","which":"res","id":26,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":23437,"event":"close","which":"req","id":26,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":23437,"event":"request","id":27,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":23437,"event":"response","id":27,"status":202,"headers":{},"body":null}
+{"t_ms":23437,"event":"close","which":"res","id":27,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":23437,"event":"close","which":"req","id":27,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":28043,"event":"request","id":28,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":28044,"event":"response","id":28,"status":202,"headers":{},"body":null}
+{"t_ms":28044,"event":"close","which":"res","id":28,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":28044,"event":"close","which":"req","id":28,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":28044,"event":"request","id":29,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":28044,"event":"response","id":29,"status":202,"headers":{},"body":null}
+{"t_ms":28044,"event":"close","which":"res","id":29,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":28045,"event":"close","which":"req","id":29,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":28045,"event":"request","id":30,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":28045,"event":"response","id":30,"status":202,"headers":{},"body":null}
+{"t_ms":28045,"event":"close","which":"res","id":30,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":28045,"event":"close","which":"req","id":30,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":28045,"event":"request","id":31,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":28045,"event":"response","id":31,"status":202,"headers":{},"body":null}
+{"t_ms":28045,"event":"close","which":"res","id":31,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":28046,"event":"close","which":"req","id":31,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":28046,"event":"request","id":32,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":28046,"event":"response","id":32,"status":202,"headers":{},"body":null}
+{"t_ms":28046,"event":"close","which":"res","id":32,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":28046,"event":"close","which":"req","id":32,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":32087,"event":"request","id":33,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":32088,"event":"response","id":33,"status":202,"headers":{},"body":null}
+{"t_ms":32088,"event":"close","which":"res","id":33,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":32088,"event":"close","which":"req","id":33,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":32088,"event":"request","id":34,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":32088,"event":"response","id":34,"status":202,"headers":{},"body":null}
+{"t_ms":32088,"event":"close","which":"res","id":34,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":32088,"event":"close","which":"req","id":34,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":32088,"event":"request","id":35,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":32088,"event":"response","id":35,"status":202,"headers":{},"body":null}
+{"t_ms":32088,"event":"close","which":"res","id":35,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":32088,"event":"close","which":"req","id":35,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":32088,"event":"request","id":36,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":32089,"event":"response","id":36,"status":202,"headers":{},"body":null}
+{"t_ms":32089,"event":"close","which":"res","id":36,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":32089,"event":"close","which":"req","id":36,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":32089,"event":"request","id":37,"socket":2,"method":"POST","path":"/mcp/02b484c30d099b0b092d76ad","headers":{"mcp-session-id":"748827a70031223292c77b271413d0b4","x-probe-session":"6b0fe3233fb44ac9","content-type":"application/json","user-agent":"Go-http-client/1.1","accept":"application/json, text/event-stream","mcp-protocol-version":"2025-11-25","content-length":"73"},"phase":"run","body":{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}}
+{"t_ms":32089,"event":"response","id":37,"status":202,"headers":{},"body":null}
+{"t_ms":32089,"event":"close","which":"res","id":37,"socket":2,"finished":true,"phase":"run","peerGone":null}
+{"t_ms":32089,"event":"close","which":"req","id":37,"socket":2,"complete":true,"phase":"run"}
+{"t_ms":36382,"event":"socket-end","socket":2,"phase":"shutdown"}
+{"t_ms":36383,"event":"socket-close","socket":2,"phase":"shutdown"}
+{"t_ms":36383,"event":"socket-end","socket":1,"phase":"shutdown"}
+{"t_ms":36383,"event":"socket-close","socket":1,"phase":"shutdown"}
+{"t_ms":36383,"event":"close","which":"res","id":3,"socket":1,"finished":false,"phase":"shutdown","peerGone":{"t_ms":36383,"how":"end","phase":"shutdown"}}

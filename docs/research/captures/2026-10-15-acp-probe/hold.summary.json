@@ -1,0 +1,563 @@
+{
+  "step": "hold",
+  "status": "ok",
+  "startedAt": "2026-10-15T02:59:35.767Z",
+  "durationMs": 200060,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/agy-acp-probe-ws/hold",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 62495,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 8291,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1335,
+    "session_new_run1_ms": 3131,
+    "prompt_main_ms": 194709
+  },
+  "sessions": [
+    {
+      "sessionId": "ea1a86d4-3773-465a-a6be-97586d9b65f2",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-low",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model"
+  },
+  "modeSelection": null,
+  "modelPromptsSent": 1,
+  "prompts": [
+    {
+      "label": "main",
+      "sessionId": "ea1a86d4-3773-465a-a6be-97586d9b65f2",
+      "text": "Call the tool probe_hold with the value d51b2052 and wait for its result. Do not call any other tool.",
+      "sentAtMs": 4475,
+      "doneAtMs": 199184,
+      "durationMs": 194709,
+      "agentText": "The tool call `probe_hold` on server `agy-bridge` was executed with the argument `{\"value\": \"d51b2052\"}`.\n\n### Result\n```text\nCreated At: 2026-10-15T10:59:50+08:00\nCompleted At: 2026-10-15T11:02:50+08:00\nEncountered error in step execution: MCP tool call to server \"agy-bridge\" timed out after 3m0s: context deadline exceeded\n```\n\nThe tool timed out after 3 minutes with `context deadline exceeded`.",
+      "thoughtChars": 0,
+      "messageChunks": 7,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null
+    }
+  ],
+  "stopReasons": [
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 1,
+    "tool_call": 1,
+    "tool_call_update": 2,
+    "usage_update": 2,
+    "agent_message_chunk": 7
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [
+    {
+      "toolCallId": "030349771ddb43ec9e31027fea988813",
+      "firstMs": 14548,
+      "lastMs": 194564,
+      "title": "agy-bridge_probe_hold",
+      "titles": [
+        "agy-bridge_probe_hold"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 14548,
+          "status": "pending"
+        },
+        {
+          "t_ms": 14552,
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 194564,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "arguments": {
+          "value": "d51b2052"
+        },
+        "value": "d51b2052"
+      },
+      "rawOutput": "Failure in MCP tool execution: MCP tool call to server \"agy-bridge\" timed out after 3m0s: context deadline exceeded",
+      "content": [],
+      "_meta": {
+        "mcp": {
+          "tool": "probe_hold",
+          "server": "agy-bridge"
+        },
+        "is_mcp_tool_call": true
+      },
+      "events": 3
+    }
+  ],
+  "permissionRequests": [
+    {
+      "t_ms": 14548,
+      "sessionId": "ea1a86d4-3773-465a-a6be-97586d9b65f2",
+      "toolCall": {
+        "toolCallId": "030349771ddb43ec9e31027fea988813",
+        "kind": "other",
+        "status": "pending",
+        "title": "agy-bridge_probe_hold",
+        "content": [],
+        "rawInput": {
+          "arguments": {
+            "value": "d51b2052"
+          },
+          "value": "d51b2052"
+        },
+        "_meta": {
+          "mcp": {
+            "tool": "probe_hold",
+            "server": "agy-bridge"
+          },
+          "is_mcp_tool_call": true
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "selected",
+          "optionId": "allow"
+        }
+      },
+      "reason": "allowed: bridge MCP tool"
+    }
+  ],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "The tool call `probe_hold` on server `agy-bridge` was executed with the argument `{\"value\": \"d51b2052\"}`.\n\n### Result\n```text\nCreated At: 2026-10-15T10:59:50+08:00\nCompleted At: 2026-10-15T11:02:50+08:00\nEncountered error in step execution: MCP tool call to server \"agy-bridge\" timed out after 3m0s: context deadline exceeded\n```\n\nThe tool timed out after 3 minutes with `context deadline exceeded`.",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [
+      {
+        "t_ms": 14554,
+        "used": 15332,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 199179,
+        "used": 15689,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    ],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1343,
+      "value": "0e60d8c3d7fc5732"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:64580/mcp/a92d6aea8bc9f4f6f79208a4",
+    "tools": [
+      "probe_hold"
+    ],
+    "requestCount": 9,
+    "byMethod": {
+      "server/discover": 1,
+      "initialize": 1,
+      "notifications/initialized": 1,
+      "tools/list": 1,
+      "tools/call": 1,
+      "notifications/cancelled": 1
+    },
+    "connectionsSeen": 2,
+    "toolsListCalls": 1,
+    "initializes": [
+      {
+        "t_ms": 4571,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "0e60d8c3d7fc5732",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [
+      {
+        "reqId": 8,
+        "rpcId": 4,
+        "t_arrive": 14553,
+        "phase": "run",
+        "name": "probe_hold",
+        "arguments": {
+          "value": "d51b2052"
+        },
+        "_meta": {
+          "antigravity.google/artifacts_dir": "~/.gemini/antigravity-acp/brain/ea1a86d4-3773-465a-a6be-97586d9b65f2",
+          "antigravity.google/conversation_id": "ea1a86d4-3773-465a-a6be-97586d9b65f2",
+          "progressToken": "ea1a86d4-3773-465a-a6be-97586d9b65f2:2"
+        },
+        "headers": {
+          "mcp-session-id": "9251398d4ecf8a6092792b0e2e5a14ed",
+          "x-probe-session": "0e60d8c3d7fc5732",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "mcp-protocol-version": "2025-11-25",
+          "content-length": "376"
+        },
+        "socket": 1,
+        "closed": {
+          "t_ms": 194555,
+          "phase": "run",
+          "by": "peer",
+          "peerSignal": "end",
+          "closeEventAtMs": 194558,
+          "heldForMs": 180002
+        },
+        "answered": false,
+        "params": {
+          "_meta": {
+            "antigravity.google/artifacts_dir": "~/.gemini/antigravity-acp/brain/ea1a86d4-3773-465a-a6be-97586d9b65f2",
+            "antigravity.google/conversation_id": "ea1a86d4-3773-465a-a6be-97586d9b65f2",
+            "progressToken": "ea1a86d4-3773-465a-a6be-97586d9b65f2:2"
+          },
+          "name": "probe_hold",
+          "arguments": {
+            "value": "d51b2052"
+          }
+        }
+      }
+    ],
+    "cancelledNotifications": [
+      {
+        "t_ms": 194560,
+        "params": {
+          "reason": "context deadline exceeded",
+          "requestId": 4
+        },
+        "matchesHeldReqId": null,
+        "phase": "run"
+      }
+    ],
+    "closeEvents": 9,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "hold": {
+      "holdMaxMs": 2100000,
+      "graceAfterEndMs": 300000,
+      "toolsCallArrivedAtMs": 14553,
+      "ends": [
+        {
+          "kind": "mcp-request-socket-closed",
+          "t_ms": 194558,
+          "afterProbeCancel": false,
+          "reqId": 8,
+          "by": "peer",
+          "phase": "run",
+          "heldForMs": 180002
+        },
+        {
+          "kind": "mcp-notifications/cancelled",
+          "t_ms": 194560,
+          "afterProbeCancel": false,
+          "params": {
+            "reason": "context deadline exceeded",
+            "requestId": 4
+          }
+        },
+        {
+          "kind": "tool_call_update-failed",
+          "t_ms": 194564,
+          "afterProbeCancel": false,
+          "title": null,
+          "content": null
+        }
+      ],
+      "firstEndAtMs": 194558,
+      "cancelSentAtMs": null,
+      "cancelReason": null,
+      "outputAfterFirstEnd": {
+        "messageChars": 399,
+        "thoughtChars": 0,
+        "text": "The tool call `probe_hold` on server `agy-bridge` was executed with the argument `{\"value\": \"d51b2052\"}`.\n\n### Result\n```text\nCreated At: 2026-10-15T10:59:50+08:00\nCompleted At: 2026-10-15T11:02:50+08:00\nEncountered error in step execution: MCP tool call to server \"agy-bridge\" timed out after 3m0s: context deadline exceeded\n```\n\nThe tool timed out after 3 minutes with `context deadline exceeded`."
+      },
+      "heldForMsAtFirstClose": 180002,
+      "promptStopReason": "end_turn",
+      "promptError": null,
+      "toolsCallCount": 1,
+      "toolCalled": true,
+      "promptReturnedAtMs": 199184,
+      "modelContinuedWithoutResult": true,
+      "firstEndAfterToolsCallMs": 180005,
+      "endedByProbeCancel": false
+    }
+  },
+  "notes": [],
+  "errors": [],
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 13
+}

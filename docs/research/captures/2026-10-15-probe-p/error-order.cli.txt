@@ -1,0 +1,14 @@
+acp-probe step=error-order server=~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par out=~/agy-acp-probe/p-live-20261015T060907Z/error-order workspace=/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-ObTHdY
+prompt[invalid-image] sent: Describe this image in one word.
+prompt[invalid-image] done: stopReason=end_turn error=none in 1917 ms
+
+== acp-probe step=error-order status=ok (9174 ms) ==
+server: antigravity-acp 1.4.0  protocol=1
+prompts sent: 1  stopReasons: end_turn
+model selection: requested=gemini-3.8-flash-low used=session/set_model attempts=session/set_model:ok
+updates: available_commands_update=1 agent_message_chunk=1
+mcp: 7 requests {"server/discover":1,"initialize":1,"notifications/initialized":1,"tools/list":1}  tools/call: 0  notifications/cancelled: 0
+reply: "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting"
+check errorOrder: {"stderrAtMs":7337,"promptResultAtMs":7351,"stderrEventSeq":30,"promptResultEventSeq":50,"deltaMs":-14,"order":"stderr-before-result","timestampMeaning":"Client receipt time for complete stderr line and resolved prompt result; shared event sequence resolves equal milliseconds","stopReason":"end_turn","error":null}
+errors: none
+files: ~/agy-acp-probe/p-live-20261015T060907Z/error-order/{transcript.ndjson,stderr.txt,mcp.ndjson,summary.json}

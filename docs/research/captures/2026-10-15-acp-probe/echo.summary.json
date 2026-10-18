@@ -1,0 +1,571 @@
+{
+  "step": "echo",
+  "status": "ok",
+  "startedAt": "2026-10-15T02:59:09.826Z",
+  "durationMs": 19038,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/agy-acp-probe-ws/echo",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 62460,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 7800,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1514,
+    "session_new_run1_ms": 4316,
+    "prompt_main_ms": 12384
+  },
+  "sessions": [
+    {
+      "sessionId": "524c01bb-4f73-401e-be55-5b49826935cb",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-low",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model"
+  },
+  "modeSelection": null,
+  "modelPromptsSent": 1,
+  "prompts": [
+    {
+      "label": "main",
+      "sessionId": "524c01bb-4f73-401e-be55-5b49826935cb",
+      "text": "Call the tool probe_echo with the value f636df9c. Then reply with the exact tool output.",
+      "sentAtMs": 5841,
+      "doneAtMs": 18225,
+      "durationMs": 12384,
+      "agentText": "ECHO:f636df9c",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null
+    }
+  ],
+  "stopReasons": [
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 1,
+    "usage_update": 3,
+    "tool_call": 1,
+    "tool_call_update": 2,
+    "agent_message_chunk": 1
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [
+    {
+      "toolCallId": "38ca64d0f2ed4345b5936e998c2d3cca",
+      "firstMs": 14491,
+      "lastMs": 14502,
+      "title": "agy-bridge_probe_echo",
+      "titles": [
+        "agy-bridge_probe_echo"
+      ],
+      "kind": "other",
+      "statuses": [
+        {
+          "t_ms": 14491,
+          "status": "pending"
+        },
+        {
+          "t_ms": 14497,
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 14502,
+          "status": "completed"
+        }
+      ],
+      "rawInput": {
+        "arguments": {
+          "value": "f636df9c"
+        },
+        "value": "f636df9c"
+      },
+      "rawOutput": "Call probe_echo tool",
+      "content": [
+        {
+          "content": {
+            "text": "Call probe_echo tool",
+            "type": "text"
+          },
+          "type": "content"
+        }
+      ],
+      "_meta": {
+        "mcp": {
+          "tool": "probe_echo",
+          "server": "agy-bridge"
+        },
+        "is_mcp_tool_call": true
+      },
+      "events": 3
+    }
+  ],
+  "permissionRequests": [
+    {
+      "t_ms": 14492,
+      "sessionId": "524c01bb-4f73-401e-be55-5b49826935cb",
+      "toolCall": {
+        "toolCallId": "38ca64d0f2ed4345b5936e998c2d3cca",
+        "kind": "other",
+        "status": "pending",
+        "title": "agy-bridge_probe_echo",
+        "content": [],
+        "rawInput": {
+          "arguments": {
+            "value": "f636df9c"
+          },
+          "value": "f636df9c"
+        },
+        "_meta": {
+          "mcp": {
+            "tool": "probe_echo",
+            "server": "agy-bridge"
+          },
+          "is_mcp_tool_call": true
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "selected",
+          "optionId": "allow"
+        }
+      },
+      "reason": "allowed: bridge MCP tool"
+    }
+  ],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "ECHO:f636df9c",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [
+      {
+        "t_ms": 10303,
+        "used": 14566,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 14500,
+        "used": 14872,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 18222,
+        "used": 15017,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    ],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1524,
+      "value": "6565ffc4d12bbf4f"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:64471/mcp/65c11985aecf339c8058457f",
+    "tools": [
+      "probe_echo"
+    ],
+    "requestCount": 8,
+    "byMethod": {
+      "server/discover": 1,
+      "initialize": 1,
+      "notifications/initialized": 1,
+      "tools/list": 1,
+      "tools/call": 1
+    },
+    "connectionsSeen": 1,
+    "toolsListCalls": 1,
+    "initializes": [
+      {
+        "t_ms": 5978,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "6565ffc4d12bbf4f",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [
+      {
+        "reqId": 8,
+        "rpcId": 4,
+        "t_arrive": 14499,
+        "phase": "run",
+        "name": "probe_echo",
+        "arguments": {
+          "value": "f636df9c"
+        },
+        "_meta": {
+          "antigravity.google/artifacts_dir": "~/.gemini/antigravity-acp/brain/524c01bb-4f73-401e-be55-5b49826935cb",
+          "antigravity.google/conversation_id": "524c01bb-4f73-401e-be55-5b49826935cb",
+          "progressToken": "524c01bb-4f73-401e-be55-5b49826935cb:4"
+        },
+        "headers": {
+          "mcp-session-id": "7936f2f788b3e4bc82e309de8961715f",
+          "x-probe-session": "6565ffc4d12bbf4f",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "mcp-protocol-version": "2025-11-25",
+          "content-length": "376"
+        },
+        "socket": 1,
+        "closed": null,
+        "answered": true,
+        "params": {
+          "_meta": {
+            "antigravity.google/artifacts_dir": "~/.gemini/antigravity-acp/brain/524c01bb-4f73-401e-be55-5b49826935cb",
+            "antigravity.google/conversation_id": "524c01bb-4f73-401e-be55-5b49826935cb",
+            "progressToken": "524c01bb-4f73-401e-be55-5b49826935cb:4"
+          },
+          "name": "probe_echo",
+          "arguments": {
+            "value": "f636df9c"
+          }
+        }
+      }
+    ],
+    "cancelledNotifications": [],
+    "closeEvents": 8,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "token": "f636df9c",
+    "replyContainsEcho": true,
+    "mcpToolsCall": [
+      {
+        "name": "probe_echo",
+        "arguments": {
+          "value": "f636df9c"
+        },
+        "_meta": {
+          "antigravity.google/artifacts_dir": "~/.gemini/antigravity-acp/brain/524c01bb-4f73-401e-be55-5b49826935cb",
+          "antigravity.google/conversation_id": "524c01bb-4f73-401e-be55-5b49826935cb",
+          "progressToken": "524c01bb-4f73-401e-be55-5b49826935cb:4"
+        },
+        "headers": {
+          "mcp-session-id": "7936f2f788b3e4bc82e309de8961715f",
+          "x-probe-session": "6565ffc4d12bbf4f",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "mcp-protocol-version": "2025-11-25",
+          "content-length": "376"
+        },
+        "t_arrive": 14499,
+        "phase": "run"
+      }
+    ],
+    "acpToolCalls": [
+      {
+        "title": "agy-bridge_probe_echo",
+        "kind": "other",
+        "rawInput": {
+          "arguments": {
+            "value": "f636df9c"
+          },
+          "value": "f636df9c"
+        },
+        "rawOutput": "Call probe_echo tool",
+        "content": [
+          {
+            "content": {
+              "text": "Call probe_echo tool",
+              "type": "text"
+            },
+            "type": "content"
+          }
+        ],
+        "_meta": {
+          "mcp": {
+            "tool": "probe_echo",
+            "server": "agy-bridge"
+          },
+          "is_mcp_tool_call": true
+        },
+        "statuses": [
+          "pending",
+          "in_progress",
+          "completed"
+        ]
+      }
+    ],
+    "xProbeSessionHeaderMatches": true
+  },
+  "notes": [],
+  "errors": [],
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 8
+}

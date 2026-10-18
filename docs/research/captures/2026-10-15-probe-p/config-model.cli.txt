@@ -1,0 +1,10 @@
+acp-probe step=config-model server=~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par out=~/agy-acp-probe/p-live-20261015T060907Z/config-model workspace=/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-RrnSkp
+
+== acp-probe step=config-model status=ok (8358 ms) ==
+server: antigravity-acp 1.4.0  protocol=1
+prompts sent: 0  stopReasons: -
+updates: available_commands_update=1
+mcp: 0 requests {}  tools/call: 0  notifications/cancelled: 0
+check configModel: {"results":[{"configOptions":[{"currentValue":"gemini-3.8-flash","options":[{"value":"gemini-3.8-flash","name":"Gemini 3.8 Flash"}],"id":"model","name":"Model","category":"model","type":"select"},{"currentValue":"high","options":[{"value":"low","name":"Low"},{"value":"medium","name":"Medium"},{"value":"high","name":"High"}],"id":"thinking_level","name":"Thinking Level","category":"thought_level","...
+errors: none
+files: ~/agy-acp-probe/p-live-20261015T060907Z/config-model/{transcript.ndjson,stderr.txt,mcp.ndjson,summary.json}

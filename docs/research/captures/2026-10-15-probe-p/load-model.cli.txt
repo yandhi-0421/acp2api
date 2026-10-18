@@ -1,0 +1,17 @@
+acp-probe step=load-model server=~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par out=~/agy-acp-probe/p-live-20261015T060907Z/load-model workspace=/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-PTRbUJ
+prompt[remember] sent: Remember the codeword 5fd0b692. Reply with OK only.
+prompt[remember] done: stopReason=end_turn error=none in 3945 ms
+prompt[recall-and-read] sent: What is the codeword I gave you? Also read probe-note.txt in the current workspace. If no ...
+prompt[recall-and-read] done: stopReason=end_turn error=none in 4001 ms
+
+== acp-probe step=load-model status=ok (21759 ms) ==
+server: antigravity-acp 1.4.0  protocol=1
+prompts sent: 2  stopReasons: end_turn, end_turn
+model selection: requested=gemini-3.8-flash-medium used=session/set_model attempts=session/set_model:ok
+updates: available_commands_update=2 agent_message_chunk=3 usage_update=2 user_message_chunk=1
+mcp: 14 requests {"server/discover":2,"initialize":2,"notifications/initialized":2,"tools/list":2}  tools/call: 0  notifications/cancelled: 0
+reply: "5fd0b692|BLOCKED"
+usage: 2 usage_update, 0 prompt result usage
+check loadModel: {"pass":true,"historyReplay":[{"kind":"user_message_chunk","at":17054},{"kind":"available_commands_update","at":17054},{"kind":"agent_message_chunk","at":17054}],"liveEvents":[{"kind":"agent_message_chunk","at":21006},{"kind":"usage_update","at":21052}],"reply":"5fd0b692|BLOCKED","contextRetained":true,"contentLeaked":false,"toolFilterHeld":true}
+errors: none
+files: ~/agy-acp-probe/p-live-20261015T060907Z/load-model/{transcript.ndjson,stderr.txt,mcp.ndjson,summary.json}

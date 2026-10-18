@@ -1,0 +1,420 @@
+{
+  "step": "cancel",
+  "status": "ok",
+  "startedAt": "2026-10-15T02:55:15.430Z",
+  "durationMs": 15528,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/agy-acp-probe-ws/cancel",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": true,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 60557,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 7997,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1350,
+    "session_new_run1_ms": 3447,
+    "prompt_cancel_ms": 4599,
+    "prompt_after-cancel_ms": 3727
+  },
+  "sessions": [
+    {
+      "sessionId": "fc94b74e-e6fd-455a-96b4-942059be4683",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-low",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model"
+  },
+  "modeSelection": null,
+  "modelPromptsSent": 2,
+  "prompts": [
+    {
+      "label": "cancel",
+      "sessionId": "fc94b74e-e6fd-455a-96b4-942059be4683",
+      "text": "Write the integers from 1 to 400, one on each line.",
+      "sentAtMs": 4806,
+      "doneAtMs": 9405,
+      "durationMs": 4599,
+      "agentText": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\nThe request was cancelled by the client.",
+      "thoughtChars": 0,
+      "messageChunks": 2,
+      "stopReason": "cancelled",
+      "result": {
+        "stopReason": "cancelled"
+      },
+      "error": null
+    },
+    {
+      "label": "after-cancel",
+      "sessionId": "fc94b74e-e6fd-455a-96b4-942059be4683",
+      "text": "Reply with the word READY and nothing else.",
+      "sentAtMs": 10906,
+      "doneAtMs": 14633,
+      "durationMs": 3727,
+      "agentText": "READY",
+      "thoughtChars": 0,
+      "messageChunks": 1,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null
+    }
+  ],
+  "stopReasons": [
+    "cancelled",
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 1,
+    "agent_message_chunk": 3,
+    "usage_update": 2
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [],
+  "permissionRequests": [],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "READY",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [
+      {
+        "t_ms": 9398,
+        "used": 14395,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 14631,
+        "used": 14337,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    ],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1357,
+      "value": "0d7b91c50f80f8f7"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:63912/mcp/6a5d3e52da71964319c62b99",
+    "tools": [
+      "probe_echo"
+    ],
+    "requestCount": 12,
+    "byMethod": {
+      "server/discover": 1,
+      "initialize": 1,
+      "notifications/initialized": 1,
+      "tools/list": 1,
+      "notifications/roots/list_changed": 5
+    },
+    "connectionsSeen": 1,
+    "toolsListCalls": 1,
+    "initializes": [
+      {
+        "t_ms": 4953,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "0d7b91c50f80f8f7",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 12,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "cancel": {
+      "tCancelMs": 9395,
+      "cancelledAfterChunk": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n",
+      "promptResultAtMs": 9405,
+      "stopReason": "cancelled",
+      "error": null,
+      "cancelToResultMs": 10,
+      "updatesAfterCancel": [
+        {
+          "t_ms": 9395,
+          "sessionId": "fc94b74e-e6fd-455a-96b4-942059be4683",
+          "kind": "agent_message_chunk",
+          "brief": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n"
+        },
+        {
+          "t_ms": 9398,
+          "sessionId": "fc94b74e-e6fd-455a-96b4-942059be4683",
+          "kind": "usage_update",
+          "brief": "{\"used\":14395,\"size\":1048576,\"sessionUpdate\":\"usage_update\"}"
+        },
+        {
+          "t_ms": 9404,
+          "sessionId": "fc94b74e-e6fd-455a-96b4-942059be4683",
+          "kind": "agent_message_chunk",
+          "brief": "The request was cancelled by the client."
+        }
+      ],
+      "noMessageChunkSeen": false,
+      "textBeforeCancel": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\nThe request was cancelled by the client.",
+      "agentTextLength": 64,
+      "continueAfter": {
+        "stopReason": "end_turn",
+        "error": null,
+        "reply": "READY",
+        "worked": true
+      }
+    }
+  },
+  "notes": [],
+  "errors": [],
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 6
+}

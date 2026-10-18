@@ -1,0 +1,9 @@
+acp-probe step=session-files server=~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par out=~/agy-acp-probe/p-live-20261015T060907Z/session-files workspace=/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/acp-probe-p-u6lQiA
+
+== acp-probe step=session-files status=ok (20 ms) ==
+server: (no initialize result)  protocol=?
+prompts sent: 0  stopReasons: -
+updates: -
+check sessionFiles: {"directory":"~/.gemini/antigravity-acp/conversations","files":[{"name":"066f59d0-b2d0-4e07-8348-fd5968e63b97.db","size":393216,"type":"file"},{"name":"066f59d0-b2d0-4e07-8348-fd5968e63b97.meta","size":98,"type":"file"},{"name":"1c269fc5-badc-4ead-85f3-9473738f55e3.db","size":524288,"type":"file"},{"name":"1c269fc5-badc-4ead-85f3-9473738f55e3.meta","size":96,"type":"file"},{"name"...
+errors: none
+files: ~/agy-acp-probe/p-live-20261015T060907Z/session-files/{transcript.ndjson,stderr.txt,mcp.ndjson,summary.json}

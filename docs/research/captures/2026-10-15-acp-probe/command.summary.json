@@ -1,0 +1,462 @@
+{
+  "step": "command",
+  "status": "ok",
+  "startedAt": "2026-10-15T02:53:33.475Z",
+  "durationMs": 23813,
+  "invocation": {
+    "server": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+    "serverArgs": [],
+    "workspace": "/private/var/folders/r9/wm02f0mx08g9dj4zykj79b380000gn/T/agy-acp-probe-ws/command",
+    "model": "gemini-3.8-flash-low",
+    "mode": null,
+    "method": null,
+    "holdMaxMin": 35,
+    "continueAfter": false,
+    "session": null
+  },
+  "server": {
+    "protocolVersion": 1,
+    "agentInfo": {
+      "name": "antigravity-acp",
+      "title": "Google Antigravity",
+      "version": "1.4.0"
+    },
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "oauth-personal",
+        "name": "Log in with Google",
+        "description": "Log in with your Google account"
+      },
+      {
+        "id": "oauth-business",
+        "name": "Log in with Gemini Enterprise",
+        "description": "Log in with your Gemini Enterprise account"
+      },
+      {
+        "id": "gemini-api-key",
+        "name": "Gemini API key",
+        "description": "Use an API key with Gemini Developer API"
+      },
+      {
+        "id": "agent-platform",
+        "name": "Gemini Enterprise Agent Platform",
+        "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials or an API key"
+      }
+    ]
+  },
+  "serverRuns": [
+    {
+      "run": 1,
+      "cmd": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+      "args": [],
+      "pid": 60143,
+      "stderrFile": "stderr.txt",
+      "exit": {
+        "code": 0,
+        "signal": null
+      },
+      "stoppedBy": "stdin-end",
+      "stderrBytes": 7800,
+      "nonJsonStdoutLines": 0,
+      "stdinError": null
+    }
+  ],
+  "timings": {
+    "initialize_run1_ms": 1280,
+    "session_new_run1_ms": 3525,
+    "prompt_main_ms": 18160
+  },
+  "sessions": [
+    {
+      "sessionId": "1c269fc5-badc-4ead-85f3-9473738f55e3",
+      "how": "session/new",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)",
+            "description": "gemini-3.8-flash-high"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)",
+            "description": "gemini-3.8-flash-medium"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)",
+            "description": "gemini-3.8-flash-low"
+          }
+        ],
+        "currentModelId": "gemini-3.8-flash-high"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Default permission prompt flow"
+          },
+          {
+            "id": "auto_edit",
+            "name": "Auto Edit",
+            "description": "Auto-approve file edit tools"
+          },
+          {
+            "id": "yolo",
+            "name": "YOLO",
+            "description": "Auto-approve all tools"
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        },
+        {
+          "currentValue": "high",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ],
+          "id": "thinking_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select"
+        },
+        {
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Default permission prompt flow"
+            },
+            {
+              "value": "auto_edit",
+              "name": "Auto Edit",
+              "description": "Auto-approve file edit tools"
+            },
+            {
+              "value": "yolo",
+              "name": "YOLO",
+              "description": "Auto-approve all tools"
+            }
+          ],
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select"
+        }
+      ],
+      "modelsFromConfigOptions": [
+        {
+          "currentValue": "gemini-3.8-flash",
+          "options": [
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            }
+          ],
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select"
+        }
+      ],
+      "resultKeys": [
+        "sessionId",
+        "modes",
+        "configOptions",
+        "models",
+        "_meta"
+      ]
+    }
+  ],
+  "modelSelection": {
+    "requested": "gemini-3.8-flash-low",
+    "attempts": [
+      {
+        "method": "session/set_model",
+        "ok": true,
+        "result": {}
+      }
+    ],
+    "used": "session/set_model"
+  },
+  "modeSelection": null,
+  "modelPromptsSent": 1,
+  "prompts": [
+    {
+      "label": "main",
+      "sessionId": "1c269fc5-badc-4ead-85f3-9473738f55e3",
+      "text": "Run the shell command \"echo agy-bridge-probe\" and show its output.",
+      "sentAtMs": 4812,
+      "doneAtMs": 22972,
+      "durationMs": 18160,
+      "agentText": "The execution of the shell command was denied by the environment's pre-tool hook.\n\n- **Error encountered:** `denied by pre-tool hook: Denied by user (*).`\n- **Impact:** Unable to execute `echo agy-bridge-probe` in the shell or capture its real-time process output.\n- **Next steps:** \n  - Allow / approve shell command execution permissions in your client when prompted.\n  - Alternatively, you can run the command directly in your terminal:\n    ```zsh\n    echo agy-bridge-probe\n    ```\n    *Expected output:*\n    ```text\n    agy-bridge-probe\n    ```",
+      "thoughtChars": 0,
+      "messageChunks": 6,
+      "stopReason": "end_turn",
+      "result": {
+        "stopReason": "end_turn"
+      },
+      "error": null
+    }
+  ],
+  "stopReasons": [
+    "end_turn"
+  ],
+  "updateKindCounts": {
+    "available_commands_update": 1,
+    "tool_call": 1,
+    "tool_call_update": 1,
+    "usage_update": 3,
+    "agent_message_chunk": 6
+  },
+  "unknownUpdateKinds": [],
+  "updatesOutsidePrompt": {
+    "available_commands_update": 1
+  },
+  "toolCalls": [
+    {
+      "toolCallId": "55bc4a53d60b4927b2e318157044049e",
+      "firstMs": 9326,
+      "lastMs": 9327,
+      "title": "echo agy-bridge-probe",
+      "titles": [
+        "echo agy-bridge-probe"
+      ],
+      "kind": "execute",
+      "statuses": [
+        {
+          "t_ms": 9326,
+          "status": "pending"
+        },
+        {
+          "t_ms": 9327,
+          "status": "failed"
+        }
+      ],
+      "rawInput": {
+        "CommandLine": "echo agy-bridge-probe",
+        "Cwd": "~/.gemini/antigravity-cli/skills",
+        "WaitMsBeforeAsync": 5000
+      },
+      "rawOutput": "Rejected by user",
+      "events": 2
+    }
+  ],
+  "permissionRequests": [
+    {
+      "t_ms": 9326,
+      "sessionId": "1c269fc5-badc-4ead-85f3-9473738f55e3",
+      "toolCall": {
+        "toolCallId": "55bc4a53d60b4927b2e318157044049e",
+        "kind": "execute",
+        "status": "pending",
+        "title": "echo agy-bridge-probe",
+        "rawInput": {
+          "CommandLine": "echo agy-bridge-probe",
+          "Cwd": "~/.gemini/antigravity-cli/skills",
+          "WaitMsBeforeAsync": 5000
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_always",
+          "name": "Allow Always (risky)",
+          "kind": "allow_always",
+          "_meta": {
+            "agy.security.warning": {
+              "severity": "high",
+              "risk": "prompt_injection",
+              "title": "Allowing always can be risky",
+              "message": "Untrusted files or tool output could contain a prompt injection that silently re-runs this action. This approval is scoped to the exact command and the current workspace only."
+            }
+          }
+        },
+        {
+          "optionId": "allow",
+          "name": "Allow",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "deny",
+          "name": "Deny",
+          "kind": "reject_once"
+        }
+      ],
+      "answer": {
+        "outcome": {
+          "outcome": "selected",
+          "optionId": "deny"
+        }
+      },
+      "reason": "rejected"
+    }
+  ],
+  "rejectedAgentRequests": [],
+  "finalAgentText": "The execution of the shell command was denied by the environment's pre-tool hook.\n\n- **Error encountered:** `denied by pre-tool hook: Denied by user (*).`\n- **Impact:** Unable to execute `echo agy-bridge-probe` in the shell or capture its real-time process output.\n- **Next steps:** \n  - Allow / approve shell command execution permissions in your client when prompted.\n  - Alternatively, you can run the command directly in your terminal:\n    ```zsh\n    echo agy-bridge-probe\n    ```\n    *Expected output:*\n    ```text\n    agy-bridge-probe\n    ```",
+  "thoughtTextLength": 0,
+  "usage": {
+    "updates": [
+      {
+        "t_ms": 15835,
+        "used": 14413,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 15837,
+        "used": 15067,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      },
+      {
+        "t_ms": 22971,
+        "used": 15786,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    ],
+    "promptResults": []
+  },
+  "availableCommands": [
+    {
+      "name": "plan",
+      "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+    },
+    {
+      "name": "logout",
+      "description": "Log out and clear stored credentials."
+    },
+    {
+      "name": "usage",
+      "description": "Show model token usage and quota limits."
+    }
+  ],
+  "mcpProbeHeaders": [
+    {
+      "t_ms": 1286,
+      "value": "b37fdd87e14fbb0c"
+    }
+  ],
+  "mcp": {
+    "url": "http://127.0.0.1:63630/mcp/51732e1f25e81b799da633ec",
+    "tools": [
+      "probe_echo"
+    ],
+    "requestCount": 7,
+    "byMethod": {
+      "server/discover": 1,
+      "initialize": 1,
+      "notifications/initialized": 1,
+      "tools/list": 1
+    },
+    "connectionsSeen": 1,
+    "toolsListCalls": 1,
+    "initializes": [
+      {
+        "t_ms": 4940,
+        "protocolVersion": "2025-11-25",
+        "clientInfo": {
+          "name": "antigravity-client",
+          "version": "v1.0.0"
+        },
+        "capabilities": {
+          "elicitation": {
+            "form": {},
+            "url": {}
+          },
+          "roots": {
+            "listChanged": true
+          }
+        },
+        "headers": {
+          "x-probe-session": "b37fdd87e14fbb0c",
+          "content-type": "application/json",
+          "user-agent": "Go-http-client/1.1",
+          "accept": "application/json, text/event-stream",
+          "content-length": "231"
+        }
+      }
+    ],
+    "toolsCalls": [],
+    "cancelledNotifications": [],
+    "closeEvents": 7,
+    "heldRequestsStillOpenAtTeardown": []
+  },
+  "checks": {
+    "permissionAsked": true,
+    "toolCalls": [
+      {
+        "title": "echo agy-bridge-probe",
+        "kind": "execute",
+        "statuses": [
+          "pending",
+          "failed"
+        ]
+      }
+    ],
+    "replyHasOutputLine": true,
+    "replyMentionsString": true,
+    "note": "replyHasOutputLine is the strong signal: the prompt itself contains the string, so a mention alone proves nothing"
+  },
+  "notes": [],
+  "errors": [],
+  "serverVersion": {
+    "name": "antigravity-acp",
+    "title": "Google Antigravity",
+    "version": "1.4.0"
+  },
+  "updatesLogged": 12
+}
