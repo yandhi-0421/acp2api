@@ -67,7 +67,7 @@ impl Runtime {
             session: String::new(),
         };
         runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
-        let session = runtime.call("session/new", json!({"cwd": cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":true}}})).await?;
+        let session = runtime.call("session/new", json!({"cwd": cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}})).await?;
         runtime.session = session["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?
