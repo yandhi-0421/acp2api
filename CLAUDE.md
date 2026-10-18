@@ -37,4 +37,9 @@ One bounded context: `GLOSSARY.md` at the root, and ADRs in `docs/adr/`.
 ## Directories
 
 - `.claude/`: the workflow skills and the workflow manifest. The setup skill `/workflow-setup` writes them.
-- `docs/`: the instructions for the issue tracker in `docs/agents/`, the ADRs in `docs/adr/`, and the captures of the probes in `docs/research/captures/`.
+- `docs/`: the instructions for the issue tracker in `docs/agents/`, the ADRs in `docs/adr/`, the research notes in `docs/research/`, and the captures of the probes in `docs/research/captures/`.
+
+## Research and probes
+
+- The maintainer will delete an earlier project, a bridge from the same three APIs to the Antigravity CLI. Do not cite its repository, its files, its issues, or its commits. Its notes, captures, and test ideas that matter for acp2api are in `docs/research/`. Cite these files.
+- Each probe, fake endpoint, and fake ACP agent needs a request cap, a timeout for each run, and a size cap for each log file. Add these limits before the first run. `docs/research/2026-10-18-probe-methods-and-safety-rules.md` gives the reason and the redaction rules for captures.
