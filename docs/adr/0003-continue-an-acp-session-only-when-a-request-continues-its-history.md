@@ -27,6 +27,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - **Stopped process.** When the runtime process of an ACP session stops, acp2api keeps the record. The next match loads the ACP session with `session/load` in another runtime process.
 - **Rebuild.** The first prompt of a rebuild holds one fixed neutral line and the earlier part of the conversation as text with role labels.
   - Each image goes as an ACP `image` block at its place in the text.
+  - The system prompt is not part of this text. It goes in `_meta.antigravity.systemPrompt.append`, as [How does the system prompt of a request reach the model?](https://github.com/yandhi-0421/acp2api/issues/23) decides.
   - [How does the system prompt of a request reach the model?](https://github.com/yandhi-0421/acp2api/issues/23) decides the role labels.
   - [How does a client tool call pause and continue a prompt turn?](https://github.com/yandhi-0421/acp2api/issues/11) decides the text form of a tool result.
 - **No notice.** acp2api tells the API client nothing about a rebuild. It writes a log line.
