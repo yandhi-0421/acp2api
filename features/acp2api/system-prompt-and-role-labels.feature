@@ -57,7 +57,7 @@ Feature: System prompt and role labels
       """
     And the system prompt addition of the ACP session does not hold "Be brief."
 
-  @FR-020 @issue-36 @wip
+  @FR-020 @issue-36
   Scenario: A prompt with one new unnamed user message has no role label
     When an API client sends a request to "POST /v1/messages" with one unnamed user message "Hello"
     Then the prompt that the official runtime gets is "Hello"

@@ -90,7 +90,6 @@ impl ProcessTree for OsTree {
                 drop(self.job);
                 let _ = self.child.wait().await;
                 let _ = clock;
-                return;
             }
             #[cfg(unix)]
             {
