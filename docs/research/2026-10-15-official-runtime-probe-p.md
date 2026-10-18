@@ -63,7 +63,7 @@ acp2api: the macOS probe of acp2api later passed a similar set of cases, see F6 
 - The notification passed, so the probe did not try the other two ways of the plan: a `session/load` in the same process, and a text that names the new tool.
 - The times of the two reads of `tools/list` and both schemas are in `checkpoint-3.sanitized.json`, key `steps.tool-set-change`.
 
-acp2api: ADR-0002 says that no probe saw a second read of `tools/list`, and ADR-0003 does a rebuild for a new set of client tools. This step is one run on macOS that shows a second read after `notifications/tools/list_changed`.
+acp2api: ADR-0002 and ADR-0003 cite this step. acp2api still does a rebuild for a new set of client tools, and ADR-0003 gives the reason.
 
 ## 6. Step `error-order`
 
@@ -78,7 +78,7 @@ acp2api: ADR-0002 says that no probe saw a second read of `tools/list`, and ADR-
 - Each `.db` file had 393,216 to 720,896 bytes, and the 29 files had 13,500,416 bytes together. Each `.meta` file had 93 to 150 bytes.
 - The step opened no file and no SQLite database, and it followed no symbolic link. The names and the sizes are in `checkpoint-3.sanitized.json`, key `steps.session-files`.
 
-acp2api: the session files and their removal are in ADR-0005. ADR-0003 says that nobody measured the size of a session file.
+acp2api: the session files and their removal are in ADR-0005. ADR-0003 and ADR-0005 cite these sizes.
 
 ## 8. Files
 
