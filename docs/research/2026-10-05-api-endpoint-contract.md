@@ -502,7 +502,7 @@ The specification of the earlier bridge later changed the effort row to "Accept.
 
 ## Appendix A: the parameter table of the earlier bridge
 
-This appendix gives the choices of the earlier bridge, not the decisions of acp2api. It gives the state of the earlier bridge at commit `5103584` (2026-10-15). [Which request fields and content blocks does acp2api use, ignore, or reject?][i21] names these two sources of its delegated rows:
+This appendix gives the choices of the earlier bridge, not the decisions of acp2api. It gives the state of the earlier bridge on 2026-10-15. [Which request fields and content blocks does acp2api use, ignore, or reject?][i21] names these two sources of its delegated rows:
 
 - the section "Parameters" of the specification of the earlier bridge;
 - the module of the parameter checks of the earlier bridge, `src/api/params.ts`.
