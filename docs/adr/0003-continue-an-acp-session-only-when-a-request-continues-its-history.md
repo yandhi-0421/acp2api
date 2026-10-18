@@ -23,7 +23,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - **No wait.** When the only match has a prompt turn that runs now, the request does a rebuild. It does not wait for that ACP session.
 - **Model.** A change of the model or of the `thinking_level` keeps the ACP session. acp2api sends `session/set_config_option` before the prompt.
 - **Records in memory.** acp2api keeps the records only in memory. After a restart of acp2api, the next request of each conversation does a rebuild.
-- **Stopped process.** When the process of an ACP session stops, acp2api keeps the record. The next match loads the ACP session with `session/load` in another process.
+- **Stopped process.** When the runtime process of an ACP session stops, acp2api keeps the record. The next match loads the ACP session with `session/load` in another runtime process.
 - **Rebuild.** The first prompt of a rebuild holds one fixed neutral line and the earlier part of the conversation as text with role labels.
   - Each image goes as an ACP `image` block at its place in the text.
   - [How does the system prompt of a request reach the model?](https://github.com/yandhi-0421/acp2api/issues/23) decides the role labels.
@@ -36,14 +36,14 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - In a continued ACP session, the model sees its earlier replies and tool calls as its own turns. After a rebuild, the model sees them only as user text.
 - The official runtime keeps thought signatures in the history of an ACP session. A rebuild cannot give them to the new ACP session.
 - ACP gives no other way to put an earlier conversation into a new ACP session. A prompt holds only user content blocks, and the official runtime 1.4.0 has no `fork`.
-- Each ACP session has its own `localharness_external` process, and the official runtime keeps one SQLite file for each ACP session. Fewer ACP sessions give fewer processes and files.
+- Each ACP session has its own harness process, and the official runtime keeps one SQLite file for each ACP session. Fewer ACP sessions give fewer harness processes and files.
 - The match uses only the content of the conversation. Thus it works for Claude Code, Codex, and SillyTavern, and it finds each edit of an earlier message. SillyTavern sends no session hint.
 - Two ACP sessions with the same record hold the same conversation. Thus either one gives the same result.
 - After a cut at a stop sequence, the ACP session holds text that the API client never got. An example is a line in the voice of the user. The input tokens must show the conversation of the request ([Which token usage does acp2api report to each API?](https://github.com/yandhi-0421/acp2api/issues/20), decision 6).
 - A wait for an ACP session gives no match. When its prompt turn ends, the ACP session holds one more reply.
 - The official runtime reads the tools of an MCP server at the first prompt turn of an ACP session (ADR-0002). In the captures of Claude Code 2.1.299, each main request had 29 client tools. Each other request to `/v1/messages` had one message, and no tool or only the server tool `web_search`. Thus it was a separate conversation.
 - `session/set_config_option` took 2 to 4 ms, and the official runtime changes the model at the next prompt turn.
-- `session/load` in a new process continued an ACP session with the MCP server at a new URL.
+- `session/load` in a new runtime process continued an ACP session with the MCP server at a new URL.
 
 ## Considered options
 
@@ -58,7 +58,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 
 ## Consequences
 
-- Each rebuild and each new conversation adds one ACP session. Thus the number of `localharness_external` processes and conversation files of the official runtime grows. [How does acp2api start, keep, and stop the processes of the official runtime?](https://github.com/yandhi-0421/acp2api/issues/30) decides the limit of the processes. A new decision issue decides what acp2api does with the conversation files.
+- Each rebuild and each new conversation adds one ACP session. Thus the number of harness processes and conversation files of the official runtime grows. [How does acp2api start, keep, and stop the processes of the official runtime?](https://github.com/yandhi-0421/acp2api/issues/30) decides the limit of the harness processes. A new decision issue decides what acp2api does with the conversation files.
 - In SillyTavern, each regenerated reply, each edit, each cut at a stop sequence, and each change of the system prompt causes a rebuild. A macro such as `{{time}}` or a world info entry can change the system prompt.
 - The records hold no text. Thus acp2api cannot do a rebuild from `previous_response_id`, `item_reference`, or `conversation`, and it keeps their rejection.
 

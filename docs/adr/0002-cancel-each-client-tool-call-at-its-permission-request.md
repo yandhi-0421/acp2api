@@ -6,13 +6,13 @@ acp2api gives the client tools of a request to the model as the tools of an MCP 
 
 - The official runtime ends a held `tools/call` after 180 s. A tool of an API client can take longer, for example when Claude Code waits for the approval of the user.
 - acp2api never allows a permission request of the official runtime. A held call needs an allow.
-- No prompt turn stays open between two API requests. Thus a tool call keeps no process alive, and it holds no place of the prompt turns that run at the same time.
+- No prompt turn stays open between two API requests. Thus a tool call keeps no runtime process alive, and it holds no place of the prompt turns that run at the same time.
 - The next API request does not have to reach an open prompt turn. The tool result can go to any ACP session that holds the history of the conversation.
-- On macOS, cancel at permission passed a result of about 50,000 characters, an image result, an error result, and a task with five calls. The task also continued after `session/load` in a new process. On Windows, it passed the task with five calls.
+- On macOS, cancel at permission passed a result of about 50,000 characters, an image result, an error result, and a task with five calls. The task also continued after `session/load` in a new runtime process. On Windows, it passed the task with five calls.
 
 ## Considered options
 
-- **Held call.** acp2api allows the permission request of its own tool, and it holds the `tools/call` until the API client sends the result. The model then gets a function result, and several calls can wait at the same time. The design breaks the rule against an allow, and a call fails when the API client needs more than 180 s. It also keeps the prompt turn, its process, and its place open between two API requests.
+- **Held call.** acp2api allows the permission request of its own tool, and it holds the `tools/call` until the API client sends the result. The model then gets a function result, and several calls can wait at the same time. The design breaks the rule against an allow, and a call fails when the API client needs more than 180 s. It also keeps the prompt turn, its runtime process, and its place open between two API requests.
 - **Text protocol.** acp2api puts the tool descriptions into the prompt, and it parses the tool calls from the reply text. No open-source bridge of the official runtime tried this design. The parser is fragile, and acp2api must buffer the stream until it knows if the text is a tool call.
 
 ## Consequences
