@@ -1,0 +1,11 @@
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "Start programs only in os adapters." },
+  { path = "tokio::process::Command::new", reason = "Start programs only in os adapters." },
+  { path = "std::net::TcpStream::connect", reason = "Product networking uses only the official runtime." },
+  { path = "tokio::net::TcpStream::connect", reason = "Product networking uses only the official runtime." },
+  { path = "tokio::time::sleep", reason = "Use the Clock port." },
+  { path = "tokio::time::Instant::now", reason = "Use the Clock port." },
+  { path = "std::time::Instant::now", reason = "Use the Clock port." },
+  { path = "std::time::SystemTime::now", reason = "Use the Clock port." },
+  { path = "std::env::temp_dir", reason = "Use Environment." },
+]
