@@ -150,6 +150,7 @@ impl Scenario {
     }
     pub async fn restart(&mut self) {
         self.stop().await;
+        self.hub.prepare_restart().await;
         self.client = None;
         self.start().await;
     }

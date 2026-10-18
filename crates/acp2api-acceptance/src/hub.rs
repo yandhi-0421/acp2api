@@ -510,3 +510,24 @@ impl std::fmt::Debug for HubLink {
             .finish_non_exhaustive()
     }
 }
+
+impl Hub {
+    pub async fn prepare_restart(&self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while crate::fake::FakeRuntime::new(self.clone())
+            .record()
+            .processes_alive()
+            > 0
+        {
+            assert!(Instant::now() < deadline, "restart process-drain cap: 10 s");
+            let hub = self.clone();
+            tokio::task::spawn_blocking(move || hub.wait_change(deadline))
+                .await
+                .unwrap();
+        }
+        let mut state = self.shared.0.lock().unwrap();
+        state.stop = false;
+        state.ready = false;
+        state.servers.remove("stop");
+    }
+}

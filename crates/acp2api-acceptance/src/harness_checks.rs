@@ -342,3 +342,24 @@ fn setup_extensions_change_release_facts_without_changing_normal() {
     s.hub.close();
     s.root.cleanup();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_has_a_new_stop_signal_and_answers_a_second_real_request() {
+    let mut s = world();
+    let first = s
+        .client()
+        .await
+        .send(ApiCall::one_user_message("POST /v1/messages", "first"));
+    assert_eq!(first.finish(&mut s.time).await.status, 200);
+    s.restart().await;
+    assert!(
+        !s.hub.shared.0.lock().unwrap().stop,
+        "a restarted host must get a fresh stop signal"
+    );
+    let second = s
+        .client()
+        .await
+        .send(ApiCall::one_user_message("POST /v1/messages", "second"));
+    assert_eq!(second.finish(&mut s.time).await.status, 200);
+    s.finish(true).await;
+}
