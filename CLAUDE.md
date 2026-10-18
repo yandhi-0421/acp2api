@@ -37,7 +37,7 @@ One bounded context: `GLOSSARY.md` at the root, and ADRs in `docs/adr/`.
 ## Directories
 
 - `.claude/`: the workflow skills and the workflow manifest. The setup skill `/workflow-setup` writes them.
-- `docs/`: the instructions for the issue tracker in `docs/agents/`, the ADRs in `docs/adr/`, the research notes in `docs/research/`, and the captures of the probes in `docs/research/captures/`.
+- `docs/`: the instructions for the issue tracker in `docs/agents/`, the ADRs in `docs/adr/`, the PRD in `docs/prd/`, the research notes in `docs/research/`, and the captures of the probes in `docs/research/captures/`.
 
 ## Research and probes
 
