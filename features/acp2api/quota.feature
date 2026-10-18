@@ -32,6 +32,13 @@ Feature: Quota
     And the header "retry-after" has a value of 600 or less
     And the official runtime got "/usage" one time
 
+  @FR-036 @FR-052
+  Scenario: acp2api sends no quota query when the error text has a reset time
+    Given a prompt turn ended with the stderr error line 429 "RESOURCE_EXHAUSTED" with a reset time 2 minutes away
+    When an API client sends a valid request
+    Then acp2api refuses the request with HTTP 429
+    And the official runtime got no "/usage"
+
   @FR-036
   Scenario Outline: With no reset time anywhere, the quota wait lasts 60 minutes
     Given a prompt turn ended with the stderr error line 429 "RESOURCE_EXHAUSTED" with no reset time

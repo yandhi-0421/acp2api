@@ -118,13 +118,13 @@ Feature: Runtime process
       | 0 minutes, 5 minutes, and 11 minutes | acp2api starts a new runtime process after each exit  |
 
   @FR-045
-  Scenario: At its exit, acp2api cancels each prompt turn and ends each request in the queue
+  Scenario: At its exit, acp2api ends each request with a prompt turn and each request in the queue with M-15
     Given the concurrency limit is 1
-    And the prompt turn of the request "A" runs
+    And the prompt turn of the request "A" with no stream runs
     And the request "B" with no stream waits in the queue
     When the owner stops acp2api in its terminal
     Then the official runtime gets a cancel of the prompt turn of "A"
-    And "B" gets HTTP 400 with the message "acp2api: acp2api stopped before the end of this request."
+    And "A" and "B" each get HTTP 400 with the message "acp2api: acp2api stopped before the end of this request."
 
   @FR-045
   Scenario Outline: The runtime process and all its child processes end after acp2api ends

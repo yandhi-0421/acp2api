@@ -1,6 +1,7 @@
 # language: en
 Feature: Logs
-  A log holds only metadata. No log line, request line of the terminal, or state file holds the content of a request or a secret.
+  A log holds only metadata. No log line, terminal line, or state file holds the content of a request or a secret.
+  The only exception is the terminal at a start that makes a new local API key or a new management password.
   The logs have a total size cap of 50 MB, and acp2api deletes each log file that is older than 30 days.
 
   Background:
@@ -49,11 +50,12 @@ Feature: Logs
     Then the logs, the terminal, and the state file do not hold "MARKER-7Q"
 
   @FR-056
-  Scenario: No log line or state file holds the local API key or the management password
+  Scenario: No log, terminal line, or state file holds the local API key or the management password
     Given the local API key is "K1" and the management password is "P1"
+    And the owner restarted acp2api, so the start made no new key and no new password
     When an API client sends requests with "K1", and the owner opens the management panel with "P1"
     And a lockout signal then starts a lockout
-    Then the logs, the request lines of the terminal, and the state file do not hold "K1" or "P1"
+    Then the logs, the terminal, and the state file do not hold "K1" or "P1"
 
   @FR-056
   Scenario: acp2api writes only the parsed error line of the stderr of the official runtime
@@ -75,16 +77,29 @@ Feature: Logs
       | name@example.com   |
       | name%40example.com |
 
+  @FR-056
+  Scenario Outline: acp2api replaces each value with the form of a token with <REDACTED>
+    Given the stderr of the official runtime has an error line with the message "<message>"
+    When an API client sends a valid request
+    Then the log holds "<logged message>"
+
+    Examples:
+      | message                                  | logged message                           |
+      | Header Bearer abc.def-123                | Header Bearer <REDACTED>                 |
+      | Key AbCdEfGhIjKlMnOpQrStUvWxYz012345 bad | Key <REDACTED> bad                       |
+      | Key AbCdEfGhIjKlMnOpQrStUvWxYz01234 bad  | Key AbCdEfGhIjKlMnOpQrStUvWxYz01234 bad  |
+
   @FR-057
   Scenario: The logs keep a total size cap of 50 MB and delete the oldest log file first
     When acp2api writes 60 MB of log lines
     Then the logs take no more than 50 MB
+    And no log file is larger than 10 MB
     And the log file that acp2api deleted is the oldest log file
 
   @FR-057
   Scenario Outline: A start deletes each log file that is older than 30 days
     Given the log folder has a log file with a date <age> ago
-    When the owner starts acp2api
+    When the owner restarts acp2api
     Then that log file is <result>
 
     Examples:

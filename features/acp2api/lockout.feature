@@ -128,7 +128,7 @@ Feature: Lockout
       | state file                                        |
       | the state file holds a lockout                    |
       | the state file is damaged                         |
-      | acp2api cannot read the state file                |
+      | the state file exists, and acp2api cannot read it |
 
   @FR-035
   Scenario: No timer ends a lockout
@@ -169,3 +169,4 @@ Feature: Lockout
     When the owner deletes the state file and starts acp2api
     Then acp2api is not in the state "lockout"
     And no request gets the lockout message
+    And the data folder holds a new state file

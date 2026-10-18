@@ -43,6 +43,12 @@ Feature: Places and queue
     When acp2api starts a runtime process
     Then the count of the places in use is 0 during the start
 
+  @FR-049
+  Scenario: The management panel offers no concurrency limit above the highest value of the platform
+    Given the build of acp2api for this platform has the highest concurrency limit 2, as its release notes name
+    When the owner opens the management panel with a panel session
+    Then the entry for the concurrency limit offers only the values 1 and 2
+
   @FR-050
   Scenario: Requests start in the order of arrival
     Given the concurrency limit is 1

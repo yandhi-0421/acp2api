@@ -19,16 +19,17 @@ Feature: The conversation in each prompt
   Scenario: A request with an edited earlier message does a rebuild
     When the API client sends the conversation with the user message "Hello there", the reply "Hi.", and the new user message "How are you?"
     Then the official runtime gets a new ACP session
-    And the first prompt of the new ACP session starts with the line "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item."
-    And that prompt has these lines in this order:
-      | line          |
-      | [user]        |
-      | Hello there   |
-      | [assistant]   |
-      | Hi.           |
-      | [user]        |
-      | How are you?  |
-    And that prompt holds no text "Be kind."
+    And the first prompt of the new ACP session is:
+      """
+      The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.
+
+      [user]
+      Hello there
+      [assistant]
+      Hi.
+      [user]
+      How are you?
+      """
     And the new ACP session gets the system prompt addition "Be kind."
 
   @FR-021

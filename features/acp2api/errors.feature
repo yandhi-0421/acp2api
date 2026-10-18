@@ -57,7 +57,7 @@ Feature: Errors
     And the stream has a "content_block_stop" event for the open text block and then the "error" event
 
   @FR-027
-  Scenario Outline: An error with no retry is a response.failed event with the code invalid_prompt
+  Scenario Outline: Each error other than the 503 row is a response.failed event with the code invalid_prompt
     Given a streamed request to "POST /v1/responses" was accepted
     When <case> ends the request
     Then the stream has a "response.failed" event with the code "invalid_prompt"
@@ -68,15 +68,15 @@ Feature: Errors
       | the start of the state "sign-in required"   |
       | the start of the state "runtime unavailable" |
       | the exit of acp2api                         |
+      | the start of a quota wait                   |
       | an error of the 502 row                     |
 
   @FR-027
-  Scenario: An error with a retry is a response.failed event with a code that Codex retries
+  Scenario: An error of the 503 row is a response.failed event with the code server_error
     Given a streamed request to "POST /v1/responses" was accepted
     When an error of the 503 row ends the request
-    Then the stream has a "response.failed" event with a code that Codex retries
+    Then the stream has a "response.failed" event with the code "server_error"
     And "error.headers" of the event holds "retry-after" with the value 30
-    And the code is not "insufficient_quota"
 
   @FR-027
   Scenario: An error in a Chat Completions stream is one data line and no [DONE]

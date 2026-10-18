@@ -25,6 +25,14 @@ Feature: No text of an upstream error as reply text
       | 150 ms after the end of the prompt turn |
 
   @FR-028
+  Scenario: The wait ends early when both error lines are there
+    Given the official runtime sends the text chunks "Sure, " and "503 The service is unavailable."
+    And the prompt turn ends
+    And 20 ms after the end, stderr has the line "Antigravity SDK error processing prompt for session" with the ID of the ACP session, and then the last line of its traceback
+    When an API client sends a valid request with a stream to "POST /v1/messages"
+    Then the stream ends with an "error" event less than 200 ms after the end of the prompt turn
+
+  @FR-028
   Scenario: With no error line, the held chunk reaches the API client
     Given the official runtime sends the text chunks "Sure, " and "here it is."
     And the prompt turn ends, and no error line comes

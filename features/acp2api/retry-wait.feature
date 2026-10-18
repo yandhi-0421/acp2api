@@ -13,7 +13,7 @@ Feature: Retry wait
     Given the prompt turn of "R" failed at the time 0 s with the stderr error line 503 "UNAVAILABLE" "The service is currently unavailable."
     When the API client sends "R" again at the time 5 s
     Then acp2api refuses the request with HTTP 503 and the header "retry-after: 25"
-    And the message is "acp2api: a request of this conversation failed less than 30 s ago (upstream error 503 UNAVAILABLE: The service is currently unavailable.). Send the request again in 25 s."
+    And the message is "acp2api: a request of this conversation failed less than 30 s ago. Send the request again in 25 s. The error was: upstream error 503 UNAVAILABLE: The service is currently unavailable."
     And the official runtime gets no prompt
 
   @FR-029
@@ -75,7 +75,7 @@ Feature: Retry wait
     Given the prompt turn of "R" ended at the time 0 s with the stop reason "max_turn_requests"
     When the API client sends "R" again at the time 5 s
     Then acp2api refuses the request with HTTP 502
-    And the message is "acp2api: a request of this conversation failed less than 30 s ago (the prompt turn reached the limit of model requests of the official runtime.). Send the request again in 25 s."
+    And the message is "acp2api: a request of this conversation failed less than 30 s ago. Send the request again in 25 s. The error was: the prompt turn reached the limit of model requests of the official runtime."
     And the official runtime gets no prompt
 
   @FR-029

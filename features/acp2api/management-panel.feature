@@ -38,8 +38,8 @@ Feature: Management panel
       | acp2api is in the normal state              | stop    | the first acp2api still answers requests |
 
   @FR-054
-  Scenario: The page has its parts in the order of variant A of the prototype
-    Given acp2api is in the normal state
+  Scenario Outline: The page has its parts in the order of variant A of the prototype
+    Given <case>
     When the owner opens the management panel with a panel session
     Then the page has these parts in this order:
       | part                                                                          |
@@ -52,6 +52,15 @@ Feature: Management panel
       | the tile "logs"                                                               |
       | the tile "settings"                                                           |
       | a footer with the version of acp2api                                          |
+
+    Examples:
+      | case                                                           |
+      | acp2api is in the normal state                                 |
+      | acp2api is in the normal state, and acp2api found a new build  |
+      | acp2api is in the state "sign-in required"                     |
+      | acp2api is in the state "quota wait"                           |
+      | acp2api is in the state "runtime unavailable"                  |
+      | acp2api is in lockout                                          |
 
   @FR-054
   Scenario Outline: The first tile shows the state, its sentence, and its shade
@@ -234,6 +243,7 @@ Feature: Management panel
       | browser language | state text |
       | zh-CN            | 运行中     |
       | en-US            | Running    |
+      | fr-FR            | Running    |
 
   @FR-055
   Scenario: The language switch changes the language
@@ -253,6 +263,19 @@ Feature: Management panel
   Scenario: Each control uses the color #0066cc
     When the owner opens the management panel with a panel session
     Then each control of the page has the color "#0066cc"
+
+  @FR-055
+  Scenario: The styles of the page have no shadow and no web font
+    When the owner opens the management panel with a panel session
+    Then no element of the page has a shadow
+    And the page uses only the system fonts
+
+  @FR-055
+  Scenario: Each status color is only on a dot of 9 px next to its text
+    Given acp2api is in the state "quota wait"
+    When the owner opens the management panel with a panel session
+    Then each element with one of the status colors "#0ca30c", "#fab219", "#ec835a", and "#d03b3b" is a dot of 9 px with text next to it
+    And no control and no background has a status color
 
   @FR-055
   Scenario: v1 has only the light mode

@@ -48,12 +48,13 @@ Feature: System prompt and role labels
   Scenario: A system message after a user message stays at its place with its role label
     Given an API client sent a request to "POST /v1/chat/completions" with the user message "Hello", and the official runtime replied "Hi."
     When the API client sends the next request of that conversation with the user message "Tell me more." and then the system message "Be brief."
-    Then the prompt that the official runtime gets has these lines in this order:
-      | line          |
-      | [user]        |
-      | Tell me more. |
-      | [system]      |
-      | Be brief.     |
+    Then the prompt that the official runtime gets is:
+      """
+      [user]
+      Tell me more.
+      [system]
+      Be brief.
+      """
     And the system prompt addition of the ACP session does not hold "Be brief."
 
   @FR-020
@@ -65,23 +66,25 @@ Feature: System prompt and role labels
   Scenario: A user message with a name gets the role label with that name
     Given an API client sent a request to "POST /v1/chat/completions" with the user message "Hello", and the official runtime replied "Hi."
     When the API client sends the next request of that conversation with the user messages "I agree." with the name "Alice" and "Me too." with the name "Bob"
-    Then the prompt that the official runtime gets has these lines in this order:
-      | line          |
-      | [user: Alice] |
-      | I agree.      |
-      | [user: Bob]   |
-      | Me too.       |
+    Then the prompt that the official runtime gets is:
+      """
+      [user: Alice]
+      I agree.
+      [user: Bob]
+      Me too.
+      """
 
   @FR-020
   Scenario: A tool result gets a sentence and a system message gets a role label
     Given an API client sent a request to "POST /v1/chat/completions" with the client tool "read_file", and the model called "read_file" with the arguments {"path":"a.txt"}
     When the API client sends the next request of that conversation with the tool result "abc" and then the system message "Be brief."
-    Then the prompt that the official runtime gets has these lines in this order:
-      | line                                              |
-      | Result of your tool call read_file {"path":"a.txt"}: |
-      | abc                                               |
-      | [system]                                          |
-      | Be brief.                                         |
+    Then the prompt that the official runtime gets is:
+      """
+      Result of your tool call read_file {"path":"a.txt"}:
+      abc
+      [system]
+      Be brief.
+      """
 
   @FR-020
   Scenario: The text of a rebuild keeps the name of each message of each role
@@ -91,13 +94,16 @@ Feature: System prompt and role labels
       | assistant | Bob   | Hi, Alice.   |
       | developer |       | Stay polite. |
       | user      | Alice | Thanks.      |
-    Then the first prompt of the new ACP session has these lines in this order:
-      | line              |
-      | [user: Alice]     |
-      | Hello.            |
-      | [assistant: Bob]  |
-      | Hi, Alice.        |
-      | [developer]       |
-      | Stay polite.      |
-      | [user: Alice]     |
-      | Thanks.           |
+    Then the first prompt of the new ACP session is:
+      """
+      The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.
+
+      [user: Alice]
+      Hello.
+      [assistant: Bob]
+      Hi, Alice.
+      [developer]
+      Stay polite.
+      [user: Alice]
+      Thanks.
+      """

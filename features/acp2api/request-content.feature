@@ -28,7 +28,7 @@ Feature: Request content
       | POST /v1/messages         | "cache_control" of a text block         | {"type": "ephemeral"}                  |
       | POST /v1/responses        | "prompt_cache_key"                      | "key-1"                                |
       | POST /v1/chat/completions | "service_tier"                          | "auto"                                 |
-      | POST /v1/responses        | "store"                                 | false                                  |
+      | POST /v1/responses        | "store"                                 | true                                   |
       | POST /v1/responses        | "truncation"                            | "auto"                                 |
       | POST /v1/chat/completions | "prediction"                            | {"type": "content", "content": "Hi"}   |
       | POST /v1/messages         | "metadata.user_id"                      | "user-1"                               |
@@ -73,11 +73,14 @@ Feature: Request content
       | POST /v1/chat/completions | n                    | 2            | acp2api: the request field n = 2 is not supported.                         |
       | POST /v1/chat/completions | tool_choice          | "required"   | acp2api: the request field tool_choice = "required" is not supported.      |
       | POST /v1/chat/completions | web_search_options   | {}           | acp2api: the request field web_search_options is not supported.            |
-      | POST /v1/chat/completions | audio                | {"voice": "alloy", "format": "wav"} | acp2api: the request field audio is not supported.  |
       | POST /v1/responses        | background           | true         | acp2api: the request field background = true is not supported.             |
       | POST /v1/responses        | previous_response_id | "resp_1"     | acp2api: the request field previous_response_id is not supported.          |
       | POST /v1/responses        | conversation         | "conv_1"     | acp2api: the request field conversation is not supported.                  |
       | POST /v1/messages         | output_config.format | {"type": "json_schema", "schema": {}} | acp2api: the request field output_config.format is not supported. |
+      | POST /v1/chat/completions | logprobs             | true         | acp2api: the request field logprobs = true is not supported.               |
+      | POST /v1/chat/completions | response_format      | {"type": "json_schema", "json_schema": {"name": "x", "schema": {}}} | acp2api: the request field response_format.type = "json_schema" is not supported. |
+      | POST /v1/responses        | text.format          | {"type": "json_schema", "name": "x", "schema": {}} | acp2api: the request field text.format.type = "json_schema" is not supported. |
+      | POST /v1/messages         | tool_choice          | {"type": "any"} | acp2api: the request field tool_choice.type = "any" is not supported.   |
 
   @FR-014
   Scenario Outline: acp2api rejects a field that turns on a feature with no result in acp2api
@@ -88,20 +91,30 @@ Feature: Request content
 
     Examples:
       | endpoint                  | field           | value                                                  |
-      | POST /v1/chat/completions | logprobs        | true                                                   |
       | POST /v1/chat/completions | top_logprobs    | 5                                                      |
       | POST /v1/responses        | include         | ["message.output_text.logprobs"]                       |
-      | POST /v1/chat/completions | response_format | {"type": "json_schema", "json_schema": {"name": "x", "schema": {}}} |
-      | POST /v1/responses        | text.format     | {"type": "json_schema", "name": "x", "schema": {}}     |
       | POST /v1/chat/completions | tool_choice     | {"type": "function", "function": {"name": "read_file"}} |
-      | POST /v1/messages         | tool_choice     | {"type": "any"}                                        |
       | POST /v1/chat/completions | modalities      | ["text", "audio"]                                      |
+      | POST /v1/chat/completions | audio           | {"voice": "alloy", "format": "wav"}                    |
 
   @FR-014
   Scenario: acp2api rejects citations that a request turns on
     When an API client sends a valid request to "POST /v1/messages" with a text document block with "citations" set to {"enabled": true}
     Then acp2api refuses the request with HTTP 400
     And the official runtime gets no prompt
+
+  @FR-014
+  Scenario Outline: A field with a value that turns its feature off counts as an absent field
+    When an API client sends a valid request to "<endpoint>" with <field and value>
+    Then acp2api answers with HTTP 200
+    And the official runtime gets the same content as for the same request without that field
+
+    Examples:
+      | endpoint                  | field and value                                                  |
+      | POST /v1/chat/completions | the field "logprobs" set to false                                |
+      | POST /v1/responses        | the field "background" set to false                              |
+      | POST /v1/chat/completions | the field "audio" set to null                                    |
+      | POST /v1/messages         | a text document block with "citations" set to {"enabled": false} |
 
   @FR-014
   Scenario Outline: acp2api rejects a request body that is not JSON or that is too deep
@@ -170,13 +183,13 @@ Feature: Request content
   @FR-014
   Scenario: acp2api rejects a file_id
     When an API client sends a request to "POST /v1/responses" with an input_file item with the "file_id" "file_1"
-    Then acp2api refuses the request with HTTP 400
+    Then acp2api refuses the request with HTTP 400 and the message "acp2api: the request field file_id is not supported."
     And the official runtime gets no prompt
 
   @FR-014
   Scenario: acp2api rejects a last item from the assistant
     When an API client sends a request to "POST /v1/messages" whose last message has the role "assistant" and the text "The answer is"
-    Then acp2api refuses the request with HTTP 400
+    Then acp2api refuses the request with HTTP 400 and the message "acp2api: a last message from the assistant (a prefill) is not supported."
     And the official runtime gets no prompt
 
   @FR-016
@@ -240,7 +253,8 @@ Feature: Request content
       | endpoint                  | document                                                    | first line             |
       | POST /v1/messages         | a document block with the source type "text" and the title "Notes" | [document: Notes] |
       | POST /v1/messages         | a document block with the source type "content" and no title | [document]            |
-      | POST /v1/responses        | an input_file item with the media type "text/plain" and no title | [document]        |
+      | POST /v1/responses        | an input_file item with the media type "text/plain" and the filename "notes.txt" | [document: notes.txt] |
+      | POST /v1/responses        | an input_file item with the media type "text/plain", no title, and no filename | [document] |
 
   @FR-017
   Scenario: acp2api rejects a document with a media type other than PDF or text/plain

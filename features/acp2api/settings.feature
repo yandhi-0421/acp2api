@@ -72,6 +72,14 @@ Feature: Data folder and settings
     Then the start fails with the message "acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use."
     And the message names the setting of the concurrency limit and the path of the configuration file
 
+  @FR-049
+  Scenario: A concurrency limit above the highest value of the platform stops the start
+    Given the build of acp2api for this platform has the highest concurrency limit 2, as its release notes name
+    And the configuration file has the concurrency limit 3
+    When the owner starts acp2api
+    Then the start fails with the message "acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use."
+    And the message names the setting of the concurrency limit and the path of the configuration file
+
   @FR-004
   Scenario: A start with no field of the management password makes a new management password
     Given acp2api is stopped

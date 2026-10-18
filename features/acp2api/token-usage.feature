@@ -20,10 +20,15 @@ Feature: Token usage
       | POST /v1/chat/completions | prompt_tokens |
 
   @FR-025
-  Scenario: Each 4 ASCII characters count as 1 output token and each other character as 1 output token
-    Given the official runtime replies "abcdefghéü" to the next prompt
+  Scenario Outline: The output tokens are the ASCII characters divided by 4 and rounded up, plus 1 for each other character
+    Given the official runtime replies "<reply>" to the next prompt
     When an API client sends a valid request to "POST /v1/messages"
-    Then the usage of the response has "output_tokens" set to 4
+    Then the usage of the response has "output_tokens" set to <output tokens>
+
+    Examples:
+      | reply       | output tokens |
+      | abcdefghéü  | 4             |
+      | abcdefghiéü | 5             |
 
   @FR-025
   Scenario: The output tokens include the tool call arguments

@@ -31,6 +31,21 @@ Feature: Builds of the official runtime
     When the owner starts a new search in the management panel
     Then the result of the search lists the build in the install folder of Zed
 
+  @FR-042
+  Scenario: The search ignores a folder without localharness_external
+    Given acp2api has no copy of the official runtime
+    And the install folder of Zed holds agy_acp_server of an accepted version and no localharness_external
+    When the owner starts acp2api
+    Then the result of the search does not list the install folder of Zed
+    And acp2api is in the state "runtime unavailable"
+
+  @FR-042
+  Scenario: A path without localharness_external keeps the earlier path
+    Given the path of agy_acp_server points to the folder "F1"
+    When the owner sets the path of agy_acp_server to the folder "F2", which has no localharness_external, in the management panel
+    Then the management panel shows "This folder has no localharness_external, so acp2api did not use this path."
+    And the path of agy_acp_server still points to the folder "F1"
+
   @FR-043
   Scenario: With no copy, acp2api copies the found build with the highest version on the list
     Given acp2api has no copy of the official runtime
@@ -72,11 +87,17 @@ Feature: Builds of the official runtime
     And acp2api is in the state "runtime unavailable"
 
   @FR-043
-  Scenario: A changed byte in the copy stops the start
+  Scenario Outline: A changed byte in the copy stops the start
     Given the copy of the official runtime in the data folder has one changed byte
+    And <other builds>
     When the owner starts acp2api
-    Then no runtime process starts from that copy
-    And acp2api is in the state "runtime unavailable"
+    Then no runtime process starts from the changed copy
+    And <result>
+
+    Examples:
+      | other builds                                             | result                                                                                                          |
+      | the install folder of Zed holds the accepted build 1.4.0 | acp2api copies the build 1.4.0 from the install folder of Zed, and the runtime process runs from the new copy     |
+      | no other place holds a build of the official runtime     | acp2api is in the state "runtime unavailable" with the reason "no build that acp2api found is an accepted version" |
 
   @FR-043
   Scenario: A build for another CPU architecture is not accepted

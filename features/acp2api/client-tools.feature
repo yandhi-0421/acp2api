@@ -88,10 +88,11 @@ Feature: Client tools
   Scenario: The model gets a tool result as text in the next prompt
     Given the model called "read_file" with the arguments {"path":"a.txt"} in a request to "POST /v1/chat/completions"
     When the API client sends the tool result "abc" for that tool call
-    Then the prompt that the official runtime gets has these lines in this order:
-      | line                                                 |
-      | Result of your tool call read_file {"path":"a.txt"}: |
-      | abc                                                  |
+    Then the prompt that the official runtime gets is:
+      """
+      Result of your tool call read_file {"path":"a.txt"}:
+      abc
+      """
 
   @FR-023
   Scenario: An error result gets a note after the arguments
@@ -115,10 +116,20 @@ Feature: Client tools
     Then the first line of the tool result in the prompt holds <part>
 
     Examples:
-      | length | part                                                              |
-      | 1,000  | all 1,000 characters of the arguments and no mark                 |
-      | 1,001  | only the first 1,000 characters and a mark that the arguments are cut |
-      | 5,000  | only the first 1,000 characters and a mark that the arguments are cut |
+      | length | part                                                                                       |
+      | 1,000  | all 1,000 characters of the arguments, and no mark                                         |
+      | 1,001  | only the first 1,000 characters of the arguments, and then the mark " [arguments cut]" before the colon |
+
+  @FR-023
+  Scenario Outline: The arguments in the first line are the text of the arguments of the request
+    Given a request to "<endpoint>" has an earlier tool call of "read_file" with <arguments of the request>
+    When the request has the tool result "abc" for that tool call
+    Then the first line of the tool result in the prompt is "Result of your tool call read_file <arguments text>:"
+
+    Examples:
+      | endpoint                  | arguments of the request                                   | arguments text                 |
+      | POST /v1/chat/completions | the JSON string {"path": "a.txt", "mode": "r"} as arguments | {"path": "a.txt", "mode": "r"} |
+      | POST /v1/messages         | the input object {"path": "a.txt", "mode": "r"}             | {"path":"a.txt","mode":"r"}    |
 
   @FR-023
   Scenario: A tool result with an unknown ID gets the first line with its ID
