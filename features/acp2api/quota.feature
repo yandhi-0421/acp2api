@@ -47,9 +47,10 @@ Feature: Quota
     Then <result>
 
     Examples:
-      | time       | result                                          |
-      | 59 minutes | acp2api refuses the request with HTTP 429       |
-      | 61 minutes | the official runtime gets a prompt for the request |
+      | time                | result                                              |
+      | 60 minutes minus 1 ms | acp2api refuses the request with HTTP 429         |
+      | 60 minutes          | the official runtime gets a prompt for the request |
+      | 60 minutes plus 1 ms | the official runtime gets a prompt for the request |
 
   @FR-036 @issue-61 @wip
   Scenario: A new quota signal after a quota wait starts a new quota wait
@@ -70,9 +71,10 @@ Feature: Quota
     Then the official runtime got "/usage" <count>
 
     Examples:
-      | time | count       |
-      | 59 s | one time    |
-      | 61 s | two times   |
+      | time     | count     |
+      | 59999 ms | one time  |
+      | 60 s     | two times |
+      | 60001 ms | two times |
 
   @FR-052 @issue-66 @wip
   Scenario: The management panel shows the last result of /usage and its time

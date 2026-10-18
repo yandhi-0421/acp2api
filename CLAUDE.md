@@ -37,7 +37,7 @@ One bounded context: `GLOSSARY.md` at the root, and ADRs in `docs/adr/`.
 ## Directories
 
 - `.claude/`: the workflow skills and the workflow manifest. The setup skill `/workflow-setup` writes them.
-- `docs/`: the instructions for the issue tracker in `docs/agents/`, the ADRs in `docs/adr/`, the PRD in `docs/prd/`, the research notes in `docs/research/`, and the captures of the probes in `docs/research/captures/`.
+- `docs/`: the issue tracker instructions in `docs/agents/`, ADRs in `docs/adr/`, PRDs in `docs/prd/`, and written designs in `docs/design/`. Research notes are in `docs/research/`, and probe captures are in `docs/research/captures/`.
 - `features/`: the Gherkin feature files, one directory for each PRD. The project has no Gherkin runner yet. `features/acp2api/` holds the scenarios of `docs/prd/acp2api.md`, one file for each capability.
 
 ## Research and probes

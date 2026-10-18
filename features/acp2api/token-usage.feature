@@ -59,8 +59,39 @@ Feature: Token usage
   @FR-025 @issue-44 @wip
   Scenario: A prompt turn with no usage update gives the local estimate of the input tokens
     Given the prompt turn ends with no usage update
-    When an API client sends a valid request with a stream to "POST /v1/messages"
-    Then the "input_tokens" of the last "message_delta" event are the "input_tokens" of the "message_start" event
+    When an API client sends only the user text "abcdefghiéü" with a stream to "POST /v1/messages"
+    Then the "input_tokens" of the "message_start" event are 5
+    And the "input_tokens" of the last "message_delta" event are 5
+
+  @FR-025 @issue-44 @wip
+  Scenario Outline: The input estimate counts the full normalized conversation and the declared tools
+    Given the request has the system prompt "SYS!"
+    And the request has the user text "ABCD", assistant text "EFGH", and new user text "你IJKL"
+    And its client tool has the name "read", description "Read", and schema {"type":"object"}
+    And <session history>
+    And the prompt turn ends with no usage update
+    When an API client sends that request with a stream to "POST /v1/messages"
+    Then the "input_tokens" of the "message_start" event are 12
+    And the "input_tokens" of the last "message_delta" event are 12
+
+    Examples:
+      | session history                                                   |
+      | the request needs a rebuild                                       |
+      | an ACP session already holds the first user text and assistant text |
+
+  @FR-025 @issue-44 @wip
+  Scenario Outline: The input estimate counts tool arguments and results without generated text
+    Given the request has one earlier tool call "read" with <arguments>
+    And the result of that call is "DATA", followed by the user text "NEXT"
+    And the request has no system prompt, declared tool, or other message text
+    And the prompt turn ends with no usage update
+    When an API client sends that request with no stream to "<endpoint>"
+    Then the usage of the response has "<field>" set to <tokens>
+
+    Examples:
+      | arguments                           | endpoint                  | field         | tokens |
+      | the object {"a": "é", "b": 1}        | POST /v1/messages         | input_tokens  | 8      |
+      | the JSON string { "a": "é", "b": 1 } | POST /v1/chat/completions | prompt_tokens | 9      |
 
   @FR-025 @issue-44 @wip
   Scenario: An Anthropic stream carries a local estimate in message_start and the values in the last message_delta

@@ -37,7 +37,17 @@ Feature: Sign-in
     And the official runtime now has a valid sign-in
     When the owner starts acp2api
     Then acp2api is in the normal state
+    And acp2api checked the sign-in one time through a new ACP session
     And the state file holds no record of the state "sign-in required"
+
+  @FR-038 @issue-67 @wip
+  Scenario: A startup sign-in error is visible before any API request
+    Given the official runtime has no valid sign-in
+    And acp2api is not in lockout
+    When the owner starts acp2api without an API request
+    Then acp2api checked the sign-in one time
+    And acp2api is in the state "sign-in required"
+    And the official runtime got no prompt
 
   @FR-039 @issue-67 @wip
   Scenario: The sign-in entry uses only the sign-in method oauth-personal
@@ -86,3 +96,36 @@ Feature: Sign-in
     Given an editor signed in the official runtime with its own runtime home
     When the owner starts acp2api for the first time
     Then acp2api is in the state "sign-in required"
+
+  @FR-036 @FR-038 @issue-71 @wip
+  Scenario Outline: A successful sign-in preserves an unexpired quota wait
+    Given two prompt turns run
+    And one ends with a quota signal whose reset time is 2 minutes away
+    And the other then ends with a sign-in error
+    When <success> occurs 30 s later
+    And an API client sends a valid request
+    Then the request gets HTTP 429 with M-16
+    And the official runtime gets no prompt for that request
+    And the first tile shows "Quota wait"
+
+    Examples:
+      | success                                  |
+      | a sign-in in the management panel         |
+      | a successful sign-in check of a request   |
+
+  @FR-036 @FR-038 @issue-71 @wip
+  Scenario: An expired quota wait does not clear sign-in required
+    Given acp2api has a quota wait until the time 120 s and also requires a sign-in
+    And the official runtime still has no valid sign-in
+    When an API client sends a valid request at the time 120 s
+    Then its sign-in check fails
+    And the request gets HTTP 400 with M-13
+    And the official runtime gets no prompt
+
+  @FR-036 @FR-040 @issue-71 @wip
+  Scenario: Runtime recovery preserves an unexpired quota wait
+    Given acp2api has an unexpired quota wait and the state "runtime unavailable"
+    When the owner retries and the runtime process starts with a valid sign-in
+    And an API client sends a valid request before the reset time
+    Then the request gets HTTP 429 with M-16
+    And the official runtime gets no prompt for that request

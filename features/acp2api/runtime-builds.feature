@@ -4,9 +4,10 @@ Feature: Builds of the official runtime
   acp2api starts each runtime process only from its own copy of an accepted version in the data folder.
   A compatibility check on the computer of the owner can make another build an accepted version.
 
-  @FR-042 @issue-58 @wip
+  @FR-004 @FR-042 @issue-58 @wip
   Scenario Outline: A start finds a build in each place that acp2api searches
     Given acp2api has no copy of the official runtime
+    And the configuration file has no path of agy_acp_server
     And the only build of the official runtime is in <place>
     When the owner starts acp2api
     Then the result of the search lists the build in <place>
@@ -102,6 +103,7 @@ Feature: Builds of the official runtime
   @FR-043 @issue-58 @wip
   Scenario: A build for another CPU architecture is not accepted
     Given acp2api for macOS arm64 runs
+    And it has no copy of an accepted version and no usable runtime process
     And the only found build is a build for macOS x64 whose hashes are on the list of the release
     When acp2api searches again
     Then that build is not an accepted version

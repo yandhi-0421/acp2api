@@ -74,7 +74,7 @@ Feature: Management panel
     Examples:
       | state                                                  | state text          | sentence                                                                                                                         | shade |
       | the normal state                                       | Running             | The official runtime is ready. acp2api forwards the requests.                                                                    | light |
-      | the state "quota wait"                                 | Quota wait          | The Google quota is used up. Until <reset time>, acp2api starts no prompt turn and refuses each request. After that time, it continues by itself. | light |
+      | the state "quota wait"                                 | Quota wait          | The Google quota is used up. Until <reset time>, acp2api starts no prompt turn and refuses each request. The quota wait then ends automatically. | light |
       | the state "sign-in required"                           | Sign-in required    | The official runtime has no valid sign-in. Until a sign-in, acp2api refuses each request.                                       | dark  |
       | the state "runtime unavailable" with no executable     | Runtime unavailable | acp2api found no official runtime, so it started no runtime process.                                                             | dark  |
       | the state "runtime unavailable" with no accepted version | Runtime unavailable | No build that acp2api found is an accepted version, so it started no runtime process.                                          | dark  |
@@ -149,7 +149,7 @@ Feature: Management panel
     And the tile "logs" shows the log folder
 
   @FR-054 @issue-69 @wip
-  Scenario: The tile settings shows the port and the data folder that only the configuration file changes
+  Scenario: The tile settings shows the read-only port and data folder
     Given acp2api runs on the port 8329 with the data folder "D"
     When the owner opens the management panel with a panel session
     Then the tile "settings" shows the port 8329 and the data folder "D"
@@ -211,7 +211,7 @@ Feature: Management panel
       | cache_control                           |
       | prompt_cache_key                        |
       | service_tier                            |
-      | store with the value false              |
+      | store with each value                   |
       | truncation                              |
       | prediction                              |
       | metadata.user_id                        |

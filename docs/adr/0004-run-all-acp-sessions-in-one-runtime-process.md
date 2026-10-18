@@ -53,7 +53,7 @@ acp2api runs all ACP sessions in one runtime process. It starts the runtime proc
 - A crash of the runtime process ends each prompt turn that runs.
 - After each replacement, each conversation that continues loads its ACP session with `session/load` (ADR-0003). That took 8.3 to 8.5 s on macOS, and 7.6 s and 16.2 s in the Windows VM.
 - The acceptance test of a version must check these facts:
-  - three prompt turns at the same time in one runtime process, on macOS and on Windows;
+  - concurrent prompt turns in one runtime process at the platform maximum of FR-049, on macOS and on Windows;
   - the memory of the runtime process and of each harness process, and if a harness process exits by itself;
   - on macOS, if the harness processes stop after a crash of acp2api.
 - The measurement of the memory decides N.

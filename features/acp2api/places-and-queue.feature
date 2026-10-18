@@ -18,9 +18,21 @@ Feature: Places and queue
   @FR-049 @issue-60 @wip
   Scenario: A change of the concurrency limit applies at once
     Given the concurrency limit is 2
+    And the platform maximum concurrency limit is 3
     And the prompt turns of "A" and "B" run, and "C" waits in the queue
     When the owner sets the concurrency limit 3 in the management panel
     Then the prompt turn of "C" starts at once
+
+  @FR-049 @issue-60 @wip
+  Scenario: A lower limit preserves work and stops new acquisitions until the count is below the limit
+    Given the concurrency limit is 3
+    And the prompt turns "A", "B", and "C" run, and request "D" waits
+    When the owner sets the concurrency limit to 1
+    Then the official runtime gets no cancel for "A", "B", or "C"
+    When "A" and "B" end
+    Then the official runtime still has no call for "D"
+    When "C" ends
+    Then the official runtime gets the first call for "D"
 
   @FR-049 @issue-67 @wip
   Scenario: In the state sign-in required, the sign-in check of a request holds a place
@@ -29,6 +41,51 @@ Feature: Places and queue
     And the sign-in check of the request "A" runs
     When the request "B" comes
     Then the sign-in check of "B" starts only after the end of the sign-in check of "A"
+
+  @FR-011 @FR-026 @FR-038 @FR-049 @FR-050 @issue-67 @wip
+  Scenario: A queued sign-in check has no accepted stream
+    Given the concurrency limit is 1
+    And acp2api is in the state "sign-in required"
+    And the sign-in check of request "A" waits for a runtime reply
+    When request "B" arrives with a stream
+    And 330 s pass
+    Then "B" has no response header, HTTP status, or stream event
+    And "B" counts as one request in the queue
+    When the sign-in check of "A" fails
+    Then the sign-in check of "B" starts
+    When the sign-in check of "B" fails
+    Then "B" gets HTTP 400 with M-13 and no stream event
+
+  @FR-026 @FR-038 @FR-049 @issue-67 @wip
+  Scenario: A queued request keeps its own check after another check succeeds
+    Given the concurrency limit is 1
+    And acp2api is in the state "sign-in required"
+    And request "A" holds a place for its sign-in check
+    And request "B" waits for its own sign-in check
+    When the check of "A" succeeds
+    Then "A" keeps the place for its prompt turn
+    And "B" has no HTTP status yet
+    When the prompt turn of "A" ends
+    Then the official runtime gets one sign-in check for "B"
+    When that check succeeds
+    Then "B" gets HTTP 200 and its prompt turn starts
+
+  @FR-031 @FR-038 @FR-050 @issue-67 @wip
+  Scenario: A disconnect before a sign-in check removes the queued request
+    Given all places are occupied
+    And a request waits for its required sign-in check
+    When its API client disconnects
+    Then the queue count decreases by one
+    And the official runtime gets no call for that request
+
+  @FR-026 @FR-038 @FR-050 @issue-67 @wip
+  Scenario: The queue cap includes requests before their sign-in checks
+    Given acp2api is in the state "sign-in required"
+    And all places are occupied by sign-in checks
+    And 32 requests wait for their own sign-in checks
+    When another API client sends a request with a stream to "POST /v1/messages"
+    Then the request gets HTTP 529 with M-17 and "retry-after: 10"
+    And it has no stream event and starts no ACP call
 
   @FR-049 @issue-66 @wip
   Scenario: Each quota query holds a place
@@ -44,10 +101,16 @@ Feature: Places and queue
     Then the count of the places in use is 0 during the start
 
   @FR-049 @issue-60 @wip
-  Scenario: The management panel offers no concurrency limit above the highest value of the platform
-    Given the build of acp2api for this platform has the highest concurrency limit 2, as its release notes name
+  Scenario Outline: The management panel offers no concurrency limit above the platform maximum
+    Given the platform maximum concurrency limit is <maximum>, as its release notes name
     When the owner opens the management panel with a panel session
-    Then the entry for the concurrency limit offers only the values 1 and 2
+    Then the entry for the concurrency limit offers only <choices>
+
+    Examples:
+      | maximum | choices     |
+      | 1       | 1           |
+      | 2       | 1 and 2     |
+      | 3       | 1, 2, and 3 |
 
   @FR-050 @issue-60 @wip
   Scenario: Requests start in the order of arrival

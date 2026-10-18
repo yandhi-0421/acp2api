@@ -28,11 +28,13 @@ Feature: Model names and thinking levels
     And the entry with the "id" "gemini-3.8-flash" has the "display_name" "Gemini 3.8 Flash"
 
   @FR-012 @issue-43 @wip
-  Scenario: acp2api reads the model names at the first need
+  Scenario: The startup sign-in check supplies the model names
     Given acp2api started and got no request
-    Then the official runtime has no ACP session
+    Then the official runtime has one ACP session from the sign-in check
+    And the official runtime got no prompt
     When an API client sends "GET /v1/models"
-    Then the official runtime gets one new ACP session
+    Then the list holds "gemini-3.8-flash" and its three thinking level suffixes
+    And the official runtime still has only that ACP session
 
   @FR-012 @issue-43 @wip
   Scenario: The list holds a new model after the next new ACP session

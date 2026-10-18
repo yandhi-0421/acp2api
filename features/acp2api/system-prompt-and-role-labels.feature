@@ -58,12 +58,12 @@ Feature: System prompt and role labels
     And the system prompt addition of the ACP session does not hold "Be brief."
 
   @FR-020 @issue-36 @wip
-  Scenario: A prompt with one new user message has no role label
-    When an API client sends a request to "POST /v1/messages" with one user message "Hello"
+  Scenario: A prompt with one new unnamed user message has no role label
+    When an API client sends a request to "POST /v1/messages" with one unnamed user message "Hello"
     Then the prompt that the official runtime gets is "Hello"
 
   @FR-020 @issue-47 @wip
-  Scenario: A user message with a name gets the role label with that name
+  Scenario: Two user messages with names keep their role labels
     Given an API client sent a request to "POST /v1/chat/completions" with the user message "Hello", and the official runtime replied "Hi."
     When the API client sends the next request of that conversation with the user messages "I agree." with the name "Alice" and "Me too." with the name "Bob"
     Then the prompt that the official runtime gets is:
@@ -73,6 +73,21 @@ Feature: System prompt and role labels
       [user: Bob]
       Me too.
       """
+
+  @FR-020 @issue-47 @wip
+  Scenario Outline: One new user message with a name keeps its role label
+    Given <history>
+    When an API client sends the only new user message "Hello" with the name "Alice" to "POST /v1/chat/completions"
+    Then the prompt that the official runtime gets is:
+      """
+      [user: Alice]
+      Hello
+      """
+
+    Examples:
+      | history                                                    |
+      | the request has no earlier conversation                    |
+      | the request continues the last reply of an ACP session     |
 
   @FR-020 @issue-54 @wip
   Scenario: A tool result gets a sentence and a system message gets a role label

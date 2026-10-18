@@ -19,6 +19,7 @@ Feature: Client tools
     And the model sends the text "Let me look." and then calls "read_file" with the arguments {"path":"a.txt"}
     When an API client sends that request to "<endpoint>"
     Then the response holds the text "Let me look." and then <tool call>
+    And the tool call has exactly the arguments {"path":"a.txt"}
     And the response ends with <end>
 
     Examples:

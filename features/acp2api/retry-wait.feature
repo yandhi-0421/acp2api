@@ -17,10 +17,16 @@ Feature: Retry wait
     And the official runtime gets no prompt
 
   @FR-029 @issue-59 @wip
-  Scenario: The same request after the retry wait runs
+  Scenario Outline: The retry wait ends at exactly 30 seconds
     Given the prompt turn of "R" failed at the time 0 s with an error of the 503 row
-    When the API client sends "R" again at the time 31 s
-    Then the official runtime gets a prompt for "R"
+    When the API client sends "R" again at the time <time>
+    Then <result>
+
+    Examples:
+      | time     | result                                                    |
+      | 29999 ms | acp2api refuses the request with HTTP 503 and no prompt    |
+      | 30 s     | the official runtime gets a prompt for "R"               |
+      | 30001 ms | the official runtime gets a prompt for "R"               |
 
   @FR-029 @issue-59 @wip
   Scenario: A refused request does not make the retry wait longer

@@ -34,6 +34,8 @@ Feature: Runtime process
   Scenario Outline: An event starts a new try, and a successful start ends the state
     Given acp2api is in the state "runtime unavailable"
     And an accepted version of the official runtime is now available
+    And the official runtime has a valid sign-in
+    And no condition other than "runtime unavailable" stops requests
     When <event>
     Then the start of a runtime process succeeds
     And the next request runs

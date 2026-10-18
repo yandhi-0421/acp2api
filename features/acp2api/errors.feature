@@ -8,11 +8,25 @@ Feature: Errors
     And the official runtime offers the model name "gemini-3.8-flash"
 
   @FR-026 @issue-60 @wip
-  Scenario: A streamed request in the queue already has the status 200
+  Scenario: A streamed request that passed all admission checks has status 200 in the queue
     Given each place holds a prompt turn
     When an API client sends a valid request with a stream to "POST /v1/messages"
     Then the request waits in the queue
     And the API client already has the status 200 and the headers of the stream
+
+  @FR-032 @FR-033 @issue-50 @wip
+  Scenario Outline: An ACP error without an HTTP error line keeps its JSON-RPC values
+    Given the next ACP call fails with code -32099 and message "Synthetic ACP failure"
+    And the official runtime sends no stderr error line
+    When an API client sends a valid request with no stream to "<endpoint>"
+    Then the request gets HTTP 502 in the error envelope of its API
+    And the error message is "acp2api: upstream ACP error -32099: Synthetic ACP failure"
+
+    Examples:
+      | endpoint                  |
+      | POST /v1/messages         |
+      | POST /v1/responses        |
+      | POST /v1/chat/completions |
 
   @FR-026 @issue-49 @wip
   Scenario: A streamed request with a wrong local API key gets HTTP 401 and no stream event

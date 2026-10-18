@@ -19,7 +19,7 @@ Feature: Lockout
       | the stderr error line 403 "PERMISSION_DENIED" with the reason "TOS_VIOLATION"                 | lockout          |
       | the stderr error line 403 with the reason "VALIDATION_REQUIRED"                               | lockout          |
       | an error of the ACP call with the status "PERMISSION_DENIED", the text "Verify your account", and no 403 | lockout |
-      | the stderr error line with the reason "SUBSCRIPTION_REQUIRED" and no 403                      | lockout          |
+      | the stderr error line "PERMISSION_DENIED" with the reason "SUBSCRIPTION_REQUIRED" and no 403 | lockout          |
       | an error of the ACP call with the text "Terms of Service" and no 403                          | lockout          |
       | an error of the ACP call with the code -32000 "Authentication required" and the text "Terms of Service" | lockout |
       | the stderr error line 401 "UNAUTHENTICATED" with a 403 in its message                         | lockout          |

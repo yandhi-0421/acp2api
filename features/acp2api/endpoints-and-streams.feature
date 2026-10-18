@@ -71,11 +71,28 @@ Feature: Endpoints and streams
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
+  @FR-010 @FR-028 @issue-50 @wip
+  Scenario Outline: A reply with one text chunk stays held through the error-line wait
+    Given the official runtime sends only the reply text chunk "Hello"
+    And the prompt turn ends 10 s later with no error line
+    When an API client sends a valid request with a stream to "<endpoint>"
+    Then the stream has no text delta before the end of the prompt turn
+    And the stream has no text delta during the next 199 ms
+    And after the 200 ms error-line wait, the reply text is "Hello" and the stream ends normally
+
+    Examples:
+      | endpoint                  |
+      | POST /v1/messages         |
+      | POST /v1/responses        |
+      | POST /v1/chat/completions |
+
   @FR-011 @issue-65 @wip
   Scenario Outline: A stream gets keep-alive events while its request waits in the queue
     Given each place holds a prompt turn for the next 330 s
     When an API client sends a valid request with a stream to "<endpoint>"
     Then the stream has no gap of 300 s or more between two events
+    And its first event arrives less than 300 s after acceptance
+    And it ends less than 300 s after its last event
 
     Examples:
       | endpoint                  |
@@ -88,6 +105,8 @@ Feature: Endpoints and streams
     Given the official runtime sends the text chunks "Hel" and "lo", and then sends no update until acp2api cancels the prompt turn
     When an API client sends a valid request with a stream to "<endpoint>"
     Then the stream has no gap of 300 s or more between two events
+    And its first event arrives less than 300 s after acceptance
+    And it ends less than 300 s after its last event
 
     Examples:
       | endpoint                  |

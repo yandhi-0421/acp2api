@@ -73,7 +73,7 @@ Feature: Safety toward Google and the official runtime
   @FR-047 @issue-57 @wip
   Scenario: A built-in tool that runs with no permission request starts no new state
     Given the built-in tool "view_file" ran with no permission request in one prompt turn
-    When an API client sends the next valid request
+    When an API client sends a valid request of another conversation
     Then acp2api is in the normal state
     And the official runtime gets a prompt for the request
 

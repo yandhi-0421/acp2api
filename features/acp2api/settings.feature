@@ -26,6 +26,7 @@ Feature: Data folder and settings
   @FR-004 @issue-37 @wip
   Scenario: A first start writes the default settings
     Given the data folder "D" is empty
+    And the platform maximum concurrency limit is 3
     When the owner starts acp2api with the data folder "D"
     Then the configuration file has the port 8329 and the concurrency limit 2
     And the configuration file has no path of agy_acp_server
@@ -47,6 +48,7 @@ Feature: Data folder and settings
   @FR-004 @issue-55 @wip
   Scenario: A change in the management panel goes into the configuration file with no restart
     Given acp2api runs with the concurrency limit 2
+    And the platform maximum concurrency limit is 3
     And the owner has a panel session
     When the owner sets the concurrency limit 3 in the management panel
     Then the configuration file has the concurrency limit 3
@@ -72,6 +74,74 @@ Feature: Data folder and settings
     Then the start fails with the message "acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use."
     And the message names the setting of the concurrency limit and the path of the configuration file
 
+  @FR-004 @issue-37 @wip
+  Scenario: An unknown key stops the start
+    Given the configuration file has the unknown key "concurency_limit" with the value 2
+    When the owner starts acp2api
+    Then the start fails with the message "acp2api: the setting concurency_limit in <path of the configuration file> has a value that acp2api cannot use."
+    And acp2api accepts no API request
+
+  @FR-004 @issue-37 @wip
+  Scenario Outline: A TOML syntax error stops the start and identifies its location
+    Given the configuration file has these lines:
+      """
+      # Settings
+      <invalid line>
+      """
+    When the owner starts acp2api
+    Then the start fails with the message "acp2api: the setting <location> in <path of the configuration file> has a value that acp2api cannot use."
+    And acp2api accepts no API request
+
+    Examples:
+      | invalid line | location  |
+      | port = @     | port      |
+      | = 8329       | at line 2 |
+
+  @FR-004 @issue-37 @wip
+  Scenario Outline: An absent port or concurrency limit takes its default
+    Given acp2api is stopped
+    And the platform maximum concurrency limit is 3
+    And the configuration file has no field for the <setting>
+    When the owner starts acp2api with no option that overrides that setting
+    Then acp2api uses the <setting> <value>
+
+    Examples:
+      | setting           | value |
+      | port              | 8329  |
+      | concurrency limit | 2     |
+
+  @FR-004 @FR-049 @issue-37 @wip
+  Scenario Outline: The default concurrency limit respects the platform maximum
+    Given the platform maximum concurrency limit is <maximum>
+    And the configuration file has no concurrency limit
+    When the owner starts acp2api
+    Then the configuration file has the concurrency limit <default>
+
+    Examples:
+      | maximum | default |
+      | 1       | 1       |
+      | 2       | 2       |
+      | 3       | 2       |
+
+  @FR-004 @issue-37 @wip
+  Scenario: The option --port overrides an absent port setting
+    Given the configuration file has no field for the port
+    When the owner starts acp2api with the option "--port 8400"
+    Then acp2api answers requests on the port 8400
+    And acp2api accepts no connection on the port 8329
+
+  @FR-004 @issue-55 @wip
+  Scenario: An absent local API key gives a new saved key
+    Given acp2api is stopped
+    And the owner removed the local API key "K1" from the configuration file
+    And the configuration file still has the hash of the management password "P1"
+    When the owner starts acp2api
+    Then the terminal shows a new random local API key
+    And the configuration file holds that new key
+    And a request with that new key gets no HTTP 401
+    And a request with the local API key "K1" gets HTTP 401
+    And the terminal does not show "P1"
+
   @FR-049 @issue-60 @wip
   Scenario: A concurrency limit above the highest value of the platform stops the start
     Given the build of acp2api for this platform has the highest concurrency limit 2, as its release notes name
@@ -88,3 +158,4 @@ Feature: Data folder and settings
     Then the terminal shows a new random management password
     And the new management password opens the management panel
     And the earlier management password does not open the management panel
+    And the configuration file holds only the hash of the new management password

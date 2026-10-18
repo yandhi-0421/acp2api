@@ -98,11 +98,12 @@ Feature: Logs
 
   @FR-057 @issue-42 @wip
   Scenario Outline: A start deletes each log file that is older than 30 days
-    Given the log folder has a log file with a date <age> ago
+    Given the log folder has a log file whose modification time is <age> ago
     When the owner restarts acp2api
     Then that log file is <result>
 
     Examples:
-      | age     | result      |
-      | 31 days | gone        |
-      | 29 days | still there |
+      | age                  | result      |
+      | 30 days plus 1 ms    | gone        |
+      | 30 days              | still there |
+      | 30 days minus 1 ms   | still there |

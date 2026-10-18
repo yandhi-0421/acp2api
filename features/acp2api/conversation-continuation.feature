@@ -48,6 +48,7 @@ Feature: The conversation in each prompt
   @FR-021 @issue-66 @wip
   Scenario Outline: The next request after an event that stops an ACP session does a rebuild
     Given the next prompt turn in the ACP session "S1" ends with <event>
+    And 30 s pass after that end
     When the API client sends the next request of that conversation
     Then the official runtime gets a new ACP session
     And the first prompt of the new ACP session starts with the neutral line
@@ -56,7 +57,7 @@ Feature: The conversation in each prompt
       | event                                   |
       | a cut at a stop sequence                |
       | a disconnect of the API client          |
-      | an error                                |
+      | the stderr error line 503 "UNAVAILABLE" |
       | the stop reason "refusal", and "/usage" shows quota for the model |
 
   @FR-021 @issue-51 @wip

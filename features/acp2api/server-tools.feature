@@ -61,6 +61,8 @@ Feature: Server tools
 
   @FR-024 @issue-45 @wip
   Scenario: An advisor tool gets the Input tag message also with a tool_addition block
-    When an API client sends a request to "POST /v1/messages" with a tool of the type "advisor_20260301" and a tool_addition block whose tool is a full tool definition
+    Given a request has a tool of the type "advisor_20260301"
+    And it has a tool_addition block whose tool is a full tool definition
+    When an API client sends that request to "POST /v1/messages"
     Then acp2api refuses the request with HTTP 400 in the error envelope of the Anthropic Messages API
     And the message is "Input tag 'advisor_20260301' found using 'type' does not match any of the expected tags"

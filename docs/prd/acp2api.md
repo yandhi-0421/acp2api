@@ -79,6 +79,9 @@ acp2api keeps its own files in the data folder:
 
 The option `--data-dir` sets another data folder. The data folder holds the configuration file `config.toml`, the state file, the logs, the runtime home, and the copy of the official runtime.
 
+The temporary folders of ADR-0004 and ADR-0005 and the account coordination files stay outside the data folder.
+Account coordination files do not move with `--data-dir` or a different system temporary folder (FR-006).
+
 **Pass:** after a first start, the configuration file and the logs are in the data folder of the platform, or in the folder that `--data-dir` gives.
 
 #### FR-004 — Settings and configuration file
@@ -88,7 +91,7 @@ The configuration file holds the five settings of v1, in TOML:
 | Setting | Default | Where the owner changes it |
 |---|---|---|
 | Port | 8329 | The configuration file, or `--port` |
-| Concurrency limit: 1, 2, or 3 | 2 | The management panel |
+| Concurrency limit: 1, 2, or 3 | The smaller of 2 and the platform maximum (FR-049) | The management panel |
 | Local API key | Random at the first start | The management panel: a new key |
 | Management password | Random at the first start | The management panel |
 | Path of `agy_acp_server` | None | The management panel |
@@ -97,8 +100,12 @@ The configuration file holds the five settings of v1, in TOML:
 - The owner can edit the configuration file while acp2api is stopped.
 - Only the computer account of the owner can read the configuration file.
 - When the port is in use, the start fails with message M-25. acp2api does not change to another port.
-- When a setting has a value that acp2api cannot use, the start fails with message M-26 (assumption A-2).
+- When a setting has a value that acp2api cannot use, the start fails with message M-26.
+- An unknown key or a TOML syntax error also stops the start with M-26. The message names the key, or the line when no key is identifiable.
+- An absent port or concurrency limit takes its default. The option `--port` still overrides the port.
+- An absent local API key gives a new random key. acp2api saves it in the configuration file and shows it in the terminal.
 - When the owner removes the field of the management password, the next start makes a new random management password. It shows the password in the terminal.
+- An absent path of `agy_acp_server` means that the owner specified no path.
 
 v1 has no setting for the listen address, the log level, or an upstream proxy.
 
@@ -107,6 +114,10 @@ v1 has no setting for the listen address, the log level, or an upstream proxy.
 - A change in the management panel shows in the configuration file and in the next request, with no restart.
 - The file permissions give no other account of the computer read access to the configuration file.
 - A start with the port in use fails with M-25. A start with a wrong value fails with M-26.
+- An unknown key or a TOML syntax error gives M-26 with the key or the line.
+- Without the port, acp2api uses 8329. Without the concurrency limit, it uses the default of FR-049.
+- Without the local API key, the terminal shows a new key that acp2api accepts and saves. The earlier key no longer works.
+- Without the path of `agy_acp_server`, acp2api uses the search of FR-042.
 - A start with no field of the management password shows a new password, and that password opens the management panel.
 
 #### FR-005 — First start
@@ -117,9 +128,13 @@ When acp2api makes the configuration file, it makes a random local API key and a
 
 #### FR-006 — One acp2api for each computer account
 
-When an acp2api runs for a computer account, each other start of acp2api for that account fails with message M-24. This also applies with another data folder. The first acp2api continues, and it keeps its folders.
+When acp2api runs for a computer account, another start for that account waits until it can read the first management panel address. It then fails with message M-24. This also applies with another data folder or another system temporary folder. Changes to `TMPDIR`, `TEMP`, or `TMP` do not permit a second instance. The first acp2api continues, and it keeps its folders.
 
-**Pass:** a second start fails with M-24. After it, the first acp2api answers requests, and its temporary folders and session `cwd` folders are still there.
+Before the first address exists, the wait has no time limit. The owner can cancel the waiting start. Cancellation changes no file of the first instance. When that instance exits before it publishes an address, the waiting start can become the sole instance.
+
+Unreadable or damaged account coordination data stops the new start with M-28. acp2api does not delete a lock or use an absent, stale, or unvalidated address in M-24.
+
+**Pass:** a second start fails with M-24, also with another data folder or system temporary folder. After it, the first acp2api answers requests, and its temporary folders and session `cwd` folders are still there.
 
 ### Access protection
 
@@ -148,10 +163,10 @@ Each such refusal has an HTTP status from 400 to 499, and no prompt turn starts.
 - After a correct password, acp2api gives a cookie for a panel session, with `HttpOnly` and `SameSite=Strict`.
 - A panel session ends at a restart of acp2api, or after 12 hours.
 - A change of the management password ends each panel session.
-- For a password that the owner sets, acp2api keeps only a hash.
+- acp2api keeps each management password only as a hash, including a random password that it makes at a start.
 - To end a lockout, the owner enters the management password again, also in an open panel session.
 
-**Pass:** each page and each endpoint of the management panel needs the password or a valid panel session. The configuration file holds no password that the owner set, only its hash. A panel session stops after 12 hours, after a restart, and after a change of the password.
+**Pass:** each page and each endpoint of the management panel needs the password or a valid panel session. The configuration file holds no management password in plain text, only its hash. A panel session stops after 12 hours, after a restart, and after a change of the password.
 
 ### APIs
 
@@ -172,17 +187,23 @@ A stream has the content type `text/event-stream`. acp2api sends each event when
 - OpenAI Responses API: the last event is `response.completed`, and it carries `response.id`.
 - OpenAI Chat Completions API: `data:` lines with chunks, then `data: [DONE]`.
 
-**Pass:** each endpoint answers a valid request in the success form of its API, with and without a stream. `/v1/messages/count_tokens` gives HTTP 404. In each stream, the events have the order above, and the first text delta leaves acp2api before the prompt turn ends.
+**Pass:** each endpoint answers a valid request in the success form of its API, with and without a stream. `/v1/messages/count_tokens` gives HTTP 404. In each stream, the events have the order above. With two or more reply text chunks, the first text delta leaves acp2api before the prompt turn ends. The last chunk follows FR-028, also when it is the only chunk.
 
 #### FR-011 — Keep-alive events
 
-While a streamed request waits in the queue, or while its prompt turn sends no update, acp2api sends keep-alive events. The time between two events of one stream is less than 300 s.
+After acceptance, acp2api sends keep-alive events while a streamed request waits in the queue or its prompt turn sends no update. Each interval below is less than 300 s:
+
+- from acceptance to the first event;
+- between two events;
+- from the last event to the end of the response.
+
+A request before acceptance has no stream and no keep-alive event (FR-026).
 
 - Anthropic Messages API: the event `ping`.
 - OpenAI Responses API: a real event, for example `response.in_progress`.
 - OpenAI Chat Completions API: the written design decides the event.
 
-**Pass:** a pause of 330 s in the queue gives no gap of 300 s or more between two events of the stream. A prompt turn with no update until acp2api cancels it (FR-051) gives the same result, up to the error event.
+**Pass:** an accepted request with a pause of 330 s in the queue keeps each interval below 300 s. A prompt turn with no update until acp2api cancels it (FR-051) gives the same result, up to the error event.
 
 ### Model names and thinking level
 
@@ -193,7 +214,7 @@ For each value of the config option `model` of the official runtime, acp2api off
 - the value, for example `gemini-3.8-flash`;
 - the value with the suffix of each thinking level that the model has, for example `gemini-3.8-flash-low`.
 
-acp2api reads the model names from the official runtime at the first need. The first need is the first `GET /v1/models`, or the first request with a model name. acp2api reads them again at each later new ACP session.
+At the start, acp2api reads the model names from the successful sign-in check of FR-038. That check creates one ACP session, with no prompt turn. A first `GET /v1/models` uses those names without another ACP session. acp2api reads them again at each later new ACP session.
 
 acp2api rejects a request with a `model` that is not a model name, for example `claude-opus-5-5` or `gpt-5.5`. The error is HTTP 400 with message M-08, which lists the model names.
 
@@ -206,6 +227,7 @@ acp2api rejects a request with a `model` that is not a model name, for example `
 **Pass:**
 
 - With a fake ACP agent that gives one model with the levels `low`, `medium`, and `high`, the list has four names.
+- A start with a valid sign-in reads those names through one ACP session, before any API request. The first model-list request creates no further ACP session.
 - When the fake ACP agent adds a model, the list holds it after the next new ACP session.
 - A request with `claude-opus-5-5` gets 400 with the list of the model names.
 
@@ -342,9 +364,10 @@ No text of an API client starts a slash command of the official runtime. The fir
 - In the text of a rebuild, one blank line follows the neutral line (FR-021).
 - acp2api keeps the `name` of each message of each role.
 - A tool call and a tool result get a sentence, not a role label (FR-023).
-- When the new items of a prompt are one user message, acp2api sends its content with no change, except for the role label of FR-016. Else each item gets its role label or its sentence.
+- When the only new item is an unnamed user message, acp2api sends its content unchanged, except for the role label of FR-016.
+- A named user message always keeps its role label. Each other item gets its role label or its sentence.
 
-**Pass:** a prompt with a tool result and a `system` message has the sentence of the tool result and the line `[system]` before the message. A prompt with one user message has no role label. A Chat Completions message with `name: "Alice"` gets the label `[user: Alice]`.
+**Pass:** a prompt with a tool result and a `system` message has the sentence of the tool result and the line `[system]` before the message. A prompt with one unnamed user message has no role label. A single Chat Completions user message with `name: "Alice"` gets the label `[user: Alice]`.
 
 #### FR-021 — The conversation in each prompt
 
@@ -432,6 +455,16 @@ A server tool runs on the servers of the provider of an API, and acp2api has no 
 - **Cache tokens and reasoning tokens.** Where the API permits, acp2api leaves out each field for them. Else it sends 0.
 - **A prompt turn with no usage update.** The input tokens are the local estimate of the input tokens (assumption A-1).
 
+The local input estimate uses the output estimate formula above. It counts these fields of the full request after normalization, also for a continued ACP session:
+
+- the system prompt text after removal of the attribution block;
+- all message text and message names;
+- each earlier tool call name and its full arguments;
+- each tool result text;
+- each declared client tool name, description, and schema, also its grammar for a `custom` tool.
+
+The estimate joins these values with no separator. JSON argument strings stay unchanged. Argument objects and schemas use compact JSON, with keys in request order and non-ASCII characters unescaped. The count excludes images, PDFs, IDs, role labels, neutral lines, thought text, ignored fields, and the system text of the official runtime.
+
 The place of the usage:
 
 - Anthropic stream: `message_start` carries a local estimate of the input tokens. The last `message_delta` carries the values above.
@@ -439,7 +472,7 @@ The place of the usage:
 - Chat Completions stream: only with `stream_options.include_usage`, the last chunk carries the usage.
 - A response with no stream carries the usage in its body.
 
-**Pass:** for a prompt turn whose last usage update has `used: 5183`, the input tokens are 5183 on each API. A reply of 9 ASCII characters and 2 other characters gives 5 output tokens. No response has a cache count other than 0.
+**Pass:** for a prompt turn whose last usage update has `used: 5183`, the input tokens are 5183 on each API. A reply of 9 ASCII characters and 2 other characters gives 5 output tokens. The same character counts in the input fields give a local estimate of 5. No response has a cache count other than 0.
 
 ### Errors and retries
 
@@ -447,12 +480,14 @@ The place of the usage:
 
 acp2api accepts a request after the checks of the local API key, of the request, of the state, and of the queue.
 
+- A required sign-in check finishes before acceptance (FR-038), also when it must wait for a place.
+- That wait counts toward the queue cap of FR-050. It sends no HTTP 200, response header, or stream event.
 - For a streamed request, acp2api sends the status 200 and the headers at the acceptance.
 - Each refusal before the acceptance is an HTTP status with the error envelope of its API. The written design decides the `type` and the `code` of the OpenAI error body.
 - Each later error of a streamed request is a stream event (FR-027).
 - A request with no stream gets each error as an HTTP status.
 
-**Pass:** a streamed request in the queue already has the status 200. A request with a wrong key gets 401 with no stream event.
+**Pass:** a streamed request that passed all admission checks has status 200 while it waits for a place. A request before its required sign-in check has no response yet. A failed check gives HTTP 400 with no stream event. A request with a wrong key gets 401 with no stream event.
 
 #### FR-027 — Error events in a stream
 
@@ -469,8 +504,9 @@ acp2api accepts a request after the checks of the local API key, of the request,
 
 The official runtime sends the text of an upstream error as normal reply text. No such text reaches the API client as reply text.
 
-- acp2api holds the newest text chunk of each prompt turn until the next update.
+- acp2api holds the newest reply text chunk until the next reply text chunk. A usage update or thought text does not release it.
 - At the end of a prompt turn, acp2api waits up to 200 ms for the error lines of the ACP session. The wait ends early when both lines are there: `Antigravity SDK error processing prompt for session <ID>` and the last line of its traceback.
+- With no error line at the end of this wait, acp2api sends the held chunk.
 - After an error line, acp2api drops the held chunk, and it ends the response with the error. The text that acp2api sent before the held chunk stays in the response.
 - When an error line comes after the wait, the ACP session never continues, and acp2api writes a log line.
 
@@ -522,16 +558,29 @@ Each message that acp2api writes starts with `acp2api: `. The messages of FR-024
 | A lockout, the state "sign-in required", the state "runtime unavailable", or the exit of acp2api | 400 with `x-should-retry: false` | `invalid_request_error` | `invalid_request_error` | No |
 | A quota wait | 429 with `retry-after`: the seconds to the reset time | `rate_limit_error` | `rate_limit_error` | Claude Code retries only when the reset time is 60 s away or less |
 | A full queue | 529 on the Anthropic Messages API and 503 on the two OpenAI APIs, with `retry-after: 10` | `overloaded_error` | Does not occur | Yes |
-| The 503 row: a temporary upstream error, for example a Google 5xx or a timeout; a prompt turn with no update for 5 minutes; a failure of the runtime process | 503 with `retry-after: 30` | `api_error` | `api_error` | Yes |
+| The 503 row: a temporary upstream error, an update timeout, or a runtime process failure (see below) | 503 with `retry-after: 30` | `api_error` | `api_error` | Yes |
 | The 502 row: another upstream error, for example a Google 400; the stop reason `max_turn_requests`, or a built-in tool that runs with no permission request | 502 with `x-should-retry: false` | `api_error` | `invalid_request_error` | No |
 
 An upstream error that is a lockout signal, a quota signal, or a sign-in error (FR-034) gets the row of the state that it starts.
 
+The 503 row includes a Google 5xx, an upstream timeout, a prompt turn without an update for 5 minutes, and a runtime process failure.
+
 The message of an upstream error is M-18. The other causes of the 503 row and the 502 row have M-19 to M-22, and the exit of acp2api has M-15.
+An ACP error without an HTTP error line uses the ACP form of M-18. It keeps its JSON-RPC code and message.
 
 **Pass:** each case gives the status, the headers, and the `error.type` of its row. With the real Claude Code and Codex, the retries of SC-003 occur.
 
 ### States that stop requests
+
+Several conditions can stop requests at the same time. Their priority for a response and the first panel tile is:
+
+1. lockout;
+2. runtime unavailable;
+3. sign-in required;
+4. quota wait;
+5. normal state, when no condition remains.
+
+The end of one condition does not end another condition. A successful sign-in check clears only sign-in required, then acp2api checks the other conditions before acceptance.
 
 #### FR-034 — Lockout signals
 
@@ -580,21 +629,23 @@ During a lockout, acp2api sends no request to the official runtime.
 - Each request gets M-12, and the first response also holds the original text.
 - After a restart, acp2api is still in lockout, and a damaged state file gives a lockout.
 - After a deletion of the state file and a restart, acp2api is not in lockout.
-- After the password in the management panel, the next request runs.
+- After the password in the management panel, lockout ends. The next request runs when no other condition stops it.
 
 #### FR-036 — Quota wait
 
-After a quota signal, acp2api starts no prompt turn until the reset time. It refuses each request with the 429 of FR-033 and message M-16, and the wait ends without the owner.
+After a quota signal, acp2api starts no prompt turn until the reset time. With no condition of higher priority, it refuses each request with the 429 of FR-033 and message M-16. The wait ends without the owner.
 
 - acp2api reads the reset time from the error text. Only when the error text has none, acp2api sends `/usage` for it.
 - When neither gives a reset time, the quota wait lasts 60 minutes.
-- After the wait, the next request runs normally. A new quota signal starts a new quota wait.
+- After the wait, the next request runs when no other condition stops it. A new quota signal starts a new quota wait.
 
-**Pass:** after a 429 `RESOURCE_EXHAUSTED` with a reset time 2 minutes away, each request gets 429 with `retry-after` up to 120. The first request after the reset time runs. With no reset time anywhere, the wait lasts 60 minutes.
+**Pass:** with no other condition, a quota signal whose reset time is 2 minutes away gives HTTP 429 with `retry-after` up to 120. The first request at the reset time runs. With no reset time anywhere, the wait lasts 60 minutes.
 
 #### FR-037 — Requests in the queue at the start of a state
 
 A quota wait, the state "sign-in required", and the state "runtime unavailable" end the requests in the queue at their start. Each such request gets the error of that state. The prompt turns that run continue to their end. Only a lockout cancels them (FR-035).
+
+This includes a request before acceptance: it gets an HTTP error, not a stream event. An accepted streamed request gets a stream error. An error for a condition that is already active does not flush the queue again. When conditions overlap, the priority above selects the error.
 
 **Pass:** two requests wait in the queue, and one prompt turn runs. A quota signal then ends the two requests with 429, and the prompt turn ends normally.
 
@@ -603,10 +654,15 @@ A quota wait, the state "sign-in required", and the state "runtime unavailable" 
 The official runtime has no valid sign-in: the owner never signed in, or the official runtime signed out.
 
 - acp2api starts no prompt turn. It refuses each request with message M-13, which gives the address of the sign-in entry.
-- For each API request in this state, acp2api first checks the sign-in one time. When the check passes, the state ends, and the request runs.
-- The state ends when a sign-in succeeds. acp2api keeps no record of the state, and it checks the sign-in again at each start.
+- For each API request that arrives in this state, acp2api checks the sign-in one time before acceptance. This also applies during a quota wait.
+- A check waits for a place in the queue when all places are occupied. Each such request keeps its own required check.
+- A failed check gives HTTP 400 and M-13. A successful check clears sign-in required, then acp2api checks each remaining admission condition.
+- A successful sign-in also clears only sign-in required. An unexpired quota wait remains.
+- acp2api keeps no record of sign-in required, and it checks the sign-in again at each start.
+- At the start, the check uses one `session/new` after the runtime process becomes available. During a lockout, no check occurs (FR-035).
+- A successful check gives the model names of FR-012. A sign-in error gives the state "sign-in required" before any API request.
 
-**Pass:** with no sign-in, each request gets M-13, and the official runtime gets no prompt. After a sign-in in the management panel, the next request runs.
+**Pass:** a start with no sign-in gives the state "sign-in required" before any API request. Each failed check then gives M-13, and the official runtime gets no prompt. A successful check gives the model names. After a sign-in, the next request runs when no other condition stops it.
 
 #### FR-039 — Sign-in entry
 
@@ -627,14 +683,14 @@ acp2api has no runtime process that it can use, so it starts no prompt turn. It 
 - acp2api found only builds that are not accepted versions;
 - the runtime process had 3 failures in 10 minutes (FR-041).
 
-The state ends when a start of a runtime process succeeds. In this state, acp2api starts no runtime process by itself. These events start a new try:
+The condition ends when a start of a runtime process succeeds. Other conditions remain until their own end. In this state, acp2api starts no runtime process by itself. These events start a new try:
 
 - the retry entry of the management panel;
 - a restart of acp2api;
 - a new path, or a new search;
 - a passed compatibility check.
 
-**Pass:** each reason gives the state and M-14 with that reason. After the retry entry and a successful start, the next request runs.
+**Pass:** each reason gives the state and M-14 with that reason. After the retry entry and a successful start, the next request runs when no other condition stops it.
 
 ### Official runtime
 
@@ -744,18 +800,23 @@ acp2api gives the official runtime the client name `acp2api`, the title `acp2api
 
 #### FR-049 — Places
 
-- The concurrency limit is 2 by default, and the owner can set 1, 2, or 3 in the management panel. A change applies at once.
+- The default concurrency limit is the smaller of 2 and the platform maximum. The management panel offers 1 through that maximum.
+- A change applies at once. A lower limit does not cancel work that already holds a place.
+- New work obtains a place only when the occupied count is below the new limit.
 - A request holds a place from its first call to the official runtime to the end of its prompt turn.
 - In the state "sign-in required", the sign-in check of a request holds a place.
+- When no prompt starts, the place remains occupied until that request's outstanding ACP call ends or the runtime process ends.
 - Each `/usage` holds a place.
 - The start of a runtime process holds no place.
 - A platform can fail the acceptance test with 3 prompt turns at the same time. Then the highest value on that platform is the highest value that passed. The release notes name it, and the management panel of that platform offers no higher value. A higher value in the configuration file stops the start with message M-26.
+- The platform maximum must be at least 1. An arm64 release passes SC-002 at its declared maximum, even when that maximum is below 3.
 
 **Pass:** with the limit 2 and 3 requests, the official runtime gets no call for the third request until one of the first two ends. A change to 3 lets the third request start at once.
 
 #### FR-050 — Queue
 
 - The other requests wait in the queue, in the order of arrival.
+- Requests before a required sign-in check and accepted requests share one queue and its cap. Before acceptance, a request sends no keep-alive event.
 - A request waits with no time limit while its API client stays connected.
 - The queue holds no more than 32 requests. acp2api refuses each request after that at once, with the full-queue row of FR-033 and message M-17.
 
@@ -803,7 +864,7 @@ The management panel is one long page of tiles, the layout of variant A of the p
 1. A black global bar with the language switch and the exit of the panel. Under it, a frosted bar with the anchors of the sections and the main action of the current state.
 2. The first tile: the state in large type, its sentence, its action, and three figures.
    - The figures are the places in use, the requests in the queue, and the build in use.
-   - The first tile is dark in a state that stops requests: "sign-in required", "runtime unavailable", and lockout.
+   - The first tile is dark only for "sign-in required", "runtime unavailable", and lockout. Quota wait uses a light tile.
    - In a lockout, it also shows the evidence and the entry that ends the lockout.
 3. A band of notices, only when a notice exists.
 4. The tile "official runtime":
@@ -816,7 +877,9 @@ The management panel is one long page of tiles, the layout of variant A of the p
    - the last 50 requests with their metadata, from memory;
    - a table of the unknown field names since the start, with the API, the count, and the last time;
    - the log folder.
-8. The tile "settings": the concurrency limit, the change of the management password, and the port and the data folder, which only the configuration file changes.
+8. The tile "settings": the concurrency limit, the change of the management password, and the read-only port and data folder.
+   - The owner changes the port through the configuration file or `--port`.
+   - The owner changes the data folder through `--data-dir`.
 9. A footer with the version of acp2api.
 
 Model names: after their first read, the tile "setup" shows them. Before that read, an entry reads them now. That read holds one place, and it makes one ACP session.
@@ -879,7 +942,7 @@ No log line, no terminal line, and no state file holds these items:
 - a message text, the system prompt, a tool argument, or a tool result;
 - the local API key, or the management password.
 
-The only exception is the terminal at a start that makes a new key or password (FR-004, FR-005).
+The only exception is the terminal at a start that makes a new key or password (FR-004, FR-005). It shows only the new values.
 
 For the error texts of the official runtime:
 
@@ -895,7 +958,9 @@ For the error texts of the official runtime:
 
 The logs have a total size cap of 50 MB, and acp2api deletes the oldest log file first. Each log file has a size cap of 10 MB. At each start, acp2api deletes each log file that is older than 30 days.
 
-**Pass:** a run that writes 60 MB of log lines leaves no more than 50 MB of logs, and no log file over 10 MB. A log file with a date 31 days ago is gone after a start.
+The age of a log file is the time since its last modification.
+
+**Pass:** a run that writes 60 MB of log lines leaves no more than 50 MB of logs, and no log file over 10 MB. A log file whose last modification was 31 days ago is gone after a start.
 
 ### Message texts
 
@@ -920,7 +985,7 @@ The logs have a total size cap of 50 MB, and acp2api deletes the oldest log file
 | M-15 | The exit of acp2api | `acp2api: acp2api stopped before the end of this request.` |
 | M-16 | A quota wait | `acp2api: the Google quota is used up until <reset time>. acp2api starts no prompt turn before that time.` |
 | M-17 | A full queue | `acp2api: the queue is full (32 requests). Send the request again later.` |
-| M-18 | An upstream error | `acp2api: upstream error <HTTP code> <status>: <message>` with the values of the stderr error line |
+| M-18 | An upstream error | With an HTTP error line: `acp2api: upstream error <HTTP code> <status>: <message>`. Without one: `acp2api: upstream ACP error <code>: <message>`, with the JSON-RPC values. |
 | M-19 | A prompt turn with no update for 5 minutes | `acp2api: the official runtime sent no update for 5 minutes, so acp2api cancelled the prompt turn.` |
 | M-20 | A failure of the runtime process | `acp2api: the runtime process failed, so acp2api ended the prompt turn.` |
 | M-21 | The stop reason `max_turn_requests` | `acp2api: the prompt turn reached the limit of model requests of the official runtime.` |
@@ -928,8 +993,9 @@ The logs have a total size cap of 50 MB, and acp2api deletes the oldest log file
 | M-23 | A request in a retry wait | `acp2api: a request of this conversation failed less than 30 s ago. Send the request again in <seconds> s. The error was: <error>` `<error>` is the earlier message without its start `acp2api: `. |
 | M-24 | A second start for the same computer account | `acp2api: another acp2api runs for this computer account. Its management panel is at <address>.` |
 | M-25 | A port in use | `acp2api: the port <port> is in use. Set another port in the configuration file or with --port.` |
-| M-26 | A setting with a wrong value | `acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use.` |
+| M-26 | A setting with a wrong value, an unknown key, or a TOML syntax error | `acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use.` `<setting>` is the key. For a syntax error with no identifiable key, it is `at line <n>`, with a one-based line number. |
 | M-27 | A last item from the assistant (a prefill) | `acp2api: a last message from the assistant (a prefill) is not supported.` |
+| M-28 | Unreadable or damaged account coordination data | `acp2api: cannot use the account coordination data at <path>.` |
 
 The reasons of M-14 are `acp2api found no executable of the official runtime`, `no build that acp2api found is an accepted version`, and `the runtime process failed 3 times in 10 minutes`.
 
@@ -947,7 +1013,7 @@ The reasons of M-14 are `acp2api found no executable of the official runtime`, `
 | Sign-in wait | 正在等待浏览器完成登录，还剩 <time>。如果浏览器没有打开，复制这个地址：<address> | acp2api waits for the sign-in in the browser: <time> left. If no browser opened, copy this address: <address> |
 | Cancel of the sign-in | 取消登录 | Cancel the sign-in |
 | State "quota wait" | 配额等待 | Quota wait |
-| Sentence of "quota wait" | Google 配额已用完。<reset time> 之前，acp2api 不启动 prompt 轮次，在本地拒绝请求。到时间后自动恢复。 | The Google quota is used up. Until <reset time>, acp2api starts no prompt turn and refuses each request. After that time, it continues by itself. |
+| Sentence of "quota wait" | Google 配额已用完。<reset time> 之前，acp2api 不启动 prompt 轮次，在本地拒绝请求。到时间后自动结束配额等待。 | The Google quota is used up. Until <reset time>, acp2api starts no prompt turn and refuses each request. The quota wait then ends automatically. |
 | State "runtime unavailable" | 运行时不可用 | Runtime unavailable |
 | Sentence: no executable | 没有找到官方运行时，所以 acp2api 没有启动运行时进程。 | acp2api found no official runtime, so it started no runtime process. |
 | Sentence: no accepted version | 找到的构建不是已接受版本，所以 acp2api 没有启动运行时进程。 | No build that acp2api found is an accepted version, so it started no runtime process. |
@@ -978,7 +1044,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 - **SC-001 — Tests with a fake ACP agent.** The tests start acp2api with a fake ACP agent in place of the official runtime. They send real HTTP requests as a fake API client. They cover each FR that needs no Google account. While they run, a guard refuses each executable except the fake ACP agent. **Pass:** at the commit of the release, CI passed the tests on `macos-15`, `macos-15-intel`, `windows-latest`, and `windows-11-arm`. CI starts when the repository is public, so no release comes before that time. Until then, the maintainer runs the tests on the Mac.
 - **SC-002 — Acceptance test of each build.** A test program runs each build with a Google account of the maintainer. It runs on the Mac and in the Windows VM. It first runs the real compatibility check, and it writes the SHA-256 values for the list. It obeys the safety rules of `docs/research/2026-10-18-probe-methods-and-safety-rules.md`. The facts that it shows:
   - the tool filter, the full tool schemas with no file read, and the title `Run <tool>?`;
-  - three prompt turns at the same time, and the memory of the runtime process and of each harness process (arm64 only);
+  - prompt turns at the platform maximum of FR-049, and the memory of the runtime process and each harness process (arm64 only);
   - on macOS, the stop of the harness processes after a crash of acp2api;
   - the system prompt addition with a system prompt of the size of the one of Claude Code;
   - no read of `~/.gemini` and of the parent folders of a `cwd`, and the files of the official runtime only in the runtime home;
@@ -1012,7 +1078,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 ## Assumptions
 
 - **A-1 (FR-025).** When a prompt turn ends with no usage update, the input tokens are the local estimate of the input tokens, the value of `message_start`. Such a prompt turn occurred on Windows after cancel at permission ([#16], W6). The local estimate is a value of [#20], decision 4.
-- **A-2 (FR-004).** A setting with a value that acp2api cannot use stops the start, and the error names the setting. The tests of [#17] check a start with a wrong value, and the written design decides the form of the file ([#18]).
+- **A-2 — Retired:** FR-004 defines the result of an invalid configuration file.
 - **A-3 (FR-054).** Before the official runtime reports a context size, the setup text has a placeholder for the window. [#13] takes the window from the context size that the official runtime reports.
 
 ## Open decisions
@@ -1052,7 +1118,7 @@ The changes to `DESIGN.md`:
 - A status color is only on a dot of 9 px, and text is always next to it. No control and no background has a status color.
 - The status colors are good `#0ca30c`, warning `#fab219`, serious `#ec835a`, and critical `#d03b3b`.
 - The page uses only the system fonts. Chinese text has no negative letter spacing.
-- A state that stops requests uses a dark tile, not a red background.
+- The first tile is dark only in sign-in required, runtime unavailable, and lockout. Quota wait uses a light tile.
 - The forms, the error lines, and the tables use the hairlines, the pill inputs, and the type sizes above.
 
 [#1]: https://github.com/yandhi-0421/acp2api/issues/1
