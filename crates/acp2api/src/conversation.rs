@@ -10,6 +10,8 @@ pub(crate) struct Answer {
 pub(crate) fn prompt(turn: &TurnRequest) -> String {
     turn.text.clone()
 }
-pub(crate) fn output_tokens(_text: &str) -> u64 {
-    0
+pub(crate) fn output_tokens(text: &str) -> u64 {
+    let ascii = text.chars().filter(char::is_ascii).count() as u64;
+    let other = text.chars().filter(|ch| !ch.is_ascii()).count() as u64;
+    ascii.div_ceil(4) + other
 }

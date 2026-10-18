@@ -83,8 +83,22 @@ async fn messages(
             )
         })?;
     let _hold = app.clock.hold(HoldKind::TurnEvent);
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":{"type":"api_error","message":e.to_string()}})),
+        )
+    })?;
+    let id = format!(
+        "msg_{}",
+        random
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
     Ok(Json(
-        json!({"id":"msg_1","type":"message","role":"assistant","model":request.model,"content":[{"type":"text","text":answer.text}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":answer.input_tokens,"output_tokens":answer.output_tokens}}),
+        json!({"id":id,"type":"message","role":"assistant","model":request.model,"content":[{"type":"text","text":answer.text}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":answer.input_tokens,"output_tokens":answer.output_tokens}}),
     ))
 }
 

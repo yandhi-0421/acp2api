@@ -1,4 +1,5 @@
 use crate::*;
+use agent_client_protocol_schema::v1::{ContentBlock, SessionNotification, SessionUpdate};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -119,14 +120,19 @@ impl Runtime {
                 }
                 return Ok((text, used));
             }
-            let update = &value["params"]["update"];
-            if update["sessionUpdate"] == "agent_message_chunk"
-                && let Some(chunk) = update["content"]["text"].as_str()
-            {
-                text.push_str(chunk);
-            }
-            if update["sessionUpdate"] == "usage_update" {
-                used = update["used"].as_u64().unwrap_or(used);
+            if value["method"] == "session/update" {
+                let notification: SessionNotification =
+                    serde_json::from_value(value["params"].clone())
+                        .map_err(|e| format!("ACP session/update: {e}"))?;
+                match notification.update {
+                    SessionUpdate::AgentMessageChunk(chunk) => {
+                        if let ContentBlock::Text(content) = chunk.content {
+                            text.push_str(&content.text);
+                        }
+                    }
+                    SessionUpdate::UsageUpdate(usage) => used = usage.used,
+                    _ => {}
+                }
             }
         }
         Err("runtime stdout closed".into())
