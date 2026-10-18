@@ -13,7 +13,7 @@ The project writes acp2api in Rust. CI builds one native executable for each tar
 - **Go.** Go has the simplest builds and one code style. But it has no official ACP library, and the most used community library had no release after 2026-06-02. Go also has no enums with data, so each message variant needs JSON decode code by hand. The hello-world server is 5.4 MB, and it uses 10.0 MB of memory at idle.
 - **TypeScript on Bun.** Bun has the official ACP and MCP libraries, and one CI job builds the four targets. But the compiled hello-world server is 61.5 MB, and it uses 26.9 MB of memory at idle. Bun also has open bugs about child processes on Windows, and TypeScript types do not exist at run time.
 - **TypeScript on Node.js.** A Node.js single executable application cannot target macOS x64.
-- **A port of agy-bridge.** The maintainer keeps the earlier project agy-bridge (TypeScript on Node.js) only as a reference. Its translation logic, its tests, and its stream captures can guide acp2api, but its code does not move.
+- **A port of the earlier CLI bridge.** The maintainer kept an earlier project only as a reference: a bridge from the same three APIs to the Antigravity CLI, in TypeScript on Node.js. Its research notes, its test ideas, and its stream captures moved to `docs/research/`, and they can guide acp2api. Its code does not move.
 
 ## Consequences
 

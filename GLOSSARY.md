@@ -118,10 +118,10 @@ The setup skill `/workflow-setup` writes the text between the two markers. Its n
 | management panel | 管理面板 | The web page of acp2api on 127.0.0.1 where the user sees the state of acp2api and changes its settings. | dashboard, admin page, web UI, console |
 | management password | 管理密码 | The secret that the user enters to open the management panel and to change the state or the settings of acp2api. | admin password, panel key, secret key, local API key (a different secret) |
 | lockout | 锁死 | The state in which acp2api sends no request to the official runtime, after a response that shows a risk to the Google account. Only the user ends it. | ban (an action of Google on the account), pause, circuit breaker (it closes again without the user) |
-| upstream error | 上游错误 | An error that the official runtime reports for an ACP call or a prompt turn. It is a JSON-RPC error, an error line in stderr, or the reply text that comes with such a line. An error that acp2api finds itself, for example a prompt turn with no update for 5 minutes, is not an upstream error. | engine error (the word of agy-bridge), backend error |
+| upstream error | 上游错误 | An error that the official runtime reports for an ACP call or a prompt turn. It is a JSON-RPC error, an error line in stderr, or the reply text that comes with such a line. An error that acp2api finds itself, for example a prompt turn with no update for 5 minutes, is not an upstream error. | engine error (the word of the earlier CLI bridge), backend error |
 | lockout signal | 锁死信号 | A response or an event of the official runtime that shows a risk to the Google account. It starts a lockout. | ban signal (a ban is an action of Google), trigger |
 | quota wait | 配额等待 | The state in which acp2api starts no prompt turn on the official runtime until the reset time of an exhausted Google quota. It ends without the user. | cooldown, rate limit (a limit of Google, not a state of acp2api), pause, lockout (only the user ends a lockout) |
-| runtime unavailable | 运行时不可用 | The state in which acp2api has no runtime process that it can use, so it starts no prompt turn. It ends when the start of a runtime process succeeds. | engine unavailable (the word of agy-bridge), runtime down, crash loop, lockout (a lockout comes from a risk to the Google account) |
+| runtime unavailable | 运行时不可用 | The state in which acp2api has no runtime process that it can use, so it starts no prompt turn. It ends when the start of a runtime process succeeds. | engine unavailable (the word of the earlier CLI bridge), runtime down, crash loop, lockout (a lockout comes from a risk to the Google account) |
 | sign-in required | 需要登录 | The state in which the official runtime has no valid sign-in, so acp2api starts no prompt turn on it. It ends when a sign-in succeeds. | signed out, logged out, unauthenticated, lockout (a sign-in error is not a lockout signal) |
 
 ## Technical names
@@ -130,7 +130,7 @@ The project approves these names as exceptions to ASD-STE100. This section gives
 
 | Name | Chinese term | Source | Avoid |
 |---|---|---|---|
-| ACP session | ACP 会话 | ACP specification, `docs/protocol/v1/session-setup.mdx` in `agentclientprotocol/agent-client-protocol` | session (alone), Cascade (the word of agy-bridge for a conversation of its engine), conversation (the messages of one request) |
+| ACP session | ACP 会话 | ACP specification, `docs/protocol/v1/session-setup.mdx` in `agentclientprotocol/agent-client-protocol` | session (alone), Cascade (the word of the earlier CLI bridge for a conversation of its engine), conversation (the messages of one request) |
 | DNS rebinding | DNS 重绑定 | C. Jackson, A. Barth, A. Bortz, W. Shao, and D. Boneh, "Protecting Browsers from DNS Rebinding Attacks", ACM CCS 2007 | DNS rebind attack |
 | permission request | 权限请求 | ACP specification, `docs/protocol/v1/tool-calls.mdx`, section "Requesting Permission" (`session/request_permission`), in `agentclientprotocol/agent-client-protocol` | permission prompt, approval request |
 | prompt turn | prompt 轮次 | ACP specification, `docs/protocol/v1/prompt-turn.mdx` in `agentclientprotocol/agent-client-protocol` | turn (alone) |

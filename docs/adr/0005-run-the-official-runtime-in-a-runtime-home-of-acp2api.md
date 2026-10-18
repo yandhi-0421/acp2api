@@ -14,7 +14,7 @@ acp2api starts each runtime process with `GEMINI_HOME` set to a runtime home tha
 
 ## Reasons
 
-- The official runtime reads `config/mcp_config.json`, `config/hooks.json`, and the skills in `config/skills/` and `antigravity-cli/skills/` of its runtime home. Source: the agy-bridge note, section 3.3, row "Global files".
+- The official runtime reads `config/mcp_config.json`, `config/hooks.json`, and the skills in `config/skills/` and `antigravity-cli/skills/` of its runtime home. Source: `docs/research/2026-10-15-official-runtime-acp-probe.md`, section 3.3, row "Global files".
 - The official runtime 1.4.0 tried to parse `~/.gemini/config/mcp_config.json` at the start of each agent session ([Probe the official runtime on macOS with a test MCP server and an empty `cwd`](https://github.com/yandhi-0421/acp2api/issues/8)).
 - The tool filter does not govern MCP tools. The permission request of an MCP tool names the tool only in its title `Run <tool>?` (ADR-0002). Thus acp2api cannot tell a tool of a global MCP server from a client tool with the same name.
 - A hook or a skill of the user changes what the model does. The target of acp2api is a pure model, and acp2api only translates.
@@ -24,7 +24,7 @@ acp2api starts each runtime process with `GEMINI_HOME` set to a runtime home tha
 - On macOS, the system temporary folder is not in the folder of the user. The macOS probe found no `.agents`, `.gemini`, `.git`, `AGENTS.md`, or `GEMINI.md` in the parent folders of such a `cwd` (issue 8). A data folder in the folder of the user can have `~/.gemini` or a `.git` in a parent folder.
 - A later runtime process can load the ACP session. Thus its `cwd` is not in the folder of the runtime process, which acp2api deletes after the stop (ADR-0004).
 - The login keychain protects the token better than a file. acp2api serves one Google account, so an editor and acp2api can share the token of that account.
-- The official runtime 1.4.0 obeys `GEMINI_HOME`. Its stderr says `Gemini home resolved to ~/.gemini (default; $GEMINI_HOME is unset)` (issue 8). A `session/resume` of an unknown ACP session gives `-32002` `Session not found in the current GEMINI_HOME` (agy-bridge note, section 3.2).
+- The official runtime 1.4.0 obeys `GEMINI_HOME`. Its stderr says `Gemini home resolved to ~/.gemini (default; $GEMINI_HOME is unset)` (issue 8). A `session/resume` of an unknown ACP session gives `-32002` `Session not found in the current GEMINI_HOME` (the same note, section 3.2).
 
 ## Considered options
 
@@ -44,4 +44,4 @@ acp2api starts each runtime process with `GEMINI_HOME` set to a runtime home tha
 - Between two starts of a runtime process, the session files grow with each new ACP session. The acceptance test of a version measures the size of a session file.
 - On Windows, the system temporary folder is in the folder of the user. The acceptance test of a version checks that the official runtime reads nothing from the parent folders of a `cwd`.
 
-Evidence: the grilling of [How does the user install the official runtime and sign in, and how does acp2api find it?](https://github.com/yandhi-0421/acp2api/issues/22) and [What does acp2api do with the conversation files of the official runtime?](https://github.com/yandhi-0421/acp2api/issues/31); F11 of issue 8; W5 of [Probe the official runtime on Windows 11 ARM in a VM](https://github.com/yandhi-0421/acp2api/issues/16); C3 of [What does the official runtime support over ACP on Windows and macOS?](https://github.com/yandhi-0421/acp2api/issues/2); and the agy-bridge note, sections 3.2 and 3.3 ([link](https://github.com/yandhi-0421/agy-bridge/blob/cc55e4bcd8874357eaa1efbc6bd50c040d888fc2/docs/research/2026-10-15-antigravity-acp-server-engine.md)).
+Evidence: the grilling of [How does the user install the official runtime and sign in, and how does acp2api find it?](https://github.com/yandhi-0421/acp2api/issues/22) and [What does acp2api do with the conversation files of the official runtime?](https://github.com/yandhi-0421/acp2api/issues/31); F11 of issue 8; W5 of [Probe the official runtime on Windows 11 ARM in a VM](https://github.com/yandhi-0421/acp2api/issues/16); C3 of [What does the official runtime support over ACP on Windows and macOS?](https://github.com/yandhi-0421/acp2api/issues/2); and sections 3.2 and 3.3 of `docs/research/2026-10-15-official-runtime-acp-probe.md`.

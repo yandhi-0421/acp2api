@@ -16,7 +16,7 @@ acp2api identifies a build of the official runtime by the SHA-256 values of its 
 
 ## Reasons
 
-- The official runtime has no updater, and the ACP Registry gives no checksum for its archives (agy-bridge note, section 3.2).
+- The official runtime has no updater, and the ACP Registry gives no checksum for its archives (`docs/research/2026-10-15-official-runtime-acp-probe.md`, section 3.2).
 - Each start of the official runtime refreshes the access token with Google ([Probe the official runtime on macOS with a test MCP server and an empty `cwd`](https://github.com/yandhi-0421/acp2api/issues/8), F11). On Windows, a start took 47.5 to 156.8 s in the VM, and it unpacked 341 MB ([Probe the official runtime on Windows 11 ARM in a VM](https://github.com/yandhi-0421/acp2api/issues/16), W3). A check of the hashes before the start avoids both for a build that acp2api does not accept.
 - A hash also finds a damaged or changed file, and a new build with an old version number. The version in `agentInfo` does not.
 - acp2api depends on the tool filter, `eagerMcpServers`, and the title `Run <tool>?` (ADR-0002), on `_meta.antigravity.systemPrompt.append`, and on the stderr lines of the lockout signals. A build that changes one of them breaks acp2api or hides a lockout signal.
@@ -39,4 +39,4 @@ acp2api identifies a build of the official runtime by the SHA-256 values of its 
 - The state file of acp2api holds the records of the compatibility checks. They are stored data.
 - Not tested: that a copy of the two executables starts on macOS and on Windows.
 
-Evidence: the grilling of [How does the user install the official runtime and sign in, and how does acp2api find it?](https://github.com/yandhi-0421/acp2api/issues/22); F1 and F11 of issue 8; W1 and W3 of issue 16; the answer of [Which signals start a lockout, and how does the user end it?](https://github.com/yandhi-0421/acp2api/issues/15); and the agy-bridge note, sections 3.2 and 3.3 ([link](https://github.com/yandhi-0421/agy-bridge/blob/cc55e4bcd8874357eaa1efbc6bd50c040d888fc2/docs/research/2026-10-15-antigravity-acp-server-engine.md)).
+Evidence: the grilling of [How does the user install the official runtime and sign in, and how does acp2api find it?](https://github.com/yandhi-0421/acp2api/issues/22); F1 and F11 of issue 8; W1 and W3 of issue 16; the answer of [Which signals start a lockout, and how does the user end it?](https://github.com/yandhi-0421/acp2api/issues/15); and sections 3.2 and 3.3 of the same note.
