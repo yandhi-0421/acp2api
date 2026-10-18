@@ -1,0 +1,7 @@
+[t_ms=292408] google\api_core\_python_version_support.py:232: FutureWarning: You are using a non-supported Python version (3.10.4). Google will not post any further updates to google.api_core supporting this Python version. Please upgrade to the latest Python version, or at least Python 3.11, and then update google.api_core.
+[t_ms=292409]   warnings.warn(message, FutureWarning)
+[t_ms=296517] I1018 10:17:25.727681 10048 main.py:118] Starting AGY ACP Server...
+[t_ms=296518] I1018 10:17:25.727681 10048 main.py:119] Gemini home resolved to ~\.gemini (default; $GEMINI_HOME is unset)
+[t_ms=296518] I1018 10:17:25.727681 10048 settings.py:302] settings: path=~\.gemini\antigravity-acp\settings.json status=missing
+[t_ms=298037] I1018 10:17:27.245913 10048 settings.py:302] settings: path=~\.gemini\antigravity-acp\settings.json status=missing
+[t_ms=298038] I1018 10:17:27.252925 10048 settings.py:302] settings: path=~\.gemini\antigravity-acp\settings.json status=missing

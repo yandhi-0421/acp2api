@@ -1,0 +1,3669 @@
+{
+  "phase": "b",
+  "startedAt": "2026-10-18T02:54:40.707Z",
+  "host": {
+    "osRelease": "10.0.26300",
+    "nodeArch": "arm64",
+    "nodeVersion": "v22.23.1",
+    "cpus": 6,
+    "cpuModel": "virt-10.0",
+    "windowsCaption": "Microsoft Windows 11 家庭版",
+    "windowsBuild": "26300",
+    "osArch": "ARM 64 位处理器",
+    "uiCulture": "zh-CN",
+    "systemLocale": "zh-CN",
+    "ansiCodePage": "936",
+    "oemCodePage": "936",
+    "defenderRealtime": "True",
+    "proxyEnv": []
+  },
+  "init": {
+    "p1": {
+      "ms": 47509,
+      "agentInfo": {
+        "name": "antigravity-acp",
+        "title": "Google Antigravity",
+        "version": "1.4.0"
+      },
+      "protocolVersion": 1,
+      "authMethods": [
+        "oauth-personal",
+        "oauth-business",
+        "gemini-api-key",
+        "agent-platform"
+      ],
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "p2": {
+      "ms": 80173,
+      "agentInfo": {
+        "name": "antigravity-acp",
+        "title": "Google Antigravity",
+        "version": "1.4.0"
+      },
+      "protocolVersion": 1,
+      "authMethods": [
+        "oauth-personal",
+        "oauth-business",
+        "gemini-api-key",
+        "agent-platform"
+      ],
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    },
+    "p3": {
+      "ms": 156801,
+      "agentInfo": {
+        "name": "antigravity-acp",
+        "title": "Google Antigravity",
+        "version": "1.4.0"
+      },
+      "protocolVersion": 1,
+      "authMethods": [
+        "oauth-personal",
+        "oauth-business",
+        "gemini-api-key",
+        "agent-platform"
+      ],
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    }
+  },
+  "turns": [
+    {
+      "n": 1,
+      "label": "C1 chain task",
+      "session": "A",
+      "srv": "p1",
+      "sentAt": 80111,
+      "firstModelUpdate": 84425,
+      "endAt": 84448,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [
+        {
+          "t_ms": 84426,
+          "title": "Run probe_big_text?",
+          "kind": "other",
+          "rawInput": {},
+          "name": "probe_big_text",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 84425,
+          "title": "Run probe_big_text?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {}
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 84430,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 84448,
+          "used": 5135,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": 84426,
+      "done": true,
+      "promptChars": 461,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Do this task with the tools of the MCP server probe. Make one tool call at a time, and wait for its result.\n1. Call probe_big_text. Its result is a long document. Exactly one line in it starts with \"NEXT KEY:\".\n2. Call probe_lookup with that key.\n3. Then follow the instruction in each tool result. I… (461 characters)"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 2,
+      "label": "R1 resources",
+      "session": "B",
+      "srv": "p1",
+      "sentAt": 80126,
+      "firstModelUpdate": 84756,
+      "endAt": 96748,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "tool_call": 3,
+        "tool_call_update": 3,
+        "usage_update": 4,
+        "agent_message_chunk": 12
+      },
+      "perms": [
+        {
+          "t_ms": 84756,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "rawInput": {
+            "ServerName": "probe"
+          },
+          "name": "list_resources",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "deny"
+        },
+        {
+          "t_ms": 88047,
+          "title": "Run read_resource?",
+          "kind": "other",
+          "rawInput": {
+            "ServerName": "probe",
+            "Uri": "probe://notes/canary"
+          },
+          "name": "read_resource",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "deny"
+        },
+        {
+          "t_ms": 91799,
+          "title": "Run read_resource?",
+          "kind": "other",
+          "rawInput": {
+            "ServerName": "probe",
+            "Uri": "file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt"
+          },
+          "name": "read_resource",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "deny"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 84756,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "ServerName": "probe"
+          }
+        },
+        {
+          "t_ms": 88046,
+          "title": "Run read_resource?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "ServerName": "probe",
+            "Uri": "probe://notes/canary"
+          }
+        },
+        {
+          "t_ms": 91798,
+          "title": "Run read_resource?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "ServerName": "probe",
+            "Uri": "file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 84758,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        },
+        {
+          "t_ms": 88048,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        },
+        {
+          "t_ms": 91800,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "### Tool Execution Report\n\nEach requested tool call was attempted and blocked by the pre-tool security policy / user permission hook:\n\n1. **`list_resources` (Server: `probe`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to list accessible resources from the server.\n\n2. **`read_resource` (Server: `probe`, URI: `probe://notes/canary`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to retrieve the contents of `probe://notes/canary`.\n\n3. **`read_resource` (Server: `probe`, URI: `file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to retrieve the file resource.\n\n---\n\n### Next Steps\nTo allow these operations to complete, please approve tool execution permissions for `list_resources` and `read_resource` in the client/environment settings.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 88052,
+          "used": 5097,
+          "size": 1048576,
+          "cost": null
+        },
+        {
+          "t_ms": 91804,
+          "used": 5350,
+          "size": 1048576,
+          "cost": null
+        },
+        {
+          "t_ms": 95400,
+          "used": 5688,
+          "size": 1048576,
+          "cost": null
+        },
+        {
+          "t_ms": 96748,
+          "used": 6420,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 294,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Use the tool list_resources to list every resource that you can reach. Then use the tool read_resource to read the resource probe://notes/canary of the server probe, and the resource file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt. Reply with a short report of what each call returned."
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 3,
+      "label": "C2 result 1",
+      "session": "A",
+      "srv": "p1",
+      "sentAt": 100276,
+      "firstModelUpdate": 103818,
+      "endAt": 103833,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [
+        {
+          "t_ms": 103818,
+          "title": "Run probe_lookup?",
+          "kind": "other",
+          "rawInput": {
+            "key": "k2-25483d45"
+          },
+          "name": "probe_lookup",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 103818,
+          "title": "Run probe_lookup?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "key": "k2-25483d45"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 103819,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 103832,
+          "used": 25467,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": 103818,
+      "done": true,
+      "promptChars": 50038,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Result of your tool call probe_big_text {}:\nStation log. Each line is one record. Exactly one line in this document starts with \"NEXT KEY:\".\nRecord 0001: canal field reading 63.248, level 9, state normal.\nRecord 0002: canal canal reading 17.270, level 8, state normal.\nRecord 0003: tower market readi… (50038 characters)"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 4,
+      "label": "C3 result 2",
+      "session": "A",
+      "srv": "p1",
+      "sentAt": 106358,
+      "firstModelUpdate": 109067,
+      "endAt": 109092,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1
+      },
+      "perms": [
+        {
+          "t_ms": 109068,
+          "title": "Run probe_image?",
+          "kind": "other",
+          "rawInput": {
+            "id": "img-359dcab4"
+          },
+          "name": "probe_image",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 109067,
+          "title": "Run probe_image?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "id": "img-359dcab4"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 109069,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [],
+      "cancelSent": 109068,
+      "done": true,
+      "promptChars": 306,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Result of your tool call probe_lookup {\"key\":\"k2-25483d45\"}:\nNext step: call probe_image with the argument id set to \"img-359dcab4\". The image shows three vertical stripes of color. The next key is the three color names from left to right, in lower case, joined by hyphens. Call probe_lookup with tha… (306 characters)"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 5,
+      "label": "C4 result 3",
+      "session": "A",
+      "srv": "p2",
+      "sentAt": 240575,
+      "firstModelUpdate": 245497,
+      "endAt": 245526,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [
+        {
+          "t_ms": 245498,
+          "title": "Run probe_lookup?",
+          "kind": "other",
+          "rawInput": {
+            "key": "blue-green-red"
+          },
+          "name": "probe_lookup",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 245497,
+          "title": "Run probe_lookup?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "key": "blue-green-red"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 245501,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 245526,
+          "used": 26815,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": 245498,
+      "done": true,
+      "promptChars": 89,
+      "promptBlocks": [
+        "text",
+        "image"
+      ],
+      "promptTexts": [
+        "Result of your tool call probe_image {\"id\":\"img-359dcab4\"}:\nThe tool returned 1 image(s)."
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 6,
+      "label": "C5 result 4",
+      "session": "A",
+      "srv": "p2",
+      "sentAt": 248290,
+      "firstModelUpdate": 253352,
+      "endAt": 253372,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [
+        {
+          "t_ms": 253352,
+          "title": "Run probe_unlock?",
+          "kind": "other",
+          "rawInput": {
+            "code": "E-10f9"
+          },
+          "name": "probe_unlock",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 253352,
+          "title": "Run probe_unlock?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "code": "E-10f9"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 253353,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 253372,
+          "used": 51840,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": 253352,
+      "done": true,
+      "promptChars": 226,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Result of your tool call probe_lookup {\"key\":\"blue-green-red\"} (the tool reported an error):\nprobe_lookup error E-10f9: the key store is locked for the key \"blue-green-red\". To continue, call probe_unlock with the code E-10f9."
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 7,
+      "label": "C6 result 5",
+      "session": "A",
+      "srv": "p2",
+      "sentAt": 255882,
+      "firstModelUpdate": 259527,
+      "endAt": 259610,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [],
+      "toolCalls": [],
+      "toolCallUpdates": [],
+      "message": "FINAL-e5bdc54b",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 259610,
+          "used": 52367,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 71,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Result of your tool call probe_unlock {\"code\":\"E-10f9\"}:\nFINAL-e5bdc54b"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 8,
+      "label": "U1 long reply",
+      "session": "U",
+      "srv": "p3",
+      "sentAt": 464075,
+      "firstModelUpdate": 467750,
+      "endAt": 479225,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "agent_message_chunk": 111,
+        "usage_update": 1
+      },
+      "perms": [],
+      "toolCalls": [],
+      "toolCallUpdates": [],
+      "message": "blue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 479225,
+          "used": 7707,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 89,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Write the line \"blue river station\" exactly 600 times, one line each. Write nothing else."
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 9,
+      "label": "U2 short prompt",
+      "session": "U",
+      "srv": "p3",
+      "sentAt": 480738,
+      "firstModelUpdate": 483738,
+      "endAt": 483761,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [],
+      "toolCalls": [],
+      "toolCallUpdates": [],
+      "message": "OK",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 483761,
+          "used": 7781,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 28,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Reply with the word OK only."
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 10,
+      "label": "D1 PDF",
+      "session": "D",
+      "srv": "p3",
+      "sentAt": 497253,
+      "firstModelUpdate": 500554,
+      "endAt": 500570,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [
+        {
+          "t_ms": 500555,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "rawInput": {
+            "ServerName": "probe"
+          },
+          "name": "list_resources",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 500554,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "ServerName": "probe"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 500556,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 500569,
+          "used": 4980,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": 500555,
+      "done": true,
+      "promptChars": 76,
+      "promptBlocks": [
+        "text",
+        "resource:application/pdf"
+      ],
+      "promptTexts": [
+        "The attached PDF document contains a codeword. Reply with the codeword only."
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 11,
+      "label": "S1 first block",
+      "session": "S1",
+      "srv": "p3",
+      "sentAt": 507153,
+      "firstModelUpdate": 508680,
+      "endAt": 508681,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "agent_message_chunk": 1
+      },
+      "perms": [],
+      "toolCalls": [],
+      "toolCallUpdates": [],
+      "message": "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 95% remaining (resets Oct 25, 2026, 02:56 UTC)\n- **Claude and GPT models**\n  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 25, 2026, 03:03 UTC)",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 6,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "/usage"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 12,
+      "label": "S2 after one space",
+      "session": "S2",
+      "srv": "p3",
+      "sentAt": 514944,
+      "firstModelUpdate": 517028,
+      "endAt": 517028,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "agent_message_chunk": 1
+      },
+      "perms": [],
+      "toolCalls": [],
+      "toolCallUpdates": [],
+      "message": "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 95% remaining (resets Oct 25, 2026, 02:56 UTC)\n- **Claude and GPT models**\n  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 25, 2026, 03:03 UTC)",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 7,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        " /usage"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 13,
+      "label": "S3 after one line break",
+      "session": "S3",
+      "srv": "p3",
+      "sentAt": 527150,
+      "firstModelUpdate": 528015,
+      "endAt": 528015,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "agent_message_chunk": 1
+      },
+      "perms": [],
+      "toolCalls": [],
+      "toolCallUpdates": [],
+      "message": "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 95% remaining (resets Oct 25, 2026, 02:56 UTC)\n- **Claude and GPT models**\n  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 25, 2026, 03:03 UTC)",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 7,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "\n/usage"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 14,
+      "label": "S4 second text block",
+      "session": "S4",
+      "srv": "p3",
+      "sentAt": 535782,
+      "firstModelUpdate": 539794,
+      "endAt": 540182,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1
+      },
+      "perms": [
+        {
+          "t_ms": 539794,
+          "title": "Run probe_big_text?",
+          "kind": "other",
+          "rawInput": {},
+          "name": "probe_big_text",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 539794,
+          "title": "Run probe_big_text?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {}
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 539796,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [],
+      "cancelSent": 539794,
+      "done": true,
+      "promptChars": 31,
+      "promptBlocks": [
+        "text",
+        "text"
+      ],
+      "promptTexts": [
+        "Read the next text block.",
+        "/usage"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 15,
+      "label": "S5 after a neutral line",
+      "session": "S5",
+      "srv": "p3",
+      "sentAt": 546323,
+      "firstModelUpdate": 551189,
+      "endAt": 551225,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [
+        {
+          "t_ms": 551190,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "rawInput": {
+            "ServerName": "probe"
+          },
+          "name": "list_resources",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 551189,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "ServerName": "probe"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 551191,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 551225,
+          "used": 5225,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": 551190,
+      "done": true,
+      "promptChars": 35,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Message from the API client:\n/usage"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 16,
+      "label": "S6 unknown name",
+      "session": "S6",
+      "srv": "p3",
+      "sentAt": 558540,
+      "firstModelUpdate": 562887,
+      "endAt": 563837,
+      "stopReason": "cancelled",
+      "error": null,
+      "kinds": {
+        "tool_call": 1,
+        "tool_call_update": 1,
+        "agent_message_chunk": 1,
+        "usage_update": 1
+      },
+      "perms": [
+        {
+          "t_ms": 562887,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "rawInput": {
+            "ServerName": "probe"
+          },
+          "name": "list_resources",
+          "options": [
+            "allow_always:allow_always",
+            "allow:allow_once",
+            "deny:reject_once"
+          ],
+          "answer": "cancelled"
+        }
+      ],
+      "toolCalls": [
+        {
+          "t_ms": 562887,
+          "title": "Run list_resources?",
+          "kind": "other",
+          "status": "pending",
+          "rawInput": {
+            "ServerName": "probe"
+          }
+        }
+      ],
+      "toolCallUpdates": [
+        {
+          "t_ms": 562888,
+          "status": "failed",
+          "rawOutput": "Rejected by user"
+        }
+      ],
+      "message": "The request was cancelled by the client.",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 563837,
+          "used": 5186,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": 562887,
+      "done": true,
+      "promptChars": 14,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "/acp2api-probe"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 17,
+      "label": "N1 non-ASCII",
+      "session": "N",
+      "srv": "p3",
+      "sentAt": 571202,
+      "firstModelUpdate": 574736,
+      "endAt": 574754,
+      "stopReason": "end_turn",
+      "error": null,
+      "kinds": {
+        "agent_message_chunk": 2,
+        "usage_update": 1
+      },
+      "perms": [],
+      "toolCalls": [],
+      "toolCallUpdates": [],
+      "message": "编码检查：中文、日本語、한국어、Ελληνικά、emoji 🚀、符号 ©±≠ — eb17",
+      "thoughtChunks": 0,
+      "thoughtChars": 0,
+      "usage": [
+        {
+          "t_ms": 574754,
+          "used": 4961,
+          "size": 1048576,
+          "cost": null
+        }
+      ],
+      "cancelSent": null,
+      "done": true,
+      "promptChars": 95,
+      "promptBlocks": [
+        "text"
+      ],
+      "promptTexts": [
+        "Reply with this line exactly, and nothing else:\n编码检查：中文、日本語、한국어、Ελληνικά、emoji 🚀、符号 ©±≠ — eb17"
+      ],
+      "resultExtra": {}
+    }
+  ],
+  "outsideTurn": {
+    "p1:A": {
+      "available_commands_update": 1
+    },
+    "p1:d4cf0959-68ae-4d57-b33f-bbedd96e9330": {
+      "available_commands_update": 1
+    },
+    "p2:A": {
+      "user_message_chunk": 3,
+      "available_commands_update": 1,
+      "tool_call": 3,
+      "tool_call_update": 3
+    },
+    "p3:U": {
+      "available_commands_update": 1
+    },
+    "p3:D": {
+      "available_commands_update": 1
+    },
+    "p3:e4dd8b9d-b684-4c6e-b6c4-c78b04a00634": {
+      "available_commands_update": 1
+    },
+    "p3:a9271af8-6063-4613-a219-b7ef78dadf97": {
+      "available_commands_update": 1
+    },
+    "p3:S3": {
+      "available_commands_update": 1
+    },
+    "p3:2391c24a-23fe-4bfc-b25d-7e64cd677e71": {
+      "available_commands_update": 1
+    },
+    "p3:S5": {
+      "available_commands_update": 1
+    },
+    "p3:84b60361-48ce-4cad-9393-3e5f65402fad": {
+      "available_commands_update": 1
+    },
+    "p3:N": {
+      "available_commands_update": 1
+    }
+  },
+  "commands": {
+    "p1:A": [
+      {
+        "t_ms": 75705,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p1:d4cf0959-68ae-4d57-b33f-bbedd96e9330": [
+      {
+        "t_ms": 80106,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p2:A": [
+      {
+        "t_ms": 239568,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:U": [
+      {
+        "t_ms": 464072,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:D": [
+      {
+        "t_ms": 497251,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:e4dd8b9d-b684-4c6e-b6c4-c78b04a00634": [
+      {
+        "t_ms": 507150,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:a9271af8-6063-4613-a219-b7ef78dadf97": [
+      {
+        "t_ms": 514942,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:S3": [
+      {
+        "t_ms": 527142,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:2391c24a-23fe-4bfc-b25d-7e64cd677e71": [
+      {
+        "t_ms": 535779,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:S5": [
+      {
+        "t_ms": 546322,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:84b60361-48ce-4cad-9393-3e5f65402fad": [
+      {
+        "t_ms": 558538,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ],
+    "p3:N": [
+      {
+        "t_ms": 571201,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ]
+  },
+  "agentRequests": [
+    {
+      "t_ms": 84426,
+      "srv": "p1",
+      "method": "session/request_permission",
+      "sessionId": "83f2d281-cdb4-484e-b070-596a67019bce",
+      "title": "Run probe_big_text?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 84756,
+      "srv": "p1",
+      "method": "session/request_permission",
+      "sessionId": "d4cf0959-68ae-4d57-b33f-bbedd96e9330",
+      "title": "Run list_resources?",
+      "answer": "deny"
+    },
+    {
+      "t_ms": 88047,
+      "srv": "p1",
+      "method": "session/request_permission",
+      "sessionId": "d4cf0959-68ae-4d57-b33f-bbedd96e9330",
+      "title": "Run read_resource?",
+      "answer": "deny"
+    },
+    {
+      "t_ms": 91798,
+      "srv": "p1",
+      "method": "session/request_permission",
+      "sessionId": "d4cf0959-68ae-4d57-b33f-bbedd96e9330",
+      "title": "Run read_resource?",
+      "answer": "deny"
+    },
+    {
+      "t_ms": 103818,
+      "srv": "p1",
+      "method": "session/request_permission",
+      "sessionId": "83f2d281-cdb4-484e-b070-596a67019bce",
+      "title": "Run probe_lookup?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 109068,
+      "srv": "p1",
+      "method": "session/request_permission",
+      "sessionId": "83f2d281-cdb4-484e-b070-596a67019bce",
+      "title": "Run probe_image?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 245498,
+      "srv": "p2",
+      "method": "session/request_permission",
+      "sessionId": "83f2d281-cdb4-484e-b070-596a67019bce",
+      "title": "Run probe_lookup?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 253352,
+      "srv": "p2",
+      "method": "session/request_permission",
+      "sessionId": "83f2d281-cdb4-484e-b070-596a67019bce",
+      "title": "Run probe_unlock?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 500555,
+      "srv": "p3",
+      "method": "session/request_permission",
+      "sessionId": "07077ede-060c-418c-9cef-ce9efa0b048d",
+      "title": "Run list_resources?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 539794,
+      "srv": "p3",
+      "method": "session/request_permission",
+      "sessionId": "2391c24a-23fe-4bfc-b25d-7e64cd677e71",
+      "title": "Run probe_big_text?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 551190,
+      "srv": "p3",
+      "method": "session/request_permission",
+      "sessionId": "23494a6d-ea8b-4340-9043-290800d17ef2",
+      "title": "Run list_resources?",
+      "answer": "cancelled"
+    },
+    {
+      "t_ms": 562887,
+      "srv": "p3",
+      "method": "session/request_permission",
+      "sessionId": "84b60361-48ce-4cad-9393-3e5f65402fad",
+      "title": "Run list_resources?",
+      "answer": "cancelled"
+    }
+  ],
+  "errors": [],
+  "notes": [],
+  "stops": {
+    "p1": {
+      "mode": "stdin-end",
+      "stoppedBy": "stdin-end, then kill-root after timeout",
+      "exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "t_ms": 132509
+      },
+      "stopMs": 132510,
+      "treeBefore": [
+        {
+          "pid": 2332,
+          "ppid": 6208,
+          "depth": 0,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 3700,
+          "ppid": 2332,
+          "depth": 1,
+          "name": "conhost.exe",
+          "exe": "C:\\WINDOWS\\system32\\conhost.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 2488,
+          "ppid": 2332,
+          "depth": 1,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 1812,
+          "ppid": 2488,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 4660,
+          "ppid": 2488,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        }
+      ],
+      "aliveAtStop": [
+        "conhost.exe:3700",
+        "agy_acp_server.exe:2488",
+        "localharness_external.exe:1812",
+        "localharness_external.exe:4660"
+      ],
+      "aliveAfter5s": [
+        "conhost.exe:3700",
+        "agy_acp_server.exe:2488",
+        "localharness_external.exe:1812",
+        "localharness_external.exe:4660"
+      ],
+      "mei": {
+        "beforeStart": [
+          "_MEI000003942",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "whileRunning": [
+          "_MEI000003942",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "after5s": [
+          "_MEI000003942",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "newWhileRunning": [
+          "_MEI0000091c2"
+        ],
+        "leftAfter5s": [
+          "_MEI0000091c2"
+        ]
+      },
+      "aliveAfterCleanup": [
+        "localharness_external.exe:1812"
+      ]
+    },
+    "chain": {
+      "mode": "stdin-end",
+      "stoppedBy": "stdin-end, then kill-root after timeout",
+      "exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "t_ms": 282042
+      },
+      "stopMs": 282043,
+      "treeBefore": [
+        {
+          "pid": 7248,
+          "ppid": 6208,
+          "depth": 0,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 4772,
+          "ppid": 7248,
+          "depth": 1,
+          "name": "conhost.exe",
+          "exe": "C:\\WINDOWS\\system32\\conhost.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 1992,
+          "ppid": 7248,
+          "depth": 1,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 5920,
+          "ppid": 1992,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        }
+      ],
+      "aliveAtStop": [
+        "conhost.exe:4772",
+        "agy_acp_server.exe:1992",
+        "localharness_external.exe:5920"
+      ],
+      "aliveAfter5s": [
+        "conhost.exe:4772",
+        "agy_acp_server.exe:1992",
+        "localharness_external.exe:5920"
+      ],
+      "mei": {
+        "beforeStart": [
+          "_MEI000003942",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "whileRunning": [
+          "_MEI000003942",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001c502",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "after5s": [
+          "_MEI000003942",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001c502",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "newWhileRunning": [
+          "_MEI00001c502"
+        ],
+        "leftAfter5s": [
+          "_MEI00001c502"
+        ]
+      },
+      "aliveAfterCleanup": []
+    },
+    "p3": {
+      "mode": "stdin-end",
+      "stoppedBy": "stdin-end, then kill-root after timeout",
+      "exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "t_ms": 597176
+      },
+      "stopMs": 597177,
+      "treeBefore": [
+        {
+          "pid": 2116,
+          "ppid": 6208,
+          "depth": 0,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 5668,
+          "ppid": 2116,
+          "depth": 1,
+          "name": "conhost.exe",
+          "exe": "C:\\WINDOWS\\system32\\conhost.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 9208,
+          "ppid": 2116,
+          "depth": 1,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 9984,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 832,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 3312,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 904,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 8476,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 9936,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 6092,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 9076,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 2120,
+          "ppid": 9208,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        }
+      ],
+      "aliveAtStop": [
+        "conhost.exe:5668",
+        "agy_acp_server.exe:9208",
+        "localharness_external.exe:9984",
+        "localharness_external.exe:832",
+        "localharness_external.exe:3312",
+        "localharness_external.exe:904",
+        "localharness_external.exe:8476",
+        "localharness_external.exe:9936",
+        "localharness_external.exe:6092",
+        "localharness_external.exe:9076",
+        "localharness_external.exe:2120"
+      ],
+      "aliveAfter5s": [
+        "conhost.exe:5668",
+        "agy_acp_server.exe:9208",
+        "localharness_external.exe:9984",
+        "localharness_external.exe:832",
+        "localharness_external.exe:3312",
+        "localharness_external.exe:904",
+        "localharness_external.exe:8476",
+        "localharness_external.exe:9936",
+        "localharness_external.exe:6092",
+        "localharness_external.exe:9076",
+        "localharness_external.exe:2120"
+      ],
+      "mei": {
+        "beforeStart": [
+          "_MEI000003942",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001c502",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "whileRunning": [
+          "_MEI000003942",
+          "_MEI000008442",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001c502",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "after5s": [
+          "_MEI000003942",
+          "_MEI000008442",
+          "_MEI0000091c2",
+          "_MEI00000c782",
+          "_MEI000011082",
+          "_MEI000013f82",
+          "_MEI000014542",
+          "_MEI000015702",
+          "_MEI00001c502",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "newWhileRunning": [
+          "_MEI000008442"
+        ],
+        "leftAfter5s": [
+          "_MEI000008442"
+        ]
+      },
+      "aliveAfterCleanup": []
+    }
+  },
+  "workspaces": {
+    "root": "%TEMP%\\acp2api-probe16",
+    "proc": {
+      "dir": "%TEMP%\\acp2api-probe16\\proc-DVl29J",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\proc-DVl29J",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "canary": {
+      "dir": "C:\\acp2api-probe\\canary\\canary-yGp2NG",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 4,
+        "hits": [],
+        "dirs": [
+          "C:\\acp2api-probe\\canary\\canary-yGp2NG",
+          "C:\\acp2api-probe\\canary",
+          "C:\\acp2api-probe",
+          "C:\\"
+        ]
+      }
+    },
+    "A": {
+      "dir": "%TEMP%\\acp2api-probe16\\a-WJm48i",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\a-WJm48i",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "B": {
+      "dir": "%TEMP%\\acp2api-probe16\\b-glzPXP",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\b-glzPXP",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "U": {
+      "dir": "%TEMP%\\acp2api-probe16\\u-CTByAE",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\u-CTByAE",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "D": {
+      "dir": "%TEMP%\\acp2api-probe16\\d-pteGy4",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\d-pteGy4",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "S1": {
+      "dir": "%TEMP%\\acp2api-probe16\\s1-DzJLnQ",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\s1-DzJLnQ",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "S2": {
+      "dir": "%TEMP%\\acp2api-probe16\\s2-vullmD",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\s2-vullmD",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "S3": {
+      "dir": "%TEMP%\\acp2api-probe16\\s3-eKQvGG",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\s3-eKQvGG",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "S4": {
+      "dir": "%TEMP%\\acp2api-probe16\\s4-mF5OcO",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\s4-mF5OcO",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "S5": {
+      "dir": "%TEMP%\\acp2api-probe16\\s5-BYgyql",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\s5-BYgyql",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "S6": {
+      "dir": "%TEMP%\\acp2api-probe16\\s6-4G31DH",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\s6-4G31DH",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "N": {
+      "dir": "%TEMP%\\acp2api-probe16\\n-qYJYCj",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\n-qYJYCj",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    }
+  },
+  "sessionNew_A": {
+    "ms": 18340,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_A": {
+    "ms": 14,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_B": {
+    "ms": 4387,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_B": {
+    "ms": 4,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "concurrency": {
+    "C1": {
+      "sent": 80111,
+      "firstModelUpdate": 84425,
+      "end": 84448
+    },
+    "R1": {
+      "sent": 80126,
+      "firstModelUpdate": 84756,
+      "end": 96748
+    },
+    "overlap": false
+  },
+  "processTree_p1": [
+    {
+      "depth": 0,
+      "name": "agy_acp_server.exe",
+      "machine": "x64"
+    },
+    {
+      "depth": 1,
+      "name": "conhost.exe",
+      "machine": "arm64"
+    },
+    {
+      "depth": 1,
+      "name": "agy_acp_server.exe",
+      "machine": "x64"
+    },
+    {
+      "depth": 2,
+      "name": "localharness_external.exe",
+      "machine": "arm64"
+    },
+    {
+      "depth": 2,
+      "name": "localharness_external.exe",
+      "machine": "arm64"
+    }
+  ],
+  "sessionLoad_A": {
+    "ms": 16165,
+    "keys": [
+      "modes",
+      "configOptions",
+      "models",
+      "_meta"
+    ]
+  },
+  "thinking_A_after_load": [
+    "model=gemini-3.8-flash",
+    "thinking_level=high",
+    "mode=default"
+  ],
+  "chainEnd": "turn C6 result 5 ended with end_turn and 0 tool request(s)",
+  "chainCalls": [
+    {
+      "turn": "C1 chain task",
+      "srv": "p1",
+      "name": "probe_big_text",
+      "rawInput": {}
+    },
+    {
+      "turn": "C2 result 1",
+      "srv": "p1",
+      "name": "probe_lookup",
+      "rawInput": {
+        "key": "k2-25483d45"
+      }
+    },
+    {
+      "turn": "C3 result 2",
+      "srv": "p1",
+      "name": "probe_image",
+      "rawInput": {
+        "id": "img-359dcab4"
+      }
+    },
+    {
+      "turn": "C4 result 3",
+      "srv": "p2",
+      "name": "probe_lookup",
+      "rawInput": {
+        "key": "blue-green-red"
+      }
+    },
+    {
+      "turn": "C5 result 4",
+      "srv": "p2",
+      "name": "probe_unlock",
+      "rawInput": {
+        "code": "E-10f9"
+      }
+    }
+  ],
+  "finalTurnA": {
+    "label": "C6 result 5",
+    "stopReason": "end_turn",
+    "message": "FINAL-e5bdc54b"
+  },
+  "sessionNew_U": {
+    "ms": 15425,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_U": {
+    "ms": 2,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_D": {
+    "ms": 11987,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_D": {
+    "ms": 2,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_S1": {
+    "ms": 5078,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_S1": {
+    "ms": 2,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_S2": {
+    "ms": 4752,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_S2": {
+    "ms": 2,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_S3": {
+    "ms": 5635,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_S3": {
+    "ms": 9,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_S4": {
+    "ms": 6243,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_S4": {
+    "ms": 3,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_S5": {
+    "ms": 4625,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_S5": {
+    "ms": 1,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_S6": {
+    "ms": 5804,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_S6": {
+    "ms": 2,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "sessionNew_N": {
+    "ms": 5389,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ],
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ],
+    "modes": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "tier": "free-tier"
+  },
+  "thinking_N": {
+    "ms": 2,
+    "config": [
+      "model=gemini-3.8-flash",
+      "thinking_level=high",
+      "mode=default"
+    ]
+  },
+  "encoding_p3": {
+    "stdoutNonAsciiLines": 0,
+    "stdoutReplacementChars": 0,
+    "stderrReplacementChars": 0
+  },
+  "encoding": {
+    "p1": {
+      "nonJsonStdout": 0,
+      "stdoutNonAsciiLines": 0,
+      "stdoutReplacementChars": 0,
+      "stderrReplacementChars": 0,
+      "stderrLines": 47
+    },
+    "p2": {
+      "nonJsonStdout": 0,
+      "stdoutNonAsciiLines": 0,
+      "stdoutReplacementChars": 0,
+      "stderrReplacementChars": 0,
+      "stderrLines": 29
+    },
+    "p3": {
+      "nonJsonStdout": 0,
+      "stdoutNonAsciiLines": 0,
+      "stdoutReplacementChars": 0,
+      "stderrReplacementChars": 0,
+      "stderrLines": 101
+    }
+  },
+  "eval": {
+    "promptsSent": 17,
+    "turns": [
+      {
+        "turn": "C1 chain task",
+        "srv": "p1",
+        "session": "A",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 4337,
+        "firstModelUpdateMs": 4314,
+        "promptChars": 461,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Do this task with the tools of the MCP server probe. Make one tool call at a time, and wait for its result.\n1. Call probe_big_text. Its result is a long document. Exactly one line in it starts with \"NEXT KEY:\".\n2. Call probe_lookup with that key.\n3. Then follow the instruction in each tool result. I… (461 characters)"
+        ],
+        "modelRequests": 2,
+        "usage": [
+          {
+            "t_ms": 84448,
+            "used": 5135,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [
+          "probe_big_text {} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 84430,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "R1 resources",
+        "srv": "p1",
+        "session": "B",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 16622,
+        "firstModelUpdateMs": 4630,
+        "promptChars": 294,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Use the tool list_resources to list every resource that you can reach. Then use the tool read_resource to read the resource probe://notes/canary of the server probe, and the resource file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt. Reply with a short report of what each call returned."
+        ],
+        "modelRequests": 5,
+        "usage": [
+          {
+            "t_ms": 88052,
+            "used": 5097,
+            "size": 1048576,
+            "cost": null
+          },
+          {
+            "t_ms": 91804,
+            "used": 5350,
+            "size": 1048576,
+            "cost": null
+          },
+          {
+            "t_ms": 95400,
+            "used": 5688,
+            "size": 1048576,
+            "cost": null
+          },
+          {
+            "t_ms": 96748,
+            "used": 6420,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 3,
+          "tool_call_update": 3,
+          "usage_update": 4,
+          "agent_message_chunk": 12
+        },
+        "perms": [
+          "list_resources {\"ServerName\":\"probe\"} -> deny",
+          "read_resource {\"ServerName\":\"probe\",\"Uri\":\"probe://notes/canary\"} -> deny",
+          "read_resource {\"ServerName\":\"probe\",\"Uri\":\"file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt\"} -> deny"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 84758,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          },
+          {
+            "t_ms": 88048,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          },
+          {
+            "t_ms": 91800,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 1058,
+        "reply": "### Tool Execution Report\n\nEach requested tool call was attempted and blocked by the pre-tool security policy / user permission hook:\n\n1. **`list_resources` (Server: `probe`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to list accessible resources from the server.\n\n2. **`read_resource` (Server: `probe`, URI: `probe://notes/canary`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to retrieve the contents of `probe://notes/canary`.\n\n3. **`read_resource` (Server: `probe`, URI: `file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to retrieve the file resource.\n\n---\n\n### Next Steps\nTo allow these operations to complete, please approve tool execution permissions for `list_resources` and `read_resource` in the client/environment settings.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "C2 result 1",
+        "srv": "p1",
+        "session": "A",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 3557,
+        "firstModelUpdateMs": 3542,
+        "promptChars": 50038,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Result of your tool call probe_big_text {}:\nStation log. Each line is one record. Exactly one line in this document starts with \"NEXT KEY:\".\nRecord 0001: canal field reading 63.248, level 9, state normal.\nRecord 0002: canal canal reading 17.270, level 8, state normal.\nRecord 0003: tower market readi… (50038 characters)"
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 103832,
+            "used": 25467,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [
+          "probe_lookup {\"key\":\"k2-25483d45\"} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 103819,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "C3 result 2",
+        "srv": "p1",
+        "session": "A",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 2734,
+        "firstModelUpdateMs": 2709,
+        "promptChars": 306,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Result of your tool call probe_lookup {\"key\":\"k2-25483d45\"}:\nNext step: call probe_image with the argument id set to \"img-359dcab4\". The image shows three vertical stripes of color. The next key is the three color names from left to right, in lower case, joined by hyphens. Call probe_lookup with tha… (306 characters)"
+        ],
+        "modelRequests": 1,
+        "usage": [],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1
+        },
+        "perms": [
+          "probe_image {\"id\":\"img-359dcab4\"} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 109069,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "C4 result 3",
+        "srv": "p2",
+        "session": "A",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 4951,
+        "firstModelUpdateMs": 4922,
+        "promptChars": 89,
+        "promptBlocks": [
+          "text",
+          "image"
+        ],
+        "promptTexts": [
+          "Result of your tool call probe_image {\"id\":\"img-359dcab4\"}:\nThe tool returned 1 image(s)."
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 245526,
+            "used": 26815,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [
+          "probe_lookup {\"key\":\"blue-green-red\"} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 245501,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "C5 result 4",
+        "srv": "p2",
+        "session": "A",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 5082,
+        "firstModelUpdateMs": 5062,
+        "promptChars": 226,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Result of your tool call probe_lookup {\"key\":\"blue-green-red\"} (the tool reported an error):\nprobe_lookup error E-10f9: the key store is locked for the key \"blue-green-red\". To continue, call probe_unlock with the code E-10f9."
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 253372,
+            "used": 51840,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [
+          "probe_unlock {\"code\":\"E-10f9\"} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 253353,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "C6 result 5",
+        "srv": "p2",
+        "session": "A",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 3728,
+        "firstModelUpdateMs": 3645,
+        "promptChars": 71,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Result of your tool call probe_unlock {\"code\":\"E-10f9\"}:\nFINAL-e5bdc54b"
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 259610,
+            "used": 52367,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [],
+        "permOptions": null,
+        "toolCallUpdates": [],
+        "replyChars": 14,
+        "reply": "FINAL-e5bdc54b",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "U1 long reply",
+        "srv": "p3",
+        "session": "U",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 15150,
+        "firstModelUpdateMs": 3675,
+        "promptChars": 89,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Write the line \"blue river station\" exactly 600 times, one line each. Write nothing else."
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 479225,
+            "used": 7707,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "agent_message_chunk": 111,
+          "usage_update": 1
+        },
+        "perms": [],
+        "permOptions": null,
+        "toolCallUpdates": [],
+        "replyChars": 13109,
+        "reply": "blue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river  … e river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station\nblue river station",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "U2 short prompt",
+        "srv": "p3",
+        "session": "U",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 3023,
+        "firstModelUpdateMs": 3000,
+        "promptChars": 28,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Reply with the word OK only."
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 483761,
+            "used": 7781,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [],
+        "permOptions": null,
+        "toolCallUpdates": [],
+        "replyChars": 2,
+        "reply": "OK",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "D1 PDF",
+        "srv": "p3",
+        "session": "D",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 3317,
+        "firstModelUpdateMs": 3301,
+        "promptChars": 76,
+        "promptBlocks": [
+          "text",
+          "resource:application/pdf"
+        ],
+        "promptTexts": [
+          "The attached PDF document contains a codeword. Reply with the codeword only."
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 500569,
+            "used": 4980,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [
+          "list_resources {\"ServerName\":\"probe\"} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 500556,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "S1 first block",
+        "srv": "p3",
+        "session": "S1",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 1528,
+        "firstModelUpdateMs": 1527,
+        "promptChars": 6,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "/usage"
+        ],
+        "modelRequests": 0,
+        "usage": [],
+        "kinds": {
+          "agent_message_chunk": 1
+        },
+        "perms": [],
+        "permOptions": null,
+        "toolCallUpdates": [],
+        "replyChars": 411,
+        "reply": "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 95% remaining (resets Oct 25, 2026, 02:56 UTC)\n- **Claude and GPT models**\n  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 25, 2026, 03:03 UTC)",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "S2 after one space",
+        "srv": "p3",
+        "session": "S2",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 2084,
+        "firstModelUpdateMs": 2084,
+        "promptChars": 7,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          " /usage"
+        ],
+        "modelRequests": 0,
+        "usage": [],
+        "kinds": {
+          "agent_message_chunk": 1
+        },
+        "perms": [],
+        "permOptions": null,
+        "toolCallUpdates": [],
+        "replyChars": 411,
+        "reply": "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 95% remaining (resets Oct 25, 2026, 02:56 UTC)\n- **Claude and GPT models**\n  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 25, 2026, 03:03 UTC)",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "S3 after one line break",
+        "srv": "p3",
+        "session": "S3",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 865,
+        "firstModelUpdateMs": 865,
+        "promptChars": 7,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "\n/usage"
+        ],
+        "modelRequests": 0,
+        "usage": [],
+        "kinds": {
+          "agent_message_chunk": 1
+        },
+        "perms": [],
+        "permOptions": null,
+        "toolCallUpdates": [],
+        "replyChars": 411,
+        "reply": "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 95% remaining (resets Oct 25, 2026, 02:56 UTC)\n- **Claude and GPT models**\n  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 25, 2026, 03:03 UTC)",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "S4 second text block",
+        "srv": "p3",
+        "session": "S4",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 4400,
+        "firstModelUpdateMs": 4012,
+        "promptChars": 31,
+        "promptBlocks": [
+          "text",
+          "text"
+        ],
+        "promptTexts": [
+          "Read the next text block.",
+          "/usage"
+        ],
+        "modelRequests": 1,
+        "usage": [],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1
+        },
+        "perms": [
+          "probe_big_text {} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 539796,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "S5 after a neutral line",
+        "srv": "p3",
+        "session": "S5",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 4902,
+        "firstModelUpdateMs": 4866,
+        "promptChars": 35,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Message from the API client:\n/usage"
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 551225,
+            "used": 5225,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [
+          "list_resources {\"ServerName\":\"probe\"} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 551191,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "S6 unknown name",
+        "srv": "p3",
+        "session": "S6",
+        "stopReason": "cancelled",
+        "error": null,
+        "ms": 5297,
+        "firstModelUpdateMs": 4347,
+        "promptChars": 14,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "/acp2api-probe"
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 563837,
+            "used": 5186,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "tool_call": 1,
+          "tool_call_update": 1,
+          "agent_message_chunk": 1,
+          "usage_update": 1
+        },
+        "perms": [
+          "list_resources {\"ServerName\":\"probe\"} -> cancelled"
+        ],
+        "permOptions": [
+          "allow_always:allow_always",
+          "allow:allow_once",
+          "deny:reject_once"
+        ],
+        "toolCallUpdates": [
+          {
+            "t_ms": 562888,
+            "status": "failed",
+            "rawOutput": "Rejected by user"
+          }
+        ],
+        "replyChars": 40,
+        "reply": "The request was cancelled by the client.",
+        "thoughtChunks": 0
+      },
+      {
+        "turn": "N1 non-ASCII",
+        "srv": "p3",
+        "session": "N",
+        "stopReason": "end_turn",
+        "error": null,
+        "ms": 3552,
+        "firstModelUpdateMs": 3534,
+        "promptChars": 95,
+        "promptBlocks": [
+          "text"
+        ],
+        "promptTexts": [
+          "Reply with this line exactly, and nothing else:\n编码检查：中文、日本語、한국어、Ελληνικά、emoji 🚀、符号 ©±≠ — eb17"
+        ],
+        "modelRequests": 1,
+        "usage": [
+          {
+            "t_ms": 574754,
+            "used": 4961,
+            "size": 1048576,
+            "cost": null
+          }
+        ],
+        "kinds": {
+          "agent_message_chunk": 2,
+          "usage_update": 1
+        },
+        "perms": [],
+        "permOptions": null,
+        "toolCallUpdates": [],
+        "replyChars": 47,
+        "reply": "编码检查：中文、日本語、한국어、Ελληνικά、emoji 🚀、符号 ©±≠ — eb17",
+        "thoughtChunks": 0
+      }
+    ],
+    "longReply": {
+      "lines": 690,
+      "chars": 13109
+    },
+    "pdf": {
+      "codeword": "PDFCODE-24e2535c",
+      "inReply": false,
+      "reply": "The request was cancelled by the client."
+    },
+    "nonAscii": {
+      "expected": "编码检查：中文、日本語、한국어、Ελληνικά、emoji 🚀、符号 ©±≠ — eb17",
+      "exact": true,
+      "contains": true,
+      "reply": "编码检查：中文、日本語、한국어、Ελληνικά、emoji 🚀、符号 ©±≠ — eb17"
+    },
+    "resources": {
+      "resourceCodeInReply": false,
+      "canaryCodeInReply": false,
+      "perms": [
+        "Run list_resources? {\"ServerName\":\"probe\"} -> deny",
+        "Run read_resource? {\"ServerName\":\"probe\",\"Uri\":\"probe://notes/canary\"} -> deny",
+        "Run read_resource? {\"ServerName\":\"probe\",\"Uri\":\"file:///C:/acp2api-probe/canary/canary-yGp2NG/canary.txt\"} -> deny"
+      ],
+      "reply": "### Tool Execution Report\n\nEach requested tool call was attempted and blocked by the pre-tool security policy / user permission hook:\n\n1. **`list_resources` (Server: `probe`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to list accessible resources from the server.\n\n2. **`read_resource` (Server: `probe`, URI: `probe://notes/canary`)**\n   - **Result**: Execution blocked / failed.\n   - **Error**: `denied by pre-tool hook: Denied by user (*)`\n   - **Details**: Unable to retrieve the contents of `probe://notes"
+    },
+    "chain": {
+      "calls": [
+        "C1 chain task [p1] probe_big_text {}",
+        "C2 result 1 [p1] probe_lookup {\"key\":\"k2-25483d45\"}",
+        "C3 result 2 [p1] probe_image {\"id\":\"img-359dcab4\"}",
+        "C4 result 3 [p2] probe_lookup {\"key\":\"blue-green-red\"}",
+        "C5 result 4 [p2] probe_unlock {\"code\":\"E-10f9\"}"
+      ],
+      "keyOk": true,
+      "imageOk": true,
+      "colorOk": true,
+      "codeOk": true,
+      "finalOk": true
+    }
+  },
+  "workspaceContentsAfter": {
+    "proc": [],
+    "canary": [
+      "canary.txt"
+    ],
+    "A": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "B": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "U": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "D": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "S1": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "S2": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "S3": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "S4": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "S5": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "S6": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ],
+    "N": [
+      ".agents/",
+      ".agents\\skills/",
+      ".gemini/",
+      ".gemini\\skills/"
+    ]
+  },
+  "meiAtEnd": [
+    "_MEI000003942",
+    "_MEI000008442",
+    "_MEI0000091c2",
+    "_MEI00000c782",
+    "_MEI000011082",
+    "_MEI000013f82",
+    "_MEI000014542",
+    "_MEI000015702",
+    "_MEI00001c502",
+    "_MEI00001e102",
+    "_MEI000023e42",
+    "_MEI000027fc2",
+    "_MEI00002aa82",
+    "_MEI00002ae02"
+  ],
+  "mcpStats": {
+    "requests": 88,
+    "byMethod": {
+      "server/discover": 9,
+      "initialize": 9,
+      "notifications/initialized": 9,
+      "tools/list": 9,
+      "notifications/roots/list_changed": 25
+    },
+    "toolCalls": [],
+    "resourceReads": [],
+    "resourceLists": 0,
+    "byEndpoint": {
+      "A": 15,
+      "/.well-known/oauth-protected-resource/mcp/1d5704266f4766e431b8ad04": 1,
+      "/.well-known/oauth-protected-resource": 9,
+      "B": 5,
+      "/.well-known/oauth-protected-resource/mcp/9d661da4603dba3a1db00f8f": 1,
+      "A-load": 15,
+      "/.well-known/oauth-protected-resource/mcp/48cc893ec111039b9770a9c2": 1,
+      "U": 10,
+      "/.well-known/oauth-protected-resource/mcp/3980151b82bfd3e165e378e8": 1,
+      "D": 5,
+      "/.well-known/oauth-protected-resource/mcp/75e52611b62dda19861b4a20": 1,
+      "S4": 5,
+      "/.well-known/oauth-protected-resource/mcp/0eac29b3b08de1d52ba678e0": 1,
+      "S5": 5,
+      "/.well-known/oauth-protected-resource/mcp/752bea5d6f934df93db30722": 1,
+      "S6": 5,
+      "/.well-known/oauth-protected-resource/mcp/0983408a7abc101e686790eb": 1,
+      "N": 5,
+      "/.well-known/oauth-protected-resource/mcp/1711b86407012307881cf7ce": 1
+    }
+  },
+  "guard": {
+    "trip": null,
+    "all": []
+  },
+  "budget": {
+    "approved": 17,
+    "sent": 17,
+    "approvedBy": "user, in chat, 2026-10-18: 批准 17 个 (Recommended)",
+    "log": [
+      {
+        "n": 1,
+        "label": "C1 chain task",
+        "at": "2026-10-18T02:56:00.818Z"
+      },
+      {
+        "n": 2,
+        "label": "R1 resources",
+        "at": "2026-10-18T02:56:00.832Z"
+      },
+      {
+        "n": 3,
+        "label": "C2 result 1",
+        "at": "2026-10-18T02:56:20.983Z"
+      },
+      {
+        "n": 4,
+        "label": "C3 result 2",
+        "at": "2026-10-18T02:56:27.064Z"
+      },
+      {
+        "n": 5,
+        "label": "C4 result 3",
+        "at": "2026-10-18T02:58:41.282Z"
+      },
+      {
+        "n": 6,
+        "label": "C5 result 4",
+        "at": "2026-10-18T02:58:48.736Z"
+      },
+      {
+        "n": 7,
+        "label": "C6 result 5",
+        "at": "2026-10-18T02:58:56.588Z"
+      },
+      {
+        "n": 8,
+        "label": "U1 long reply",
+        "at": "2026-10-18T03:02:24.781Z"
+      },
+      {
+        "n": 9,
+        "label": "U2 short prompt",
+        "at": "2026-10-18T03:02:41.444Z"
+      },
+      {
+        "n": 10,
+        "label": "D1 PDF",
+        "at": "2026-10-18T03:02:57.960Z"
+      },
+      {
+        "n": 11,
+        "label": "S1 first block",
+        "at": "2026-10-18T03:03:07.860Z"
+      },
+      {
+        "n": 12,
+        "label": "S2 after one space",
+        "at": "2026-10-18T03:03:15.651Z"
+      },
+      {
+        "n": 13,
+        "label": "S3 after one line break",
+        "at": "2026-10-18T03:03:27.857Z"
+      },
+      {
+        "n": 14,
+        "label": "S4 second text block",
+        "at": "2026-10-18T03:03:36.489Z"
+      },
+      {
+        "n": 15,
+        "label": "S5 after a neutral line",
+        "at": "2026-10-18T03:03:47.030Z"
+      },
+      {
+        "n": 16,
+        "label": "S6 unknown name",
+        "at": "2026-10-18T03:03:59.247Z"
+      },
+      {
+        "n": 17,
+        "label": "N1 non-ASCII",
+        "at": "2026-10-18T03:04:11.909Z"
+      }
+    ]
+  },
+  "captureDropped": {},
+  "redactionCounts": {
+    "tmpdir": 15,
+    "home": 50
+  },
+  "endedAt": "2026-10-18T03:04:55.512Z"
+}

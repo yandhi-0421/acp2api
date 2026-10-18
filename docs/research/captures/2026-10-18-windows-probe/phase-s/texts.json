@@ -1,0 +1,80 @@
+{
+  "TASK": "Do this task with the tools of the MCP server probe. Make one tool call at a time, and wait for its result.\n1. Call probe_big_text. Its result is a long document. Exactly one line in it starts with \"NEXT KEY:\".\n2. Call probe_lookup with that key.\n3. Then follow the instruction in each tool result. If a tool result reports an error, follow the instruction in the error.\n4. When a tool result gives a value that starts with \"FINAL-\", reply with that value only.",
+  "RES": "Use the tool list_resources to list every resource that you can reach. Then use the tool read_resource to read the resource probe://notes/canary of the server probe, and the resource file:///C:/acp2api-probe/canary/canary-iMTt6q/canary.txt. Reply with a short report of what each call returned.",
+  "U1": "Write the line \"blue river station\" exactly 600 times, one line each. Write nothing else.",
+  "U2": "Reply with the word OK only.",
+  "D1": "The attached PDF document contains a codeword. Reply with the codeword only.",
+  "PDF_CODE": "PDFCODE-f12abb1a",
+  "pdfBytes": 631,
+  "N1": "Reply with this line exactly, and nothing else:\n编码检查：中文、日本語、한국어、Ελληνικά、emoji 🚀、符号 ©±≠ — 366e",
+  "SLASH": [
+    {
+      "label": "S1 first block",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/usage"
+        }
+      ]
+    },
+    {
+      "label": "S2 after one space",
+      "blocks": [
+        {
+          "type": "text",
+          "text": " /usage"
+        }
+      ]
+    },
+    {
+      "label": "S3 after one line break",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "\n/usage"
+        }
+      ]
+    },
+    {
+      "label": "S4 second text block",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Read the next text block."
+        },
+        {
+          "type": "text",
+          "text": "/usage"
+        }
+      ]
+    },
+    {
+      "label": "S5 after a neutral line",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "Message from the API client:\n/usage"
+        }
+      ]
+    },
+    {
+      "label": "S6 unknown name",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "/acp2api-probe"
+        }
+      ]
+    }
+  ],
+  "chain": {
+    "markerKey": "k2-f64890c1",
+    "imageId": "img-13863323",
+    "colorKey": "blue-green-red",
+    "errCode": "E-66d4",
+    "final": "FINAL-8a2992e5",
+    "bigTextLength": 49994,
+    "resourceCode": "RESOURCE-657e405c",
+    "canaryCode": "CANARY-95336460"
+  }
+}

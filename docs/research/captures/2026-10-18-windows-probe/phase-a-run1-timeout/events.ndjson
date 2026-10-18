@@ -1,0 +1,4 @@
+{"t_ms":44957,"srv":"p0","event":"spawn","exe":"~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe","args":[],"cwd":"%TEMP%\\acp2api-probe16\\proc-KD71Qb","pid":5204,"envKeys":["ALLUSERSPROFILE","APPDATA","CommonProgramFiles","CommonProgramFiles(x86)","CommonProgramW6432","COMPUTERNAME","ComSpec","HOMEDRIVE","HOMEPATH","LOCALAPPDATA","NUMBER_OF_PROCESSORS","OS","Path","PATHEXT","PROCESSOR_ARCHITECTURE","PROCESSOR_IDENTIFIER","ProgramData","ProgramFiles","ProgramFiles(x86)","ProgramW6432","PUBLIC","SystemDrive","SystemRoot","TEMP","TMP","USERDOMAIN","USERNAME","USERPROFILE","windir"]}
+{"t_ms":219655,"srv":"p0","event":"stop:stdin-end"}
+{"t_ms":239809,"srv":"p0","event":"exit","code":null,"signal":"SIGTERM"}
+{"t_ms":256141,"srv":"p0","event":"stop-result","aliveAtStop":[],"aliveAfter5s":[],"leftMei":["_MEI000014542"]}

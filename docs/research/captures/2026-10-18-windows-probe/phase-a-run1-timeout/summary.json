@@ -1,0 +1,221 @@
+{
+  "phase": "a",
+  "startedAt": "2026-10-18T02:41:00.600Z",
+  "host": {
+    "osRelease": "10.0.26300",
+    "nodeArch": "arm64",
+    "nodeVersion": "v22.23.1",
+    "cpus": 6,
+    "cpuModel": "virt-10.0",
+    "windowsCaption": "Microsoft Windows 11 家庭版",
+    "windowsBuild": "26300",
+    "osArch": "ARM 64 位处理器",
+    "uiCulture": "zh-CN",
+    "systemLocale": "zh-CN",
+    "ansiCodePage": "936",
+    "oemCodePage": "936",
+    "defenderRealtime": "True",
+    "proxyEnv": []
+  },
+  "init": {},
+  "turns": [],
+  "outsideTurn": {},
+  "commands": {},
+  "agentRequests": [],
+  "errors": [],
+  "notes": [],
+  "stops": {
+    "p0-final": {
+      "mode": "stdin-end",
+      "stoppedBy": "stdin-end, then kill-root after timeout",
+      "exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "t_ms": 239809
+      },
+      "stopMs": 239809,
+      "treeBefore": [
+        {
+          "pid": 5204,
+          "ppid": 8496,
+          "depth": 0,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 5968,
+          "ppid": 5204,
+          "depth": 1,
+          "name": "conhost.exe",
+          "exe": "C:\\WINDOWS\\system32\\conhost.exe",
+          "machine": "arm64"
+        }
+      ],
+      "aliveAtStop": [],
+      "aliveAfter5s": [],
+      "mei": {
+        "beforeStart": [
+          "_MEI000003942",
+          "_MEI00000c782",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "whileRunning": [
+          "_MEI000003942",
+          "_MEI00000c782",
+          "_MEI000014542",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "after5s": [
+          "_MEI000003942",
+          "_MEI00000c782",
+          "_MEI000014542",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "newWhileRunning": [
+          "_MEI000014542"
+        ],
+        "leftAfter5s": [
+          "_MEI000014542"
+        ]
+      }
+    }
+  },
+  "workspaces": {
+    "root": "%TEMP%\\acp2api-probe16",
+    "proc": {
+      "dir": "%TEMP%\\acp2api-probe16\\proc-KD71Qb",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [
+          {
+            "dir": "~",
+            "found": [
+              ".gemini"
+            ]
+          }
+        ],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\proc-KD71Qb",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "canary": {
+      "dir": "C:\\acp2api-probe\\canary\\canary-4mMowL",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 4,
+        "hits": [],
+        "dirs": [
+          "C:\\acp2api-probe\\canary\\canary-4mMowL",
+          "C:\\acp2api-probe\\canary",
+          "C:\\acp2api-probe",
+          "C:\\"
+        ]
+      }
+    }
+  },
+  "files": {
+    "serverDir": [
+      "agy_acp_server.exe (86867784 bytes)",
+      "localharness_external.exe (136970904 bytes)"
+    ],
+    "exeMachine": "x64",
+    "harnessMachine": "arm64"
+  },
+  "fatal": {
+    "message": "timeout initialize",
+    "code": "TIMEOUT",
+    "stack": [
+      "Error: timeout initialize",
+      "    at Timeout._onTimeout (file:///C:/acp2api-probe/lib/acp.mjs:188:86)",
+      "    at listOnTimeout (node:internal/timers:585:17)",
+      "    at process.processTimers (node:internal/timers:521:7)"
+    ]
+  },
+  "encoding": {
+    "p0": {
+      "nonJsonStdout": 0,
+      "stdoutNonAsciiLines": 0,
+      "stdoutReplacementChars": 0,
+      "stderrReplacementChars": 0,
+      "stderrLines": 0
+    }
+  },
+  "eval": {
+    "promptsSent": 0,
+    "turns": []
+  },
+  "workspaceContentsAfter": {
+    "proc": [],
+    "canary": [
+      "canary.txt"
+    ]
+  },
+  "meiAtEnd": [
+    "_MEI000003942",
+    "_MEI00000c782",
+    "_MEI000014542",
+    "_MEI00001e102",
+    "_MEI000023e42",
+    "_MEI000027fc2",
+    "_MEI00002aa82",
+    "_MEI00002ae02"
+  ],
+  "mcpStats": {
+    "requests": 0,
+    "byMethod": {},
+    "toolCalls": [],
+    "resourceReads": [],
+    "resourceLists": 0,
+    "byEndpoint": {}
+  },
+  "guard": {
+    "trip": null,
+    "all": []
+  },
+  "budget": {
+    "approved": 17,
+    "sent": 0,
+    "approvedBy": "user, in chat, 2026-10-18: 批准 17 个 (Recommended)",
+    "log": []
+  },
+  "captureDropped": {},
+  "redactionCounts": {
+    "tmpdir": 1,
+    "home": 1
+  },
+  "endedAt": "2026-10-18T02:45:16.748Z"
+}

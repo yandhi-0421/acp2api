@@ -1,0 +1,273 @@
+{
+  "phase": "x",
+  "startedAt": "2026-10-18T03:05:27.578Z",
+  "steps": {
+    "copy": {
+      "ms": 200408,
+      "files": 9778,
+      "bytes": 340894963,
+      "removed": true
+    },
+    "timeline": {
+      "initMs": 67998,
+      "firstStderrMs": 67995,
+      "meiFirstSeenMs": 3180,
+      "unpackDoneMs": 41565,
+      "childSeenMs": 41565,
+      "finalMei": {
+        "files": 9778,
+        "bytes": 340894963
+      },
+      "samples": 11,
+      "sampleEveryMs": 1500
+    },
+    "longStdinEnd": {
+      "exitedWithinMs": null,
+      "waitedMs": 180013,
+      "exit": null,
+      "aliveAfterWait": [
+        "agy_acp_server.exe",
+        "conhost.exe",
+        "agy_acp_server.exe"
+      ]
+    },
+    "orphan": {
+      "initMs": 169208,
+      "treeBefore": [
+        {
+          "name": "agy_acp_server.exe",
+          "depth": 0
+        },
+        {
+          "name": "conhost.exe",
+          "depth": 1
+        },
+        {
+          "name": "agy_acp_server.exe",
+          "depth": 1
+        }
+      ],
+      "watch": [
+        {
+          "t": 10924,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 16885,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 26581,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 34044,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 40010,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 48656,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 54667,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 61040,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 67861,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 89002,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 95201,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 105334,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 114522,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 124011,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 132459,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 138906,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 147157,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 160015,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 208213,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 214639,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 228777,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 236190,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 248808,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 254760,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        },
+        {
+          "t": 261094,
+          "alive": [
+            "conhost.exe",
+            "agy_acp_server.exe"
+          ],
+          "meiExists": true
+        }
+      ],
+      "aliveAfterCleanup": [],
+      "meiExistsAfterCleanup": true
+    },
+    "ownTemp": {
+      "initMs": 76539,
+      "meiInOwnFolder": 1,
+      "meiNewInSystemTemp": 0,
+      "aliveAfterTreeKill": [],
+      "removeError": null,
+      "ownFolderRemoved": true
+    }
+  },
+  "meiLeftAtStart": {
+    "count": 14
+  },
+  "meiLeftAtEnd": {
+    "count": 16,
+    "bytes": 5276844249
+  },
+  "guard": null,
+  "endedAt": "2026-10-18T03:24:55.241Z"
+}

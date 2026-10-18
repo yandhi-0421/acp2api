@@ -1,0 +1,344 @@
+{
+  "phase": "s",
+  "startedAt": "2026-10-18T02:29:33.844Z",
+  "host": {
+    "osRelease": "10.0.26300",
+    "nodeArch": "arm64",
+    "nodeVersion": "v22.23.1",
+    "cpus": 6,
+    "cpuModel": "virt-10.0",
+    "windowsCaption": "Microsoft Windows 11 家庭版",
+    "windowsBuild": "26300",
+    "osArch": "ARM 64 位处理器",
+    "uiCulture": "zh-CN",
+    "systemLocale": "zh-CN",
+    "ansiCodePage": "936",
+    "oemCodePage": "936",
+    "defenderRealtime": "True",
+    "proxyEnv": []
+  },
+  "init": {
+    "ps": {
+      "ms": 76864,
+      "agentInfo": {
+        "name": "antigravity-acp",
+        "title": "Google Antigravity",
+        "version": "1.4.0"
+      },
+      "protocolVersion": 1,
+      "authMethods": [
+        "oauth-personal",
+        "oauth-business",
+        "gemini-api-key",
+        "agent-platform"
+      ],
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": true,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {}
+      },
+      "meta": {
+        "antigravity": {
+          "tier": true,
+          "systemPrompt": {
+            "append": true
+          }
+        }
+      }
+    }
+  },
+  "turns": [],
+  "outsideTurn": {
+    "ps:cd048a9b-d83b-4750-8a3f-2959650f33f1": {
+      "available_commands_update": 1
+    }
+  },
+  "commands": {
+    "ps:cd048a9b-d83b-4750-8a3f-2959650f33f1": [
+      {
+        "t_ms": 172241,
+        "commands": [
+          "plan",
+          "logout",
+          "usage"
+        ]
+      }
+    ]
+  },
+  "agentRequests": [],
+  "errors": [],
+  "notes": [],
+  "stops": {
+    "ps": {
+      "mode": "stdin-end",
+      "stoppedBy": "stdin-end, then kill-root after timeout",
+      "exit": {
+        "code": null,
+        "signal": "SIGTERM",
+        "t_ms": 193714
+      },
+      "stopMs": 193715,
+      "treeBefore": [
+        {
+          "pid": 916,
+          "ppid": 8456,
+          "depth": 0,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 3344,
+          "ppid": 916,
+          "depth": 1,
+          "name": "conhost.exe",
+          "exe": "C:\\WINDOWS\\system32\\conhost.exe",
+          "machine": "arm64"
+        },
+        {
+          "pid": 8840,
+          "ppid": 916,
+          "depth": 1,
+          "name": "agy_acp_server.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\agy_acp_server.exe",
+          "machine": "x64"
+        },
+        {
+          "pid": 9440,
+          "ppid": 8840,
+          "depth": 2,
+          "name": "localharness_external.exe",
+          "exe": "~\\agy-acp-probe\\server\\1.4.0\\extracted\\localharness_external.exe",
+          "machine": "arm64"
+        }
+      ],
+      "aliveAtStop": [
+        "conhost.exe:3344",
+        "agy_acp_server.exe:8840",
+        "localharness_external.exe:9440"
+      ],
+      "aliveAfter5s": [
+        "conhost.exe:3344",
+        "agy_acp_server.exe:8840",
+        "localharness_external.exe:9440"
+      ],
+      "mei": {
+        "beforeStart": [
+          "_MEI00000c782",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "whileRunning": [
+          "_MEI000003942",
+          "_MEI00000c782",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "after5s": [
+          "_MEI000003942",
+          "_MEI00000c782",
+          "_MEI00001e102",
+          "_MEI000023e42",
+          "_MEI000027fc2",
+          "_MEI00002aa82",
+          "_MEI00002ae02"
+        ],
+        "newWhileRunning": [
+          "_MEI000003942"
+        ],
+        "leftAfter5s": [
+          "_MEI000003942"
+        ]
+      },
+      "aliveAfterCleanup": []
+    }
+  },
+  "workspaces": {
+    "root": "%TEMP%\\acp2api-probe16",
+    "proc": {
+      "dir": "%TEMP%\\acp2api-probe16\\proc-gjHpmJ",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 8,
+        "hits": [],
+        "dirs": [
+          "%TEMP%\\acp2api-probe16\\proc-gjHpmJ",
+          "%TEMP%\\acp2api-probe16",
+          "%TEMP%",
+          "~\\AppData\\Local",
+          "~\\AppData",
+          "~",
+          "C:\\Users",
+          "C:\\"
+        ]
+      }
+    },
+    "canary": {
+      "dir": "C:\\acp2api-probe\\canary\\canary-iMTt6q",
+      "parentCheck": {
+        "markers": [
+          ".agents",
+          ".gemini",
+          ".git",
+          "AGENTS.md",
+          "GEMINI.md"
+        ],
+        "checked": 4,
+        "hits": [],
+        "dirs": [
+          "C:\\acp2api-probe\\canary\\canary-iMTt6q",
+          "C:\\acp2api-probe\\canary",
+          "C:\\acp2api-probe",
+          "C:\\"
+        ]
+      }
+    }
+  },
+  "files": {
+    "serverDir": [
+      "agy_acp_server.exe (86867784 bytes)",
+      "localharness_external.exe (136970904 bytes)"
+    ],
+    "exeMachine": "x64",
+    "harnessMachine": "arm64"
+  },
+  "geminiHomeBefore": [
+    ".: ENOENT"
+  ],
+  "sessionNewBeforeAuth": {
+    "ok": false,
+    "ms": 3,
+    "error": {
+      "code": -32000,
+      "message": "Authentication required",
+      "data": {
+        "message": "No authentication method selected. Either call the `authenticate` method (supports oauth-personal, gemini-api-key, agent-platform), or set `auth.type` in settings.json (~\\.gemini\\antigravity-acp\\settings.json) to one of: oauth-personal, gemini-api-key (requires GEMINI_API_KEY env var), oauth-business (Gemini Enterprise; requires gcp.project/location), agent-platform (formerly 'vertex-ai', still accepted; requires GOOGLE_API_KEY, or a project and location from GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION or gcp.project/gcp.location with Application Default Credentials), gateway (custom AI API Gateway; requires AGY_LLM_GATEWAY_URL or an enterprise admin_settings.json)."
+      }
+    }
+  },
+  "authenticate": {
+    "ok": true,
+    "ms": 46915,
+    "result": {
+      "_meta": {
+        "antigravity": {
+          "tier": {
+            "name": "Antigravity Starter Quota",
+            "id": "free-tier",
+            "upgradeUri": "https://antigravity.google/docs/faq#why-am-i-ineligible-for-google-one-ai-quotas-even-though-i-am-a-subscribed-to-a-plan"
+          }
+        }
+      }
+    }
+  },
+  "sessionNewAfterAuth": {
+    "ms": 29308,
+    "tier": "free-tier",
+    "models": [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low"
+    ]
+  },
+  "geminiHomeAfter": [
+    "antigravity-acp/",
+    "antigravity-acp\\acp_token.json (510 bytes)",
+    "antigravity-acp\\conversations/",
+    "antigravity-acp\\conversations\\cd048a9b-d83b-4750-8a3f-2959650f33f1.db (393216 bytes)",
+    "antigravity-acp\\conversations\\cd048a9b-d83b-4750-8a3f-2959650f33f1.db-shm (32768 bytes)",
+    "antigravity-acp\\conversations\\cd048a9b-d83b-4750-8a3f-2959650f33f1.db-wal (98408 bytes)",
+    "antigravity-acp\\conversations\\cd048a9b-d83b-4750-8a3f-2959650f33f1.meta (137 bytes)",
+    "antigravity-acp\\settings.json (54 bytes)",
+    "antigravity-cli/",
+    "antigravity-cli\\skills/",
+    "config/",
+    "config\\skills/"
+  ],
+  "credentialManagerTargets": "",
+  "encoding": {
+    "ps": {
+      "nonJsonStdout": 0,
+      "stdoutNonAsciiLines": 0,
+      "stdoutReplacementChars": 0,
+      "stderrReplacementChars": 0,
+      "stderrLines": 20
+    }
+  },
+  "eval": {
+    "promptsSent": 0,
+    "turns": []
+  },
+  "workspaceContentsAfter": {
+    "proc": [],
+    "canary": [
+      "canary.txt"
+    ]
+  },
+  "meiAtEnd": [
+    "_MEI000003942",
+    "_MEI00000c782",
+    "_MEI00001e102",
+    "_MEI000023e42",
+    "_MEI000027fc2",
+    "_MEI00002aa82",
+    "_MEI00002ae02"
+  ],
+  "mcpStats": {
+    "requests": 0,
+    "byMethod": {},
+    "toolCalls": [],
+    "resourceReads": [],
+    "resourceLists": 0,
+    "byEndpoint": {}
+  },
+  "guard": {
+    "trip": {
+      "kind": "auth",
+      "name": "auth-required",
+      "source": "stdout:ps",
+      "snippet": "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Authentication required\",\"data\":{\"message\":\"No authentication method selected. Either call the `authenticate` method (supports oauth-personal, gemini-api-key, agent-platform), or set `auth.type` in se"
+    },
+    "all": [
+      {
+        "kind": "auth",
+        "name": "auth-required",
+        "source": "stdout:ps",
+        "snippet": "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Authentication required\",\"data\":{\"message\":\"No authentication method selected. Either call the `authenticate` method (supports oauth-personal, gemini-api-key, agent-platform), or set `auth.type` in se"
+      }
+    ]
+  },
+  "budget": {
+    "approved": 17,
+    "sent": 0,
+    "approvedBy": "user, in chat, 2026-10-18: 批准 17 个 (Recommended)",
+    "log": []
+  },
+  "captureDropped": {},
+  "redactionCounts": {
+    "tmpdir": 3,
+    "home": 9,
+    "oauth-code": 2
+  },
+  "endedAt": "2026-10-18T02:32:59.916Z"
+}
