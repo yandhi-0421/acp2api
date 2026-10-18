@@ -24,6 +24,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - **No wait.** When the only match has a prompt turn that runs now, the request does a rebuild. It does not wait for that ACP session.
 - **Model.** A change of the model or of the `thinking_level` keeps the ACP session. acp2api sends `session/set_config_option` before the prompt.
 - **Records in memory.** acp2api keeps the records only in memory. After a restart of acp2api, the next request of each conversation does a rebuild.
+- **Record drop.** acp2api drops the record of an ACP session that no request created or continued in the last 24 hours. ADR-0005 then deletes its session file.
 - **Stopped process.** When the runtime process of an ACP session stops, acp2api keeps the record. The next match loads the ACP session with `session/load` in another runtime process.
 - **Rebuild.** The first prompt of a rebuild holds one fixed neutral line and the earlier part of the conversation as text with role labels.
   - Each image goes as an ACP `image` block at its place in the text.
@@ -38,7 +39,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - In a continued ACP session, the model sees its earlier replies and tool calls as its own turns. After a rebuild, the model sees them only as user text.
 - The official runtime keeps thought signatures in the history of an ACP session. A rebuild cannot give them to the new ACP session.
 - ACP gives no other way to put an earlier conversation into a new ACP session. A prompt holds only user content blocks, and the official runtime 1.4.0 has no `fork`.
-- Each ACP session has its own harness process, and the official runtime keeps one SQLite file for each ACP session. Fewer ACP sessions give fewer harness processes and files.
+- Each ACP session has its own harness process, and the official runtime keeps one session file for each ACP session. Fewer ACP sessions give fewer harness processes and session files.
 - The match uses only the content of the conversation. Thus it works for Claude Code, Codex, and SillyTavern, and it finds each edit of an earlier message. SillyTavern sends no session hint.
 - acp2api gives no `thinking` block, no `reasoning` item, and no `tool_addition` block to the model. An API client can remove an old `thinking` block from a later request, for example Claude Code after a rejection of its signature. A hash of such a block then stops the match, and the model gains nothing.
 - Two ACP sessions with the same record hold the same conversation. Thus either one gives the same result.
@@ -48,6 +49,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - Claude Code 2.1.299 puts a `role: "system"` message after the first user message and after each tool result. Each of its 15 main requests in the captures ended with such a message. Without the rule for `system` and `developer` messages, no request of Claude Code continues an ACP session.
 - `session/set_config_option` took 2 to 4 ms, and the official runtime changes the model at the next prompt turn.
 - `session/load` in a new runtime process continued an ACP session with the MCP server at a new URL.
+- A `session/load` needs the session file of the ACP session, so the session file stays while acp2api keeps the record. Without a drop of records, no session file goes away before a restart of acp2api (ADR-0005).
 
 ## Considered options
 
@@ -58,13 +60,14 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - **Each `system` and `developer` message in the system prompt, as in agy-bridge.** Then the system prompt of Claude Code changes with each request, and each request does a rebuild.
 - **A rejection of each `system` message after the system prompt.** The Claude Code gateway guide says that Claude Code then stops such messages, but it does not give the error text that Claude Code recognizes. No source shows such a fallback for Codex or SillyTavern.
 - **Records in a file.** A file format is stored data, and each change of it needs a migration. A restart of acp2api is rare, and the gain is one rebuild for each conversation.
+- **No drop of records.** A conversation that continues after a long time needs no rebuild. But the session files then stay until a restart of acp2api, and nobody measured their size.
 - **A replay of each earlier user message as its own prompt.** The model answers each message again. The replies then differ from the conversation, and each one costs one model request.
 - **The earlier conversation in `_meta.antigravity.systemPrompt.append`.** That option is for instructions, and nobody knows its size limit. [How does the system prompt of a request reach the model?](https://github.com/yandhi-0421/acp2api/issues/23) decides its use.
 - **Images as files with a path line, as in agy-bridge.** An ACP `image` block went through to the model. agy-bridge used files only because its CLI took no image input.
 
 ## Consequences
 
-- Each rebuild and each new conversation adds one ACP session. Thus the number of harness processes and conversation files of the official runtime grows. [How does acp2api start, keep, and stop the processes of the official runtime?](https://github.com/yandhi-0421/acp2api/issues/30) decides the limit of the harness processes. A new decision issue decides what acp2api does with the conversation files.
+- Each rebuild and each new conversation adds one ACP session. Thus the number of harness processes and session files grows. [How does acp2api start, keep, and stop the processes of the official runtime?](https://github.com/yandhi-0421/acp2api/issues/30) decides the limit of the harness processes. ADR-0005 decides what acp2api does with the session files.
 - In SillyTavern, each regenerated reply, each edit, each cut at a stop sequence, and each change of the system prompt causes a rebuild. A macro such as `{{time}}` or a world info entry can change the system prompt.
 - The records hold no text. Thus acp2api cannot do a rebuild from `previous_response_id`, `item_reference`, or `conversation`, and it keeps their rejection.
 
