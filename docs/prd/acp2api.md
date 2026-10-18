@@ -182,7 +182,7 @@ While a streamed request waits in the queue, or while its prompt turn sends no u
 - OpenAI Responses API: a real event, for example `response.in_progress`.
 - OpenAI Chat Completions API: the written design decides the event.
 
-**Pass:** a pause of 330 s in the queue gives no gap of 300 s or more between two events of the stream. A pause of 330 s in a prompt turn gives the same result.
+**Pass:** a pause of 330 s in the queue gives no gap of 300 s or more between two events of the stream. A prompt turn with no update until acp2api cancels it (FR-051) gives the same result, up to the error event.
 
 ### Model names and thinking level
 
@@ -241,6 +241,8 @@ acp2api gives each request field and each content block one action:
 - **Reject:** the owner turned on a feature, and acp2api cannot give its result. acp2api answers with HTTP 400 (FR-033). The message is M-02 for a field and M-03 for a content block, unless a row names another message.
 - **Emulate:** acp2api makes the exact result itself.
 
+A field with a value that turns its feature off counts as an absent field, for example `logprobs: false`, `background: false`, `audio: null`, or `citations` with `enabled: false`.
+
 Fields:
 
 | Field | Action |
@@ -250,7 +252,7 @@ Fields:
 | `tool_choice: "auto"` | Use |
 | `temperature`, `top_p`, `top_k`, `presence_penalty`, `frequency_penalty`, `seed`, `logit_bias` | Ignore |
 | `max_tokens`, `max_completion_tokens`, `max_output_tokens` | Ignore |
-| `cache_control`, `prompt_cache_key`, `service_tier`, `store` with the value `false`, `truncation`, `prediction` | Ignore |
+| `cache_control`, `prompt_cache_key`, `service_tier`, `store` with each value, `truncation`, `prediction` | Ignore |
 | `metadata.user_id`, `user`, `safety_identifier`, `client_metadata` | Ignore. These values never go to the official runtime. |
 | `context_management`, `output_config.task_budget`, and the tool fields `strict`, `defer_loading`, and `eager_input_streaming` | Ignore |
 | `parallel_tool_calls`, `max_tool_calls`, `verbosity`, `text.verbosity` | Ignore |
@@ -279,9 +281,9 @@ Content blocks and items:
 | A document or a file with another media type | Reject, with message M-04 |
 | Audio input | Reject |
 | An image or a file with an `http` or `https` URL | Reject, with message M-05. acp2api sends no HTTP request for it. |
-| A `file_id` | Reject |
+| A `file_id` | Reject, with message M-02 for the field `file_id` |
 | `item_reference` | Reject |
-| A last item from the assistant (a prefill) | Reject |
+| A last item from the assistant (a prefill) | Reject, with message M-27 |
 | `thinking`, `redacted_thinking`, a `reasoning` item, and `reasoning_content` in an assistant message | Ignore (FR-018) |
 | Tool calls, tool results, and tools | FR-022 to FR-024 |
 | Another content block type | Reject, with message M-03 |
@@ -307,7 +309,7 @@ No text of an API client starts a slash command of the official runtime. The fir
 
 - **A PDF in a message.** acp2api rejects the request with message M-06. This also applies to a PDF in an earlier message of the conversation.
 - **A PDF in a tool result.** acp2api puts this note at the place of the PDF: `[A PDF document was here. acp2api cannot give PDF documents to the model.]`. The other content of the tool result does not change.
-- **A text document.** The model gets the text at its place, in this form: the line `[document: <title>]`, then the text, then the line `[end of document]`. A document with no title starts with the line `[document]`. A text document is a `document` block with the source type `text` or `content`, or a document or a file with the media type `text/plain`.
+- **A text document.** The model gets the text at its place, in this form: the line `[document: <title>]`, then the text, then the line `[end of document]`. The title is the `title` of the document, else its `filename`. A document with neither starts with the line `[document]`. A text document is a `document` block with the source type `text` or `content`, or a document or a file with the media type `text/plain`.
 - **Another media type.** acp2api rejects the request with message M-04.
 
 **Pass:** each case gives the result above on each API. A tool result with a PDF and a text gives the note and the text to the model, and the API client gets no error.
@@ -328,7 +330,7 @@ No text of an API client starts a slash command of the official runtime. The fir
 
 - The model gets the system prompt as an addition to the system text of the official runtime, not as user text.
 - acp2api joins the parts of the system prompt with one blank line. A part with a `name` starts with its role label on its own line, for example `[system: example_user]`.
-- When the first `system` block is the attribution block of Claude Code, acp2api removes it.
+- When the first `system` block is the attribution block of Claude Code, acp2api removes it. acp2api finds the block by the start of its text. The client check of SC-003 finds that start, and the written design records it.
 - A later `system` or `developer` message is a message of the conversation. It stays at its place, with its role label.
 
 **Pass:** the ACP session of a request gets its system prompt as an addition to the system text. No prompt text holds the system prompt. A request of Claude Code gives no attribution block to the official runtime. A `system` message after a user message is at its place in the prompt, after the line `[system]`.
@@ -336,6 +338,8 @@ No text of an API client starts a slash command of the official runtime. The fir
 #### FR-020 — Role labels
 
 - A role label is a line of its own before an item: `[user]`, `[assistant]`, `[system]`, or `[developer]`. With a `name`, the form is `[user: Alice]`.
+- The content of an item starts on the line after its role label. Each role label and each sentence of FR-023 starts a new line. No blank line separates two items.
+- In the text of a rebuild, one blank line follows the neutral line (FR-021).
 - acp2api keeps the `name` of each message of each role.
 - A tool call and a tool result get a sentence, not a role label (FR-023).
 - When the new items of a prompt are one user message, acp2api sends its content with no change, except for the role label of FR-016. Else each item gets its role label or its sentence.
@@ -398,12 +402,13 @@ The model gets each tool result as text in the next prompt, in this form:
 - The first line is `Result of your tool call <name> <arguments>:`. The result follows it.
 - For an error result, ` (the tool reported an error)` follows the arguments.
 - Each image of the result is at its place.
-- When the arguments have more than 1,000 characters, the line holds only the first 1,000. A mark then says that the arguments are cut.
+- When the arguments have more than 1,000 characters, the line holds only the first 1,000, and then the mark ` [arguments cut]`.
+- `<arguments>` is the text of the arguments. A JSON string of the API client goes as it is. An object, for example the `input` of an Anthropic `tool_use` block, goes as compact JSON with its keys in the order of the request.
 - When the conversation has no earlier tool call with the ID of the tool result, the first line is `Result of the tool call <id>:`.
 
 In the text of a rebuild, an earlier tool call is the sentence `You called the tool <name> with the arguments <arguments>.`, with the full arguments. The same form of a tool result goes into a continued ACP session and into the text of a rebuild.
 
-**Pass:** each case gives the form above in the prompt. A result with arguments of 5,000 characters gives a first line with 1,000 characters of the arguments and the mark.
+**Pass:** each case gives the form above in the prompt. A result with arguments of 5,000 characters gives a first line with 1,000 characters of the arguments and the mark ` [arguments cut]`.
 
 #### FR-024 — Server tools
 
@@ -422,7 +427,7 @@ A server tool runs on the servers of the provider of an API, and acp2api has no 
 #### FR-025 — Token usage
 
 - **Input tokens.** The value is the `used` field of the last usage update of the prompt turn. It goes into `input_tokens` (Anthropic Messages API and Responses API) or `prompt_tokens` (Chat Completions API).
-- **Output tokens.** acp2api estimates the tokens of the text and of the tool call arguments that it returns. Each 4 ASCII characters count as 1 token, and each other character counts as 1 token.
+- **Output tokens.** acp2api estimates the tokens of the text and of the tool call arguments that it returns. The count is the number of ASCII characters divided by 4 and rounded up, plus 1 token for each other character.
 - **Total tokens.** The sum of the input tokens and the output tokens.
 - **Cache tokens and reasoning tokens.** Where the API permits, acp2api leaves out each field for them. Else it sends 0.
 - **A prompt turn with no usage update.** The input tokens are the local estimate of the input tokens (assumption A-1).
@@ -434,7 +439,7 @@ The place of the usage:
 - Chat Completions stream: only with `stream_options.include_usage`, the last chunk carries the usage.
 - A response with no stream carries the usage in its body.
 
-**Pass:** for a prompt turn whose last usage update has `used: 5183`, the input tokens are 5183 on each API. A reply of 8 ASCII characters and 2 other characters gives 4 output tokens. No response has a cache count other than 0.
+**Pass:** for a prompt turn whose last usage update has `used: 5183`, the input tokens are 5183 on each API. A reply of 9 ASCII characters and 2 other characters gives 5 output tokens. No response has a cache count other than 0.
 
 ### Errors and retries
 
@@ -453,8 +458,8 @@ acp2api accepts a request after the checks of the local API key, of the request,
 
 - **Anthropic Messages API.** An `error` event with the `error.type` of the table of FR-033, column "In an Anthropic stream". No `message_stop` event follows it. After text, acp2api first sends `content_block_stop` for the open text block, and then the `error` event. acp2api sends no `overloaded_error` in a stream.
 - **OpenAI Responses API.** A `response.failed` event.
-  - For an error that the table of FR-033 marks with no retry, the code is `invalid_prompt`.
-  - For an error with a retry, the code is one that Codex retries, for example `server_error`, and `error.headers` holds `retry-after` with the seconds of FR-033.
+  - For the 503 row of FR-033, the code is `server_error`, and `error.headers` holds `retry-after` with the seconds of FR-033.
+  - For each other row, also a quota wait, the code is `invalid_prompt`.
   - acp2api never uses the code `insufficient_quota`.
 - **OpenAI Chat Completions API.** One `data:` line with an `error` object. Then the stream ends with no `data: [DONE]`.
 
@@ -465,7 +470,7 @@ acp2api accepts a request after the checks of the local API key, of the request,
 The official runtime sends the text of an upstream error as normal reply text. No such text reaches the API client as reply text.
 
 - acp2api holds the newest text chunk of each prompt turn until the next update.
-- At the end of a prompt turn, acp2api waits up to 200 ms for the error lines of the ACP session. The wait ends early when both lines are there.
+- At the end of a prompt turn, acp2api waits up to 200 ms for the error lines of the ACP session. The wait ends early when both lines are there: `Antigravity SDK error processing prompt for session <ID>` and the last line of its traceback.
 - After an error line, acp2api drops the held chunk, and it ends the response with the error. The text that acp2api sent before the held chunk stays in the response.
 - When an error line comes after the wait, the ACP session never continues, and acp2api writes a log line.
 
@@ -518,7 +523,7 @@ Each message that acp2api writes starts with `acp2api: `. The messages of FR-024
 | A quota wait | 429 with `retry-after`: the seconds to the reset time | `rate_limit_error` | `rate_limit_error` | Claude Code retries only when the reset time is 60 s away or less |
 | A full queue | 529 on the Anthropic Messages API and 503 on the two OpenAI APIs, with `retry-after: 10` | `overloaded_error` | Does not occur | Yes |
 | The 503 row: a temporary upstream error, for example a Google 5xx or a timeout; a prompt turn with no update for 5 minutes; a failure of the runtime process | 503 with `retry-after: 30` | `api_error` | `api_error` | Yes |
-| The 502 row: another upstream error, the stop reason `max_turn_requests`, or a built-in tool that runs with no permission request | 502 with `x-should-retry: false` | `api_error` | `invalid_request_error` | No |
+| The 502 row: another upstream error, for example a Google 400; the stop reason `max_turn_requests`, or a built-in tool that runs with no permission request | 502 with `x-should-retry: false` | `api_error` | `invalid_request_error` | No |
 
 An upstream error that is a lockout signal, a quota signal, or a sign-in error (FR-034) gets the row of the state that it starts.
 
@@ -562,23 +567,26 @@ During a lockout, acp2api sends no request to the official runtime.
 - acp2api shows the notice in one terminal line, and in the dark first tile of the management panel.
 - During a lockout, acp2api starts no runtime process, sends no `/usage`, and the management panel has no sign-in entry.
 - acp2api writes the lockout and its evidence into its state file: the signal, the time, and the original error text, with the redaction of FR-056.
-- A restart of acp2api does not end a lockout. When acp2api cannot read the state file, or the file is damaged, acp2api is in lockout.
+- A restart of acp2api does not end a lockout. acp2api reads the state file at each start.
+  - When the state file exists, and acp2api cannot read it, or the file is damaged, acp2api is in lockout.
+  - When no state file exists, acp2api is not in lockout, and it makes a new state file.
 - Only the owner ends a lockout. The management panel shows the evidence, the owner enters the management password, and the lockout ends at once. No timer and no automatic step end it.
 - After the end, acp2api sends no test request. The next lockout signal starts a new lockout.
-- When the owner deletes the state file, the lockout ends. acp2api does not try to stop this act.
+- When the owner deletes the state file, the lockout ends at the next start of acp2api. acp2api does not try to stop this act.
 
 **Pass:**
 
 - After a lockout signal, the official runtime gets no request, and no runtime process runs.
 - Each request gets M-12, and the first response also holds the original text.
 - After a restart, acp2api is still in lockout, and a damaged state file gives a lockout.
+- After a deletion of the state file and a restart, acp2api is not in lockout.
 - After the password in the management panel, the next request runs.
 
 #### FR-036 — Quota wait
 
 After a quota signal, acp2api starts no prompt turn until the reset time. It refuses each request with the 429 of FR-033 and message M-16, and the wait ends without the owner.
 
-- acp2api reads the reset time from the error text, or from `/usage`.
+- acp2api reads the reset time from the error text. Only when the error text has none, acp2api sends `/usage` for it.
 - When neither gives a reset time, the quota wait lasts 60 minutes.
 - After the wait, the next request runs normally. A new quota signal starts a new quota wait.
 
@@ -656,7 +664,8 @@ The owner unpacks the official runtime from the ACP Registry, or an editor insta
   - the folder of the acp2api executable;
   - `PATH`;
   - the install folders of the editors that install the official runtime from the ACP Registry, for example Zed and JetBrains IDEs.
-- The management panel has an entry that starts a new search, and an entry for the path of `agy_acp_server`. `localharness_external` must be in the same folder.
+- The management panel has an entry that starts a new search, and an entry for the path of `agy_acp_server`.
+- A build needs `localharness_external` in the folder of `agy_acp_server`. The search ignores a folder without it. For such a path, the management panel shows the row "Path without localharness_external" of "Texts of the management panel", and acp2api keeps its earlier path.
 
 **Pass:** with a build in an install folder of Zed, a start finds it. A path that the owner gives finds the build. With no build anywhere, acp2api goes into the state "runtime unavailable" with the first reason of FR-040.
 
@@ -665,14 +674,14 @@ The owner unpacks the official runtime from the ACP Registry, or an editor insta
 - Each release of acp2api holds a list of the builds that the acceptance test passed, with their versions. A build is the pair of SHA-256 values of its two executables (ADR-0006).
 - Each executable of acp2api accepts only builds for its own operating system and CPU architecture.
 - acp2api starts each runtime process only from its own copy in the data folder, and only when the copy is an accepted version. It keeps one copy.
-- When acp2api has no copy, it copies the found build with the highest version on the list, with no step of the owner.
+- When acp2api has no copy that is an accepted version, it searches. Then it copies the found accepted version with the highest version, with no step of the owner. A changed copy is not an accepted version, and it counts as a found build.
 - When acp2api has a copy, it never changes the build by itself. The management panel shows "new build found" only for a found build with a higher version than the build in use. An older build shows only in the result of the search.
 - The owner can change to another accepted build in the management panel. acp2api then replaces the runtime process.
 - A build that is not on the list gets a copy only after the owner starts its compatibility check.
 
 **Pass:**
 
-- A changed byte in the copy stops the start, and acp2api goes into the state "runtime unavailable".
+- A changed byte in the copy stops the start. With an accepted build in the Zed folder, acp2api copies it and starts. With no other build, acp2api goes into the state "runtime unavailable" with the second reason of FR-040.
 - A new build in the Zed folder shows "new build found", and the build in use does not change.
 - A build for another CPU architecture is not accepted.
 
@@ -698,9 +707,9 @@ For a build that is not an accepted version, the owner can start a compatibility
 
 #### FR-045 — Exit of acp2api
 
-At its exit, acp2api cancels each prompt turn that runs. It ends each request in the queue with the error of the exit and message M-15. Then it stops the runtime process with all its child processes. After a crash of acp2api, the runtime process stops too (ADR-0004).
+At its exit, acp2api cancels each prompt turn that runs. It ends the response of each such prompt turn, and each request in the queue, with the error of the exit and message M-15. Then it stops the runtime process with all its child processes. After a crash of acp2api, the runtime process stops too (ADR-0004).
 
-**Pass:** after the exit, the runtime process and all its child processes have ended. After a kill of acp2api, they end without a step of the owner.
+**Pass:** a request with a prompt turn that runs, and a request in the queue, both get M-15 at the exit. After the exit, the runtime process and all its child processes have ended. After a kill of acp2api, they end without a step of the owner.
 
 ### Safety toward Google and the official runtime
 
@@ -740,7 +749,7 @@ acp2api gives the official runtime the client name `acp2api`, the title `acp2api
 - In the state "sign-in required", the sign-in check of a request holds a place.
 - Each `/usage` holds a place.
 - The start of a runtime process holds no place.
-- A platform can fail the acceptance test with 3 prompt turns at the same time. Then the highest value on that platform is the highest value that passed.
+- A platform can fail the acceptance test with 3 prompt turns at the same time. Then the highest value on that platform is the highest value that passed. The release notes name it, and the management panel of that platform offers no higher value. A higher value in the configuration file stops the start with message M-26.
 
 **Pass:** with the limit 2 and 3 requests, the official runtime gets no call for the third request until one of the first two ends. A change to 3 lets the third request start at once.
 
@@ -764,7 +773,7 @@ When a prompt turn gets no update for 5 minutes, acp2api cancels it. It ends the
 
 acp2api sends `/usage` to the official runtime only in three cases:
 
-- for the reset time of a quota wait (FR-036);
+- for the reset time of a quota wait, when the error text has none (FR-036);
 - one time after the stop reason `refusal` (FR-034);
 - when the owner refreshes the quota in the management panel.
 
@@ -821,17 +830,34 @@ The setup text has a placeholder for the local API key, and the owner copies the
 
 The management panel shows no email address of the Google account. The README, not the management panel, lists the request fields that acp2api ignores. A view of the management panel sends no request to the official runtime.
 
-**Pass:** in each of the six states of the prototype, the page has the items above. A view of the page gives no call to the official runtime. No page holds the email address of the account. The README lists each Ignore row of FR-014.
+**Pass:** the page has the items above in each of these six cases:
+
+- the normal state, and the normal state with a new build;
+- sign-in required, and quota wait;
+- runtime unavailable, and lockout.
+
+Also:
+
+- A view of the page gives no call to the official runtime.
+- No page holds the email address of the account.
+- The README lists each Ignore row of FR-014.
 
 #### FR-055 — Language and look
 
-- The management panel has Chinese and English. The language of the browser selects the default, and the owner can change it.
+- The management panel has Chinese and English. A browser language that starts with `zh` selects Chinese, and each other browser language selects English. The owner can change the language.
 - The section "Texts of the management panel" gives the texts of the states, the actions, and the labels. For each other text, the management panel uses the terms of `GLOSSARY.md`: the column "Term" in English and the column "Chinese term" in Chinese.
 - The management panel follows the section "Visual rules of the management panel".
 - It loads no font and no other file from an external address.
 - v1 has only the light mode.
 
-**Pass:** a browser with the language `zh-CN` shows the Chinese texts, and a browser with `en-US` shows the English texts. The switch changes the language. A load of the page gives requests only to `127.0.0.1:<port>`. Each control uses the color `#0066cc`.
+**Pass:**
+
+- A browser with the language `zh-CN` shows the Chinese texts. A browser with `en-US` or `fr-FR` shows the English texts. The switch changes the language.
+- A load of the page gives requests only to `127.0.0.1:<port>`.
+- A check of the styles of the page finds the values of "Visual rules of the management panel":
+  - each control in `#0066cc`;
+  - no shadow, and no web font;
+  - each status color only on a dot of 9 px.
 
 ### Logs
 
@@ -848,24 +874,28 @@ A log holds only metadata:
 - one line for each change of state;
 - the lines that other FRs name, for example for a rebuild.
 
-No log line, terminal line, or state file holds these items:
+No log line, no terminal line, and no state file holds these items:
 
 - a message text, the system prompt, a tool argument, or a tool result;
 - the local API key, or the management password.
 
+The only exception is the terminal at a start that makes a new key or password (FR-004, FR-005).
+
 For the error texts of the official runtime:
 
 - acp2api does not copy the stderr of the official runtime into its log. It writes only the parsed error line: the code, the status, and the message.
-- Before acp2api writes an error text into the log or into the state file, it replaces each email address with `<REDACTED>`. This applies to the `@` form and the `%40` form, and also to each value with the form of a token.
+- Before acp2api writes an error text into the log or into the state file, it replaces each email address with `<REDACTED>`. This applies to the `@` form and the `%40` form. It also replaces each value with the form of a token:
+  - a value after `Bearer `;
+  - a run of 32 or more characters from the set `A-Z a-z 0-9 - _ . + / =`.
 - v1 has no setting for a log of the content of the requests.
 
 **Pass:** a test request with a marker string in each content field leaves no marker in the logs, the terminal, or the state file. A stderr line with `name%40example.com` gives `<REDACTED>` in the log.
 
 #### FR-057 — Log size
 
-The logs have a total size cap of 50 MB, and acp2api deletes the oldest log file first. Each log file also has a size cap. At each start, acp2api deletes each log file that is older than 30 days.
+The logs have a total size cap of 50 MB, and acp2api deletes the oldest log file first. Each log file has a size cap of 10 MB. At each start, acp2api deletes each log file that is older than 30 days.
 
-**Pass:** a run that writes 60 MB of log lines leaves no more than 50 MB of logs. A log file with a date 31 days ago is gone after a start.
+**Pass:** a run that writes 60 MB of log lines leaves no more than 50 MB of logs, and no log file over 10 MB. A log file with a date 31 days ago is gone after a start.
 
 ### Message texts
 
@@ -874,7 +904,7 @@ The logs have a total size cap of 50 MB, and acp2api deletes the oldest log file
 | ID | Case | Text |
 |---|---|---|
 | M-01 | An absent or wrong local API key | `acp2api: the local API key is absent or wrong.` |
-| M-02 | A rejected field | `acp2api: the request field <field> is not supported.` For a field that acp2api rejects only for some values, `<field>` is the name and the value, for example `tool_choice = "required"`. |
+| M-02 | A rejected field | `acp2api: the request field <field> is not supported.` `<field>` is the path of the field. When a value turned the feature on, ` = <value>` follows in JSON, for example `n = 2`, `tool_choice = "required"`, or `response_format.type = "json_schema"`. |
 | M-03 | A rejected content block | `acp2api: the content type <type> is not supported.` |
 | M-04 | A rejected media type | `acp2api: the media type <media type> is not supported.` |
 | M-05 | An image or a file with a URL | `acp2api: the content type <type> with a URL is not supported. Send the data as base64.` |
@@ -895,10 +925,11 @@ The logs have a total size cap of 50 MB, and acp2api deletes the oldest log file
 | M-20 | A failure of the runtime process | `acp2api: the runtime process failed, so acp2api ended the prompt turn.` |
 | M-21 | The stop reason `max_turn_requests` | `acp2api: the prompt turn reached the limit of model requests of the official runtime.` |
 | M-22 | A built-in tool with no permission request | `acp2api: the built-in tool <name> of the official runtime ran with no permission request, so acp2api cancelled the prompt turn.` |
-| M-23 | A request in a retry wait | `acp2api: a request of this conversation failed less than 30 s ago (<error>). Send the request again in <seconds> s.` `<error>` is the earlier message without its start `acp2api: `. |
+| M-23 | A request in a retry wait | `acp2api: a request of this conversation failed less than 30 s ago. Send the request again in <seconds> s. The error was: <error>` `<error>` is the earlier message without its start `acp2api: `. |
 | M-24 | A second start for the same computer account | `acp2api: another acp2api runs for this computer account. Its management panel is at <address>.` |
 | M-25 | A port in use | `acp2api: the port <port> is in use. Set another port in the configuration file or with --port.` |
 | M-26 | A setting with a wrong value | `acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use.` |
+| M-27 | A last item from the assistant (a prefill) | `acp2api: a last message from the assistant (a prefill) is not supported.` |
 
 The reasons of M-14 are `acp2api found no executable of the official runtime`, `no build that acp2api found is an accepted version`, and `the runtime process failed 3 times in 10 minutes`.
 
@@ -933,6 +964,7 @@ The reasons of M-14 are `acp2api found no executable of the official runtime`, `
 | Refresh of the quota | 刷新配额 | Refresh the quota |
 | New search | 重新搜索 | Search again |
 | Path entry | 填写 agy_acp_server 的路径 | Set the path of agy_acp_server |
+| Path without localharness_external | 这个文件夹里没有 localharness_external，acp2api 没有使用这个路径。 | This folder has no localharness_external, so acp2api did not use this path. |
 | Read of the model names | 现在读取模型名 | Read the model names now |
 | New local API key | 换一个新密钥 | Make a new key |
 | Change of the management password | 修改管理密码 | Change the management password |
