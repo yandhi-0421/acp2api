@@ -9,7 +9,7 @@ Feature: Model names and thinking levels
     And the config option "model" of the official runtime has one value "gemini-3.8-flash" with the name "Gemini 3.8 Flash"
     And the model "gemini-3.8-flash" has the thinking levels "low", "medium", and "high"
 
-  @FR-012
+  @FR-012 @issue-43 @wip
   Scenario: The list of model names holds each value with each thinking level suffix
     When an API client sends "GET /v1/models"
     Then the list holds exactly these model names:
@@ -19,7 +19,7 @@ Feature: Model names and thinking levels
       | gemini-3.8-flash-medium |
       | gemini-3.8-flash-high   |
 
-  @FR-012
+  @FR-012 @issue-43 @wip
   Scenario: Each entry of the list has the fields of the OpenAI APIs and of the Anthropic Messages API
     When an API client sends "GET /v1/models"
     Then the answer has "object" with the value "list"
@@ -27,14 +27,14 @@ Feature: Model names and thinking levels
     And each entry has "object" with the value "model" and "type" with the value "model"
     And the entry with the "id" "gemini-3.8-flash" has the "display_name" "Gemini 3.8 Flash"
 
-  @FR-012
+  @FR-012 @issue-43 @wip
   Scenario: acp2api reads the model names at the first need
     Given acp2api started and got no request
     Then the official runtime has no ACP session
     When an API client sends "GET /v1/models"
     Then the official runtime gets one new ACP session
 
-  @FR-012
+  @FR-012 @issue-43 @wip
   Scenario: The list holds a new model after the next new ACP session
     Given an API client read the list of model names
     And the official runtime then adds the value "gemini-3.9-pro" with the thinking level "high" to the config option "model"
@@ -42,7 +42,7 @@ Feature: Model names and thinking levels
     And an API client sends "GET /v1/models"
     Then the list holds the model names "gemini-3.9-pro" and "gemini-3.9-pro-high"
 
-  @FR-012
+  @FR-012 @issue-43 @wip
   Scenario Outline: A request with a model that is not a model name gets HTTP 400
     When an API client sends a request to "POST /v1/messages" with the model "<model>"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the model name <model> is not available. The model names are: <names>."
@@ -55,7 +55,7 @@ Feature: Model names and thinking levels
       | gpt-5.5               |
       | gemini-3.8-flash-xhigh |
 
-  @FR-012
+  @FR-012 @issue-71 @wip
   Scenario Outline: The list of model names gives the error of a state that stops requests
     Given acp2api is in the state "<state>"
     When an API client sends "GET /v1/models"
@@ -68,12 +68,12 @@ Feature: Model names and thinking levels
       | sign-in required    | 400    |
       | runtime unavailable | 400    |
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario: The suffix of a model name sets the thinking level and acp2api ignores the effort fields
     When an API client sends a request to "POST /v1/responses" with the model "gemini-3.8-flash-low" and "reasoning.effort" set to "high"
     Then the prompt turn runs with the thinking level "low"
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario Outline: Each value of an effort field gives its thinking level
     When an API client sends a request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and "reasoning_effort" set to "<value>"
     Then the prompt turn runs with the thinking level "<level>"
@@ -89,7 +89,7 @@ Feature: Model names and thinking levels
       | max     | high   |
       | ultra   | high   |
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario Outline: Each effort field of each API sets the thinking level
     When an API client sends a request to "<endpoint>" with the model "gemini-3.8-flash" and <effort field>
     Then the prompt turn runs with the thinking level "<level>"
@@ -102,24 +102,24 @@ Feature: Model names and thinking levels
       | POST /v1/messages         | "thinking" with the type "adaptive"             | high   |
       | POST /v1/messages         | "thinking" with the type "enabled" and "budget_tokens" 1024 | high |
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario: A request with no effort field runs at the thinking level high
     When an API client sends a request to "POST /v1/messages" with the model "gemini-3.8-flash" and no effort field
     Then the prompt turn runs with the thinking level "high"
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario: output_config.effort sets the thinking level when the request also has thinking
     When an API client sends a request to "POST /v1/messages" with the model "gemini-3.8-flash", "output_config.effort" set to "medium", and "thinking" with the type "disabled"
     Then the prompt turn runs with the thinking level "medium"
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario: acp2api ignores an effort value that the table does not give and writes it into the log
     When an API client sends a request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and "reasoning_effort" set to "extreme"
     Then the prompt turn runs with the thinking level "high"
     And the log has a line with the value "extreme"
     And the API client gets no error
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario Outline: A thinking level that the model does not have gives another level of the model
     Given the model "gemini-3.8-flash" has only the thinking levels <levels of the model>
     When an API client sends a request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and "reasoning_effort" set to "<value>"
@@ -130,7 +130,7 @@ Feature: Model names and thinking levels
       | "low" and "high"      | medium | high   |
       | "low" and "medium"    | high   | medium |
 
-  @FR-013
+  @FR-013 @issue-48 @wip
   Scenario Outline: The model field of each response holds the model name of the request
     When an API client sends a request to "POST /v1/chat/completions" with the model "<model name>"
     Then the response has "model" with the value "<model name>"

@@ -7,20 +7,20 @@ Feature: Errors
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-026
+  @FR-026 @issue-60 @wip
   Scenario: A streamed request in the queue already has the status 200
     Given each place holds a prompt turn
     When an API client sends a valid request with a stream to "POST /v1/messages"
     Then the request waits in the queue
     And the API client already has the status 200 and the headers of the stream
 
-  @FR-026
+  @FR-026 @issue-49 @wip
   Scenario: A streamed request with a wrong local API key gets HTTP 401 and no stream event
     When an API client sends a valid request with a stream to "POST /v1/messages" with a wrong local API key
     Then acp2api refuses the request with HTTP 401 in the error envelope of the Anthropic Messages API
     And the answer has no stream event
 
-  @FR-026
+  @FR-026 @issue-43 @wip
   Scenario Outline: A refusal before the acceptance has the error envelope of its API
     When an API client sends a request with a stream to "<endpoint>" with the model "claude-opus-5-5"
     Then acp2api refuses the request with HTTP 400 in the error envelope of the <api>
@@ -32,7 +32,7 @@ Feature: Errors
       | POST /v1/responses        | OpenAI Responses API        |
       | POST /v1/chat/completions | OpenAI Chat Completions API |
 
-  @FR-027
+  @FR-027 @issue-71 @wip
   Scenario Outline: An error after the acceptance is an error event in an Anthropic stream
     Given a streamed request to "POST /v1/messages" was accepted
     When <case> ends the request
@@ -49,14 +49,14 @@ Feature: Errors
       | an error of the 503 row                     | api_error             |
       | an error of the 502 row                     | invalid_request_error |
 
-  @FR-027
+  @FR-027 @issue-50 @wip
   Scenario: After text, an Anthropic stream closes the text block before the error event
     Given the official runtime sent the text chunks "Hel" and "lo" in a streamed request to "POST /v1/messages"
     When the prompt turn ends with an error of the 503 row
     Then the stream has the text "Hel"
     And the stream has a "content_block_stop" event for the open text block and then the "error" event
 
-  @FR-027
+  @FR-027 @issue-71 @wip
   Scenario Outline: Each error other than the 503 row is a response.failed event with the code invalid_prompt
     Given a streamed request to "POST /v1/responses" was accepted
     When <case> ends the request
@@ -71,21 +71,21 @@ Feature: Errors
       | the start of a quota wait                   |
       | an error of the 502 row                     |
 
-  @FR-027
+  @FR-027 @issue-50 @wip
   Scenario: An error of the 503 row is a response.failed event with the code server_error
     Given a streamed request to "POST /v1/responses" was accepted
     When an error of the 503 row ends the request
     Then the stream has a "response.failed" event with the code "server_error"
     And "error.headers" of the event holds "retry-after" with the value 30
 
-  @FR-027
+  @FR-027 @issue-50 @wip
   Scenario: An error in a Chat Completions stream is one data line and no [DONE]
     Given a streamed request to "POST /v1/chat/completions" was accepted
     When an error of the 503 row ends the request
     Then the stream has one "data:" line with an "error" object
     And the stream ends after that line with no "data: [DONE]"
 
-  @FR-032
+  @FR-032 @issue-71 @wip
   Scenario Outline: Each error of acp2api holds the text of its case
     When <case> ends a request to "<endpoint>"
     Then <place> holds the message "<message>"
@@ -97,7 +97,7 @@ Feature: Errors
       | a failure of the runtime process in a stream             | POST /v1/responses        | the "response.failed" event   | acp2api: the runtime process failed, so acp2api ended the prompt turn.                           |
       | the stop reason "max_turn_requests" in a stream          | POST /v1/chat/completions | the "error" object            | acp2api: the prompt turn reached the limit of model requests of the official runtime.            |
 
-  @FR-033
+  @FR-033 @issue-53 @wip
   Scenario Outline: A request that acp2api rejects gets the status and the error.type of its row
     Given <prior state>
     When an API client sends a request to "POST /v1/messages" with "stream" set to false
@@ -109,7 +109,7 @@ Feature: Errors
       | the request has no local API key                  | 401    | authentication_error  |
       | the request has the field "output_config.format"  | 400    | invalid_request_error |
 
-  @FR-033
+  @FR-033 @issue-71 @wip
   Scenario Outline: Each other error case of a request with no stream gets the status, the headers, and the error.type of its row
     Given <prior state>
     When an API client sends a request to "POST /v1/messages" with "stream" set to false
@@ -131,7 +131,7 @@ Feature: Errors
       | the next prompt turn ends with the stop reason "max_turn_requests"                 | 502    | the header "x-should-retry: false" | api_error        |
       | a built-in tool runs with no permission request in the next prompt turn            | 502    | the header "x-should-retry: false" | api_error        |
 
-  @FR-033
+  @FR-033 @issue-60 @wip
   Scenario Outline: A full queue gets HTTP 503 on the OpenAI APIs
     Given the queue holds 32 requests
     When an API client sends a valid request to "<endpoint>"
@@ -142,14 +142,14 @@ Feature: Errors
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
-  @FR-033
+  @FR-033 @issue-61 @wip
   Scenario: An upstream error that is a quota signal gets the row of the quota wait
     Given the next prompt turn gets the upstream error 429 RESOURCE_EXHAUSTED with a reset time 120 s away
     When an API client sends a request to "POST /v1/messages" with "stream" set to false
     Then acp2api answers with HTTP 429 and the header "retry-after: 120"
     And the error body has the "error.type" "rate_limit_error"
 
-  @FR-033
+  @FR-033 @issue-50 @wip
   Scenario: The message of an upstream error holds the values of the stderr error line
     Given the next prompt turn gets the stderr error line with the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
     When an API client sends a request to "POST /v1/messages" with "stream" set to false

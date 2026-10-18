@@ -8,7 +8,7 @@ Feature: Logs
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-056
+  @FR-056 @issue-42 @wip
   Scenario: A request gives one log line with its metadata
     When an API client sends a valid request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and the unknown field "example_field"
     Then the log has one line for the request with these fields:
@@ -26,7 +26,7 @@ Feature: Logs
       | the unknown field names       |
     And the unknown field names of the line hold "example_field"
 
-  @FR-056
+  @FR-056 @issue-47 @wip
   Scenario Outline: The log line shows how the request used an ACP session
     Given <history>
     When an API client sends that request
@@ -38,18 +38,18 @@ Feature: Logs
       | the request adds one user message to the last conversation    | continue |
       | the request has an edited earlier message                     | rebuild  |
 
-  @FR-056
+  @FR-056 @issue-61 @wip
   Scenario: A change of state gives one log line
     When a quota signal starts a quota wait
     Then the log has one line for the change to the state "quota wait"
 
-  @FR-056
+  @FR-056 @issue-73 @wip
   Scenario: No log, terminal, or state file holds the content of a request
     When an API client sends a request with the marker "MARKER-7Q" in the message text, the system prompt, a tool argument, and a tool result
     And a lockout signal then starts a lockout
     Then the logs, the terminal, and the state file do not hold "MARKER-7Q"
 
-  @FR-056
+  @FR-056 @issue-73 @wip
   Scenario: No log, terminal line, or state file holds the local API key or the management password
     Given the local API key is "K1" and the management password is "P1"
     And the owner restarted acp2api, so the start made no new key and no new password
@@ -57,7 +57,7 @@ Feature: Logs
     And a lockout signal then starts a lockout
     Then the logs, the terminal, and the state file do not hold "K1" or "P1"
 
-  @FR-056
+  @FR-056 @issue-50 @wip
   Scenario: acp2api writes only the parsed error line of the stderr of the official runtime
     Given the stderr of the official runtime has the line "I1018 harness: MARKER-STDERR"
     And the stderr then has the error line with the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
@@ -65,7 +65,7 @@ Feature: Logs
     Then the log holds the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
     And the log does not hold "MARKER-STDERR"
 
-  @FR-056
+  @FR-056 @issue-50 @wip
   Scenario Outline: acp2api replaces each email address in an error text with <REDACTED>
     Given the stderr of the official runtime has an error line with the message "Account <address> is not valid"
     When an API client sends a valid request
@@ -77,7 +77,7 @@ Feature: Logs
       | name@example.com   |
       | name%40example.com |
 
-  @FR-056
+  @FR-056 @issue-50 @wip
   Scenario Outline: acp2api replaces each value with the form of a token with <REDACTED>
     Given the stderr of the official runtime has an error line with the message "<message>"
     When an API client sends a valid request
@@ -89,14 +89,14 @@ Feature: Logs
       | Key AbCdEfGhIjKlMnOpQrStUvWxYz012345 bad | Key <REDACTED> bad                       |
       | Key AbCdEfGhIjKlMnOpQrStUvWxYz01234 bad  | Key AbCdEfGhIjKlMnOpQrStUvWxYz01234 bad  |
 
-  @FR-057
+  @FR-057 @issue-42 @wip
   Scenario: The logs keep a total size cap of 50 MB and delete the oldest log file first
     When acp2api writes 60 MB of log lines
     Then the logs take no more than 50 MB
     And no log file is larger than 10 MB
     And the log file that acp2api deleted is the oldest log file
 
-  @FR-057
+  @FR-057 @issue-42 @wip
   Scenario Outline: A start deletes each log file that is older than 30 days
     Given the log folder has a log file with a date <age> ago
     When the owner restarts acp2api

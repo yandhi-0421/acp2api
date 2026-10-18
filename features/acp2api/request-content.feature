@@ -7,7 +7,7 @@ Feature: Request content
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-014
+  @FR-014 @issue-53 @wip
   Scenario Outline: acp2api ignores a field that an API client sends by default or as a hint
     When an API client sends a valid request to "<endpoint>" with the field <field> set to <value>
     Then acp2api answers with HTTP 200
@@ -49,20 +49,20 @@ Feature: Request content
       | POST /v1/responses        | "reasoning.summary"                     | "auto"                                 |
       | POST /v1/messages         | "thinking.display"                      | "summarized"                           |
 
-  @FR-014
+  @FR-014 @issue-44 @wip
   Scenario: acp2api uses the fields stream, stream_options.include_usage, and n with the value 1
     When an API client sends a valid request to "POST /v1/chat/completions" with "stream" set to true, "stream_options.include_usage" set to true, and "n" set to 1
     Then acp2api answers with a stream
     And the last chunk of the stream before "data: [DONE]" carries the usage
     And the stream has one choice
 
-  @FR-014
+  @FR-014 @issue-40 @wip
   Scenario: acp2api uses tool_choice auto
     Given the request has the client tool "read_file"
     When an API client sends a valid request to "POST /v1/chat/completions" with "tool_choice" set to "auto"
     Then the official runtime offers the model the client tool "read_file"
 
-  @FR-014
+  @FR-014 @issue-53 @wip
   Scenario Outline: acp2api rejects a field whose result it cannot give
     When an API client sends a valid request to "<endpoint>" with the field "<field>" set to <value>
     Then acp2api refuses the request with HTTP 400 and the message "<message>"
@@ -82,7 +82,7 @@ Feature: Request content
       | POST /v1/responses        | text.format          | {"type": "json_schema", "name": "x", "schema": {}} | acp2api: the request field text.format.type = "json_schema" is not supported. |
       | POST /v1/messages         | tool_choice          | {"type": "any"} | acp2api: the request field tool_choice.type = "any" is not supported.   |
 
-  @FR-014
+  @FR-014 @issue-53 @wip
   Scenario Outline: acp2api rejects a field that turns on a feature with no result in acp2api
     When an API client sends a valid request to "<endpoint>" with the field "<field>" set to <value>
     Then acp2api refuses the request with HTTP 400
@@ -97,13 +97,13 @@ Feature: Request content
       | POST /v1/chat/completions | modalities      | ["text", "audio"]                                      |
       | POST /v1/chat/completions | audio           | {"voice": "alloy", "format": "wav"}                    |
 
-  @FR-014
+  @FR-014 @issue-53 @wip
   Scenario: acp2api rejects citations that a request turns on
     When an API client sends a valid request to "POST /v1/messages" with a text document block with "citations" set to {"enabled": true}
     Then acp2api refuses the request with HTTP 400
     And the official runtime gets no prompt
 
-  @FR-014
+  @FR-014 @issue-53 @wip
   Scenario Outline: A field with a value that turns its feature off counts as an absent field
     When an API client sends a valid request to "<endpoint>" with <field and value>
     Then acp2api answers with HTTP 200
@@ -116,7 +116,7 @@ Feature: Request content
       | POST /v1/chat/completions | the field "audio" set to null                                    |
       | POST /v1/messages         | a text document block with "citations" set to {"enabled": false} |
 
-  @FR-014
+  @FR-014 @issue-53 @wip
   Scenario Outline: acp2api rejects a request body that is not JSON or that is too deep
     When an API client sends to "POST /v1/messages" <body>
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the request body is not valid JSON, or it has more than 128 levels."
@@ -126,24 +126,24 @@ Feature: Request content
       | the body "not JSON"                               |
       | a valid request with 129 levels of objects and arrays |
 
-  @FR-014
+  @FR-014 @issue-53 @wip
   Scenario: acp2api accepts a request body with 128 levels of objects and arrays
     When an API client sends to "POST /v1/messages" a valid request with 128 levels of objects and arrays
     Then acp2api answers with HTTP 200
 
-  @FR-014
+  @FR-014 @issue-74 @wip
   Scenario: acp2api ignores an unknown top-level field and counts it
     When an API client sends a valid request to "POST /v1/chat/completions" with the top-level field "example_field" set to 1
     Then acp2api answers with HTTP 200
     And the log has a line with the field name "example_field"
     And the management panel counts "example_field" one time for the OpenAI Chat Completions API
 
-  @FR-014
+  @FR-014 @issue-39 @wip
   Scenario: acp2api uses an input item of the Responses API with a role and no type as a message item
     When an API client sends a request to "POST /v1/responses" with the input [{"role": "user", "content": "Hi"}]
     Then the prompt that the official runtime gets is "Hi"
 
-  @FR-014
+  @FR-014 @issue-39 @wip
   Scenario: The model gets an image with base64 data at its place
     When an API client sends a request to "POST /v1/messages" with one user message with these content blocks:
       | block | content                    |
@@ -152,7 +152,7 @@ Feature: Request content
       | text  | What is it?                |
     Then the prompt that the official runtime gets has the text "Look at this:", the image, and the text "What is it?" in this order
 
-  @FR-014
+  @FR-014 @issue-39 @wip
   Scenario Outline: acp2api rejects an image or a file with a URL and sends no HTTP request for it
     When an API client sends a request to "<endpoint>" with <block> with the URL "https://example.com/a.png"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the content type <type> with a URL is not supported. Send the data as base64."
@@ -164,12 +164,12 @@ Feature: Request content
       | POST /v1/chat/completions | an image_url part      | image_url   |
       | POST /v1/responses        | an input_image item    | input_image |
 
-  @FR-014
+  @FR-014 @issue-39 @wip
   Scenario: acp2api uses an image_url part with a data URL as an image with base64 data
     When an API client sends a request to "POST /v1/chat/completions" with an image_url part with a "data:image/png;base64," URL
     Then the prompt that the official runtime gets holds the image
 
-  @FR-014
+  @FR-014 @issue-39 @wip
   Scenario Outline: acp2api rejects a content block type that it does not use
     When an API client sends a request to "<endpoint>" with a content block of the type "<type>"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the content type <type> is not supported."
@@ -180,19 +180,19 @@ Feature: Request content
       | POST /v1/responses        | item_reference |
       | POST /v1/messages         | example_block  |
 
-  @FR-014
+  @FR-014 @issue-39 @wip
   Scenario: acp2api rejects a file_id
     When an API client sends a request to "POST /v1/responses" with an input_file item with the "file_id" "file_1"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the request field file_id is not supported."
     And the official runtime gets no prompt
 
-  @FR-014
+  @FR-014 @issue-39 @wip
   Scenario: acp2api rejects a last item from the assistant
     When an API client sends a request to "POST /v1/messages" whose last message has the role "assistant" and the text "The answer is"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: a last message from the assistant (a prefill) is not supported."
     And the official runtime gets no prompt
 
-  @FR-016
+  @FR-016 @issue-52 @wip
   Scenario: A first text that starts with a slash gets the role label [user]
     When an API client sends a request to "POST /v1/chat/completions" with one user message with the text "/logout"
     Then the prompt that the official runtime gets is:
@@ -202,25 +202,25 @@ Feature: Request content
       """
     And the official runtime runs no slash command
 
-  @FR-016
+  @FR-016 @issue-52 @wip
   Scenario: A first text that starts with white space and a slash gets the role label [user]
     When an API client sends a request to "POST /v1/chat/completions" with one user message with one space and then the text "/usage"
     Then the first line of the prompt that the official runtime gets is "[user]"
     And the official runtime runs no slash command
 
-  @FR-016
+  @FR-016 @issue-52 @wip
   Scenario: The official runtime stays signed in after a request with the text /logout
     When an API client sends a request to "POST /v1/messages" with one user message with the text "/logout"
     Then the official runtime is still signed in
     And the next request runs
 
-  @FR-016
+  @FR-016 @issue-52 @wip
   Scenario: A text that starts with a slash after the first text does not change
     When an API client sends a request to "POST /v1/messages" with one user message with the text blocks "Run this:" and "/logout"
     Then the prompt that the official runtime gets has the text "Run this:" and the text "/logout"
     And the prompt has no role label
 
-  @FR-017
+  @FR-017 @issue-39 @wip
   Scenario Outline: acp2api rejects a PDF in a message
     When an API client sends a request to "<endpoint>" with a PDF document in <message>
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: a PDF document in a message (content type <type>) is not supported. Remove that message from the conversation."
@@ -232,14 +232,14 @@ Feature: Request content
       | POST /v1/responses        | the last user message     | input_file |
       | POST /v1/chat/completions | the last user message     | file       |
 
-  @FR-017
+  @FR-017 @issue-54 @wip
   Scenario: A PDF in a tool result becomes a note, and the other content stays
     When an API client sends a request to "POST /v1/messages" with a tool result that holds the text "Page count: 3" and a PDF document
     Then acp2api answers with HTTP 200
     And the tool result in the prompt holds the text "Page count: 3"
     And the tool result in the prompt holds the line "[A PDF document was here. acp2api cannot give PDF documents to the model.]" at the place of the PDF
 
-  @FR-017
+  @FR-017 @issue-39 @wip
   Scenario Outline: The model gets a text document at its place
     When an API client sends a request to "<endpoint>" with <document> with the text "Line one."
     Then the prompt that the official runtime gets holds at the place of the document:
@@ -256,12 +256,12 @@ Feature: Request content
       | POST /v1/responses        | an input_file item with the media type "text/plain" and the filename "notes.txt" | [document: notes.txt] |
       | POST /v1/responses        | an input_file item with the media type "text/plain", no title, and no filename | [document] |
 
-  @FR-017
+  @FR-017 @issue-39 @wip
   Scenario: acp2api rejects a document with a media type other than PDF or text/plain
     When an API client sends a request to "POST /v1/responses" with an input_file item with the media type "text/csv"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the media type text/csv is not supported."
 
-  @FR-018
+  @FR-018 @issue-52 @wip
   Scenario Outline: acp2api sends no thought text on any API
     Given the official runtime sends the thought text "I think so." and then the reply "Yes."
     When an API client sends a valid request to "<endpoint>" with "stream" set to <stream>
@@ -275,14 +275,14 @@ Feature: Request content
       | POST /v1/responses        | false  |
       | POST /v1/chat/completions | true   |
 
-  @FR-018
+  @FR-018 @issue-52 @wip
   Scenario: acp2api writes one log line when it drops thought text
     Given the official runtime sends the thought text "I think so." and then the reply "Yes."
     When an API client sends a valid request to "POST /v1/messages"
     Then the log has one line about the dropped thought text
     And the log holds no text "I think so."
 
-  @FR-018
+  @FR-018 @issue-52 @wip
   Scenario Outline: acp2api ignores thought text in a request
     When an API client sends a request to "<endpoint>" with <item> that holds the text "Old thought."
     Then acp2api answers with HTTP 200
