@@ -1,0 +1,3 @@
+{"t_ms":20.353,"srv":"P1","event":"spawn","exe":"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par","args":[],"cwd":"$TMPDIR/acp2api-probe33/proc-cFI5l0","pid":7962,"envKeys":["HOME","PATH","USER","LOGNAME","SHELL","TMPDIR","__CF_USER_TEXT_ENCODING","HTTP_PROXY","HTTPS_PROXY","NO_PROXY"]}
+{"t_ms":6013.275,"srv":"P1","event":"stdin-end"}
+{"t_ms":6397.352,"srv":"P1","event":"exit","code":0,"signal":null}

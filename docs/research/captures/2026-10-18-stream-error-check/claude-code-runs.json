@@ -1,0 +1,2691 @@
+{
+ "check": "acp2api issue 33, check 1: Claude Code and an `error` event in a stream",
+ "date": "2026-10-18",
+ "claudeCode": "2.1.299 (the copy of the desktop app)",
+ "platform": "macOS 27.2, arm64",
+ "fake": "Throwaway fake Anthropic Messages endpoint on 127.0.0.1. A main request is a request with tools whose first user text has PROBE-ERR. The first errorCount streamed main requests got status 200, message_start, ping, (after: a complete text block), an `error` event, and the end of the stream with no message_stop. A later main request, or a main request with no stream, got the reply PROBE-RECOVERED or the HTTP error of nonStream. Each other request got a normal reply.",
+ "network": "sandbox-exec denied each outbound connection except the fake and a local proxy; the proxy refused each CONNECT with 403; env -i; new CLAUDE_CONFIG_DIR; made-up ANTHROPIC_AUTH_TOKEN.",
+ "runs": {
+  "c0-baseline": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 0,
+    "errorType": "api_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 1,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "m-api_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "api_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 5,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "json",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 1,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "m-api_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "api_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 10,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 4,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 6,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 6,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 3,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "m-overloaded_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "overloaded_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 566,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 1094,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 1,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "m-overloaded_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "overloaded_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 11,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 4,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 7,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 6,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 3,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "m-rate_limit_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "rate_limit_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "rate_limit_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 4,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "json",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 1,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "m-rate_limit_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "rate_limit_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "rate_limit_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "assistant",
+     "text": "API Error: acp2api probe: injected rate_limit_error after the first content block"
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 429,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: acp2api probe: injected rate_limit_error after the first content block"
+   },
+   "exit": 1
+  },
+  "m-invalid_request_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "invalid_request_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "invalid_request_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 5,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "json",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 1,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "m-invalid_request_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 12,
+    "errorCount": 2,
+    "nonStream": "success",
+    "errorType": "invalid_request_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "invalid_request_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "assistant",
+     "text": "API Error: acp2api probe: injected invalid_request_error after the first content block"
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": null,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: acp2api probe: injected invalid_request_error after the first content block"
+   },
+   "exit": 1
+  },
+  "p-overloaded_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "529",
+    "errorType": "overloaded_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 522,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 1155,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 5,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 529,
+      "headers": {
+       "content-type": "application/json"
+      },
+      "errorType": "overloaded_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 529,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+   },
+   "exit": 1
+  },
+  "p-api_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "502, x-should-retry: false",
+    "errorType": "api_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 10,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 4,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 7,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 6,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 6,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 8,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "assistant",
+     "text": "API Error: Server error mid-response. The response above may be incomplete."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": null,
+    "terminal_reason": "api_error",
+    "num_turns": 4,
+    "result": "API Error: Server error mid-response. The response above may be incomplete."
+   },
+   "exit": 1
+  },
+  "p-overloaded_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "529",
+    "errorType": "overloaded_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 10,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 4,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 6,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 6,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 5,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 8,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "assistant",
+     "text": "API Error: Server error mid-response. The response above may be incomplete."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": null,
+    "terminal_reason": "api_error",
+    "num_turns": 4,
+    "result": "API Error: Server error mid-response. The response above may be incomplete."
+   },
+   "exit": 1
+  },
+  "p-api_error-before-502": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "502, x-should-retry: false",
+    "errorType": "api_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 4,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 502,
+      "headers": {
+       "content-type": "application/json",
+       "x-should-retry": "false"
+      },
+      "errorType": "api_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: 502 acp2api probe: HTTP 502 api_error for a request with no stream. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 502,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: 502 acp2api probe: HTTP 502 api_error for a request with no stream. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+   },
+   "exit": 1
+  },
+  "p-api_error-before-503": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 5,
+    "errorCount": "all",
+    "nonStream": "503, retry-after: 5",
+    "errorType": "api_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 4,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 503,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "api_error"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 5007,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 503,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "api_error"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 5011,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 503,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "api_error"
+     }
+    },
+    {
+     "id": 5,
+     "gapMs": 5010,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 5,
+     "response": {
+      "status": 503,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "api_error"
+     }
+    },
+    {
+     "limit": "request limit 5 reached; later requests get 400 and no log"
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: 400 probe request limit reached"
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 400,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: 400 probe request limit reached"
+   },
+   "exit": 1
+  },
+  "p-invalid_request_error-before-400": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "400",
+    "errorType": "invalid_request_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "invalid_request_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 4,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 400,
+      "headers": {
+       "content-type": "application/json"
+      },
+      "errorType": "invalid_request_error"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 2,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 400,
+      "headers": {
+       "content-type": "application/json"
+      },
+      "errorType": "invalid_request_error"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 1,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 9,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 400,
+      "headers": {
+       "content-type": "application/json"
+      },
+      "errorType": "invalid_request_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: 400 acp2api probe: HTTP 400 invalid_request_error for a request with no stream"
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 400,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: 400 acp2api probe: HTTP 400 invalid_request_error for a request with no stream"
+   },
+   "exit": 1
+  },
+  "p-rate_limit_error-before-429": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 5,
+    "errorCount": "all",
+    "nonStream": "429, retry-after: 5",
+    "errorType": "rate_limit_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "rate_limit_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 4,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 429,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "rate_limit_error"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 5005,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 429,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "rate_limit_error"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 5009,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 429,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "rate_limit_error"
+     }
+    },
+    {
+     "id": 5,
+     "gapMs": 5009,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 5,
+     "response": {
+      "status": 429,
+      "headers": {
+       "content-type": "application/json",
+       "retry-after": "5"
+      },
+      "errorType": "rate_limit_error"
+     }
+    },
+    {
+     "limit": "request limit 5 reached; later requests get 400 and no log"
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: 400 probe request limit reached"
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 400,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: 400 probe request limit reached"
+   },
+   "exit": 1
+  },
+  "g-api_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": 1,
+    "nonStream": "success",
+    "claudeArgs": "--model gemini-3.8-flash-high",
+    "errorType": "api_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "gemini-3.8-flash-high",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 32000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 8,
+     "stream": true,
+     "model": "gemini-3.8-flash-high",
+     "messages": 4,
+     "tools": 21,
+     "maxTokens": 32000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 2,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "g-api_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": 1,
+    "nonStream": "success",
+    "claudeArgs": "--model gemini-3.8-flash-high",
+    "errorType": "api_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "gemini-3.8-flash-high",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 32000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 5,
+     "stream": false,
+     "model": "gemini-3.8-flash-high",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 32000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "json",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 1,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "g-overloaded_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": 1,
+    "nonStream": "success",
+    "claudeArgs": "--model gemini-3.8-flash-high",
+    "errorType": "overloaded_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "gemini-3.8-flash-high",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 32000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 537,
+     "stream": true,
+     "model": "gemini-3.8-flash-high",
+     "messages": 2,
+     "tools": 21,
+     "maxTokens": 32000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-RECOVERED"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-RECOVERED: a later request succeeded."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "api_error_status": null,
+    "terminal_reason": "completed",
+    "num_turns": 1,
+    "result": "PROBE-RECOVERED: a later request succeeded."
+   },
+   "exit": 0
+  },
+  "s-api_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": true,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "502, x-should-retry: false",
+    "errorType": "api_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 4,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 502,
+      "headers": {
+       "content-type": "application/json",
+       "x-should-retry": "false"
+      },
+      "errorType": "api_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: 502 acp2api probe: HTTP 502 api_error for a request with no stream. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 502,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: 502 acp2api probe: HTTP 502 api_error for a request with no stream. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+   },
+   "exit": 1
+  },
+  "s-api_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": true,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "502, x-should-retry: false",
+    "errorType": "api_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 9,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 4,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 5,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 6,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 5,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 8,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "user",
+     "text": "Your response above was cut off mid-stream. Resume directly from where it stops — no apology, no recap. If none of it survived, answer the request from the start."
+    },
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "assistant",
+     "text": "API Error: Server error mid-response. The response above may be incomplete."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": null,
+    "terminal_reason": "api_error",
+    "num_turns": 4,
+    "result": "API Error: Server error mid-response. The response above may be incomplete."
+   },
+   "exit": 1
+  },
+  "s-overloaded_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": true,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "529",
+    "errorType": "overloaded_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 617,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 1161,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 10,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 529,
+      "headers": {
+       "content-type": "application/json"
+      },
+      "errorType": "overloaded_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 529,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337)."
+   },
+   "exit": 1
+  },
+  "s-invalid_request_error-before": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": true,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "400, x-should-retry: false",
+    "errorType": "invalid_request_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "invalid_request_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 4,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 400,
+      "headers": {
+       "content-type": "application/json",
+       "x-should-retry": "false"
+      },
+      "errorType": "invalid_request_error"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 1,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 400,
+      "headers": {
+       "content-type": "application/json",
+       "x-should-retry": "false"
+      },
+      "errorType": "invalid_request_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "API Error: 400 acp2api probe: HTTP 400 invalid_request_error for a request with no stream"
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 400,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: 400 acp2api probe: HTTP 400 invalid_request_error for a request with no stream"
+   },
+   "exit": 1
+  },
+  "s-invalid_request_error-after": {
+   "scenario": {
+    "mode": "print",
+    "cachedFlags": true,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "400, x-should-retry: false",
+    "errorType": "invalid_request_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 23,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, sdk-cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "invalid_request_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "api.anthropic.com:443",
+    "http-intake.logs.us5.datadoghq.com:443",
+    "api.anthropic.com:443"
+   ],
+   "streamJson": [
+    {
+     "type": "assistant",
+     "text": "PROBE-PARTIAL: text before the error."
+    },
+    {
+     "type": "assistant",
+     "text": "API Error: acp2api probe: injected invalid_request_error after the first content block"
+    }
+   ],
+   "result": {
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": null,
+    "terminal_reason": "api_error",
+    "num_turns": 1,
+    "result": "API Error: acp2api probe: injected invalid_request_error after the first content block"
+   },
+   "exit": 1
+  },
+  "i-api_error-after": {
+   "scenario": {
+    "mode": "interactive",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "502, x-should-retry: false",
+    "errorType": "api_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 1,
+     "tools": 0,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": false,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-OTHER"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 3,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "screenLines": [
+    "⏺ PROBE-PARTIAL: text before the error. ⏺ API Error: Server error mid-response. The response above may be incomplete. ✻ Cooked for 0s · done 5:09 PM"
+   ]
+  },
+  "i-api_error-after-recover": {
+   "scenario": {
+    "mode": "interactive",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": 1,
+    "nonStream": "success",
+    "errorType": "api_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 1,
+     "tools": 0,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": false,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-OTHER"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 2,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "screenLines": [
+    "⏺ PROBE-PARTIAL: text before the error. ⏺ API Error: Server error mid-response. The response above may be incomplete. ✻ Brewed for 0s · done 5:10 PM"
+   ]
+  },
+  "i-api_error-before": {
+   "scenario": {
+    "mode": "interactive",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "502, x-should-retry: false",
+    "errorType": "api_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 1,
+     "tools": 0,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": false,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-OTHER"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 3,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "api_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 7,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 502,
+      "headers": {
+       "content-type": "application/json",
+       "x-should-retry": "false"
+      },
+      "errorType": "api_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "screenLines": [
+    "⏺ API Error: 502 acp2api probe: HTTP 502 api_error for a request with no stream. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337). ✻ Baked for 0s · done 5:10 PM"
+   ]
+  },
+  "i-overloaded_error-before": {
+   "scenario": {
+    "mode": "interactive",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "529",
+    "errorType": "overloaded_error",
+    "position": "before"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 1,
+     "tools": 0,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": false,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-OTHER"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 3,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 3,
+     "gapMs": 561,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 2,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 4,
+     "gapMs": 1066,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 3,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "overloaded_error",
+      "position": "before"
+     }
+    },
+    {
+     "id": 5,
+     "gapMs": 9,
+     "stream": false,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 64000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "300",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 4,
+     "response": {
+      "status": 529,
+      "headers": {
+       "content-type": "application/json"
+      },
+      "errorType": "overloaded_error"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "screenLines": [
+    "✻ API error · Retrying in 1s · attempt 1/2",
+    "acp2api probe: injected overloaded_error before the first content block · Retrying in 2s · attempt 2/2 ⎿  If it persists, check your inference gateway (127.0.0.1:18337). ❯",
+    "✽ Determining… ❯  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents ⏺ API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment. If it persists, check your inference gateway (127.0.0.1:18337). ✻ Baked for 1s · done 5:10 PM"
+   ]
+  },
+  "i-invalid_request_error-after": {
+   "scenario": {
+    "mode": "interactive",
+    "cachedFlags": false,
+    "requestCap": 14,
+    "errorCount": "all",
+    "nonStream": "400, x-should-retry: false",
+    "errorType": "invalid_request_error",
+    "position": "after"
+   },
+   "requests": [
+    {
+     "id": 1,
+     "gapMs": null,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 1,
+     "tools": 0,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 10,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": false,
+     "response": {
+      "status": 200,
+      "stream": "normal",
+      "text": "PROBE-OTHER"
+     }
+    },
+    {
+     "id": 2,
+     "gapMs": 2,
+     "stream": true,
+     "model": "claude-opus-5-5",
+     "messages": 2,
+     "tools": 24,
+     "maxTokens": 128000,
+     "sdkRetryCount": "0",
+     "sdkTimeout": "600",
+     "betaCount": 11,
+     "userAgent": "claude-cli/2.1.299 (external, cli)",
+     "mainRequest": 1,
+     "response": {
+      "status": 200,
+      "stream": "error",
+      "errorType": "invalid_request_error",
+      "position": "after"
+     }
+    }
+   ],
+   "proxyAttempts": [
+    "raw.githubusercontent.com:443",
+    "api.anthropic.com:443",
+    "downloads.claude.ai:443",
+    "github.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443",
+    "api.anthropic.com:443"
+   ],
+   "screenLines": [
+    "⏺ PROBE-PARTIAL: text before the error. ⏺ API Error: acp2api probe: injected invalid_request_error after the first content block ✻ Cogitated for 0s · done 5:11 PM"
+   ]
+  }
+ }
+}

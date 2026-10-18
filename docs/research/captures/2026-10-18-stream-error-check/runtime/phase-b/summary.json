@@ -1,0 +1,862 @@
+{
+  "phase": "b",
+  "startedAt": "2026-10-18T09:13:22.502Z",
+  "exe": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+  "init": {
+    "P1": {
+      "ms": 1216.717,
+      "agentInfo": {
+        "name": "antigravity-acp",
+        "title": "Google Antigravity",
+        "version": "1.4.0"
+      },
+      "protocolVersion": 1,
+      "authMethods": [
+        "oauth-personal",
+        "oauth-business",
+        "gemini-api-key",
+        "agent-platform"
+      ]
+    }
+  },
+  "sessions": {
+    "E1": {
+      "sessionId": "07510ae0-d9f9-48c9-9d28-878c13c1714b",
+      "ms": 3691.506,
+      "models": [
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low"
+      ],
+      "tier": "g1-pro-tier",
+      "config": [
+        "model=gemini-3.8-flash",
+        "thinking_level=high",
+        "mode=default"
+      ]
+    },
+    "E2": {
+      "sessionId": "14ae1772-e9f4-4381-8dda-e542db845961",
+      "ms": 1240.7759999999998,
+      "models": [
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low"
+      ],
+      "tier": "g1-pro-tier",
+      "config": [
+        "model=gemini-3.8-flash",
+        "thinking_level=high",
+        "mode=default"
+      ]
+    },
+    "E3": {
+      "sessionId": "bce31dc8-efca-43d4-a9c6-23f03f21dac0",
+      "ms": 1315.866,
+      "models": [
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low"
+      ],
+      "tier": "g1-pro-tier",
+      "config": [
+        "model=gemini-3.8-flash",
+        "thinking_level=high",
+        "mode=default"
+      ]
+    }
+  },
+  "turns": [
+    {
+      "n": 1,
+      "label": "E1 bad image",
+      "session": "E1",
+      "sessionId": "07510ae0-d9f9-48c9-9d28-878c13c1714b",
+      "srv": "P1",
+      "sentAt": 7478.903,
+      "resultAt": 9030.119,
+      "stopReason": "end_turn",
+      "error": null,
+      "updates": [
+        {
+          "t_ms": 9029.903,
+          "kind": "agent_message_chunk",
+          "text": "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting",
+          "contentType": "text"
+        }
+      ],
+      "lateUpdates": [],
+      "stderr": [
+        {
+          "t_ms": 7496.997,
+          "line": "I1018 17:13:29.998986 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: I1018 17:13:29.998768      84 encoder_embed.go:85] Installing/updating embedded webm_encoder binary to ~/.gemini/antigravity/bin/webm_encoder"
+        },
+        {
+          "t_ms": 7594.306,
+          "line": "I1018 17:13:30.096339 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:30.095990      84 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 7594.882,
+          "line": "I1018 17:13:30.097064 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:30.097044      84 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 7597.012,
+          "line": "I1018 17:13:30.099210 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:30.099197      84 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 7602.085,
+          "line": "I1018 17:13:30.104272 6235844608 proxy_server.py:106] Proxy extracted model from path: gemini-3.8-flash-high"
+        },
+        {
+          "t_ms": 9020.859,
+          "line": "I1018 17:13:31.522936 6185365504 local_connection.py:551] harness stderr: received model response error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 9022.316,
+          "line": "I1018 17:13:31.524513 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:31.522939      84 stream_handler.go:107] error encountered while processing planner output: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 9024.164,
+          "line": "I1018 17:13:31.526359 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:31.526326      84 executor.go:521] error in generator: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativea"
+        },
+        {
+          "t_ms": 9025.5,
+          "line": "I1018 17:13:31.527647 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:31.526951      84 errorreport.go:224] agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.genera"
+        },
+        {
+          "t_ms": 9025.671,
+          "line": "I1018 17:13:31.527770 6185365504 local_connection.py:551] harness stderr: Agent run failed: executor run failed: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Detai"
+        },
+        {
+          "t_ms": 9029.046,
+          "line": "E1018 17:13:31.527889 8794063616 server.py:5558] Antigravity SDK error processing prompt for session 07510ae0-d9f9-48c9-9d28-878c13c1714b"
+        },
+        {
+          "t_ms": 9029.228,
+          "line": "Traceback (most recent call last):"
+        },
+        {
+          "t_ms": 9029.28,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py\", line 5447, in prompt"
+        },
+        {
+          "t_ms": 9029.327,
+          "line": "    async for step in agent.conversation.receive_steps():"
+        },
+        {
+          "t_ms": 9029.364,
+          "line": "    ...<2 lines>..."
+        },
+        {
+          "t_ms": 9029.4,
+          "line": "      )"
+        },
+        {
+          "t_ms": 9029.434,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/conversation/conversation.py\", line 135, in receive_steps"
+        },
+        {
+          "t_ms": 9029.472,
+          "line": "    async for step in self._connection.receive_steps():"
+        },
+        {
+          "t_ms": 9029.507,
+          "line": "    ...<4 lines>..."
+        },
+        {
+          "t_ms": 9029.537,
+          "line": "      yield step"
+        },
+        {
+          "t_ms": 9029.568,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/connections/local/local_connection.py\", line 520, in receive_steps"
+        },
+        {
+          "t_ms": 9029.603,
+          "line": "    raise types.AntigravityConnectionError("
+        },
+        {
+          "t_ms": 9029.636,
+          "line": "        step_obj.error or \"System error occurred.\""
+        },
+        {
+          "t_ms": 9029.665,
+          "line": "    )"
+        },
+        {
+          "t_ms": 9029.7,
+          "line": "google.antigravity.types.AntigravityConnectionError: Agent execution terminated due to error. (\"agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, "
+        }
+      ],
+      "perms": [],
+      "cancelSent": null,
+      "done": true,
+      "collecting": false,
+      "promptBlocks": [
+        "text:Describe this image in one word.",
+        "image:image/png:45B"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 2,
+      "label": "E2 bad image",
+      "session": "E2",
+      "sessionId": "14ae1772-e9f4-4381-8dda-e542db845961",
+      "srv": "P1",
+      "sentAt": 14032.868,
+      "resultAt": 15572.882,
+      "stopReason": "end_turn",
+      "error": null,
+      "updates": [
+        {
+          "t_ms": 15572.664,
+          "kind": "agent_message_chunk",
+          "text": "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting",
+          "contentType": "text"
+        }
+      ],
+      "lateUpdates": [],
+      "stderr": [
+        {
+          "t_ms": 14111.929,
+          "line": "I1018 17:13:36.614040 6202191872 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:36.613946      81 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 14112.24,
+          "line": "I1018 17:13:36.614475 6202191872 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:36.614395      81 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 14113.434,
+          "line": "I1018 17:13:36.615655 6202191872 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:36.615632      81 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 14114.549,
+          "line": "I1018 17:13:36.616786 6235844608 proxy_server.py:106] Proxy extracted model from path: gemini-3.8-flash-high"
+        },
+        {
+          "t_ms": 15561.791,
+          "line": "I1018 17:13:38.063744 6202191872 local_connection.py:551] harness stderr: received model response error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 15562.556,
+          "line": "I1018 17:13:38.063932 6202191872 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:38.063733      81 stream_handler.go:107] error encountered while processing planner output: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 15565.953,
+          "line": "I1018 17:13:38.067941 6202191872 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:38.067793      81 executor.go:521] error in generator: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativea"
+        },
+        {
+          "t_ms": 15568.055,
+          "line": "I1018 17:13:38.070050 6202191872 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:38.069930      81 errorreport.go:224] agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.genera"
+        },
+        {
+          "t_ms": 15569.369,
+          "line": "I1018 17:13:38.071438 6202191872 local_connection.py:551] harness stderr: Agent run failed: executor run failed: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Detai"
+        },
+        {
+          "t_ms": 15570.65,
+          "line": "E1018 17:13:38.071812 8794063616 server.py:5558] Antigravity SDK error processing prompt for session 14ae1772-e9f4-4381-8dda-e542db845961"
+        },
+        {
+          "t_ms": 15570.856,
+          "line": "Traceback (most recent call last):"
+        },
+        {
+          "t_ms": 15571.029,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py\", line 5447, in prompt"
+        },
+        {
+          "t_ms": 15571.233,
+          "line": "    async for step in agent.conversation.receive_steps():"
+        },
+        {
+          "t_ms": 15571.424,
+          "line": "    ...<2 lines>..."
+        },
+        {
+          "t_ms": 15571.55,
+          "line": "      )"
+        },
+        {
+          "t_ms": 15571.662,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/conversation/conversation.py\", line 135, in receive_steps"
+        },
+        {
+          "t_ms": 15571.739,
+          "line": "    async for step in self._connection.receive_steps():"
+        },
+        {
+          "t_ms": 15571.814,
+          "line": "    ...<4 lines>..."
+        },
+        {
+          "t_ms": 15571.884,
+          "line": "      yield step"
+        },
+        {
+          "t_ms": 15571.976,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/connections/local/local_connection.py\", line 520, in receive_steps"
+        },
+        {
+          "t_ms": 15572.046,
+          "line": "    raise types.AntigravityConnectionError("
+        },
+        {
+          "t_ms": 15572.114,
+          "line": "        step_obj.error or \"System error occurred.\""
+        },
+        {
+          "t_ms": 15572.169,
+          "line": "    )"
+        },
+        {
+          "t_ms": 15572.233,
+          "line": "google.antigravity.types.AntigravityConnectionError: Agent execution terminated due to error. (\"agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, "
+        }
+      ],
+      "perms": [],
+      "cancelSent": null,
+      "done": true,
+      "collecting": false,
+      "promptBlocks": [
+        "text:Describe this image in one word.",
+        "image:image/png:45B"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 3,
+      "label": "E3 bad image",
+      "session": "E3",
+      "sessionId": "bce31dc8-efca-43d4-a9c6-23f03f21dac0",
+      "srv": "P1",
+      "sentAt": 20574.592,
+      "resultAt": 21921.127,
+      "stopReason": "end_turn",
+      "error": null,
+      "updates": [
+        {
+          "t_ms": 21920.913,
+          "kind": "agent_message_chunk",
+          "text": "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting",
+          "contentType": "text"
+        }
+      ],
+      "lateUpdates": [],
+      "stderr": [
+        {
+          "t_ms": 20596.77,
+          "line": "I1018 17:13:43.098949 6219018240 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:43.098650      42 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 20597.116,
+          "line": "I1018 17:13:43.099380 6219018240 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:43.099352      42 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 20598.753,
+          "line": "I1018 17:13:43.101026 6219018240 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:43.100999      42 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 20600.094,
+          "line": "I1018 17:13:43.102358 6235844608 proxy_server.py:106] Proxy extracted model from path: gemini-3.8-flash-high"
+        },
+        {
+          "t_ms": 21910.885,
+          "line": "I1018 17:13:44.412793 6219018240 local_connection.py:551] harness stderr: received model response error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 21911.672,
+          "line": "I1018 17:13:44.413026 6219018240 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:44.412777      42 stream_handler.go:107] error encountered while processing planner output: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 21914.058,
+          "line": "I1018 17:13:44.416228 6219018240 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:44.416126      42 executor.go:521] error in generator: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativea"
+        },
+        {
+          "t_ms": 21917.015,
+          "line": "I1018 17:13:44.419181 6219018240 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:44.418322      42 errorreport.go:224] agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.genera"
+        },
+        {
+          "t_ms": 21918.331,
+          "line": "E1018 17:13:44.419452 8794063616 server.py:5558] Antigravity SDK error processing prompt for session bce31dc8-efca-43d4-a9c6-23f03f21dac0"
+        },
+        {
+          "t_ms": 21918.585,
+          "line": "Traceback (most recent call last):"
+        },
+        {
+          "t_ms": 21918.775,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py\", line 5447, in prompt"
+        },
+        {
+          "t_ms": 21918.924,
+          "line": "    async for step in agent.conversation.receive_steps():"
+        },
+        {
+          "t_ms": 21919.075,
+          "line": "    ...<2 lines>..."
+        },
+        {
+          "t_ms": 21919.188,
+          "line": "      )"
+        },
+        {
+          "t_ms": 21919.305,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/conversation/conversation.py\", line 135, in receive_steps"
+        },
+        {
+          "t_ms": 21919.496,
+          "line": "    async for step in self._connection.receive_steps():"
+        },
+        {
+          "t_ms": 21919.648,
+          "line": "    ...<4 lines>..."
+        },
+        {
+          "t_ms": 21919.768,
+          "line": "      yield step"
+        },
+        {
+          "t_ms": 21919.89,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/connections/local/local_connection.py\", line 520, in receive_steps"
+        },
+        {
+          "t_ms": 21920.005,
+          "line": "    raise types.AntigravityConnectionError("
+        },
+        {
+          "t_ms": 21920.11,
+          "line": "        step_obj.error or \"System error occurred.\""
+        },
+        {
+          "t_ms": 21920.197,
+          "line": "    )"
+        },
+        {
+          "t_ms": 21920.297,
+          "line": "google.antigravity.types.AntigravityConnectionError: Agent execution terminated due to error. (\"agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, "
+        },
+        {
+          "t_ms": 21920.538,
+          "line": "I1018 17:13:44.419950 6219018240 local_connection.py:551] harness stderr: Agent run failed: executor run failed: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Detai"
+        }
+      ],
+      "perms": [],
+      "cancelSent": null,
+      "done": true,
+      "collecting": false,
+      "promptBlocks": [
+        "text:Describe this image in one word.",
+        "image:image/png:45B"
+      ],
+      "resultExtra": {}
+    },
+    {
+      "n": 4,
+      "label": "E1 follow-up text",
+      "session": "E1",
+      "sessionId": "07510ae0-d9f9-48c9-9d28-878c13c1714b",
+      "srv": "P1",
+      "sentAt": 26923.648,
+      "resultAt": 29004.76,
+      "stopReason": "end_turn",
+      "error": null,
+      "updates": [
+        {
+          "t_ms": 29004.523,
+          "kind": "agent_message_chunk",
+          "text": "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting",
+          "contentType": "text"
+        }
+      ],
+      "lateUpdates": [],
+      "stderr": [
+        {
+          "t_ms": 26924.331,
+          "line": "W1018 17:13:49.426584 8794063616 server.py:5470] Agent connection closed for session 07510ae0-d9f9-48c9-9d28-878c13c1714b; rebuilding agent and retrying the turn once."
+        },
+        {
+          "t_ms": 26924.489,
+          "line": "I1018 17:13:49.426661 8794063616 agent.py:239] Stopping Agent session"
+        },
+        {
+          "t_ms": 26924.546,
+          "line": "I1018 17:13:49.426820 6185365504 local_connection.py:551] harness stderr: Stdin closed, cleaning up..."
+        },
+        {
+          "t_ms": 26933.011,
+          "line": "I1018 17:13:49.435256 8794063616 mcp_servers.py:230] Attempting to load global MCP configs from ~/.gemini/config/mcp_config.json"
+        },
+        {
+          "t_ms": 26933.22,
+          "line": "W1018 17:13:49.435438 8794063616 mcp_servers.py:169] Failed to load/parse MCP config at ~/.gemini/config/mcp_config.json: Expecting value: line 1 column 1 (char 0)"
+        },
+        {
+          "t_ms": 26940.61,
+          "line": "I1018 17:13:49.442813 8794063616 agent.py:163] Starting Agent session"
+        },
+        {
+          "t_ms": 26940.811,
+          "line": "I1018 17:13:49.443111 8794063616 agent.py:200] Starting connection and creating conversation..."
+        },
+        {
+          "t_ms": 27145.011,
+          "line": "I1018 17:13:49.647274 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:49.647228      99 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 27146.138,
+          "line": "I1018 17:13:49.648453 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:49.648438      99 trajectory_chat_converter.go:639] error calculating media token count: error getting image dimensions: unexpected EOF"
+        },
+        {
+          "t_ms": 27147.139,
+          "line": "I1018 17:13:49.649474 6235844608 proxy_server.py:106] Proxy extracted model from path: gemini-3.8-flash-high"
+        },
+        {
+          "t_ms": 28981.093,
+          "line": "I1018 17:13:51.483288 6185365504 local_connection.py:551] harness stderr: received model response error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 28981.849,
+          "line": "I1018 17:13:51.483395 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:51.483281      99 stream_handler.go:107] error encountered while processing planner output: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]"
+        },
+        {
+          "t_ms": 28983.04,
+          "line": "I1018 17:13:51.485274 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:51.485179      99 executor.go:521] error in generator: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativea"
+        },
+        {
+          "t_ms": 28985.194,
+          "line": "I1018 17:13:51.486905 6185365504 local_connection.py:551] harness stderr: ERROR: logging before google.Init: E1018 17:13:51.486685      99 errorreport.go:224] agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.genera"
+        },
+        {
+          "t_ms": 28988.292,
+          "line": "E1018 17:13:51.488282 8794063616 server.py:5558] Antigravity SDK error processing prompt for session 07510ae0-d9f9-48c9-9d28-878c13c1714b"
+        },
+        {
+          "t_ms": 28988.834,
+          "line": "Traceback (most recent call last):"
+        },
+        {
+          "t_ms": 28989.16,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/cloud/developer_experience/antigravity_extensions/acp_server/server.py\", line 5447, in prompt"
+        },
+        {
+          "t_ms": 28989.358,
+          "line": "    async for step in agent.conversation.receive_steps():"
+        },
+        {
+          "t_ms": 28989.987,
+          "line": "    ...<2 lines>..."
+        },
+        {
+          "t_ms": 28990.332,
+          "line": "      )"
+        },
+        {
+          "t_ms": 28990.549,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/conversation/conversation.py\", line 135, in receive_steps"
+        },
+        {
+          "t_ms": 29002.828,
+          "line": "    async for step in self._connection.receive_steps():"
+        },
+        {
+          "t_ms": 29003.18,
+          "line": "    ...<4 lines>..."
+        },
+        {
+          "t_ms": 29003.342,
+          "line": "      yield step"
+        },
+        {
+          "t_ms": 29003.514,
+          "line": "  File \"~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par/google3/third_party/py/google/antigravity/connections/local/local_connection.py\", line 520, in receive_steps"
+        },
+        {
+          "t_ms": 29003.571,
+          "line": "    raise types.AntigravityConnectionError("
+        },
+        {
+          "t_ms": 29003.615,
+          "line": "        step_obj.error or \"System error occurred.\""
+        },
+        {
+          "t_ms": 29003.654,
+          "line": "    )"
+        },
+        {
+          "t_ms": 29003.712,
+          "line": "google.antigravity.types.AntigravityConnectionError: Agent execution terminated due to error. (\"agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, "
+        },
+        {
+          "t_ms": 29004.003,
+          "line": "I1018 17:13:51.491589 6185365504 local_connection.py:551] harness stderr: Agent run failed: executor run failed: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Detai"
+        }
+      ],
+      "perms": [],
+      "cancelSent": null,
+      "done": true,
+      "collecting": false,
+      "promptBlocks": [
+        "text:Reply with the word READY and nothing else."
+      ],
+      "resultExtra": {}
+    }
+  ],
+  "outsideTurn": {
+    "P1:E1": {
+      "available_commands_update": 1
+    },
+    "P1:E2": {
+      "available_commands_update": 1
+    },
+    "P1:E3": {
+      "available_commands_update": 1
+    }
+  },
+  "agentRequests": [],
+  "errors": [],
+  "notes": [],
+  "workspaces": {
+    "root": "$TMPDIR/acp2api-probe33",
+    "proc": "$TMPDIR/acp2api-probe33/proc-9YrALl"
+  },
+  "stop_p1": {
+    "code": 0,
+    "signal": null,
+    "t_ms": 34597.046,
+    "stoppedBy": "stdin-end"
+  },
+  "measurements": [
+    {
+      "turn": "E1 bad image",
+      "session": "E1",
+      "stopReason": "end_turn",
+      "error": null,
+      "updateKinds": [
+        "agent_message_chunk"
+      ],
+      "lateUpdates": 0,
+      "chunkCount": 1,
+      "chunkTexts": [
+        "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting"
+      ],
+      "lastChunkAt": 1551,
+      "resultAt": 1551.216,
+      "markers": {
+        "harnessModelError": {
+          "count": 1,
+          "firstAt": 1541.956,
+          "minusLastChunkMs": -9.044,
+          "minusResultMs": -9.26,
+          "logTime": "17:13:31.522936"
+        },
+        "harnessAgentRunFailed": {
+          "count": 1,
+          "firstAt": 1546.768,
+          "minusLastChunkMs": -4.232,
+          "minusResultMs": -4.448,
+          "logTime": "17:13:31.527770"
+        },
+        "sdkErrorForSession": {
+          "count": 1,
+          "firstAt": 1550.143,
+          "minusLastChunkMs": -0.857,
+          "minusResultMs": -1.073,
+          "logTime": "17:13:31.527889"
+        },
+        "connectionErrorLine": {
+          "count": 1,
+          "firstAt": 1550.797,
+          "minusLastChunkMs": -0.203,
+          "minusResultMs": -0.419,
+          "logTime": null
+        }
+      }
+    },
+    {
+      "turn": "E2 bad image",
+      "session": "E2",
+      "stopReason": "end_turn",
+      "error": null,
+      "updateKinds": [
+        "agent_message_chunk"
+      ],
+      "lateUpdates": 0,
+      "chunkCount": 1,
+      "chunkTexts": [
+        "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting"
+      ],
+      "lastChunkAt": 1539.796,
+      "resultAt": 1540.014,
+      "markers": {
+        "harnessModelError": {
+          "count": 1,
+          "firstAt": 1528.923,
+          "minusLastChunkMs": -10.873,
+          "minusResultMs": -11.091,
+          "logTime": "17:13:38.063744"
+        },
+        "harnessAgentRunFailed": {
+          "count": 1,
+          "firstAt": 1536.501,
+          "minusLastChunkMs": -3.295,
+          "minusResultMs": -3.513,
+          "logTime": "17:13:38.071438"
+        },
+        "sdkErrorForSession": {
+          "count": 1,
+          "firstAt": 1537.782,
+          "minusLastChunkMs": -2.014,
+          "minusResultMs": -2.232,
+          "logTime": "17:13:38.071812"
+        },
+        "connectionErrorLine": {
+          "count": 1,
+          "firstAt": 1539.365,
+          "minusLastChunkMs": -0.431,
+          "minusResultMs": -0.649,
+          "logTime": null
+        }
+      }
+    },
+    {
+      "turn": "E3 bad image",
+      "session": "E3",
+      "stopReason": "end_turn",
+      "error": null,
+      "updateKinds": [
+        "agent_message_chunk"
+      ],
+      "lateUpdates": 0,
+      "chunkCount": 1,
+      "chunkTexts": [
+        "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting"
+      ],
+      "lastChunkAt": 1346.321,
+      "resultAt": 1346.535,
+      "markers": {
+        "harnessModelError": {
+          "count": 1,
+          "firstAt": 1336.293,
+          "minusLastChunkMs": -10.028,
+          "minusResultMs": -10.242,
+          "logTime": "17:13:44.412793"
+        },
+        "harnessAgentRunFailed": {
+          "count": 1,
+          "firstAt": 1345.946,
+          "minusLastChunkMs": -0.375,
+          "minusResultMs": -0.589,
+          "logTime": "17:13:44.419950"
+        },
+        "sdkErrorForSession": {
+          "count": 1,
+          "firstAt": 1343.739,
+          "minusLastChunkMs": -2.582,
+          "minusResultMs": -2.796,
+          "logTime": "17:13:44.419452"
+        },
+        "connectionErrorLine": {
+          "count": 1,
+          "firstAt": 1345.705,
+          "minusLastChunkMs": -0.616,
+          "minusResultMs": -0.83,
+          "logTime": null
+        }
+      }
+    },
+    {
+      "turn": "E1 follow-up text",
+      "session": "E1",
+      "stopReason": "end_turn",
+      "error": null,
+      "updateKinds": [
+        "agent_message_chunk"
+      ],
+      "lateUpdates": 0,
+      "chunkCount": 1,
+      "chunkTexts": [
+        "Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting"
+      ],
+      "lastChunkAt": 2080.875,
+      "resultAt": 2081.112,
+      "markers": {
+        "harnessModelError": {
+          "count": 1,
+          "firstAt": 2057.445,
+          "minusLastChunkMs": -23.43,
+          "minusResultMs": -23.667,
+          "logTime": "17:13:51.483288"
+        },
+        "harnessAgentRunFailed": {
+          "count": 1,
+          "firstAt": 2080.355,
+          "minusLastChunkMs": -0.52,
+          "minusResultMs": -0.757,
+          "logTime": "17:13:51.491589"
+        },
+        "sdkErrorForSession": {
+          "count": 1,
+          "firstAt": 2064.644,
+          "minusLastChunkMs": -16.231,
+          "minusResultMs": -16.468,
+          "logTime": "17:13:51.488282"
+        },
+        "connectionErrorLine": {
+          "count": 1,
+          "firstAt": 2080.064,
+          "minusLastChunkMs": -0.811,
+          "minusResultMs": -1.048,
+          "logTime": null
+        }
+      }
+    }
+  ],
+  "mcp": {
+    "requests": 28,
+    "byMethod": {
+      "server/discover": 4,
+      "initialize": 4,
+      "notifications/initialized": 4,
+      "tools/list": 4
+    },
+    "toolCalls": 0
+  },
+  "guard": {
+    "trip": null,
+    "all": []
+  },
+  "budget": {
+    "approved": 4,
+    "sent": 4,
+    "approvedBy": "user, in chat, 2026-10-18: 4 个 (Recommended)",
+    "log": [
+      {
+        "n": 1,
+        "label": "E1 bad image",
+        "at": "2026-10-18T09:13:29.980Z"
+      },
+      {
+        "n": 2,
+        "label": "E2 bad image",
+        "at": "2026-10-18T09:13:36.534Z"
+      },
+      {
+        "n": 3,
+        "label": "E3 bad image",
+        "at": "2026-10-18T09:13:43.076Z"
+      },
+      {
+        "n": 4,
+        "label": "E1 follow-up text",
+        "at": "2026-10-18T09:13:49.425Z"
+      }
+    ]
+  },
+  "redactionCounts": {
+    "tmpdir": 4,
+    "home": 25
+  },
+  "stderrLines": 140
+}

@@ -1,0 +1,79 @@
+{
+  "phase": "a",
+  "startedAt": "2026-10-18T09:12:23.389Z",
+  "exe": "~/agy-acp-probe/server/1.4.0/extracted/agy_acp_server.par",
+  "init": {
+    "P1": {
+      "ms": 1463.5110000000002,
+      "agentInfo": {
+        "name": "antigravity-acp",
+        "title": "Google Antigravity",
+        "version": "1.4.0"
+      },
+      "protocolVersion": 1,
+      "authMethods": [
+        "oauth-personal",
+        "oauth-business",
+        "gemini-api-key",
+        "agent-platform"
+      ]
+    }
+  },
+  "sessions": {
+    "E1": {
+      "sessionId": "c32aa71c-9784-4a94-bb32-efe483f61238",
+      "ms": 4527.450000000001,
+      "models": [
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low"
+      ],
+      "tier": "g1-pro-tier",
+      "config": [
+        "model=gemini-3.8-flash",
+        "thinking_level=high",
+        "mode=default"
+      ]
+    }
+  },
+  "turns": [],
+  "outsideTurn": {
+    "P1:E1": {
+      "available_commands_update": 1
+    }
+  },
+  "agentRequests": [],
+  "errors": [],
+  "notes": [],
+  "workspaces": {
+    "root": "$TMPDIR/acp2api-probe33",
+    "proc": "$TMPDIR/acp2api-probe33/proc-cFI5l0"
+  },
+  "stop_p1": {
+    "code": 0,
+    "signal": null,
+    "t_ms": 6397.344,
+    "stoppedBy": "stdin-end"
+  },
+  "measurements": [],
+  "mcp": {
+    "requests": 0,
+    "byMethod": {},
+    "toolCalls": 0
+  },
+  "guard": {
+    "trip": null,
+    "all": []
+  },
+  "budget": {
+    "approved": 0,
+    "sent": 0,
+    "approvedBy": "phase a: no prompt",
+    "log": []
+  },
+  "redactionCounts": {
+    "tmpdir": 2,
+    "home": 6
+  },
+  "stderrLines": 21
+}
