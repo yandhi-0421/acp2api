@@ -13,6 +13,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
   - The record is the start of the conversation of the request.
   - After a prompt turn that ended with `end_turn`, the rest of the conversation is one or more user messages.
   - After a client tool call, the rest starts with the tool result of that call. Zero or more user messages follow it.
+  - In the two conditions above, a `system` or `developer` message after the system prompt counts as a user message.
   - The request has the same set of client tools.
   - The ACP session has no prompt turn that runs now.
 - **Choice.** When several ACP sessions match, acp2api uses the ACP session with the longest record. For records of the same length, it uses the ACP session that it used last.
@@ -42,6 +43,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - After a cut at a stop sequence, the ACP session holds text that the API client never got. An example is a line in the voice of the user. The input tokens must show the conversation of the request ([Which token usage does acp2api report to each API?](https://github.com/yandhi-0421/acp2api/issues/20), decision 6).
 - A wait for an ACP session gives no match. When its prompt turn ends, the ACP session holds one more reply.
 - The official runtime reads the tools of an MCP server at the first prompt turn of an ACP session (ADR-0002). In the captures of Claude Code 2.1.299, each main request had 29 client tools. Each other request to `/v1/messages` had one message, and no tool or only the server tool `web_search`. Thus it was a separate conversation.
+- Claude Code 2.1.299 puts a `role: "system"` message after the first user message and after each tool result. Each of its 15 main requests in the captures ended with such a message. Without the rule for `system` and `developer` messages, no request of Claude Code continues an ACP session.
 - `session/set_config_option` took 2 to 4 ms, and the official runtime changes the model at the next prompt turn.
 - `session/load` in a new runtime process continued an ACP session with the MCP server at a new URL.
 
@@ -51,6 +53,8 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - **Session hints as the key.** SillyTavern sends no hint, and a hint does not show an edit of an earlier message.
 - **`session/load` with a new MCP server, or `notifications/tools/list_changed`, for a new set of client tools.** No probe gave a different set of client tools to an ACP session. A later probe can make this path cheaper than a rebuild.
 - **No match change for a new system prompt, as in agy-bridge.** The model then sees an old system prompt. agy-bridge kept it only because its agent file could not change.
+- **Each `system` and `developer` message in the system prompt, as in agy-bridge.** Then the system prompt of Claude Code changes with each request, and each request does a rebuild.
+- **A rejection of each `system` message after the system prompt.** The Claude Code gateway guide says that Claude Code then stops such messages, but it does not give the error text that Claude Code recognizes. No source shows such a fallback for Codex or SillyTavern.
 - **Records in a file.** A file format is stored data, and each change of it needs a migration. A restart of acp2api is rare, and the gain is one rebuild for each conversation.
 - **A replay of each earlier user message as its own prompt.** The model answers each message again. The replies then differ from the conversation, and each one costs one model request.
 - **The earlier conversation in `_meta.antigravity.systemPrompt.append`.** That option is for instructions, and nobody knows its size limit. [How does the system prompt of a request reach the model?](https://github.com/yandhi-0421/acp2api/issues/23) decides its use.
@@ -62,4 +66,4 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - In SillyTavern, each regenerated reply, each edit, each cut at a stop sequence, and each change of the system prompt causes a rebuild. A macro such as `{{time}}` or a world info entry can change the system prompt.
 - The records hold no text. Thus acp2api cannot do a rebuild from `previous_response_id`, `item_reference`, or `conversation`, and it keeps their rejection.
 
-Evidence: the grilling of [Which ACP session does acp2api use for each API request?](https://github.com/yandhi-0421/acp2api/issues/10); F3, F6, F8, F9, and F12 of [Probe the official runtime on macOS with a test MCP server and an empty `cwd`](https://github.com/yandhi-0421/acp2api/issues/8); W3 of [Probe the official runtime on Windows 11 ARM in a VM](https://github.com/yandhi-0421/acp2api/issues/16); `docs/research/captures/2026-10-17-claude-code-check/runs.json`, runs `p7-tui` and `p10-tui-search`; and the agy-bridge note, section 3.3 ([link](https://github.com/yandhi-0421/agy-bridge/blob/cc55e4bcd8874357eaa1efbc6bd50c040d888fc2/docs/research/2026-10-15-antigravity-acp-server-engine.md)).
+Evidence: the grilling of [Which ACP session does acp2api use for each API request?](https://github.com/yandhi-0421/acp2api/issues/10); the grilling of [How does the system prompt of a request reach the model?](https://github.com/yandhi-0421/acp2api/issues/23), for the `system` and `developer` messages; F3, F6, F8, F9, and F12 of [Probe the official runtime on macOS with a test MCP server and an empty `cwd`](https://github.com/yandhi-0421/acp2api/issues/8); W3 of [Probe the official runtime on Windows 11 ARM in a VM](https://github.com/yandhi-0421/acp2api/issues/16); `docs/research/captures/2026-10-17-claude-code-check/runs.json`, runs `p7-tui` and `p10-tui-search`, and the last role of each main request; `blocks.json` in the same directory, `messageRolesAfterPdfRead`; and the agy-bridge note, section 3.3 ([link](https://github.com/yandhi-0421/agy-bridge/blob/cc55e4bcd8874357eaa1efbc6bd50c040d888fc2/docs/research/2026-10-15-antigravity-acp-server-engine.md)).
