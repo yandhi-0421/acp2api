@@ -93,12 +93,14 @@ The setup skill `/workflow-setup` writes the text between the two markers. Its n
 | Term | Chinese term | Definition | Avoid |
 |---|---|---|---|
 | API client | API 客户端 | A program that sends requests to acp2api through the OpenAI Chat Completions API, the OpenAI Responses API, or the Anthropic Messages API. Examples are Claude Code, Codex, and SillyTavern. | harness (not each API client is a harness), client (alone, because in ACP acp2api is the Client) |
+| conversation | 对话 | The system prompt and the messages that an API client sends in one request, with the tool calls and the tool results in them. Each request carries the full conversation. | chat, thread, message list, session (an ACP session is a different thing) |
 | official runtime | 官方运行时 | The executable that Google publishes for Antigravity and that speaks ACP (Agent Client Protocol): the Antigravity ACP server, `agy_acp_server`. acp2api is its ACP Client. | runtime (alone), Antigravity (alone), agent, backend, `agy` (the Antigravity CLI, which has no ACP mode) |
 | client tool | 客户端工具 | A tool that an API client declares in a request and executes itself. | harness tool, external tool |
 | built-in tool | 内置工具 | A tool that the official runtime has and executes itself, for example a file edit, a terminal command, or a web search. | Antigravity tool, native tool, agent tool |
 | server tool | 服务端工具 | A tool that the provider of an API executes on its own servers, when a request to that API declares it. Examples are `web_search_20250305` of the Anthropic Messages API and the hosted `web_search` of the OpenAI Responses API. | hosted tool, server-side tool, built-in tool (a tool of the official runtime) |
 | cancel at permission | 权限处取消 | The method in which acp2api cancels the prompt turn at the permission request of a client tool, and returns the tool call to the API client. The tool result then goes to the model as text in a later prompt. | held call (a different method), cancel and text result |
 | tool filter | 工具过滤 | The undocumented option `_meta.antigravity.enabledTools` of an ACP session of the official runtime. It limits the built-in tools that the model of the session can use. | tool lock, tool allowlist |
+| rebuild | 重建 | The start of a new ACP session whose first prompt holds the earlier part of a conversation as text. A new ACP session for a conversation with no earlier part is not a rebuild. | replay (`session/load` replays the history of an ACP session), reset, fork |
 | local API key | 本地 API 密钥 | The secret that an API client sends to acp2api with each request, so that acp2api accepts the request. | API key (alone, because the official runtime also signs in with a Google API key), token |
 | management panel | 管理面板 | The web page of acp2api on 127.0.0.1 where the user sees the state of acp2api and changes its settings. | dashboard, admin page, web UI, console |
 | management password | 管理密码 | The secret that the user enters to open the management panel and to change the state or the settings of acp2api. | admin password, panel key, secret key, local API key (a different secret) |
@@ -113,6 +115,7 @@ The project approves these names as exceptions to ASD-STE100. This section gives
 
 | Name | Chinese term | Source | Avoid |
 |---|---|---|---|
+| ACP session | ACP 会话 | ACP specification, `docs/protocol/v1/session-setup.mdx` in `agentclientprotocol/agent-client-protocol` | session (alone), Cascade (the word of agy-bridge for a conversation of its engine), conversation (the messages of one request) |
 | DNS rebinding | DNS 重绑定 | C. Jackson, A. Barth, A. Bortz, W. Shao, and D. Boneh, "Protecting Browsers from DNS Rebinding Attacks", ACM CCS 2007 | DNS rebind attack |
 | permission request | 权限请求 | ACP specification, `docs/protocol/v1/tool-calls.mdx`, section "Requesting Permission" (`session/request_permission`), in `agentclientprotocol/agent-client-protocol` | permission prompt, approval request |
 | prompt turn | prompt 轮次 | ACP specification, `docs/protocol/v1/prompt-turn.mdx` in `agentclientprotocol/agent-client-protocol` | turn (alone) |
