@@ -97,6 +97,8 @@ The setup skill `/workflow-setup` writes the text between the two markers. Its n
 | client tool | 客户端工具 | A tool that an API client declares in a request and executes itself. | harness tool, external tool |
 | built-in tool | 内置工具 | A tool that the official runtime has and executes itself, for example a file edit, a terminal command, or a web search. | Antigravity tool, native tool, agent tool |
 | server tool | 服务端工具 | A tool that the provider of an API executes on its own servers, when a request to that API declares it. Examples are `web_search_20250305` of the Anthropic Messages API and the hosted `web_search` of the OpenAI Responses API. | hosted tool, server-side tool, built-in tool (a tool of the official runtime) |
+| cancel at permission | 权限处取消 | The method in which acp2api cancels the prompt turn at the permission request of a client tool, and returns the tool call to the API client. The tool result then goes to the model as text in a later prompt. | held call (a different method), cancel and text result |
+| tool filter | 工具过滤 | The undocumented option `_meta.antigravity.enabledTools` of an ACP session of the official runtime. It limits the built-in tools that the model of the session can use. | tool lock, tool allowlist |
 | local API key | 本地 API 密钥 | The secret that an API client sends to acp2api with each request, so that acp2api accepts the request. | API key (alone, because the official runtime also signs in with a Google API key), token |
 | management panel | 管理面板 | The web page of acp2api on 127.0.0.1 where the user sees the state of acp2api and changes its settings. | dashboard, admin page, web UI, console |
 | management password | 管理密码 | The secret that the user enters to open the management panel and to change the state or the settings of acp2api. | admin password, panel key, secret key, local API key (a different secret) |
@@ -112,4 +114,6 @@ The project approves these names as exceptions to ASD-STE100. This section gives
 | Name | Chinese term | Source | Avoid |
 |---|---|---|---|
 | DNS rebinding | DNS 重绑定 | C. Jackson, A. Barth, A. Bortz, W. Shao, and D. Boneh, "Protecting Browsers from DNS Rebinding Attacks", ACM CCS 2007 | DNS rebind attack |
+| permission request | 权限请求 | ACP specification, `docs/protocol/v1/tool-calls.mdx`, section "Requesting Permission" (`session/request_permission`), in `agentclientprotocol/agent-client-protocol` | permission prompt, approval request |
+| prompt turn | prompt 轮次 | ACP specification, `docs/protocol/v1/prompt-turn.mdx` in `agentclientprotocol/agent-client-protocol` | turn (alone) |
 | slash command | 斜杠命令 | ACP specification, `docs/protocol/v1/slash-commands.mdx` in `agentclientprotocol/agent-client-protocol` | command (alone) |
