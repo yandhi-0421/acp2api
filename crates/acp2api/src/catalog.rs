@@ -4,7 +4,7 @@ use agent_client_protocol_schema::v1::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, time::SystemTime};
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct ModelEntry {
     id: String,
     object: &'static str,
@@ -15,7 +15,16 @@ pub(crate) struct ModelEntry {
     owned_by: &'static str,
 }
 #[derive(Default)]
-pub(crate) struct Catalog(Vec<ModelEntry>);
+pub(crate) struct Catalog {
+    models: Vec<OfferedModel>,
+    created: u64,
+    created_at: String,
+}
+struct OfferedModel {
+    value: String,
+    name: String,
+    levels: Vec<String>,
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Metadata {
@@ -64,41 +73,66 @@ impl Catalog {
             if base.is_empty() || model.name.is_empty() {
                 return Err("ACP session/new has an empty model value or display name".into());
             }
-            let names = std::iter::once(base.clone()).chain(
-                levels
+            if seen.insert(base.clone()) {
+                let mut seen_levels = HashSet::new();
+                let supported = levels
                     .iter()
-                    .map(|level| format!("{base}-{}", level.value))
-                    .filter(|id| available.contains(id) && !bases.contains(id)),
-            );
-            for id in names {
-                if seen.insert(id.clone()) {
-                    entries.push(ModelEntry {
-                        id,
-                        object: "model",
-                        r#type: "model",
-                        display_name: model.name.clone(),
-                        created,
-                        created_at: created_at.clone(),
-                        owned_by: "google",
-                    });
-                }
+                    .map(|level| level.value.to_string())
+                    .filter(|level| {
+                        let id = format!("{base}-{level}");
+                        available.contains(&id)
+                            && !bases.contains(&id)
+                            && seen_levels.insert(level.clone())
+                    })
+                    .collect();
+                entries.push(OfferedModel {
+                    value: base,
+                    name: model.name.clone(),
+                    levels: supported,
+                });
             }
         }
         if entries.is_empty() {
             return Err("ACP session/new has no model values".into());
         }
-        Ok(Self(entries))
+        Ok(Self {
+            models: entries,
+            created,
+            created_at,
+        })
+    }
+    fn names(&self) -> impl Iterator<Item = (String, &str)> {
+        self.models.iter().flat_map(|model| {
+            std::iter::once(model.value.clone())
+                .chain(
+                    model
+                        .levels
+                        .iter()
+                        .map(|level| format!("{}-{level}", model.value)),
+                )
+                .map(|id| (id, model.name.as_str()))
+        })
     }
     pub(crate) fn entries(&self) -> Vec<ModelEntry> {
-        self.0.clone()
+        self.names()
+            .map(|(id, name)| ModelEntry {
+                id,
+                object: "model",
+                r#type: "model",
+                display_name: name.into(),
+                created: self.created,
+                created_at: self.created_at.clone(),
+                owned_by: "google",
+            })
+            .collect()
     }
     pub(crate) fn check(&self, requested: &str) -> Result<(), crate::messages::Refusal> {
-        if self.0.iter().any(|entry| entry.id == requested) {
+        if self.names().any(|(id, _)| id == requested) {
             Ok(())
         } else {
             Err(crate::messages::Message::Model {
                 requested: requested.into(),
-                names: self.0.iter().map(|e| e.id.clone()).collect(),
+                names: self.names().map(|(id, _)| id).collect(),
             }
             .into())
         }

@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Clone)]
 pub(crate) struct Conductor(mpsc::Sender<Work>);
 enum Work {
-    Turn(TurnWork),
+    Turn(Box<TurnWork>),
     Models {
         reply: oneshot::Sender<Vec<crate::catalog::ModelEntry>>,
         hold: Hold,
@@ -293,7 +293,7 @@ impl Conductor {
                                 drop(hold);
                                 continue;
                             }
-                            Work::Turn(work) => work,
+                            Work::Turn(work) => *work,
                         };
                         if let Err(error) = core.catalog.check(&work.turn.model) {
                             let _ = work.admission.send(Err(error));
@@ -397,12 +397,12 @@ impl Conductor {
     ) -> Result<Ticket, crate::messages::Refusal> {
         let (admission, reply) = oneshot::channel();
         self.0
-            .send(Work::Turn(TurnWork {
+            .send(Work::Turn(Box::new(TurnWork {
                 turn,
                 request,
                 hold,
                 admission,
-            }))
+            })))
             .await
             .map_err(|_| {
                 crate::messages::Refusal::from(crate::messages::Message::Upstream(
