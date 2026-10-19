@@ -65,6 +65,12 @@ pub(crate) async fn start(
         &data.join("config.toml"),
         ports.release.highest_concurrency_limit(),
     )?;
+    if let Some(key) = opened.new_key {
+        println!("acp2api: local API key: {key}");
+    }
+    if let Some(password) = opened.new_password {
+        println!("acp2api: management password: {password}");
+    }
     let settings = opened.settings;
     let port = options.port.unwrap_or(settings.port);
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
@@ -120,12 +126,6 @@ pub(crate) async fn start(
         settings.local_api_key,
         secret,
     );
-    if let Some(key) = opened.new_key {
-        println!("acp2api: local API key: {key}");
-    }
-    if let Some(password) = opened.new_password {
-        println!("acp2api: management password: {password}");
-    }
     if opened.first_start {
         ports.browser.open(&panel);
     }
