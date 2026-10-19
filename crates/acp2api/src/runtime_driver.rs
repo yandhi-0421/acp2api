@@ -142,6 +142,9 @@ impl Runtime {
             .await?;
         Ok(id)
     }
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session
+    }
     async fn write(&mut self, value: Value) -> Result<(), String> {
         let mut bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
         bytes.push(b'\n');

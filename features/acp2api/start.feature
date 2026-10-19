@@ -17,7 +17,7 @@ Feature: Start of acp2api
     Then the terminal shows the address of the management panel on the port 8329
     And the browser can open the management panel at that address
 
-  @FR-002 @issue-42 @wip
+  @FR-002 @issue-42
   Scenario: The terminal shows one line for each request
     Given acp2api is in the normal state
     When an API client sends 3 requests with the model name "gemini-3.8-flash"

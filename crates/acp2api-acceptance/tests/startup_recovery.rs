@@ -131,7 +131,16 @@ async fn occupied_first_start_then_retry_delivers_the_saved_credentials() {
         std::fs::read(startup.config_path()).unwrap() == saved_after_failure,
         "retry must preserve valid saved credentials (values withheld)"
     );
-    let log = std::fs::read_to_string(startup.data.join("logs/acp2api.log")).unwrap();
+    let log_files: Vec<_> = std::fs::read_dir(startup.data.join("logs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "log"))
+        .collect();
+    assert!(!log_files.is_empty(), "startup opens the production log");
+    let log: String = log_files
+        .into_iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
     for line in terminal.lines() {
         for prefix in ["acp2api: local API key: ", "acp2api: management password: "] {
             if let Some(value) = line.strip_prefix(prefix) {

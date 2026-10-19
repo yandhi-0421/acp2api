@@ -161,7 +161,16 @@ async fn startup_round_trip_with_fresh_inputs() {
     );
     let urls = s.browser_urls();
     assert_eq!(urls, vec![format!("http://127.0.0.1:{port}/")]);
-    let log = std::fs::read_to_string(s.data.join("logs/acp2api.log")).unwrap();
+    let log_files: Vec<_> = std::fs::read_dir(s.data.join("logs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "log"))
+        .collect();
+    assert!(!log_files.is_empty(), "startup opens the production log");
+    let log: String = log_files
+        .into_iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
     assert!(
         !log.contains(key) && !log.contains(password),
         "log must exclude generated secrets"

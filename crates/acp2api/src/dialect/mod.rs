@@ -21,6 +21,7 @@ pub(crate) static CHAT: &dyn Dialect = &chat::Chat;
 pub(crate) struct Parsed {
     pub turn: TurnRequest,
     pub form: ReplyForm,
+    pub unknown_fields: Vec<String>,
 }
 pub(crate) trait Dialect: Sync {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
@@ -35,19 +36,7 @@ pub(crate) trait Dialect: Sync {
 trait WireDialect: Sync {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
     fn refusal_body(&self, refusal: &Refusal) -> Value {
-        let code = match refusal.message {
-            Message::Field(_) => "unsupported_parameter",
-            Message::Content(_) => "unsupported_content_type",
-            Message::Media(_) => "unsupported_media_type",
-            Message::Url(_) => "unsupported_url",
-            Message::Pdf(_) => "unsupported_pdf",
-            Message::Prefill => "unsupported_prefill",
-            Message::ToolSearch => "unsupported_tool",
-            Message::ToolName(_) => "unsupported_tool_name",
-            Message::Invalid(_) => "invalid_request_error",
-            Message::Key => "invalid_api_key",
-            Message::Upstream(_) => "upstream_error",
-        };
+        let code = refusal_code(refusal);
         json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
     }
     fn prefix(&self) -> &'static str;
@@ -221,6 +210,7 @@ fn data(value: Value) -> Event {
 }
 fn parsed(model: String, conversation: crate::conversation::Conversation, stream: bool) -> Parsed {
     Parsed {
+        unknown_fields: Vec::new(),
         turn: TurnRequest {
             model: model.clone(),
             conversation,
@@ -240,5 +230,21 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
         Row::Key => StatusCode::UNAUTHORIZED,
         Row::Rejected => StatusCode::BAD_REQUEST,
         Row::Other502 => StatusCode::BAD_GATEWAY,
+    }
+}
+
+pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
+    match refusal.message {
+        Message::Field(_) => "unsupported_parameter",
+        Message::Content(_) => "unsupported_content_type",
+        Message::Media(_) => "unsupported_media_type",
+        Message::Url(_) => "unsupported_url",
+        Message::Pdf(_) => "unsupported_pdf",
+        Message::Prefill => "unsupported_prefill",
+        Message::ToolSearch => "unsupported_tool",
+        Message::ToolName(_) => "unsupported_tool_name",
+        Message::Invalid(_) => "invalid_request_error",
+        Message::Key => "invalid_api_key",
+        Message::Upstream(_) => "upstream_error",
     }
 }
