@@ -497,6 +497,34 @@ impl tokio::io::AsyncWrite for CountSocket {
         std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
+struct ObservedBody<'a> {
+    inner: &'a mut hyper::body::Incoming,
+    hub: &'a Hub,
+    id: u64,
+}
+impl hyper::body::Body for ObservedBody<'_> {
+    type Data = Bytes;
+    type Error = hyper::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, hyper::Error>>> {
+        let this = self.get_mut();
+        let read = this.hub.shared.0.lock().unwrap().client_sockets[&this.id].read;
+        let frame = std::pin::Pin::new(&mut *this.inner).poll_frame(cx);
+        if frame.is_pending() {
+            // Acknowledge the head after buffered frames drain, excluding later reads.
+            let mut s = this.hub.shared.0.lock().unwrap();
+            if let Some(socket) = s.client_sockets.get_mut(&this.id) {
+                socket.consumed = read;
+            }
+            this.hub.shared.1.notify_all();
+        }
+        frame
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,33 +633,5 @@ second"
             server.await.unwrap();
             hub.close();
         }
-    }
-}
-
-struct ObservedBody<'a> {
-    inner: &'a mut hyper::body::Incoming,
-    hub: &'a Hub,
-    id: u64,
-}
-impl hyper::body::Body for ObservedBody<'_> {
-    type Data = Bytes;
-    type Error = hyper::Error;
-
-    fn poll_frame(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, hyper::Error>>> {
-        let this = self.get_mut();
-        let read = this.hub.shared.0.lock().unwrap().client_sockets[&this.id].read;
-        let frame = std::pin::Pin::new(&mut *this.inner).poll_frame(cx);
-        if frame.is_pending() {
-            // Acknowledge the head after buffered frames drain, excluding later reads.
-            let mut s = this.hub.shared.0.lock().unwrap();
-            if let Some(socket) = s.client_sockets.get_mut(&this.id) {
-                socket.consumed = read;
-            }
-            this.hub.shared.1.notify_all();
-        }
-        frame
     }
 }
