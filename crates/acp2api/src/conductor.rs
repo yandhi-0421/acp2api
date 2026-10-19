@@ -33,20 +33,28 @@ enum Phase {
 struct Core {
     active: Option<Active>,
     waiting: VecDeque<Accepted>,
-    session_tools: Option<Vec<crate::conversation::ClientTool>>,
+    session: Option<Session>,
+}
+#[derive(PartialEq, Eq)]
+struct Session {
+    tools: Vec<crate::conversation::ClientTool>,
+    system: Option<String>,
 }
 impl Default for Core {
     fn default() -> Self {
         Self {
             active: None,
             waiting: VecDeque::new(),
-            session_tools: Some(Vec::new()),
+            session: Some(Session {
+                tools: Vec::new(),
+                system: None,
+            }),
         }
     }
 }
 enum SessionPlan {
     Current,
-    New(Vec<crate::conversation::ClientTool>),
+    New(Session),
 }
 enum Event {
     Accepted(Accepted),
@@ -77,11 +85,11 @@ impl Core {
         match event {
             Event::Accepted(request) => self.waiting.push_back(request),
             Event::Runtime(RuntimeEvent::Failed(error)) => {
-                self.session_tools = None;
+                self.session = None;
                 self.finish(Err(error), &mut commands);
             }
             Event::Runtime(RuntimeEvent::Closed) => {
-                self.session_tools = None;
+                self.session = None;
                 self.finish(Err("runtime stdout closed".into()), &mut commands)
             }
             Event::Runtime(RuntimeEvent::Text(text)) => {
@@ -138,15 +146,24 @@ impl Core {
             && let Some(request) = self.waiting.pop_front()
         {
             let prompt = crate::conversation::prompt(&request.turn);
+            let system =
+                crate::conversation::system_prompt_addition(&request.turn.conversation.system);
             let tools = match request.turn.tool_choice {
                 crate::conversation::ToolChoice::Off => Vec::new(),
                 crate::conversation::ToolChoice::Auto => request.turn.tools,
             };
-            let session = if self.session_tools.as_ref() == Some(&tools) {
+            let requested = Session {
+                tools: tools.clone(),
+                system,
+            };
+            let session = if self.session.as_ref() == Some(&requested) {
                 SessionPlan::Current
             } else {
-                self.session_tools = Some(tools.clone());
-                SessionPlan::New(tools.clone())
+                self.session = Some(Session {
+                    tools: requested.tools.clone(),
+                    system: requested.system.clone(),
+                });
+                SessionPlan::New(requested)
             };
             self.active = Some(Active {
                 output: request.output,
@@ -223,8 +240,13 @@ impl Conductor {
                                 Some(runtime) => {
                                     let prepared = match session {
                                         SessionPlan::Current => Ok(()),
-                                        SessionPlan::New(tools) => {
-                                            runtime.new_session(&tools).await
+                                        SessionPlan::New(session) => {
+                                            runtime
+                                                .new_session(
+                                                    &session.tools,
+                                                    session.system.as_deref(),
+                                                )
+                                                .await
                                         }
                                     };
                                     match prepared {

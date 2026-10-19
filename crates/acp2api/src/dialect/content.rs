@@ -1,6 +1,6 @@
 use super::{Parsed, parsed};
 use crate::{
-    conversation::{Conversation, Item, Part, Role},
+    conversation::{Conversation, Item, Part, Role, SystemPart},
     messages::{Message, Refusal},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -21,6 +21,16 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         "messages"
     }];
     let mut items = Vec::new();
+    let mut system = Vec::new();
+    if matches!(api, Api::Messages)
+        && let Some(text) = value["system"].as_str()
+    {
+        system.push(SystemPart {
+            role: Role::System,
+            name: None,
+            text: text.into(),
+        });
+    }
     if matches!(api, Api::Responses) && input.is_string() {
         items.push(Item::Message {
             role: Role::User,
@@ -61,6 +71,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let mut parsed = parsed(
         model,
         Conversation {
+            system,
             earlier: items,
             last,
         },
