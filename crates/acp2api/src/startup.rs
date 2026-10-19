@@ -67,7 +67,15 @@ pub(crate) async fn start(
     )?;
     let settings = opened.settings;
     let port = options.port.unwrap_or(settings.port);
-    let listener=tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,port)).await.map_err(|error|if error.kind()==io::ErrorKind::AddrInUse{format!("the port {port} is in use. Set another port in the configuration file or with --port.")}else{format!("cannot listen on port {port}: {error}")})?;
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+        .await
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::AddrInUse {
+                format!("the port {port} is in use. Set another port in the configuration file or with --port.")
+            } else {
+                format!("cannot listen on port {port}: {error}")
+            }
+        })?;
     let panel = format!("http://127.0.0.1:{port}/");
     let start_line = format!(
         "acp2api: {}: management panel at {panel}",
