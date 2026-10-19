@@ -4,7 +4,7 @@ Feature: Start of acp2api
   The terminal shows the address of the management panel, one line for each request, and one line for each change of state.
   In a quoted message, a value in angle brackets is a value that acp2api fills in, as the section "Message texts" of the PRD gives.
 
-  @FR-002 @issue-37 @wip
+  @FR-002 @issue-37
   Scenario: The help text lists only the four options
     When the owner runs "acp2api --help"
     Then the help text lists the options "--port", "--data-dir", "--version", and "--help"
@@ -40,13 +40,13 @@ Feature: Start of acp2api
     And the management password from the terminal opens the management panel
     And the configuration file holds only the hash of that management password
 
-  @FR-005 @issue-37 @wip
+  @FR-005 @issue-37
   Scenario: A first start opens the management panel in the browser
     Given the data folder "D" is empty
     When the owner starts acp2api with the data folder "D"
     Then the browser opens the address of the management panel
 
-  @FR-005 @issue-37 @wip
+  @FR-005 @issue-37
   Scenario: Two first starts make different secrets
     Given the data folders "D1" and "D2" are empty
     When the owner does a first start with the data folder "D1" and then a first start with the data folder "D2"
