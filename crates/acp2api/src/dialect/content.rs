@@ -25,12 +25,20 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     if matches!(api, Api::Messages) && !value["system"].is_null() {
         system = system_parts(Role::System, None, &value["system"], "text")?;
     }
+    if matches!(api, Api::Responses) && !value["instructions"].is_null() {
+        system.push(SystemPart {
+            role: Role::System,
+            name: None,
+            text: required(&value, "instructions")?.into(),
+        });
+    }
     if matches!(api, Api::Responses) && input.is_string() {
         items.push(Item::Message {
             role: Role::User,
             parts: vec![Part::Text(input.as_str().unwrap().into())],
         });
     } else {
+        let mut at_start = true;
         for item in input
             .as_array()
             .ok_or_else(|| Refusal::invalid("message array required"))?
@@ -46,8 +54,25 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 "developer" => Role::Developer,
                 _ => return Err(Refusal::invalid("unsupported message role")),
             };
-            let parts = parts(api, &item["content"])?;
-            items.push(Item::Message { role, parts });
+            if !matches!(api, Api::Messages)
+                && at_start
+                && matches!(role, Role::System | Role::Developer)
+            {
+                system.extend(system_parts(
+                    role,
+                    item["name"].as_str(),
+                    &item["content"],
+                    if matches!(api, Api::Responses) {
+                        "input_text"
+                    } else {
+                        "text"
+                    },
+                )?);
+            } else {
+                at_start = false;
+                let parts = parts(api, &item["content"])?;
+                items.push(Item::Message { role, parts });
+            }
         }
     }
     let last = items
