@@ -280,17 +280,19 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                     .map(|m| json!({"value":m.value,"name":m.name}))
                     .collect();
                 let available: Vec<_> = catalog.iter().flat_map(|m| m.levels.iter().map(|level| json!({"modelId":format!("{}-{level}",m.value),"name":format!("{} ({level})",m.name)}))).collect();
-                let levels: std::collections::BTreeSet<_> = catalog
-                    .iter()
-                    .flat_map(|m| m.levels.iter().cloned())
-                    .collect();
-                let levels: Vec<_> = levels.iter().map(|v| json!({"value":v,"name":v})).collect();
                 let first = catalog.first().expect("non-empty fake model catalog");
-                let current = available
-                    .first()
-                    .map(|v| v["modelId"].clone())
-                    .unwrap_or(json!(first.value));
-                let metadata = json!({"sessionId":session,"models":{"currentModelId":current,"availableModels":available},"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":first.value,"options":options},{"id":"thinking_level","name":"Thinking Level","type":"select","currentValue":"high","options":levels}]});
+                let level = first.levels.last().map(String::as_str).unwrap_or("high");
+                let levels: Vec<_> = first
+                    .levels
+                    .iter()
+                    .map(|v| json!({"value":v,"name":v}))
+                    .collect();
+                let current = if first.levels.is_empty() {
+                    first.value.clone()
+                } else {
+                    format!("{}-{level}", first.value)
+                };
+                let metadata = json!({"sessionId":session,"models":{"currentModelId":current,"availableModels":available},"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":first.value,"options":options},{"id":"thinking_level","name":"Thinking Level","type":"select","currentValue":level,"options":levels}]});
                 if matches!(s.fake.session_result, SessionResult::Held) {
                     s.fake.session_result = SessionResult::Pending {
                         label: label.into(),
