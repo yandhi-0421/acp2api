@@ -41,7 +41,7 @@ impl Responses {
         json!({"id":w.id,"object":"response","created_at":w.created,"status":if answer.is_some(){"completed"}else{"in_progress"},"error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"model":w.model,"output":answer.map(|a|vec![self.item(w,Some(&a.text))]).unwrap_or_default(),"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":false,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":answer.map(|a|json!({"input_tokens":a.input_tokens,"input_tokens_details":{"cached_tokens":0},"output_tokens":a.output_tokens,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":a.input_tokens+a.output_tokens})),"user":null,"metadata":{}})
     }
 }
-impl Dialect for Responses {
+impl WireDialect for Responses {
     fn parse(&self, body: &[u8]) -> Result<Parsed, String> {
         let request: Request = serde_json::from_slice(body).map_err(|e| e.to_string())?;
         let text = match request.input {

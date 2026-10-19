@@ -22,11 +22,26 @@ pub(crate) struct Parsed {
 }
 pub(crate) trait Dialect: Sync {
     fn parse(&self, body: &[u8]) -> Result<Parsed, String>;
+    fn refusal(&self, status: axum::http::StatusCode, message: &str) -> Response;
+    fn respond(
+        &'static self,
+        form: ReplyForm,
+        ticket: Ticket,
+        clock: Arc<dyn Clock>,
+    ) -> BoxFuture<'static, Response>;
+}
+trait WireDialect: Sync {
+    fn parse(&self, body: &[u8]) -> Result<Parsed, String>;
     fn prefix(&self) -> &'static str;
     fn body(&self, wire: &Encoding, answer: &Answer) -> Value;
     fn start(&self, wire: &mut Encoding) -> Vec<Event>;
     fn text(&self, wire: &mut Encoding, text: &str) -> Vec<Event>;
     fn end(&self, wire: &mut Encoding, answer: &Answer) -> Vec<Event>;
+}
+impl<T: WireDialect + 'static> Dialect for T {
+    fn parse(&self, body: &[u8]) -> Result<Parsed, String> {
+        WireDialect::parse(self, body)
+    }
     fn refusal(&self, status: axum::http::StatusCode, message: &str) -> Response {
         (
             status,
@@ -121,7 +136,7 @@ struct StreamState {
     hold: Option<Hold>,
     ended: bool,
 }
-pub(crate) struct Encoding {
+struct Encoding {
     id: String,
     item_id: String,
     model: String,

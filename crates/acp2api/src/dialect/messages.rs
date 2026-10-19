@@ -13,7 +13,7 @@ struct Message {
     role: String,
     content: String,
 }
-impl Dialect for Messages {
+impl WireDialect for Messages {
     fn parse(&self, body: &[u8]) -> Result<Parsed, String> {
         let request: Request = serde_json::from_slice(body).map_err(|e| e.to_string())?;
         let [message]: [Message; 1] = request
