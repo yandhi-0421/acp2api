@@ -8,14 +8,18 @@ impl Responses {
         json!({"id":w.item_id,"type":"message","status":if text.is_some(){"completed"}else{"in_progress"},"role":"assistant","content":text.map(|t|vec![self.part(t)]).unwrap_or_default()})
     }
     fn call(&self, w: &Encoding, call: &crate::conversation::ToolCall, completed: bool) -> Value {
-        match call.kind {
+        let mut item = match call.kind {
             crate::conversation::ToolKind::Function => {
                 json!({"id":w.call_item_id,"type":"function_call","call_id":w.call_id,"name":call.name,"arguments":if completed{&call.arguments}else{""},"status":if completed{"completed"}else{"in_progress"}})
             }
             crate::conversation::ToolKind::Custom => {
                 json!({"id":w.call_item_id,"type":"custom_tool_call","call_id":w.call_id,"name":call.name,"input":if completed{&call.arguments}else{""}})
             }
+        };
+        if let Some(namespace) = &call.namespace {
+            item["namespace"] = json!(namespace);
         }
+        item
     }
     fn output(&self, w: &Encoding, a: &Answer) -> Vec<Value> {
         let mut output = Vec::new();

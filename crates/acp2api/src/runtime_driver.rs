@@ -251,7 +251,7 @@ impl Runtime {
                 }
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
-                let tool = self.tools.iter().find(|tool| tool.name == name)?;
+                let tool = self.tools.iter().find(|tool| tool.mcp_name() == name)?;
                 let input = request
                     .tool_call
                     .fields
@@ -267,6 +267,7 @@ impl Runtime {
                 Some(crate::conversation::ToolCall {
                     name: tool.name.clone(),
                     kind: tool.kind,
+                    namespace: tool.namespace.clone(),
                     arguments,
                 })
             })();

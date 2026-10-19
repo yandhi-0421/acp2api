@@ -43,24 +43,24 @@ Feature: Client tools
     Then the prompt turn of "C2" starts at once
     And the official runtime got a cancel of the prompt turn of "C1"
 
-  @FR-022 @issue-46 @wip
+  @FR-022 @issue-46
   Scenario: A custom tool of Codex goes to the model as a tool with one string argument
     When Codex sends a request to "POST /v1/responses" with the custom tool "apply_patch" with a grammar
     Then the official runtime offers the model the tool "apply_patch" with one string argument "input"
     And the description of that tool holds the grammar
 
-  @FR-022 @issue-46 @wip
+  @FR-022 @issue-46
   Scenario: A model call of a custom tool gives a custom_tool_call item
     Given Codex sent a request with the custom tool "apply_patch"
     When the model calls "apply_patch" with the input "*** Begin Patch"
     Then the response has a "custom_tool_call" item for "apply_patch" with the input "*** Begin Patch"
 
-  @FR-022 @issue-46 @wip
+  @FR-022 @issue-46
   Scenario: Each tool of a namespace tool goes to the model as one tool
     When Codex sends a request to "POST /v1/responses" with the namespace tool "files" that holds the tools "read" and "write"
     Then the official runtime offers the model two tools, one for "read" and one for "write"
 
-  @FR-022 @issue-46 @wip
+  @FR-022 @issue-46
   Scenario: acp2api returns the namespace in the function_call
     Given Codex sent a request with the namespace tool "files" that holds the tool "read"
     When the model calls the tool for "read"
