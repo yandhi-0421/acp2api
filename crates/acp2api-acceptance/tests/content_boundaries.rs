@@ -215,3 +215,18 @@ async fn content_parent_lever() {
     println!("Sink requests: 1 positive control; 0 URL fetches");
     s.finish(true).await;
 }
+
+#[tokio::test]
+async fn unsupported_media_type_envelope_in_all_dialects() {
+    for endpoint in ENDPOINTS {
+        rejected(
+            endpoint,
+            c::document(endpoint, "text/csv", None),
+            "acp2api: the media type text/csv is not supported.",
+            "unsupported_media_type",
+            None,
+            false,
+        )
+        .await;
+    }
+}
