@@ -7,6 +7,8 @@ pub(crate) enum Message {
     Url(String),
     Pdf(String),
     Prefill,
+    ToolSearch,
+    ToolName(String),
     Invalid(String),
     Key,
     Upstream(String),
@@ -37,6 +39,8 @@ impl Refusal {
             | Message::Media(_)
             | Message::Url(_)
             | Message::Pdf(_)
+            | Message::ToolSearch
+            | Message::ToolName(_)
             | Message::Prefill
             | Message::Invalid(_) => Row::Rejected,
         }
@@ -62,6 +66,11 @@ impl fmt::Display for Message {
             Self::Pdf(kind) => write!(
                 f,
                 "acp2api: a PDF document in a message (content type {kind}) is not supported. Remove that message from the conversation."
+            ),
+            Self::ToolSearch => f.write_str("acp2api: the tool tool_search is not supported."),
+            Self::ToolName(name) => write!(
+                f,
+                "acp2api: the client tool name {name} is not supported, because a built-in tool of the official runtime has this name."
             ),
             Self::Prefill => f.write_str(
                 "acp2api: a last message from the assistant (a prefill) is not supported.",

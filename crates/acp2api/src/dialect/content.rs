@@ -58,14 +58,22 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     ) {
         return Err(Message::Prefill.into());
     }
-    Ok(parsed(
+    let mut parsed = parsed(
         model,
         Conversation {
             earlier: items,
             last,
         },
         value["stream"].as_bool().unwrap_or(false),
-    ))
+    );
+    parsed.turn.tools = tools(api, &value["tools"])?;
+    parsed.turn.tool_choice =
+        if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
+            crate::conversation::ToolChoice::Off
+        } else {
+            crate::conversation::ToolChoice::Auto
+        };
+    Ok(parsed)
 }
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
     v[key]
@@ -218,4 +226,46 @@ fn validate_media(media: &str, kind: &str) -> Result<(), Refusal> {
         "text/plain" => Ok(()),
         _ => Err(Message::Media(media.into()).into()),
     }
+}
+
+fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>, Refusal> {
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    value
+        .as_array()
+        .ok_or_else(|| Refusal::invalid("tools must be an array"))?
+        .iter()
+        .map(|tool| {
+            let kind = tool["type"].as_str().unwrap_or("function");
+            if kind == "tool_search" {
+                return Err(Message::ToolSearch.into());
+            }
+            if kind != "function" {
+                return Err(Refusal::invalid("unsupported client tool type"));
+            }
+            let function = if matches!(api, Api::Chat) {
+                &tool["function"]
+            } else {
+                tool
+            };
+            let name = required(function, "name")?;
+            if matches!(name, "list_resources" | "read_resource") {
+                return Err(Message::ToolName(name.into()).into());
+            }
+            let schema = &function[if matches!(api, Api::Messages) {
+                "input_schema"
+            } else {
+                "parameters"
+            }];
+            if !schema.is_object() {
+                return Err(Refusal::invalid("tool schema must be an object"));
+            }
+            Ok(crate::conversation::ClientTool {
+                name: name.into(),
+                description: function["description"].as_str().unwrap_or("").into(),
+                schema: schema.to_string(),
+            })
+        })
+        .collect()
 }

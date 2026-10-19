@@ -16,9 +16,26 @@ pub(crate) struct Conversation {
     pub earlier: Vec<Item>,
     pub last: Item,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ClientTool {
+    pub name: String,
+    pub description: String,
+    pub schema: String,
+}
+pub(crate) enum ToolChoice {
+    Auto,
+    Off,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct ToolCall {
+    pub name: String,
+    pub arguments: String,
+}
 pub(crate) struct TurnRequest {
     pub conversation: Conversation,
     pub model: String,
+    pub tools: Vec<ClientTool>,
+    pub tool_choice: ToolChoice,
 }
 pub(crate) enum PromptBlock {
     Text(String),
@@ -26,6 +43,7 @@ pub(crate) enum PromptBlock {
 }
 pub(crate) struct Answer {
     pub text: String,
+    pub tool_call: Option<ToolCall>,
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
@@ -69,6 +87,7 @@ pub(crate) struct Usage {
 }
 pub(crate) enum TurnEvent {
     Text(String),
+    ToolCall(ToolCall),
     End(Result<Usage, String>),
 }
 pub(crate) type Ticket = tokio::sync::mpsc::UnboundedReceiver<(TurnEvent, crate::Hold)>;

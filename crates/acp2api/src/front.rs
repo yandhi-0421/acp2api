@@ -4,13 +4,7 @@ use crate::{
     dialect::{self, Dialect},
     messages::Message,
 };
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::post,
-};
-use serde_json::{Value, json};
+use axum::{Router, extract::State, http::HeaderMap, routing::post};
 use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
@@ -19,29 +13,27 @@ struct App {
     conductor: Conductor,
     clock: Arc<dyn Clock>,
     key: String,
-    secret: String,
 }
 pub(crate) fn router(
     conductor: Conductor,
     clock: Arc<dyn Clock>,
     key: String,
-    secret: String,
+    tools: crate::runtime_driver::mcp::ToolSets,
 ) -> Router {
     Router::new()
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(chat))
-        .route("/mcp/{secret}", post(mcp))
+        .with_state(App {
+            conductor,
+            clock: clock.clone(),
+            key,
+        })
+        .merge(tools.router())
         .layer(axum::middleware::from_fn_with_state(
             clock.clone(),
             input_hold,
         ))
-        .with_state(App {
-            conductor,
-            clock,
-            key,
-            secret,
-        })
 }
 async fn messages(
     State(app): State<App>,
@@ -92,39 +84,6 @@ async fn serve(
         Ok(ticket) => dialect.respond(parsed.form, ticket, app.clock).await,
         Err(error) => dialect.refusal(&Message::Upstream(error).into()),
     }
-}
-
-async fn mcp(
-    State(app): State<App>,
-    axum::extract::Path(secret): axum::extract::Path<String>,
-    Json(call): Json<Value>,
-) -> (StatusCode, Json<Value>) {
-    if secret != app.secret {
-        return (StatusCode::NOT_FOUND, Json(Value::Null));
-    }
-    let id = call["id"].clone();
-    let result = match call["method"].as_str() {
-        Some("initialize") => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"acp2api","version":env!("CARGO_PKG_VERSION")}})
-        }
-        Some("notifications/initialized") => return (StatusCode::ACCEPTED, Json(Value::Null)),
-        Some("tools/list") => json!({"tools":[]}),
-        Some("tools/call") => {
-            json!({"isError":true,"content":[{"type":"text","text":"Client tools execute in the API client."}]})
-        }
-        _ => {
-            return (
-                StatusCode::OK,
-                Json(
-                    json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}}),
-                ),
-            );
-        }
-    };
-    (
-        StatusCode::OK,
-        Json(json!({"jsonrpc":"2.0","id":id,"result":result})),
-    )
 }
 
 async fn input_hold(
