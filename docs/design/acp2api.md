@@ -287,7 +287,7 @@ pub struct Ports {
 pub trait Clock: Send + Sync {
     fn now(&self) -> Moment;                                   // monotonic milliseconds
     fn wall(&self) -> SystemTime;                              // log dates, lockout start, reset times
-    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, ()>;
+    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold>;
     fn hold(&self, kind: HoldKind) -> Hold;                    // virtual time does not pass while a Hold lives
 }
 pub enum HoldKind { HttpRequest, RuntimeLine, McpRequest, TurnEvent }
@@ -333,7 +333,9 @@ Invariants and error modes:
 - `ProcessTree::stop` on macOS closes stdin, waits 5 s on the clock, and kills the process group. On Windows, it closes the Job Object at once (ADR-0004).
 - `LaunchError::Refused` and `LaunchError::Io` are both a failed start of the runtime process (FR-041).
 - A `ConcurrencyLimit` is 1 to 3. The parse of the configuration file also compares it with `highest_concurrency_limit` (FR-049).
-- In production, `hold` returns an empty `Hold`, and `sleep_until` is a tokio sleep to the deadline.
+- In production, `hold` returns an empty `Hold`. `sleep_until` waits to the deadline and returns an empty `Hold`.
+- A successful timer returns a `Hold` for the work that its wake starts. The owner keeps it until that work finishes.
+- A loop registers its next wait before it releases the earlier `Hold`. Cancellation releases a pending sleep.
 
 ### Domain types
 
@@ -836,7 +838,9 @@ advance_to(target):
 - The design uses no `tokio::time::pause`, no time scale, and no real sleep.
 - A self-test of the harness in #36 checks the settle against bursts of lines.
 - At one virtual instant, scheduled external inputs arrive before product deadline callbacks. Thus the 200 ms boundary of FR-028 is deterministic.
-- Timer delivery does not prove that the awakened work has finished. The protocol retains ownership until that work finishes or waits again.
+- Delivery transfers ownership from the sleep future to its returned `Hold`. The hub keeps that work pending until the `Hold` drops.
+- Timer delivery does not prove completion. An owner with unfinished callback work retains its `Hold`, including while another owner registers a timer.
+- `ProcessTree::stop` keeps the timer's `Hold` until the forced stop and process wait finish.
 - A one-shot timer and a process-stop timer can finish without another sleep registration. Self-tests cover these terminal owners and work still executing after a wake.
 
 #### Runner and step files
@@ -1434,7 +1438,10 @@ These repairs change test infrastructure, not PRD behavior or the expected resul
 
 Issue #36 owns the repair and the replacement freeze record. Preserve the original freeze and failing evidence in history.
 The change affects every later slice that uses the shared harness, especially streaming, cancellation, runtime recovery, and quota deadlines.
-The parent records any further concrete clock-port revision after it reviews the implementation.
+Independent review confirmed the concrete port revision: `Clock::sleep_until` returns `Hold` instead of `()`.
+The two product call sites retain or release that ownership at the end of their work.
+The production clock returns an empty `Hold`; the harness clock reports delivery and completion separately.
+This removes the dependency on another timer registration and keeps the five-port structure unchanged.
 
 ## Open questions
 
