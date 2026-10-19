@@ -52,10 +52,10 @@ Feature: Model names and thinking levels
     And the official runtime gets no prompt
 
     Examples:
-      | model                 |
-      | claude-opus-5-5       |
-      | gpt-5.5               |
-      | gemini-3.8-flash-xhigh |
+      | model                 | names   |
+      | claude-opus-5-5       | <names> |
+      | gpt-5.5               | <names> |
+      | gemini-3.8-flash-xhigh | <names> |
 
   @FR-012 @issue-71 @wip
   Scenario Outline: The list of model names gives the error of a state that stops requests

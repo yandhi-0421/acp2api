@@ -92,6 +92,7 @@ struct ActiveTurn {
 }
 #[derive(Debug)]
 pub(crate) struct FakeState {
+    catalog: Option<Vec<ModelSpec>>,
     plans: VecDeque<TurnPlan>,
     next_session: u64,
     pub model: String,
@@ -107,6 +108,7 @@ impl Default for FakeState {
     fn default() -> Self {
         Self {
             plans: VecDeque::new(),
+            catalog: None,
             next_session: 0,
             model: "gemini-3.8-flash".into(),
             signed_in: true,
@@ -123,7 +125,17 @@ impl Default for FakeState {
 pub struct FakeRuntime {
     hub: Hub,
 }
+#[derive(Clone, Debug)]
+pub struct ModelSpec {
+    pub value: String,
+    pub name: String,
+    pub levels: Vec<String>,
+}
 impl FakeRuntime {
+    pub fn catalog(&self, models: &[ModelSpec]) {
+        assert!(models.len() <= 32, "fake catalog cap: 32 models");
+        self.hub.shared.0.lock().unwrap().fake.catalog = Some(models.to_vec());
+    }
     pub fn new(hub: Hub) -> Self {
         Self { hub }
     }
@@ -224,6 +236,26 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                     .cloned()
                     .unwrap_or_default(),
             );
+            if let Some(catalog) = &s.fake.catalog {
+                let options: Vec<_> = catalog
+                    .iter()
+                    .map(|m| json!({"value":m.value,"name":m.name}))
+                    .collect();
+                let available: Vec<_> = catalog.iter().flat_map(|m| m.levels.iter().map(|level| json!({"modelId":format!("{}-{level}",m.value),"name":format!("{} ({level})",m.name)}))).collect();
+                let levels: std::collections::BTreeSet<_> = catalog
+                    .iter()
+                    .flat_map(|m| m.levels.iter().cloned())
+                    .collect();
+                let levels: Vec<_> = levels.iter().map(|v| json!({"value":v,"name":v})).collect();
+                let first = catalog.first().expect("non-empty fake model catalog");
+                let current = available
+                    .first()
+                    .map(|v| v["modelId"].clone())
+                    .unwrap_or(json!(first.value));
+                let metadata = json!({"sessionId":session,"models":{"currentModelId":current,"availableModels":available},"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":first.value,"options":options},{"id":"thinking_level","name":"Thinking Level","type":"select","currentValue":"high","options":levels}]});
+                emit(s, label, s.now, result(id, metadata));
+                return;
+            }
             emit(
                 s,
                 label,
