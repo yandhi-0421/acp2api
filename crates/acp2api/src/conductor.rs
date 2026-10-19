@@ -23,15 +23,30 @@ struct Active {
     text: String,
     input_tokens: u64,
     phase: Phase,
+    tools: Vec<crate::conversation::ClientTool>,
+    tool_call: Option<crate::conversation::ToolCall>,
 }
 enum Phase {
     Prompt,
     Settling(Moment),
 }
-#[derive(Default)]
 struct Core {
     active: Option<Active>,
     waiting: VecDeque<Accepted>,
+    session_tools: Option<Vec<crate::conversation::ClientTool>>,
+}
+impl Default for Core {
+    fn default() -> Self {
+        Self {
+            active: None,
+            waiting: VecDeque::new(),
+            session_tools: Some(Vec::new()),
+        }
+    }
+}
+enum SessionPlan {
+    Current,
+    New(Vec<crate::conversation::ClientTool>),
 }
 enum Event {
     Accepted(Accepted),
@@ -42,8 +57,13 @@ enum Command {
     Prompt {
         text: Vec<crate::conversation::PromptBlock>,
         model: String,
+        session: SessionPlan,
     },
     Emit(Output, TurnEvent),
+    Permission {
+        request: crate::runtime_driver::PermissionId,
+        cancel: bool,
+    },
 }
 impl Core {
     fn next_deadline(&self) -> Moment {
@@ -56,12 +76,17 @@ impl Core {
         let mut commands = Vec::new();
         match event {
             Event::Accepted(request) => self.waiting.push_back(request),
-            Event::Runtime(RuntimeEvent::Failed(error)) => self.finish(Err(error), &mut commands),
+            Event::Runtime(RuntimeEvent::Failed(error)) => {
+                self.session_tools = None;
+                self.finish(Err(error), &mut commands);
+            }
             Event::Runtime(RuntimeEvent::Closed) => {
+                self.session_tools = None;
                 self.finish(Err("runtime stdout closed".into()), &mut commands)
             }
             Event::Runtime(RuntimeEvent::Text(text)) => {
                 if let Some(active) = self.active.as_mut()
+                    && active.tool_call.is_none()
                     && let Some(previous) = active.held.replace(text)
                 {
                     active.text.push_str(&previous);
@@ -70,6 +95,27 @@ impl Core {
                         TurnEvent::Text(previous),
                     ));
                 }
+            }
+            Event::Runtime(RuntimeEvent::Permission {
+                request,
+                title,
+                arguments,
+            }) => {
+                let mut cancel = false;
+                if let Some(active) = self.active.as_mut()
+                    && matches!(active.phase, Phase::Prompt)
+                    && active.tool_call.is_none()
+                    && let Some(name) = title.strip_prefix("Run ").and_then(|t| t.strip_suffix('?'))
+                    && active.tools.iter().any(|t| t.name == name)
+                    && let Some(arguments) = arguments
+                {
+                    active.tool_call = Some(crate::conversation::ToolCall {
+                        name: name.into(),
+                        arguments,
+                    });
+                    cancel = true;
+                }
+                commands.push(Command::Permission { request, cancel });
             }
             Event::Runtime(RuntimeEvent::Usage(used)) => {
                 if let Some(active) = self.active.as_mut() {
@@ -92,16 +138,29 @@ impl Core {
             && let Some(request) = self.waiting.pop_front()
         {
             let prompt = crate::conversation::prompt(&request.turn);
+            let tools = match request.turn.tool_choice {
+                crate::conversation::ToolChoice::Off => Vec::new(),
+                crate::conversation::ToolChoice::Auto => request.turn.tools,
+            };
+            let session = if self.session_tools.as_ref() == Some(&tools) {
+                SessionPlan::Current
+            } else {
+                self.session_tools = Some(tools.clone());
+                SessionPlan::New(tools.clone())
+            };
             self.active = Some(Active {
                 output: request.output,
                 held: None,
                 text: String::new(),
                 input_tokens: 0,
                 phase: Phase::Prompt,
+                tools: tools.clone(),
+                tool_call: None,
             });
             commands.push(Command::Prompt {
                 text: prompt,
                 model: request.turn.model,
+                session,
             });
         }
         commands
@@ -112,6 +171,12 @@ impl Core {
                 if let Some(text) = active.held.take() {
                     active.text.push_str(&text);
                     commands.push(Command::Emit(active.output.clone(), TurnEvent::Text(text)));
+                }
+                if let Some(call) = active.tool_call.take() {
+                    commands.push(Command::Emit(
+                        active.output.clone(),
+                        TurnEvent::ToolCall(call),
+                    ));
                 }
                 Usage {
                     input_tokens: active.input_tokens,
@@ -149,12 +214,37 @@ impl Conductor {
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
                 while let Some(command) = commands.pop_front() {
                     match command {
-                        Command::Prompt { text, model } => {
+                        Command::Prompt {
+                            text,
+                            model,
+                            session,
+                        } => {
                             let result = match runtime.as_mut().filter(|_| read_open) {
-                                Some(runtime) => runtime.start_prompt(text, &model).await,
+                                Some(runtime) => {
+                                    let prepared = match session {
+                                        SessionPlan::Current => Ok(()),
+                                        SessionPlan::New(tools) => {
+                                            runtime.new_session(&tools).await
+                                        }
+                                    };
+                                    match prepared {
+                                        Ok(()) => runtime.start_prompt(text, &model).await,
+                                        Err(error) => Err(error),
+                                    }
+                                }
                                 None => Err("official runtime is not available".into()),
                             };
                             if let Err(error) = result {
+                                commands.extend(core.handle(
+                                    Event::Runtime(RuntimeEvent::Failed(error)),
+                                    clock.now(),
+                                ));
+                            }
+                        }
+                        Command::Permission { request, cancel } => {
+                            if let Some(runtime) = runtime.as_mut()
+                                && let Err(error) = runtime.permission(request, cancel).await
+                            {
                                 commands.extend(core.handle(
                                     Event::Runtime(RuntimeEvent::Failed(error)),
                                     clock.now(),

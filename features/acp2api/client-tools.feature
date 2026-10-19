@@ -7,13 +7,13 @@ Feature: Client tools
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-022 @issue-40 @wip
+  @FR-022 @issue-40
   Scenario: The tools that the official runtime offers to the model are only the client tools of the request
     When an API client sends a request to "POST /v1/messages" with the client tools "read_file" and "run_command", each with a description and a schema
     Then the official runtime offers the model exactly the tools "read_file" and "run_command"
     And each tool has the description and the schema of the request
 
-  @FR-022 @issue-40 @wip
+  @FR-022 @issue-40
   Scenario Outline: A model call of a client tool ends the response with that tool call
     Given the request has the client tool "read_file"
     And the model sends the text "Let me look." and then calls "read_file" with the arguments {"path":"a.txt"}
@@ -28,7 +28,7 @@ Feature: Client tools
       | POST /v1/chat/completions | "tool_calls" with "read_file"            | "finish_reason" set to "tool_calls" |
       | POST /v1/responses        | a "function_call" item for "read_file"   | the "function_call" item as the last output item |
 
-  @FR-022 @issue-40 @wip
+  @FR-022 @issue-40
   Scenario: A response has no more than one tool call
     Given the request has the client tools "read_file" and "list_files"
     And the model calls "read_file" and "list_files" in one prompt turn
@@ -66,14 +66,14 @@ Feature: Client tools
     When the model calls the tool for "read"
     Then the response has a "function_call" item for "read" with the namespace "files"
 
-  @FR-022 @issue-40 @wip
+  @FR-022 @issue-40
   Scenario: tool_choice none gives a response with no tool call
     Given the request has the client tool "read_file"
     And the model calls "read_file" when the official runtime offers it
     When an API client sends that request to "POST /v1/chat/completions" with "tool_choice" set to "none"
     Then the response has no tool call
 
-  @FR-022 @issue-40 @wip
+  @FR-022 @issue-40
   Scenario Outline: acp2api rejects a tool that it cannot offer
     When an API client sends a request to "<endpoint>" with <tool>
     Then acp2api refuses the request with HTTP 400 and the message "<message>"

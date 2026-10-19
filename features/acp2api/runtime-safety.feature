@@ -37,7 +37,7 @@ Feature: Safety toward Google and the official runtime
     When acp2api starts a runtime process
     Then the official runtime gets no file system capability and no terminal capability from acp2api
 
-  @FR-047 @issue-40 @wip
+  @FR-047 @issue-40
   Scenario: The permission request of a client tool cancels the prompt turn and returns the tool call
     Given the request has the client tool "read_file"
     When the official runtime sends the permission request "Run read_file?" for that tool

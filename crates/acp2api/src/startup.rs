@@ -105,10 +105,7 @@ pub(crate) async fn start(
             .map_err(|e| e.to_string())?;
         writeln!(log, "{start_line}").map_err(|e| e.to_string())?;
     }
-    let mut random = [0u8; 32];
-    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-    let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
-    let mcp_url = format!("http://127.0.0.1:{port}/mcp/{secret}");
+    let tools = crate::runtime_driver::mcp::ToolSets::new(port);
     let program = data.join("official-runtime").join(if cfg!(windows) {
         "agy_acp_server.exe"
     } else {
@@ -120,7 +117,7 @@ pub(crate) async fn start(
                 &ports,
                 &data,
                 env.temp.join("sessions/initial"),
-                &mcp_url,
+                tools.clone(),
             )
             .await?,
         )
@@ -132,7 +129,7 @@ pub(crate) async fn start(
         conductor,
         ports.clock.clone(),
         settings.local_api_key,
-        secret,
+        tools,
     );
     if opened.first_start {
         ports.browser.open(&panel);
