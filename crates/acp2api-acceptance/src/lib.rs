@@ -16,3 +16,5 @@ pub mod startup_check;
 pub mod startup_permissions;
 
 pub mod endpoint_check;
+
+pub mod content_check;
