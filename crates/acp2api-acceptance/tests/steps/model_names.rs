@@ -176,6 +176,8 @@ fn names(w: &mut World) {
     regex = r"^acp2api refuses the request with HTTP 400 in the error envelope of the (Anthropic Messages API|OpenAI Responses API|OpenAI Chat Completions API)$"
 )]
 fn envelope(w: &mut World, _api: String) {
+    let a = w.scenario.answer.as_ref().unwrap();
+    assert_eq!(a.status, 400);
     check::refusal(
         &w.scenario,
         &w.models.endpoint,
@@ -186,7 +188,6 @@ fn envelope(w: &mut World, _api: String) {
 #[then("the answer has no stream event")]
 fn no_event(w: &mut World) {
     let a = w.scenario.answer.as_ref().unwrap();
-    assert_eq!(a.status, 400);
     assert!(a.events.is_empty());
     assert!(a.headers["content-type"].starts_with("application/json"));
 }
