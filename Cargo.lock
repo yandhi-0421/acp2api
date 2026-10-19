@@ -9,6 +9,7 @@ dependencies = [
  "agent-client-protocol-schema",
  "argon2",
  "axum",
+ "futures-util",
  "getrandom",
  "libc",
  "serde",
