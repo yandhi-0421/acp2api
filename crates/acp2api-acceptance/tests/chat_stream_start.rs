@@ -88,3 +88,50 @@ async fn chat_waits_for_confirmed_text_before_its_first_data_chunk() {
     .await
     .expect("Chat stream regression cap: 30 s");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_chat_reply_still_finishes_with_an_assistant_role() {
+    // One HTTP request; no ACP text precedes normal prompt completion.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut s = Scenario::default();
+        s.plan(Setup::normal());
+        let mut plan = TurnPlan::new().usage(987, 1_048_576);
+        plan.steps.push(TurnStep::HoldUntil("empty-end".into()));
+        s.fake().next_prompt(plan);
+        let call = s
+            .client()
+            .await
+            .send(wire::request(ENDPOINT, "empty reply", true));
+        s.time.settle().await;
+        assert_eq!(call.status(), Some(200));
+        assert!(
+            call.events().is_empty(),
+            "an empty reply has no data chunk before completion"
+        );
+        s.fake().open_gate("empty-end");
+        s.time.settle().await;
+        let ended_at = s.hub.now();
+        s.time.advance_to(ended_at + 199).await;
+        assert!(
+            call.events().is_empty(),
+            "empty completion stays held through 199 ms"
+        );
+        s.time.advance_to(ended_at + 200).await;
+        let answer = call.finish(&mut s.time).await;
+        wire::verify(&answer, ENDPOINT, "", 987, 0);
+        assert_eq!(
+            answer.events.len(),
+            3,
+            "assistant role, one normal final chunk, one DONE marker"
+        );
+        let first: Value = serde_json::from_str(&answer.events[0].data).unwrap();
+        assert_eq!(
+            first["choices"][0]["delta"],
+            json!({"role":"assistant","content":""})
+        );
+        assert!(answer.events.iter().all(|event| event.at == ended_at + 200));
+        s.finish(true).await;
+    })
+    .await
+    .expect("empty Chat regression cap: 30 s");
+}
