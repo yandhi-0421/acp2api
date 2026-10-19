@@ -355,8 +355,9 @@ pub enum Item {
 pub enum Last { Messages(NonEmpty<Item>), ToolResult { result: Item, then: Vec<Item> } }
 pub struct SystemPart { pub role: Role, pub name: Option<String>, pub text: String }
 pub struct Conversation { pub system: Vec<SystemPart>, pub earlier: Vec<Item>, pub last: Last }
-pub struct ClientTool { pub name: String, pub description: String, pub schema: String, pub kind: ToolKind }
-pub enum ToolKind { Function, Custom, InNamespace(String) }
+pub struct ClientTool { pub name: String, pub description: String, pub schema: String,
+                        pub kind: ToolKind, pub namespace: Option<String> }
+pub enum ToolKind { Function, Custom }
 
 pub struct TurnRequest { pub model: ModelAsk, pub conversation: Conversation, pub tools: ClientTools,
                          pub tool_choice: ToolChoice, pub stop: Vec<String>, pub unknown_fields: Vec<String> }
@@ -1470,6 +1471,21 @@ The revised sketch carries that role with the part. The dialect admits only init
 This is an internal representation correction. It changes no PRD behavior, external field, stored format, or module owner.
 It affects system prompt normalization in #41 and the later conversation hashes in #47.
 Later system and developer messages remain in the conversation, as the glossary and ADR-0003 already require.
+
+### 2026-10-19: retain tool kind and namespace independently
+
+The implementation review for #46 found that a namespace can contain function and custom tools.
+The original `InNamespace` variant could not represent the member kind at the same time.
+The domain sketch now keeps `ToolKind` and the optional namespace in separate fields.
+Each returned call retains both values and its original member name.
+
+Normalization includes the namespace name and description in each member description, before the original member text and any grammar.
+The MCP adapter assigns distinct internal names to namespace members and ordinary tools, including ordinary names that use its reserved prefix.
+The adapter resolves permission requests through the immutable tool set. The API returns the original identity.
+
+This representation correction implements FR-022 without a new port, external dependency, or stored format.
+It affects #46 and the later tool-set identity and history work in #47 and #54.
+The parent selected this correction during slice acceptance. The existing PRD behavior and module owners remain unchanged.
 
 ## Open questions
 
