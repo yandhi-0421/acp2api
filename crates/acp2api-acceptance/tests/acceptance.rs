@@ -12,11 +12,14 @@ struct World {
     endpoint: endpoints_and_streams::EndpointState,
     content: request_content::ContentState,
     tools: client_tools::ToolState,
+    custom_tools: custom_tools::CustomToolState,
 }
 #[path = "steps/client_tools.rs"]
 mod client_tools;
 #[path = "steps/common.rs"]
 mod common;
+#[path = "steps/custom_tools.rs"]
+mod custom_tools;
 #[path = "steps/endpoints_and_streams.rs"]
 mod endpoints_and_streams;
 #[path = "steps/harness_regression.rs"]
