@@ -28,7 +28,7 @@ Feature: Errors
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
-  @FR-026 @issue-49 @wip
+  @FR-026 @issue-49
   Scenario: A streamed request with a wrong local API key gets HTTP 401 and no stream event
     When an API client sends a valid request with a stream to "POST /v1/messages" with a wrong local API key
     Then acp2api refuses the request with HTTP 401 in the error envelope of the Anthropic Messages API
