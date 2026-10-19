@@ -367,11 +367,17 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
     {
         if matches!(api, Api::Responses) && tool["type"] == "namespace" {
             let namespace = required(tool, "name")?;
+            let namespace_description = tool["description"].as_str().unwrap_or("");
             for member in tool["tools"]
                 .as_array()
                 .ok_or_else(|| Refusal::invalid("namespace tools must be an array"))?
             {
-                normalized.push(client_tool(api, member, Some(namespace))?);
+                let mut member_tool = client_tool(api, member, Some(namespace))?;
+                member_tool.description = format!(
+                    "Namespace {namespace}:\n{namespace_description}\n\n{}",
+                    member_tool.description
+                );
+                normalized.push(member_tool);
             }
         } else {
             normalized.push(client_tool(api, tool, None)?);
