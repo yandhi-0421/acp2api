@@ -133,7 +133,19 @@ pub struct ModelSpec {
 }
 impl FakeRuntime {
     pub fn catalog(&self, models: &[ModelSpec]) {
-        assert!(models.len() <= 32, "fake catalog cap: 32 models");
+        assert!(
+            !models.is_empty() && models.len() <= 32,
+            "fake catalog cap: 1 to 32 models"
+        );
+        assert!(
+            models.iter().all(|m| m.value.len() <= 128
+                && m.name.len() <= 128
+                && m.levels.len() <= 3
+                && m.levels
+                    .iter()
+                    .all(|v| ["low", "medium", "high"].contains(&v.as_str()))),
+            "fake model input caps: names 128 bytes, 3 known thinking levels"
+        );
         self.hub.shared.0.lock().unwrap().fake.catalog = Some(models.to_vec());
     }
     pub fn new(hub: Hub) -> Self {
