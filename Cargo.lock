@@ -7,6 +7,7 @@ name = "acp2api"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol-schema",
+ "argon2",
  "axum",
  "getrandom",
  "libc",

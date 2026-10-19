@@ -216,6 +216,23 @@ pub fn environment() -> Environment {
             .to_owned(),
     }
 }
+
+pub(crate) fn private_file(path: &std::path::Path) -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    }
+    #[cfg(windows)]
+    {
+        windows::private_file(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -6,11 +6,14 @@ mod timed_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
     scenario: Scenario,
+    startup: acp2api_acceptance::startup_check::Startup,
 }
 #[path = "steps/common.rs"]
 mod common;
 #[path = "steps/harness_regression.rs"]
 mod harness_regression;
+#[path = "steps/startup.rs"]
+mod startup;
 #[path = "steps/system_prompt_and_role_labels.rs"]
 mod system_prompt_and_role_labels;
 #[path = "steps/token_usage.rs"]

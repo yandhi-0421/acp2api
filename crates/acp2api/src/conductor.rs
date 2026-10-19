@@ -20,7 +20,7 @@ impl Core {
 }
 impl Conductor {
     pub(crate) fn start(
-        mut runtime: Runtime,
+        mut runtime: Option<Runtime>,
         clock: Arc<dyn Clock>,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Work>(32);
@@ -29,11 +29,25 @@ impl Conductor {
             loop {
                 let timer = clock.sleep_until(u64::MAX);
                 tokio::select! {
-                    work = recv.recv() => { let Some(work) = work else { break }; let prompt = core.prompt(&work.turn); drop(work.hold); let answer = runtime.prompt(prompt, &work.turn.model).await.map(|(text, input_tokens)| { let output_tokens = crate::conversation::output_tokens(&text); Answer { text, input_tokens, output_tokens } }); let _ = work.answer.send(answer); },
+                    work = recv.recv() => {
+                        let Some(work) = work else { break };
+                        let prompt = core.prompt(&work.turn);
+                        drop(work.hold);
+                        let answer = match runtime.as_mut() {
+                            Some(runtime) => runtime.prompt(prompt, &work.turn.model).await,
+                            None => Err("official runtime is not available".into()),
+                        }.map(|(text, input_tokens)| {
+                            let output_tokens = crate::conversation::output_tokens(&text);
+                            Answer { text, input_tokens, output_tokens }
+                        });
+                        let _ = work.answer.send(answer);
+                    },
                     work = timer => { drop(work); }
                 }
             }
-            runtime.stop().await;
+            if let Some(runtime) = runtime {
+                runtime.stop().await;
+            }
         });
         (Self(send), task)
     }
