@@ -83,6 +83,7 @@ pub struct ApiClient {
     key: String,
     hub: Hub,
     requests: Arc<AtomicUsize>,
+    status: Arc<Mutex<Option<u16>>>,
 }
 #[derive(Clone, Debug)]
 pub struct Answer {
@@ -114,6 +115,7 @@ impl ApiCall {
     }
 }
 pub struct Call {
+    status: Arc<Mutex<Option<u16>>>,
     task: tokio::task::JoinHandle<Result<Answer, String>>,
     hub: Hub,
     progress: Arc<Mutex<Vec<SseEvent>>>,
@@ -124,6 +126,9 @@ impl Drop for Call {
     }
 }
 impl Call {
+    pub fn status(&self) -> Option<u16> {
+        *self.status.lock().unwrap()
+    }
     pub fn events(&self) -> Vec<SseEvent> {
         self.progress.lock().unwrap().clone()
     }
@@ -168,6 +173,7 @@ impl ApiClient {
             key,
             hub,
             requests: Arc::new(AtomicUsize::new(0)),
+            status: Arc::new(Mutex::new(None)),
         }
     }
     pub fn send(&self, call: ApiCall) -> Call {
@@ -177,6 +183,11 @@ impl ApiClient {
         );
         self.hub.shared.0.lock().unwrap().counts.http_sent += 1;
         let client = self.clone();
+        let status = Arc::new(Mutex::new(None));
+        let client = Self {
+            status: status.clone(),
+            ..client
+        };
         let progress = Arc::new(Mutex::new(Vec::new()));
         let capture = progress.clone();
         let task = tokio::spawn(async move {
@@ -191,6 +202,7 @@ impl ApiClient {
             result
         });
         Call {
+            status,
             task,
             hub: self.hub.clone(),
             progress,
@@ -277,6 +289,7 @@ impl ApiClient {
             .await
             .map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
+        *self.status.lock().unwrap() = Some(status);
         let headers = response
             .headers()
             .iter()
@@ -287,6 +300,11 @@ impl ApiClient {
             .get("content-type")
             .is_some_and(|v| v.as_bytes().starts_with(b"text/event-stream"));
         let mut body = response.into_body();
+        let mut body = ObservedBody {
+            inner: &mut body,
+            hub: &self.hub,
+            id,
+        };
         let mut bytes = Vec::new();
         let mut events = Vec::new();
         let mut sse = SseReader::default();
@@ -479,6 +497,34 @@ impl tokio::io::AsyncWrite for CountSocket {
         std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
+struct ObservedBody<'a> {
+    inner: &'a mut hyper::body::Incoming,
+    hub: &'a Hub,
+    id: u64,
+}
+impl hyper::body::Body for ObservedBody<'_> {
+    type Data = Bytes;
+    type Error = hyper::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, hyper::Error>>> {
+        let this = self.get_mut();
+        let read = this.hub.shared.0.lock().unwrap().client_sockets[&this.id].read;
+        let frame = std::pin::Pin::new(&mut *this.inner).poll_frame(cx);
+        if frame.is_pending() {
+            // Acknowledge the head after buffered frames drain, excluding later reads.
+            let mut s = this.hub.shared.0.lock().unwrap();
+            if let Some(socket) = s.client_sockets.get_mut(&this.id) {
+                socket.consumed = read;
+            }
+            this.hub.shared.1.notify_all();
+        }
+        frame
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

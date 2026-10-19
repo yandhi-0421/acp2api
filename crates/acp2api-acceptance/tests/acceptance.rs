@@ -7,9 +7,12 @@ mod timed_steps;
 struct World {
     scenario: Scenario,
     startup: acp2api_acceptance::startup_check::Startup,
+    endpoint: endpoints_and_streams::EndpointState,
 }
 #[path = "steps/common.rs"]
 mod common;
+#[path = "steps/endpoints_and_streams.rs"]
+mod endpoints_and_streams;
 #[path = "steps/harness_regression.rs"]
 mod harness_regression;
 #[path = "steps/startup.rs"]

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+futures-util = "=0.3.34"
 tokio.workspace = true
 axum.workspace = true
 serde.workspace = true

@@ -7,7 +7,7 @@ Feature: Endpoints and streams
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-010 @issue-38 @wip
+  @FR-010 @issue-38
   Scenario Outline: Each POST endpoint answers a valid request in the success form of its API
     Given the official runtime replies "Hello" to the next prompt
     When an API client sends a valid request to "<endpoint>" with "stream" set to <stream>
@@ -24,12 +24,12 @@ Feature: Endpoints and streams
       | POST /v1/chat/completions   | false  | one body  | OpenAI Chat Completions API   |
       | POST /v1/chat/completions   | true   | a stream  | OpenAI Chat Completions API   |
 
-  @FR-010 @issue-38 @wip
+  @FR-010 @issue-38
   Scenario: acp2api has no endpoint that counts tokens
     When an API client sends a valid request to "POST /v1/messages/count_tokens"
     Then acp2api answers with HTTP 404
 
-  @FR-010 @issue-38 @wip
+  @FR-010 @issue-38
   Scenario: A stream of the Anthropic Messages API has its events in the order of that API
     Given the official runtime replies "Hello" to the next prompt
     When an API client sends a valid request with a stream to "POST /v1/messages"
@@ -43,7 +43,7 @@ Feature: Endpoints and streams
       | message_delta                          |
       | message_stop                           |
 
-  @FR-010 @issue-38 @wip
+  @FR-010 @issue-38
   Scenario: A stream of the OpenAI Responses API ends with response.completed
     Given the official runtime replies "Hello" to the next prompt
     When an API client sends a valid request with a stream to "POST /v1/responses"
@@ -51,7 +51,7 @@ Feature: Endpoints and streams
     And the last event of the stream is "response.completed"
     And the event "response.completed" carries "response.id"
 
-  @FR-010 @issue-38 @wip
+  @FR-010 @issue-38
   Scenario: A stream of the OpenAI Chat Completions API ends with data: [DONE]
     Given the official runtime replies "Hello" to the next prompt
     When an API client sends a valid request with a stream to "POST /v1/chat/completions"
@@ -59,7 +59,7 @@ Feature: Endpoints and streams
     And each line of the stream before the last line is a "data:" line with a chunk
     And the last line of the stream is "data: [DONE]"
 
-  @FR-010 @issue-38 @wip
+  @FR-010 @issue-38
   Scenario Outline: The first text delta leaves acp2api before the prompt turn ends
     Given the official runtime sends the text chunks "Hel" and "lo", and then waits 10 s before the end of the prompt turn
     When an API client sends a valid request with a stream to "<endpoint>"
