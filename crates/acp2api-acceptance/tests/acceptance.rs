@@ -9,11 +9,14 @@ struct World {
     models: model_names::ModelState,
     logs: logs::LogState,
     startup: acp2api_acceptance::startup_check::Startup,
+    access: access_protection::AccessState,
     endpoint: endpoints_and_streams::EndpointState,
     content: request_content::ContentState,
     tools: client_tools::ToolState,
     custom_tools: custom_tools::CustomToolState,
 }
+#[path = "steps/access_protection.rs"]
+mod access_protection;
 #[path = "steps/client_tools.rs"]
 mod client_tools;
 #[path = "steps/common.rs"]

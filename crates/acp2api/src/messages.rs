@@ -86,7 +86,7 @@ impl fmt::Display for Message {
                 "acp2api: a last message from the assistant (a prefill) is not supported.",
             ),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
-            Self::Key => f.write_str("Invalid API key"),
+            Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
         }
     }
 }

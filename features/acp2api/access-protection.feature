@@ -7,7 +7,7 @@ Feature: Access protection
     Given acp2api is in the normal state on the port 8329
     And the local API key is "K1"
 
-  @FR-007 @issue-49 @wip
+  @FR-007 @issue-49
   Scenario Outline: A request with no local API key or a wrong local API key gets HTTP 401
     When an API client sends "<request>" with <key>
     Then acp2api refuses the request with HTTP 401 and the message "acp2api: the local API key is absent or wrong."
@@ -20,7 +20,7 @@ Feature: Access protection
       | POST /v1/chat/completions | no local API key          |
       | GET /v1/models            | the wrong local API key "K9" |
 
-  @FR-007 @issue-49 @wip
+  @FR-007 @issue-49
   Scenario Outline: The local API key goes in either of two headers
     When an API client sends "GET /v1/models" with the local API key "K1" in the header "<header>"
     Then acp2api answers with HTTP 200
@@ -36,19 +36,19 @@ Feature: Access protection
     Then a request with the local API key "K1" gets HTTP 401
     And a request with the new local API key gets HTTP 200
 
-  @FR-008 @issue-49 @wip
+  @FR-008 @issue-49
   Scenario: acp2api accepts no connection on another network address of the computer
     Given the computer has a network address other than 127.0.0.1
     When a program connects to the port 8329 on that network address
     Then acp2api accepts no connection
 
-  @FR-008 @issue-49 @wip
+  @FR-008 @issue-49
   Scenario: A request to an API with the Origin of a web page gets a 4xx status
     When an API client sends "POST /v1/messages" with the header "Origin: https://example.com"
     Then acp2api answers with an HTTP status from 400 to 499
     And no prompt turn starts
 
-  @FR-008 @issue-49 @wip
+  @FR-008 @issue-49
   Scenario: A request to an API with the Origin of the management panel gets a 4xx status
     When a request with the Origin of the management panel goes to "POST /v1/chat/completions"
     Then acp2api answers with an HTTP status from 400 to 499
@@ -60,7 +60,7 @@ Feature: Access protection
     When a request with the Origin of the management panel goes to a management endpoint
     Then acp2api answers with an HTTP status from 200 to 299
 
-  @FR-008 @issue-49 @wip
+  @FR-008 @issue-49
   Scenario Outline: acp2api accepts only a local Host header with its own port
     When an API client sends "GET /v1/models" with the header "Host: <host>"
     Then acp2api answers with <result>
@@ -72,12 +72,12 @@ Feature: Access protection
       | example.com    | an HTTP status from 400 to 499 |
       | localhost:8330 | an HTTP status from 400 to 499 |
 
-  @FR-008 @issue-49 @wip
+  @FR-008 @issue-49
   Scenario: An OPTIONS request gets no CORS header
     When a program sends "OPTIONS /v1/messages" with the headers "Origin: https://example.com" and "Access-Control-Request-Method: POST"
     Then the answer has no header whose name starts with "Access-Control-"
 
-  @FR-008 @issue-49 @wip
+  @FR-008 @issue-49
   Scenario: An accepted request gets no CORS header
     When an API client sends "GET /v1/models"
     Then acp2api answers with HTTP 200
