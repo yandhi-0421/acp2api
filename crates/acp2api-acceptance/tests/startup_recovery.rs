@@ -2,6 +2,10 @@ use acp2api_acceptance::startup_check::Startup;
 
 #[tokio::test]
 #[cfg(unix)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "This OS-boundary test controls stdout and bounds the test host lifetime."
+)]
 async fn failed_terminal_delivery_leaves_no_undisclosed_saved_credentials() {
     use std::os::{fd::OwnedFd, unix::net::UnixStream};
     use std::process::{Command, Stdio};
