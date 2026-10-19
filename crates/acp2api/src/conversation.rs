@@ -3,18 +3,49 @@ pub(crate) enum Part {
     Image { media_type: String, base64: String },
     Document { title: Option<String>, text: String },
 }
+#[derive(Clone, Copy)]
 pub(crate) enum Role {
     User,
     Assistant,
     System,
     Developer,
 }
+pub(crate) struct SystemPart {
+    pub role: Role,
+    pub name: Option<String>,
+    pub text: String,
+}
 pub(crate) enum Item {
     Message { role: Role, parts: Vec<Part> },
 }
 pub(crate) struct Conversation {
+    pub system: Vec<SystemPart>,
     pub earlier: Vec<Item>,
     pub last: Item,
+}
+pub(crate) fn system_prompt_addition(system: &[SystemPart]) -> Option<String> {
+    if system.is_empty() {
+        return None;
+    }
+    Some(
+        system
+            .iter()
+            .map(|part| {
+                if let Some(name) = &part.name {
+                    let role = match part.role {
+                        Role::User => "user",
+                        Role::Assistant => "assistant",
+                        Role::System => "system",
+                        Role::Developer => "developer",
+                    };
+                    format!("[{role}: {name}]\n{}", part.text)
+                } else {
+                    part.text.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    )
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClientTool {

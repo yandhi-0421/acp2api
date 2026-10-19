@@ -113,17 +113,22 @@ impl Runtime {
             next_permission: 0,
         };
         runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
-        runtime.new_session(&[]).await?;
+        runtime.new_session(&[], None).await?;
         Ok(runtime)
     }
     pub(crate) async fn new_session(
         &mut self,
         tools: &[crate::conversation::ClientTool],
+        system: Option<&str>,
     ) -> Result<(), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
-        let session = self.call("session/new", json!({"cwd":cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}})).await?;
+        let mut params = json!({"cwd":cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}});
+        if let Some(system) = system {
+            params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
+        }
+        let session = self.call("session/new", params).await?;
         self.session = session["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?

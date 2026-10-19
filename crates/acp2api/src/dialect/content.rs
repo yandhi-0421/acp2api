@@ -1,6 +1,6 @@
 use super::{Parsed, parsed};
 use crate::{
-    conversation::{Conversation, Item, Part, Role},
+    conversation::{Conversation, Item, Part, Role, SystemPart},
     messages::{Message, Refusal},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -21,12 +21,31 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         "messages"
     }];
     let mut items = Vec::new();
+    let mut system = Vec::new();
+    if matches!(api, Api::Messages) && !value["system"].is_null() {
+        system = system_parts(Role::System, None, &value["system"], "text")?;
+        if value["system"].is_array()
+            && system
+                .first()
+                .is_some_and(|part| part.text.starts_with("x-anthropic-billing-header:"))
+        {
+            system.remove(0);
+        }
+    }
+    if matches!(api, Api::Responses) && !value["instructions"].is_null() {
+        system.push(SystemPart {
+            role: Role::System,
+            name: None,
+            text: required(&value, "instructions")?.into(),
+        });
+    }
     if matches!(api, Api::Responses) && input.is_string() {
         items.push(Item::Message {
             role: Role::User,
             parts: vec![Part::Text(input.as_str().unwrap().into())],
         });
     } else {
+        let mut at_start = true;
         for item in input
             .as_array()
             .ok_or_else(|| Refusal::invalid("message array required"))?
@@ -42,8 +61,25 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 "developer" => Role::Developer,
                 _ => return Err(Refusal::invalid("unsupported message role")),
             };
-            let parts = parts(api, &item["content"])?;
-            items.push(Item::Message { role, parts });
+            if !matches!(api, Api::Messages)
+                && at_start
+                && matches!(role, Role::System | Role::Developer)
+            {
+                system.extend(system_parts(
+                    role,
+                    item["name"].as_str(),
+                    &item["content"],
+                    if matches!(api, Api::Responses) {
+                        "input_text"
+                    } else {
+                        "text"
+                    },
+                )?);
+            } else {
+                at_start = false;
+                let parts = parts(api, &item["content"])?;
+                items.push(Item::Message { role, parts });
+            }
         }
     }
     let last = items
@@ -61,6 +97,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let mut parsed = parsed(
         model,
         Conversation {
+            system,
             earlier: items,
             last,
         },
@@ -74,6 +111,33 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             crate::conversation::ToolChoice::Auto
         };
     Ok(parsed)
+}
+fn system_parts(
+    role: Role,
+    name: Option<&str>,
+    value: &Value,
+    text_kind: &str,
+) -> Result<Vec<SystemPart>, Refusal> {
+    let make = |text: &str| SystemPart {
+        role,
+        name: name.map(str::to_owned),
+        text: text.into(),
+    };
+    if let Some(text) = value.as_str() {
+        return Ok(vec![make(text)]);
+    }
+    value
+        .as_array()
+        .ok_or_else(|| Refusal::invalid("system prompt must be text or text blocks"))?
+        .iter()
+        .map(|part| {
+            let kind = required(part, "type")?;
+            if kind != text_kind {
+                return Err(Message::Content(kind.into()).into());
+            }
+            Ok(make(required(part, "text")?))
+        })
+        .collect()
 }
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
     v[key]
