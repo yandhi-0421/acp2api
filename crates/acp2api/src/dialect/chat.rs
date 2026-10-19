@@ -42,6 +42,9 @@ impl WireDialect for Chat {
         Vec::new()
     }
     fn text(&self, w: &mut Encoding, text: &str) -> Vec<Event> {
+        if text.is_empty() {
+            return Vec::new();
+        }
         let delta = if w.text.is_empty() {
             json!({"role":"assistant","content":text})
         } else {
