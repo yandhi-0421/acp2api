@@ -35,7 +35,6 @@ struct Active {
     text: String,
     input_tokens: u64,
     phase: Phase,
-    tools: Vec<crate::conversation::ClientTool>,
     tool_call: Option<crate::conversation::ToolCall>,
 }
 enum Phase {
@@ -136,23 +135,14 @@ impl Core {
                     ));
                 }
             }
-            Event::Runtime(RuntimeEvent::Permission {
-                request,
-                title,
-                arguments,
-            }) => {
+            Event::Runtime(RuntimeEvent::Permission { request, call }) => {
                 let mut cancel = false;
                 if let Some(active) = self.active.as_mut()
                     && matches!(active.phase, Phase::Prompt)
                     && active.tool_call.is_none()
-                    && let Some(name) = title.strip_prefix("Run ").and_then(|t| t.strip_suffix('?'))
-                    && active.tools.iter().any(|t| t.name == name)
-                    && let Some(arguments) = arguments
+                    && let Some(call) = call
                 {
-                    active.tool_call = Some(crate::conversation::ToolCall {
-                        name: name.into(),
-                        arguments,
-                    });
+                    active.tool_call = Some(call);
                     cancel = true;
                 }
                 commands.push(Command::Permission { request, cancel });
@@ -206,7 +196,6 @@ impl Core {
                 text: String::new(),
                 input_tokens: 0,
                 phase: Phase::Prompt,
-                tools: tools.clone(),
                 tool_call: None,
             });
             commands.push(Command::Prompt {

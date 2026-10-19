@@ -360,27 +360,70 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
     if value.is_null() {
         return Ok(Vec::new());
     }
-    value
+    let mut normalized = Vec::new();
+    for tool in value
         .as_array()
         .ok_or_else(|| Refusal::invalid("tools must be an array"))?
-        .iter()
-        .map(|tool| {
-            let kind = tool["type"].as_str().unwrap_or("function");
-            if kind == "tool_search" {
-                return Err(Message::ToolSearch.into());
+    {
+        if matches!(api, Api::Responses) && tool["type"] == "namespace" {
+            let namespace = required(tool, "name")?;
+            let namespace_description = tool["description"].as_str().unwrap_or("");
+            for member in tool["tools"]
+                .as_array()
+                .ok_or_else(|| Refusal::invalid("namespace tools must be an array"))?
+            {
+                let mut member_tool = client_tool(api, member, Some(namespace))?;
+                member_tool.description = format!(
+                    "Namespace {namespace}:\n{namespace_description}\n\n{}",
+                    member_tool.description
+                );
+                normalized.push(member_tool);
             }
-            if kind != "function" {
-                return Err(Refusal::invalid("unsupported client tool type"));
+        } else {
+            normalized.push(client_tool(api, tool, None)?);
+        }
+    }
+    Ok(normalized)
+}
+fn client_tool(
+    api: Api,
+    tool: &Value,
+    namespace: Option<&str>,
+) -> Result<crate::conversation::ClientTool, Refusal> {
+    use crate::conversation::{ClientTool, ToolKind};
+    let kind = tool["type"].as_str().unwrap_or("function");
+    if kind == "tool_search" {
+        return Err(Message::ToolSearch.into());
+    }
+    let kind = match kind {
+        "function" => ToolKind::Function,
+        "custom" if matches!(api, Api::Responses) => ToolKind::Custom,
+        _ => return Err(Refusal::invalid("unsupported client tool type")),
+    };
+    let function = if matches!(api, Api::Chat) {
+        &tool["function"]
+    } else {
+        tool
+    };
+    let name = required(function, "name")?;
+    if matches!(name, "list_resources" | "read_resource") {
+        return Err(Message::ToolName(name.into()).into());
+    }
+    let mut description = function["description"].as_str().unwrap_or("").to_owned();
+    let schema = match kind {
+        ToolKind::Custom => {
+            match tool["format"]["type"].as_str() {
+                Some("grammar") => {
+                    let definition = required(&tool["format"], "definition")?;
+                    let syntax = required(&tool["format"], "syntax")?;
+                    description.push_str(&format!("\n\nGrammar ({syntax}):\n{definition}"));
+                }
+                None | Some("text") => {}
+                Some(_) => return Err(Refusal::invalid("unsupported custom tool format")),
             }
-            let function = if matches!(api, Api::Chat) {
-                &tool["function"]
-            } else {
-                tool
-            };
-            let name = required(function, "name")?;
-            if matches!(name, "list_resources" | "read_resource") {
-                return Err(Message::ToolName(name.into()).into());
-            }
+            serde_json::json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}).to_string()
+        }
+        ToolKind::Function => {
             let schema = &function[if matches!(api, Api::Messages) {
                 "input_schema"
             } else {
@@ -389,11 +432,14 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
             if !schema.is_object() {
                 return Err(Refusal::invalid("tool schema must be an object"));
             }
-            Ok(crate::conversation::ClientTool {
-                name: name.into(),
-                description: function["description"].as_str().unwrap_or("").into(),
-                schema: schema.to_string(),
-            })
-        })
-        .collect()
+            schema.to_string()
+        }
+    };
+    Ok(ClientTool {
+        name: name.into(),
+        description,
+        schema,
+        kind,
+        namespace: namespace.map(str::to_owned),
+    })
 }

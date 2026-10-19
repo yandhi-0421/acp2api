@@ -23,6 +23,8 @@ pub mod model_check;
 
 pub mod tool_check;
 
+pub mod custom_tool_check;
+
 pub mod system_check;
 
 pub mod journal_check;

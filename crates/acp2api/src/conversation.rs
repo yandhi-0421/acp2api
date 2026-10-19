@@ -47,11 +47,36 @@ pub(crate) fn system_prompt_addition(system: &[SystemPart]) -> Option<String> {
             .join("\n\n"),
     )
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolKind {
+    Function,
+    Custom,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClientTool {
     pub name: String,
     pub description: String,
     pub schema: String,
+    pub kind: ToolKind,
+    pub namespace: Option<String>,
+}
+impl ClientTool {
+    // Reserve the prefix and escape plain names too, so no namespace member can alias one.
+    pub(crate) fn mcp_name(&self) -> String {
+        fn hex(text: &str) -> String {
+            text.as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        }
+        match &self.namespace {
+            Some(namespace) => format!("__acp2api_n_{}_{}", hex(namespace), hex(&self.name)),
+            None if self.name.starts_with("__acp2api_") => {
+                format!("__acp2api_p_{}", hex(&self.name))
+            }
+            None => self.name.clone(),
+        }
+    }
 }
 pub(crate) enum ToolChoice {
     Auto,
@@ -59,6 +84,8 @@ pub(crate) enum ToolChoice {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct ToolCall {
+    pub kind: ToolKind,
+    pub namespace: Option<String>,
     pub name: String,
     pub arguments: String,
 }

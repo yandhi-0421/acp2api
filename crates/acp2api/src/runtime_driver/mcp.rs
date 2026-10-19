@@ -27,7 +27,7 @@ impl ToolSets {
         let mut random = [0; 32];
         getrandom::fill(&mut random).map_err(|e| e.to_string())?;
         let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        let tools:Result<Vec<_>,_>=tools.iter().map(|tool|serde_json::from_str::<Value>(&tool.schema).map(|schema|json!({"name":tool.name,"description":tool.description,"inputSchema":schema}))).collect();
+        let tools:Result<Vec<_>,_>=tools.iter().map(|tool|serde_json::from_str::<Value>(&tool.schema).map(|schema|json!({"name":tool.mcp_name(),"description":tool.description,"inputSchema":schema}))).collect();
         match self.sets.write().unwrap().entry(secret.clone()) {
             Entry::Vacant(entry) => {
                 entry.insert(tools.map_err(|e| e.to_string())?);
@@ -101,6 +101,8 @@ mod tests {
         let first = sets
             .insert(&[ClientTool {
                 name: "must_not_execute".into(),
+                kind: crate::conversation::ToolKind::Function,
+                namespace: None,
                 description: "First immutable tool".into(),
                 schema: r#"{"type":"object"}"#.into(),
             }])
