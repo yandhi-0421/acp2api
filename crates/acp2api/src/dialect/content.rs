@@ -22,14 +22,8 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     }];
     let mut items = Vec::new();
     let mut system = Vec::new();
-    if matches!(api, Api::Messages)
-        && let Some(text) = value["system"].as_str()
-    {
-        system.push(SystemPart {
-            role: Role::System,
-            name: None,
-            text: text.into(),
-        });
+    if matches!(api, Api::Messages) && !value["system"].is_null() {
+        system = system_parts(Role::System, None, &value["system"], "text")?;
     }
     if matches!(api, Api::Responses) && input.is_string() {
         items.push(Item::Message {
@@ -85,6 +79,33 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             crate::conversation::ToolChoice::Auto
         };
     Ok(parsed)
+}
+fn system_parts(
+    role: Role,
+    name: Option<&str>,
+    value: &Value,
+    text_kind: &str,
+) -> Result<Vec<SystemPart>, Refusal> {
+    let make = |text: &str| SystemPart {
+        role,
+        name: name.map(str::to_owned),
+        text: text.into(),
+    };
+    if let Some(text) = value.as_str() {
+        return Ok(vec![make(text)]);
+    }
+    value
+        .as_array()
+        .ok_or_else(|| Refusal::invalid("system prompt must be text or text blocks"))?
+        .iter()
+        .map(|part| {
+            let kind = required(part, "type")?;
+            if kind != text_kind {
+                return Err(Message::Content(kind.into()).into());
+            }
+            Ok(make(required(part, "text")?))
+        })
+        .collect()
 }
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
     v[key]

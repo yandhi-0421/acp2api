@@ -3,6 +3,7 @@ pub(crate) enum Part {
     Image { media_type: String, base64: String },
     Document { title: Option<String>, text: String },
 }
+#[derive(Clone, Copy)]
 pub(crate) enum Role {
     User,
     Assistant,
