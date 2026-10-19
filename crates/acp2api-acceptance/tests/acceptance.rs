@@ -6,6 +6,7 @@ mod timed_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
     scenario: Scenario,
+    logs: logs::LogState,
     startup: acp2api_acceptance::startup_check::Startup,
     endpoint: endpoints_and_streams::EndpointState,
     content: request_content::ContentState,
@@ -19,6 +20,8 @@ mod common;
 mod endpoints_and_streams;
 #[path = "steps/harness_regression.rs"]
 mod harness_regression;
+#[path = "steps/logs.rs"]
+mod logs;
 #[path = "steps/request_content.rs"]
 mod request_content;
 #[path = "steps/startup.rs"]
