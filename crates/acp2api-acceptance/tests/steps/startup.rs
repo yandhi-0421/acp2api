@@ -88,7 +88,11 @@ async fn unknown(w: &mut World, k: String, n: i64) {
 #[given(expr = "the configuration file has these lines:")]
 async fn syntax(w: &mut World, step: &cucumber::gherkin::Step) {
     w.startup.initialize().await;
-    std::fs::write(w.startup.config_path(), step.docstring.as_deref().unwrap()).unwrap();
+    std::fs::write(
+        w.startup.config_path(),
+        step.docstring.as_deref().unwrap().trim_matches('\n'),
+    )
+    .unwrap();
 }
 #[when(expr = "the owner runs {string}")]
 async fn cli(w: &mut World, command: String) {
