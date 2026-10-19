@@ -60,7 +60,7 @@ async fn virtual_external_inputs_precede_product_timers_and_waits_release_holds(
     let sleeper = clock.sleep_until(200);
     let hub = s.hub.clone();
     let task = tokio::spawn(async move {
-        sleeper.await;
+        let _timer_work = sleeper.await;
         let counts = hub.counts();
         assert_eq!(
             counts.ordered, counts.processed,
@@ -71,7 +71,6 @@ async fn virtual_external_inputs_precede_product_timers_and_waits_release_holds(
             .lock()
             .unwrap()
             .record(json!({"kind":"timer_callback"}));
-        drop(clock.sleep_until(u64::MAX));
     });
     s.time.advance_to(200).await;
     task.await.unwrap();

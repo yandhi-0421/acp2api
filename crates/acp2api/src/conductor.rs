@@ -30,7 +30,7 @@ impl Conductor {
                 let timer = clock.sleep_until(u64::MAX);
                 tokio::select! {
                     work = recv.recv() => { let Some(work) = work else { break }; let prompt = core.prompt(&work.turn); drop(work.hold); let answer = runtime.prompt(prompt, &work.turn.model).await.map(|(text, input_tokens)| { let output_tokens = crate::conversation::output_tokens(&text); Answer { text, input_tokens, output_tokens } }); let _ = work.answer.send(answer); },
-                    _ = timer => {}
+                    work = timer => { drop(work); }
                 }
             }
             runtime.stop().await;

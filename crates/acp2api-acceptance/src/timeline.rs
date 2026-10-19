@@ -41,8 +41,7 @@ impl TimeLine {
                 let due: Vec<_> = s.external.range(..=at).map(|(at, _)| *at).collect();
                 for key in due {
                     for event in s.external.remove(&key).unwrap() {
-                        let label = event["label"].as_str().unwrap().to_owned();
-                        s.out(&label, event["command"].clone());
+                        crate::fake::dispatch(&mut s, event);
                     }
                 }
             }

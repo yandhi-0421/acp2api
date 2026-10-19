@@ -23,6 +23,7 @@ pub enum TurnStep {
     BuiltInRuns {
         name: String,
     },
+    /// Uses captured Error 400 grammar. Other account error classes are synthetic assumptions.
     ErrorLine {
         code: u16,
         status: String,
@@ -84,17 +85,23 @@ struct Paused {
     plan: TurnPlan,
 }
 #[derive(Debug)]
+struct ActiveTurn {
+    id: Value,
+    label: String,
+    ignore_cancel: bool,
+}
+#[derive(Debug)]
 pub(crate) struct FakeState {
     plans: VecDeque<TurnPlan>,
     next_session: u64,
     pub model: String,
     signed_in: bool,
-    pending: Option<(Value, String)>,
+    pending: HashMap<String, ActiveTurn>,
+    eager: HashMap<String, HashSet<String>>,
     servers: HashMap<String, Vec<Value>>,
     offered: HashSet<String>,
     mcp_count: usize,
     gates: HashMap<String, Paused>,
-    ignore_cancel: bool,
 }
 impl Default for FakeState {
     fn default() -> Self {
@@ -103,12 +110,12 @@ impl Default for FakeState {
             next_session: 0,
             model: "gemini-3.8-flash".into(),
             signed_in: true,
-            pending: None,
+            pending: HashMap::new(),
+            eager: HashMap::new(),
             servers: HashMap::new(),
             offered: HashSet::new(),
             mcp_count: 0,
             gates: HashMap::new(),
-            ignore_cancel: false,
         }
     }
 }
@@ -201,6 +208,15 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
             }
             s.fake.next_session += 1;
             let session = format!("session-{}", s.fake.next_session);
+            s.fake.eager.insert(
+                session.clone(),
+                call["params"]["_meta"]["antigravity"]["eagerMcpServers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|name| name.as_str().map(str::to_owned))
+                    .collect(),
+            );
             s.fake.servers.insert(
                 session.clone(),
                 call["params"]["mcpServers"]
@@ -228,21 +244,31 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
         }
 
         "session/cancel" => {
-            if s.fake.ignore_cancel {
+            let session = call["params"]["sessionId"].as_str().unwrap_or("");
+            if s.fake
+                .pending
+                .get(session)
+                .is_some_and(|turn| turn.ignore_cancel)
+            {
                 return;
             }
-            if let Some((pending, session)) = s.fake.pending.take() {
+            if let Some(turn) = s.fake.pending.remove(session) {
+                s.fake.gates.retain(|_, paused| paused.session != session);
+                for events in s.external.values_mut() {
+                    events.retain(|event| event["session"] != session);
+                }
+                s.external.retain(|_, events| !events.is_empty());
                 emit(
                     s,
-                    label,
+                    &turn.label,
                     s.now,
                     json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"tool_call_update","toolCallId":"cancelled","status":"failed","content":[{"type":"content","content":{"type":"text","text":"The request was cancelled by the client."}}]}}}),
                 );
                 emit(
                     s,
-                    label,
+                    &turn.label,
                     s.now,
-                    result(pending, json!({"stopReason":"cancelled"})),
+                    result(turn.id, json!({"stopReason":"cancelled"})),
                 );
             }
         }
@@ -270,7 +296,22 @@ pub(crate) fn mcp_requests(s: &mut State, call: &Value) -> Vec<(String, Value)> 
     if !s.fake.offered.insert(session.clone()) {
         return Vec::new();
     }
-    let servers = s.fake.servers.get(&session).cloned().unwrap_or_default();
+    let eager = s.fake.eager.get(&session);
+    let servers: Vec<_> = s
+        .fake
+        .servers
+        .get(&session)
+        .into_iter()
+        .flatten()
+        .filter(|server| {
+            eager.is_some_and(|names| {
+                server["name"]
+                    .as_str()
+                    .is_some_and(|name| names.contains(name))
+            })
+        })
+        .cloned()
+        .collect();
     s.fake.mcp_count += servers.len() * 3;
     if s.fake.mcp_count > 300 {
         s.failure = Some("fake MCP request cap: 300".into());
@@ -399,8 +440,14 @@ impl Record {
 
 fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPlan) {
     let mut at = s.now;
-    s.fake.pending = Some((id.clone(), session.clone()));
-    s.fake.ignore_cancel = matches!(plan.end, TurnEndPlan::IgnoreCancel);
+    s.fake.pending.insert(
+        session.clone(),
+        ActiveTurn {
+            id: id.clone(),
+            label: label.into(),
+            ignore_cancel: matches!(plan.end, TurnEndPlan::IgnoreCancel),
+        },
+    );
     let mut remaining: VecDeque<_> = plan.steps.into();
     while let Some(step) = remaining.pop_front() {
         let update = match step {
@@ -419,14 +466,7 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
             }
             TurnStep::Stderr(line) => {
                 let c = json!({"op":"Err","line":line});
-                if at <= s.now {
-                    s.out(label, c);
-                } else {
-                    s.external
-                        .entry(at)
-                        .or_default()
-                        .push(json!({"label":label,"command":c}));
-                }
+                turn_schedule(s, label, at, (&session, &id), c, false);
                 continue;
             }
             TurnStep::ErrorLine {
@@ -434,28 +474,32 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
                 status,
                 message,
             } => {
-                schedule(
+                turn_schedule(
                     s,
                     label,
                     at,
-                    json!({"op":"Err","line":format!("session={session} code={code} status={status} {message}")}),
+                    (&session, &id),
+                    json!({"op":"Err","line":format!("Error {code}, Message: {message}, Status: {status}, Details: []")}),
+                    false,
                 );
                 continue;
             }
             TurnStep::ClientToolCall { name, arguments } => {
-                emit(
+                turn_emit(
                     s,
                     label,
                     at,
-                    json!({"jsonrpc":"2.0","id":9000,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":"tool-1","title":name,"rawInput":arguments},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}}),
+                    (&session, &id),
+                    json!({"jsonrpc":"2.0","id":9000,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":"tool-1","kind":"other","status":"pending","title":format!("Run {name}?"),"rawInput":serde_json::from_str::<Value>(&arguments).expect("client tool arguments must be JSON")},"options":[{"optionId":"allow_always","name":"Allow Always","kind":"allow_always"},{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]}}),
                 );
                 continue;
             }
             TurnStep::BuiltInPermission { title } => {
-                emit(
+                turn_emit(
                     s,
                     label,
                     at,
+                    (&session, &id),
                     json!({"jsonrpc":"2.0","id":9001,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":"builtin-1","title":title},"options":[]}}),
                 );
                 continue;
@@ -469,8 +513,8 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
                     gate,
                     Paused {
                         label: label.into(),
-                        id,
-                        session,
+                        id: id.clone(),
+                        session: session.clone(),
                         plan: TurnPlan {
                             steps: remaining.into(),
                             end: plan.end,
@@ -480,33 +524,65 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
                 return;
             }
         };
-        emit(
+        turn_emit(
             s,
             label,
             at,
+            (&session, &id),
             json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":update}}),
         );
     }
-    match plan.end {
-        TurnEndPlan::Stop(stop) => emit(s, label, at, result(id, json!({"stopReason":stop}))),
-        TurnEndPlan::RpcError { code, message } => emit(
-            s,
-            label,
-            at,
-            json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}),
-        ),
-        TurnEndPlan::Exit(code) => schedule(s, label, at, json!({"op":"Exit","code":code})),
-        TurnEndPlan::Never | TurnEndPlan::IgnoreCancel => {}
-    }
+    let command = match plan.end {
+        TurnEndPlan::Stop(stop) => {
+            json!({"op":"Out","line":result(id.clone(), json!({"stopReason":stop})).to_string()})
+        }
+        TurnEndPlan::RpcError { code, message } => {
+            json!({"op":"Out","line":json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}).to_string()})
+        }
+        TurnEndPlan::Exit(code) => json!({"op":"Exit","code":code}),
+        TurnEndPlan::Never | TurnEndPlan::IgnoreCancel => return,
+    };
+    turn_schedule(s, label, at, (&session, &id), command, true);
 }
 
-fn schedule(s: &mut State, label: &str, at: u64, command: Value) {
+fn turn_emit(s: &mut State, label: &str, at: u64, owner: (&str, &Value), value: Value) {
+    turn_schedule(
+        s,
+        label,
+        at,
+        owner,
+        json!({"op":"Out","line":value.to_string()}),
+        false,
+    );
+}
+fn turn_schedule(
+    s: &mut State,
+    label: &str,
+    at: u64,
+    (session, id): (&str, &Value),
+    command: Value,
+    terminal: bool,
+) {
+    let event = json!({"label":label,"command":command,"session":session,"prompt_id":id,"terminal":terminal});
     if at <= s.now {
-        s.out(label, command);
+        dispatch(s, event);
     } else {
-        s.external
-            .entry(at)
-            .or_default()
-            .push(json!({"label":label,"command":command}));
+        s.external.entry(at).or_default().push(event);
     }
+}
+pub(crate) fn dispatch(s: &mut State, event: Value) {
+    if let Some(session) = event["session"].as_str() {
+        if !s
+            .fake
+            .pending
+            .get(session)
+            .is_some_and(|turn| turn.id == event["prompt_id"])
+        {
+            return;
+        }
+        if event["terminal"] == true {
+            s.fake.pending.remove(session);
+        }
+    }
+    s.out(event["label"].as_str().unwrap(), event["command"].clone());
 }

@@ -72,7 +72,6 @@ pub(crate) struct State {
     pub failure: Option<String>,
     pub sleepers: HashMap<u64, Sleeper>,
     pub wake_pending: Vec<u64>,
-    pub completed: Vec<u64>,
     pub external: BTreeMap<u64, Vec<Value>>,
     pub servers: HashMap<String, Arc<Mutex<TcpStream>>>,
     pub connections: Vec<TcpStream>,
@@ -149,7 +148,6 @@ impl Hub {
                 failure: None,
                 sleepers: HashMap::new(),
                 wake_pending: Vec::new(),
-                completed: Vec::new(),
                 external: BTreeMap::new(),
                 servers: HashMap::new(),
                 connections: Vec::new(),
@@ -303,9 +301,6 @@ impl Hub {
                 }
                 "now" | "drain" => json!({"now":state.now}),
                 "sleep" => {
-                    let completed = std::mem::take(&mut state.completed);
-                    state.wake_pending.retain(|id| !completed.contains(id));
-                    state.counts.wake_pending = state.wake_pending.len() as u64;
                     state.next_sleep += 1;
                     let id = state.next_sleep;
                     let at = message["at"].as_u64().unwrap().max(state.now);
@@ -331,14 +326,15 @@ impl Hub {
                     }
                     continue;
                 }
+                "sleep_delivered" => {
+                    let id = message["id"].as_u64().unwrap();
+                    state.sleepers.remove(&id);
+                    json!({"ok":true})
+                }
                 "sleep_done" => {
                     let id = message["id"].as_u64().unwrap();
                     state.sleepers.remove(&id);
-                    if message["ready"] == true {
-                        state.completed.push(id);
-                    } else {
-                        state.wake_pending.retain(|x| *x != id);
-                    }
+                    state.wake_pending.retain(|x| *x != id);
                     state.counts.wake_pending = state.wake_pending.len() as u64;
                     json!({"ok":true})
                 }

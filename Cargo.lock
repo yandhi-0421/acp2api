@@ -31,11 +31,13 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
  "toml",
+ "windows-sys",
 ]
 
 [[package]]

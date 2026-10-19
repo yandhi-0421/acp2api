@@ -57,13 +57,12 @@ impl std::fmt::Debug for TestRoot {
 }
 impl TestRoot {
     pub fn new() -> Self {
-        let target = std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
-        let path = target
-            .join("scenario-roots")
-            .join(std::process::id().to_string())
-            .join(random_hex(12));
+        let runs = scenario_roots();
+        cleanup_stale_runs(&runs);
+        let run = runs.join(std::process::id().to_string());
+        fs::create_dir_all(&run).unwrap();
+        fs::write(run.join(".acp2api-run"), "acp2api-scenario-run-v1\n").unwrap();
+        let path = run.join(random_hex(12));
         for child in [
             "account",
             "home",
@@ -275,4 +274,178 @@ fn random_password() -> String {
         .map(|p| std::str::from_utf8(p).unwrap())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+fn scenario_roots() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"))
+        .join("scenario-roots")
+}
+fn cleanup_stale_runs(root: &Path) {
+    if !fs::symlink_metadata(root).is_ok_and(|meta| meta.is_dir() && !meta.is_symlink()) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+            .filter(|pid| *pid > 0 && *pid <= i32::MAX as u32)
+        else {
+            continue;
+        };
+        if !entry
+            .file_type()
+            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+        {
+            continue;
+        }
+        let path = entry.path();
+        let marker = path.join(".acp2api-run");
+        let owned = fs::symlink_metadata(&marker)
+            .is_ok_and(|meta| meta.is_file() && !meta.is_symlink() && meta.len() == 24)
+            && fs::read_to_string(marker).is_ok_and(|text| text == "acp2api-scenario-run-v1\n");
+        if (owned || legacy_run(&path)) && definitely_exited(pid) {
+            // remove_dir_all does not follow links inside an owned run.
+            match fs::remove_dir_all(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("stale test run cleanup failed: {error}"),
+            }
+        }
+    }
+}
+fn legacy_run(path: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    let mut found = false;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        if name.len() != 24
+            || !name.bytes().all(|c| c.is_ascii_hexdigit())
+            || !entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+        {
+            return false;
+        }
+        for child in [
+            "account",
+            "home",
+            "local-app-data",
+            "temp",
+            "path",
+            "exe",
+            "data",
+            "builds",
+        ] {
+            if !fs::symlink_metadata(entry.path().join(child))
+                .is_ok_and(|meta| meta.is_dir() && !meta.is_symlink())
+            {
+                return false;
+            }
+        }
+        found = true;
+    }
+    found
+}
+#[cfg(unix)]
+fn definitely_exited(pid: u32) -> bool {
+    (unsafe { libc::kill(pid as i32, 0) != 0 })
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+#[cfg(windows)]
+fn definitely_exited(pid: u32) -> bool {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    unsafe {
+        let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            return GetLastError() == ERROR_INVALID_PARAMETER;
+        }
+        let exited = WaitForSingleObject(process, 0) == WAIT_OBJECT_0;
+        CloseHandle(process);
+        exited
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn new_root_cleans_only_terminated_owned_runs() {
+        let active = TestRoot::new();
+        let runs = active.path.parent().unwrap().parent().unwrap();
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "exit", "0"]);
+            command
+        } else {
+            std::process::Command::new("/usr/bin/true")
+        };
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while child.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "cleanup fixture process cap: 3 s"
+            );
+            std::thread::yield_now();
+        }
+        let stale = runs.join(pid.to_string());
+        assert!(!stale.exists(), "fixture must not replace previous output");
+        fs::create_dir(&stale).unwrap();
+        fs::write(stale.join(".acp2api-run"), "acp2api-scenario-run-v1\n").unwrap();
+        fs::write(stale.join("sentinel"), "owned interrupted run").unwrap();
+        let unknown = runs.join(format!("unknown-{}", random_hex(12)));
+        fs::create_dir(&unknown).unwrap();
+        fs::write(unknown.join("sentinel"), "unknown output").unwrap();
+        let outside = active.path.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("sentinel"), "outside output").unwrap();
+        #[cfg(unix)]
+        let link = {
+            let link = runs.join(format!("link-{}", random_hex(12)));
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            link
+        };
+        let next = TestRoot::new();
+        assert!(
+            !stale.exists(),
+            "default root startup must remove stale owned output"
+        );
+        assert!(active.path.is_dir(), "active run must remain");
+        assert!(
+            unknown.join("sentinel").is_file(),
+            "unknown output must remain"
+        );
+        assert!(
+            outside.join("sentinel").is_file(),
+            "outside output must remain"
+        );
+        #[cfg(unix)]
+        {
+            assert!(link.is_symlink());
+            fs::remove_file(link).unwrap();
+        }
+        fs::remove_dir_all(unknown).unwrap();
+        next.cleanup();
+        active.cleanup();
+    }
 }

@@ -1,12 +1,16 @@
 use acp2api_acceptance::Scenario;
 use cucumber::{World as _, event::ScenarioFinished};
 mod selection;
+#[path = "support/timed_steps.rs"]
+mod timed_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
     scenario: Scenario,
 }
 #[path = "steps/common.rs"]
 mod common;
+#[path = "steps/harness_regression.rs"]
+mod harness_regression;
 #[path = "steps/system_prompt_and_role_labels.rs"]
 mod system_prompt_and_role_labels;
 #[path = "steps/token_usage.rs"]
@@ -14,6 +18,8 @@ mod token_usage;
 #[tokio::main]
 async fn main() {
     let config: toml::Value = toml::from_str(include_str!("runner.toml")).unwrap();
+    let feature_root = std::env::var("ACP2API_ACCEPTANCE_FEATURES")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../features/acp2api").into());
     let args: Vec<_> = std::env::args().collect();
     let explicit_tags = std::env::var_os("CUCUMBER_FILTER_TAGS").is_some()
         || args
@@ -25,10 +31,7 @@ async fn main() {
         use futures_util::StreamExt as _;
         let parser = selection::Selected::new(&args, &default_tags);
         let features = parser
-            .parse(
-                concat!(env!("CARGO_MANIFEST_DIR"), "/../../features/acp2api"),
-                cucumber::cli::Empty {},
-            )
+            .parse(feature_root.as_str(), cucumber::cli::Empty {})
             .collect::<Vec<_>>()
             .await;
         let steps = World::collection();
@@ -56,6 +59,7 @@ async fn main() {
         return;
     }
     World::cucumber::<&str>()
+        .steps(timed_steps::collection::<World>())
         .with_parser(selection::Selected::new(&args, &default_tags))
         .max_concurrent_scenarios(config["concurrent_scenarios"].as_integer().unwrap() as usize)
         .after(|_, _, _, finished, world| {
@@ -68,12 +72,9 @@ async fn main() {
                 }
             })
         })
-        .filter_run_and_exit(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../../features/acp2api"),
-            move |_, _, scenario| {
-                explicit_tags
-                    || default_tags == "not @wip" && !scenario.tags.iter().any(|tag| tag == "wip")
-            },
-        )
+        .filter_run_and_exit(feature_root.as_str(), move |_, _, scenario| {
+            explicit_tags
+                || default_tags == "not @wip" && !scenario.tags.iter().any(|tag| tag == "wip")
+        })
         .await;
 }

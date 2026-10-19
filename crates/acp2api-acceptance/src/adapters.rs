@@ -27,7 +27,7 @@ impl Clock for HarnessClock {
     fn wall(&self) -> SystemTime {
         UNIX_EPOCH + Duration::from_millis(1_792_281_600_000 + self.now())
     }
-    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, ()> {
+    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
         let id = self.link.call(json!({"op":"sleep","at":at}))["id"]
             .as_u64()
             .unwrap();
@@ -68,12 +68,17 @@ struct Sleep {
     ready: bool,
 }
 impl std::future::Future for Sleep {
-    type Output = ();
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    type Output = Hold;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Hold> {
         match Pin::new(&mut self.recv).poll(cx) {
             Poll::Ready(Ok(true)) => {
                 self.ready = true;
-                Poll::Ready(())
+                self.link.call(json!({"op":"sleep_delivered","id":self.id}));
+                let link = self.link.clone();
+                let id = self.id;
+                Poll::Ready(Hold::on_drop(move || {
+                    link.call(json!({"op":"sleep_done","id":id}));
+                }))
             }
             Poll::Ready(_) => panic!("timer hub closed"),
             Poll::Pending => Poll::Pending,
@@ -82,8 +87,9 @@ impl std::future::Future for Sleep {
 }
 impl Drop for Sleep {
     fn drop(&mut self) {
-        self.link
-            .call(json!({"op":"sleep_done","id":self.id,"ready":self.ready}));
+        if !self.ready {
+            self.link.call(json!({"op":"sleep_done","id":self.id}));
+        }
         let _ = self.socket.shutdown(std::net::Shutdown::Both);
     }
 }

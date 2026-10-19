@@ -30,6 +30,7 @@ pub enum HoldKind {
     McpRequest,
     TurnEvent,
 }
+#[must_use = "keep the hold until its work finishes or waits again"]
 pub struct Hold(Option<Box<dyn FnOnce() + Send>>);
 impl Hold {
     pub fn empty() -> Self {
@@ -49,7 +50,8 @@ impl Drop for Hold {
 pub trait Clock: Send + Sync {
     fn now(&self) -> Moment;
     fn wall(&self) -> SystemTime;
-    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, ()>;
+    /// Keep the returned hold until work caused by the wake finishes or waits again.
+    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold>;
     fn hold(&self, kind: HoldKind) -> Hold;
 }
 pub trait ProcessLauncher: Send + Sync {
