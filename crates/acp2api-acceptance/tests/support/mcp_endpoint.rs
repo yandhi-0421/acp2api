@@ -44,6 +44,7 @@ impl Endpoint {
                     got.fetch_add(1, Ordering::SeqCst) < 3,
                     "MCP fixture request cap: 3"
                 );
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
