@@ -38,12 +38,17 @@ impl WireDialect for Chat {
     fn body(&self, w: &Encoding, a: &Answer) -> Value {
         json!({"id":w.id,"object":"chat.completion","created":w.created,"model":w.model,"choices":[{"index":0,"message":{"role":"assistant","content":a.text,"refusal":null},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":a.input_tokens,"completion_tokens":a.output_tokens,"total_tokens":a.input_tokens+a.output_tokens}})
     }
-    fn start(&self, w: &mut Encoding) -> Vec<Event> {
-        vec![self.chunk(w, json!({"role":"assistant","content":""}), Value::Null)]
+    fn start(&self, _: &mut Encoding) -> Vec<Event> {
+        Vec::new()
     }
     fn text(&self, w: &mut Encoding, text: &str) -> Vec<Event> {
+        let delta = if w.text.is_empty() {
+            json!({"role":"assistant","content":text})
+        } else {
+            json!({"content":text})
+        };
         w.text.push_str(text);
-        vec![self.chunk(w, json!({"content":text}), Value::Null)]
+        vec![self.chunk(w, delta, Value::Null)]
     }
     fn end(&self, w: &mut Encoding, _: &Answer) -> Vec<Event> {
         vec![
