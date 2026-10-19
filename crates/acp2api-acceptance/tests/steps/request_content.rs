@@ -127,6 +127,20 @@ async fn unsupported_media(w: &mut World, endpoint: String, media: String) {
 }
 #[then(expr = "acp2api refuses the request with HTTP 400 and the message {string}")]
 fn refusal(w: &mut World, message: String) {
+    if message.contains("tool tool_search") || message.contains("client tool name") {
+        c::refusal(
+            &w.scenario,
+            &w.tools.endpoint,
+            &message,
+            if message.contains("tool tool_search") {
+                "unsupported_tool"
+            } else {
+                "unsupported_tool_name"
+            },
+            None,
+        );
+        return;
+    }
     let (code, param) = if message.contains("request field file_id") {
         ("unsupported_parameter", Some("file_id"))
     } else if message.contains("with a URL") {
