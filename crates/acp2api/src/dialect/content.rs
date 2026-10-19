@@ -110,7 +110,71 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         } else {
             crate::conversation::ToolChoice::Auto
         };
+    parsed.unknown_fields = value
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.keys())
+        .filter(|name| !known_field(api, name))
+        .cloned()
+        .collect();
     Ok(parsed)
+}
+fn known_field(api: Api, name: &str) -> bool {
+    matches!(
+        name,
+        "model"
+            | "stream"
+            | "stream_options"
+            | "tools"
+            | "tool_choice"
+            | "n"
+            | "thinking"
+            | "output_config"
+            | "reasoning"
+            | "reasoning_effort"
+            | "temperature"
+            | "top_p"
+            | "top_k"
+            | "presence_penalty"
+            | "frequency_penalty"
+            | "seed"
+            | "logit_bias"
+            | "max_tokens"
+            | "max_completion_tokens"
+            | "max_output_tokens"
+            | "cache_control"
+            | "prompt_cache_key"
+            | "service_tier"
+            | "store"
+            | "truncation"
+            | "prediction"
+            | "metadata"
+            | "user"
+            | "safety_identifier"
+            | "client_metadata"
+            | "context_management"
+            | "parallel_tool_calls"
+            | "max_tool_calls"
+            | "verbosity"
+            | "text"
+            | "response_format"
+            | "include"
+            | "stop"
+            | "stop_sequences"
+            | "logprobs"
+            | "top_logprobs"
+            | "web_search_options"
+            | "audio"
+            | "modalities"
+            | "background"
+            | "previous_response_id"
+            | "conversation"
+            | "citations"
+    ) || match api {
+        Api::Messages => matches!(name, "messages" | "system"),
+        Api::Chat => name == "messages",
+        Api::Responses => matches!(name, "input" | "instructions"),
+    }
 }
 fn system_parts(
     role: Role,

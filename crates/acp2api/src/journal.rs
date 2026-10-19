@@ -233,3 +233,109 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
         seconds % 60
     ))
 }
+
+#[derive(Clone)]
+pub(crate) struct Journal(std::sync::Arc<JournalState>);
+struct JournalState {
+    writer: std::sync::Mutex<Writer>,
+    prefix: String,
+    sequence: std::sync::atomic::AtomicU64,
+}
+#[derive(Clone)]
+pub(crate) struct Request {
+    pub id: String,
+    pub api: Api,
+    pub model: Option<String>,
+    pub unknown_fields: Vec<String>,
+    started: crate::Moment,
+}
+pub(crate) struct Session {
+    pub id: String,
+    pub kind: SessionUse,
+}
+pub(crate) enum Outcome {
+    Success { input: u64, output: u64 },
+    Refused(&'static str),
+    Failed,
+    Disconnected,
+}
+pub(crate) struct Completion {
+    pub request: Request,
+    pub session: Option<Session>,
+    pub outcome: Outcome,
+}
+impl Journal {
+    pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
+        let mut random = [0; 8];
+        getrandom::fill(&mut random).map_err(io::Error::other)?;
+        Ok(Self(std::sync::Arc::new(JournalState {
+            writer: std::sync::Mutex::new(Writer::open(folder, wall)?),
+            prefix: random.iter().map(|b| format!("{b:02x}")).collect(),
+            sequence: std::sync::atomic::AtomicU64::new(1),
+        })))
+    }
+    pub(crate) fn begin(&self, api: Api, started: crate::Moment) -> Request {
+        let n = self
+            .0
+            .sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Request {
+            id: format!("req_{}_{n}", self.0.prefix),
+            api,
+            model: None,
+            unknown_fields: Vec::new(),
+            started,
+        }
+    }
+    pub(crate) fn complete(
+        &self,
+        completion: Completion,
+        clock: &dyn crate::Clock,
+    ) -> io::Result<()> {
+        let Completion {
+            request,
+            session,
+            outcome,
+        } = completion;
+        let (result, error_code, input_tokens, output_tokens) = match outcome {
+            Outcome::Success { input, output } => {
+                (ResultKind::Success, None, Some(input), Some(output))
+            }
+            Outcome::Refused(code) => (ResultKind::Refused, Some(code), None, None),
+            Outcome::Failed => (ResultKind::Failed, Some("upstream_error"), None, None),
+            Outcome::Disconnected => (
+                ResultKind::Disconnected,
+                Some("client_disconnected"),
+                None,
+                None,
+            ),
+        };
+        let (session, session_use) = session
+            .map(|s| (Some(s.id.chars().take(12).collect()), Some(s.kind)))
+            .unwrap_or((None, None));
+        let record = RequestRecord {
+            time: timestamp(clock.wall())?,
+            request_id: request.id,
+            api: request.api,
+            model: request.model,
+            session,
+            session_use,
+            duration_ms: clock.now().saturating_sub(request.started),
+            input_tokens,
+            output_tokens,
+            result,
+            error_code: error_code.map(str::to_owned),
+            unknown_fields: request.unknown_fields,
+        };
+        let mut writer = self
+            .0
+            .writer
+            .lock()
+            .map_err(|_| io::Error::other("journal writer failed"))?;
+        writer.write(&record)?;
+        use std::io::Write;
+        let mut terminal = std::io::stdout().lock();
+        writeln!(terminal, "acp2api: {}", serde_json::to_string(&record)?)?;
+        terminal.flush()
+    }
+}

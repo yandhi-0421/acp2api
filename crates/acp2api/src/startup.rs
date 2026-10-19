@@ -95,7 +95,7 @@ pub(crate) async fn start(
         "acp2api: {}: management panel at {panel}",
         ports.release.version()
     );
-    let _journal = crate::journal::Writer::open(&data.join("logs"), ports.clock.wall())
+    let journal = crate::journal::Journal::open(&data.join("logs"), ports.clock.wall())
         .map_err(|e| e.to_string())?;
     let tools = crate::runtime_driver::mcp::ToolSets::new(port);
     let program = data.join("official-runtime").join(if cfg!(windows) {
@@ -116,12 +116,14 @@ pub(crate) async fn start(
     } else {
         None
     };
-    let (conductor, task) = crate::conductor::Conductor::start(runtime, ports.clock.clone());
+    let (conductor, task) =
+        crate::conductor::Conductor::start(runtime, ports.clock.clone(), journal.clone());
     let router = crate::front::router(
         conductor,
         ports.clock.clone(),
         settings.local_api_key,
         tools,
+        journal,
     );
     if opened.first_start {
         ports.browser.open(&panel);
