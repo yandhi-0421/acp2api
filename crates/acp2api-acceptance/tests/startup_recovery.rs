@@ -1,6 +1,67 @@
 use acp2api_acceptance::startup_check::Startup;
 
 #[tokio::test]
+#[cfg(unix)]
+async fn failed_terminal_delivery_leaves_no_undisclosed_saved_credentials() {
+    use std::os::{fd::OwnedFd, unix::net::UnixStream};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut startup = Startup::default();
+    startup.initialize().await;
+    let run_path = startup.root().path.join("delivery-run.toml");
+    std::fs::write(
+        &run_path,
+        toml::to_string(startup.run.as_ref().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let (terminal, reader) = UnixStream::pair().unwrap();
+    drop(reader);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_acp2api-test-host"))
+        .env_clear()
+        .env("ACP2API_TEST_RUN", run_path)
+        .current_dir(&startup.root().path)
+        .args([
+            "--data-dir",
+            startup.data.to_str().unwrap(),
+            "--port",
+            &startup.root().port.to_string(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(OwnedFd::from(terminal))
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("test host with a terminal that rejects writes");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("terminal failure observation deadline (8 s)");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert!(
+        !status.success(),
+        "terminal delivery failure must stop startup"
+    );
+    assert!(
+        !startup.config_path().exists(),
+        "failed terminal delivery must not save undisclosed credentials"
+    );
+    assert!(startup.browser_urls().is_empty());
+    startup
+        .launch_data(vec!["--port".into(), startup.root().port.to_string()])
+        .await;
+    assert!(startup.exited.is_none());
+    startup.remember_secrets();
+    assert!(startup.responds(startup.root().port).await);
+    startup.stop().await;
+}
+
+#[tokio::test]
 async fn occupied_first_start_then_retry_delivers_the_saved_credentials() {
     let mut startup = Startup::default();
     startup.initialize().await;
