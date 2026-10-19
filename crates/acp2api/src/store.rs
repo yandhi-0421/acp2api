@@ -53,7 +53,11 @@ fn syntax_location(text: &str, offset: usize) -> String {
     }
     format!("at line {line}")
 }
-pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
+pub(crate) fn read(
+    path: &Path,
+    highest: u8,
+    deliver: impl FnOnce(&Opened) -> Result<(), String>,
+) -> Result<Opened, String> {
     let text = match fs::read_to_string(path) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -151,6 +155,13 @@ pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
         management_password_hash,
         agy_acp_server_path,
     };
+    let opened = Opened {
+        settings,
+        first_start: text.is_none(),
+        new_key,
+        new_password,
+    };
+    deliver(&opened)?;
     if text.is_none()
         || [
             "port",
@@ -161,14 +172,9 @@ pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
         .iter()
         .any(|key| !table.contains_key(*key))
     {
-        save(path, &settings)?;
+        save(path, &opened.settings)?;
     }
-    Ok(Opened {
-        settings,
-        first_start: text.is_none(),
-        new_key,
-        new_password,
-    })
+    Ok(opened)
 }
 fn valid_password_hash(value: &str) -> bool {
     let Ok(hash) = PasswordHash::new(value) else {

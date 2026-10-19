@@ -64,13 +64,21 @@ pub(crate) async fn start(
     let opened = crate::store::read(
         &data.join("config.toml"),
         ports.release.highest_concurrency_limit(),
+        |opened| {
+            use std::io::Write;
+            let mut terminal = std::io::stdout().lock();
+            let result = (|| {
+                if let Some(key) = &opened.new_key {
+                    writeln!(terminal, "acp2api: local API key: {key}")?;
+                }
+                if let Some(password) = &opened.new_password {
+                    writeln!(terminal, "acp2api: management password: {password}")?;
+                }
+                terminal.flush()
+            })();
+            result.map_err(|_| "cannot deliver generated credentials to the terminal".into())
+        },
     )?;
-    if let Some(key) = opened.new_key {
-        println!("acp2api: local API key: {key}");
-    }
-    if let Some(password) = opened.new_password {
-        println!("acp2api: management password: {password}");
-    }
     let settings = opened.settings;
     let port = options.port.unwrap_or(settings.port);
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))

@@ -95,7 +95,10 @@ async fn occupied_first_start_then_retry_delivers_the_saved_credentials() {
     // Retry the exact configuration left by the failed start.
     startup.launch_data(args).await;
     assert!(startup.exited.is_none(), "retry must remain available");
-    assert!(startup.responds(port).await, "retry must use the chosen port");
+    assert!(
+        startup.responds(port).await,
+        "retry must use the chosen port"
+    );
     startup.stop().await;
     let terminal = format!("{first_terminal}\n{}", startup.terminal());
     let saved = startup.saved().unwrap();
