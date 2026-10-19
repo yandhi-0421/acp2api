@@ -7,13 +7,13 @@ Feature: System prompt and role labels
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-019 @issue-41 @wip
+  @FR-019 @issue-41
   Scenario: The model gets the system prompt as an addition to the system text, not as user text
     When an API client sends a request to "POST /v1/messages" with the system prompt "Answer in French." and one user message "Hello"
     Then the ACP session gets the system prompt addition "Answer in French."
     And the prompt that the official runtime gets is "Hello"
 
-  @FR-019 @issue-41 @wip
+  @FR-019 @issue-41
   Scenario Outline: acp2api joins the parts of the system prompt with one blank line
     When an API client sends a request to "<endpoint>" with <parts> and then one user message "Hello"
     Then the ACP session gets this system prompt addition:
@@ -29,7 +29,7 @@ Feature: System prompt and role labels
       | POST /v1/chat/completions | the system message "Part one." and the developer message "Part two."     |
       | POST /v1/responses        | the instructions "Part one." and the developer message "Part two."       |
 
-  @FR-019 @issue-41 @wip
+  @FR-019 @issue-41
   Scenario: A part of the system prompt with a name starts with its role label
     When an API client sends a request to "POST /v1/chat/completions" with the system message "Use short answers." with the name "example_user", and then one user message "Hello"
     Then the ACP session gets this system prompt addition:
@@ -38,7 +38,7 @@ Feature: System prompt and role labels
       Use short answers.
       """
 
-  @FR-019 @issue-41 @wip
+  @FR-019 @issue-41
   Scenario: acp2api removes the attribution block of Claude Code
     When Claude Code sends a request to "POST /v1/messages" whose first system block is the attribution block of Claude Code, and whose second system block is "You are Claude Code."
     Then the ACP session gets the system prompt addition "You are Claude Code."
