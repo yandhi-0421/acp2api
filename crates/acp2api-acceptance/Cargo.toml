@@ -1,0 +1,34 @@
+[package]
+name = "acp2api-acceptance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+acp2api = { path = "../acp2api" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+argon2.workspace = true
+getrandom.workspace = true
+bytes = "=1.12.1"
+http-body-util = "=0.1.5"
+hyper-util = { version = "=0.1.21", features = ["tokio"] }
+hyper = { version = "=1.12.0", features = ["client", "http1"] }
+
+[dev-dependencies]
+futures-util = "=0.3.34"
+cucumber = "=0.23.0"
+
+[[test]]
+name = "acceptance"
+harness = false
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }

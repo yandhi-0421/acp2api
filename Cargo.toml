@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/acp2api", "crates/acp2api-acceptance"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+
+[workspace.dependencies]
+tokio = { version = "=1.53.3", features = ["full"] }
+axum = "=0.8.9"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = ["preserve_order"] }
+toml = "=1.1.8"
+sha2 = "=0.11.1"
+argon2 = "=0.6.0"
+getrandom = "=0.4.3"
+agent-client-protocol-schema = "=1.12.0"
