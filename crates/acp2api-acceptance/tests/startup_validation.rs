@@ -171,7 +171,10 @@ async fn startup_round_trip_with_fresh_inputs() {
     s.stop().await;
     s.set("port", Some(V::Integer(port.into())));
     s.set("concurrency_limit", Some(V::Integer(concurrency)));
-    s.set("local_api_key", Some(V::String("visible-ASCII:!~".into())));
+    s.set(
+        "local_api_key",
+        Some(V::String(format!("{}:!~", s.root().key))),
+    );
     let path = s.root().path.join("path/not-yet-installed-agent");
     s.set(
         "agy_acp_server_path",
