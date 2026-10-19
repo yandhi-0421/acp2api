@@ -24,6 +24,13 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let mut system = Vec::new();
     if matches!(api, Api::Messages) && !value["system"].is_null() {
         system = system_parts(Role::System, None, &value["system"], "text")?;
+        if value["system"].is_array()
+            && system
+                .first()
+                .is_some_and(|part| part.text.starts_with("x-anthropic-billing-header:"))
+        {
+            system.remove(0);
+        }
     }
     if matches!(api, Api::Responses) && !value["instructions"].is_null() {
         system.push(SystemPart {
