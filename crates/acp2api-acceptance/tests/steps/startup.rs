@@ -311,6 +311,8 @@ fn permissions(w: &mut World) {
             "configuration must be owner-only"
         );
     }
+    #[cfg(windows)]
+    acp2api_acceptance::startup_permissions::assert_owner_only(&w.startup.config_path());
 }
 #[then(expr = "the start fails with the message {string}")]
 fn failure(w: &mut World, message: String) {

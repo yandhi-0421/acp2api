@@ -13,3 +13,4 @@ pub use setup::Setup;
 mod harness_checks;
 
 pub mod startup_check;
+pub mod startup_permissions;
