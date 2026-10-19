@@ -353,7 +353,7 @@ pub enum Item {
 }
 /// The dialect rejects a final assistant item with M-27 before it constructs Last.
 pub enum Last { Messages(NonEmpty<Item>), ToolResult { result: Item, then: Vec<Item> } }
-pub struct SystemPart { pub name: Option<String>, pub text: String }
+pub struct SystemPart { pub role: Role, pub name: Option<String>, pub text: String }
 pub struct Conversation { pub system: Vec<SystemPart>, pub earlier: Vec<Item>, pub last: Last }
 pub struct ClientTool { pub name: String, pub description: String, pub schema: String, pub kind: ToolKind }
 pub enum ToolKind { Function, Custom, InNamespace(String) }
@@ -375,6 +375,7 @@ pub fn input_tokens(turn: &TurnRequest) -> u64;                        // FR-025
 ```
 
 - `dialect::messages` removes the attribution block of Claude Code before it builds `system` (section "Decided values"). The block changes with each request, so the hash of the system prompt must never hold it.
+- Each system part keeps its original `System` or `Developer` role. A named part uses that role in its label.
 - An ignored field or block never enters a domain type. Thus it is never part of a hash (ADR-0003).
 
 Each answer that is not a success is one value of one type. `messages` owns the map from a case to a row of FR-033 (make-illegal-states-unrepresentable):
@@ -1459,6 +1460,16 @@ Both failed at their assertions before their repairs. Independent verification p
 This technical order implements FR-004 and FR-005 without plaintext password storage or a configuration format change.
 It affects #37 and the later credential and startup work in #55 and #64.
 The browser remains at the successful first-start point. Terminal delivery proves successful writes and a flush, not that the owner read them.
+
+### 2026-10-19: retain the role of each system part
+
+The implementation review for #41 found that the domain sketch kept each system part's name and text, but omitted its role.
+FR-019 requires the original role label for a named part. A named developer part must therefore retain `Developer` during normalization.
+The revised sketch carries that role with the part. The dialect admits only initial system and developer messages into this collection.
+
+This is an internal representation correction. It changes no PRD behavior, external field, stored format, or module owner.
+It affects system prompt normalization in #41 and the later conversation hashes in #47.
+Later system and developer messages remain in the conversation, as the glossary and ADR-0003 already require.
 
 ## Open questions
 
