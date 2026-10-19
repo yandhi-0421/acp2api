@@ -14,7 +14,7 @@ Feature: Data folder and settings
     Examples:
       | platform | data folder                            |
       | macOS    | ~/Library/Application Support/acp2api/ |
-      | Windows  | %LOCALAPPDATA%\acp2api\                |
+      | Windows  | %LOCALAPPDATA%\\acp2api\\                |
 
   @FR-003 @issue-37 @wip
   Scenario: The option --data-dir sets another data folder
@@ -93,9 +93,9 @@ Feature: Data folder and settings
     And acp2api accepts no API request
 
     Examples:
-      | invalid line | location  |
-      | port = @     | port      |
-      | = 8329       | at line 2 |
+      | invalid line | location  | path of the configuration file |
+      | port = @     | port      | <path of the configuration file> |
+      | = 8329       | at line 2 | <path of the configuration file> |
 
   @FR-004 @issue-37 @wip
   Scenario Outline: An absent port or concurrency limit takes its default

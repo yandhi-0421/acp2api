@@ -11,3 +11,5 @@ pub use scenario::Scenario;
 pub use setup::Setup;
 #[cfg(test)]
 mod harness_checks;
+
+pub mod startup_check;
