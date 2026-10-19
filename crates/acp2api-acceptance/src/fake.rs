@@ -91,7 +91,14 @@ struct ActiveTurn {
     ignore_cancel: bool,
 }
 #[derive(Debug)]
+enum SessionResult {
+    Immediate,
+    Held,
+    Pending { label: String, response: Value },
+}
+#[derive(Debug)]
 pub(crate) struct FakeState {
+    session_result: SessionResult,
     catalog: Option<Vec<ModelSpec>>,
     plans: VecDeque<TurnPlan>,
     next_session: u64,
@@ -109,6 +116,7 @@ impl Default for FakeState {
         Self {
             plans: VecDeque::new(),
             catalog: None,
+            session_result: SessionResult::Immediate,
             next_session: 0,
             model: "gemini-3.8-flash".into(),
             signed_in: true,
@@ -132,6 +140,24 @@ pub struct ModelSpec {
     pub levels: Vec<String>,
 }
 impl FakeRuntime {
+    pub fn hold_next_session_result(&self) {
+        let mut state = self.hub.shared.0.lock().unwrap();
+        assert!(matches!(
+            state.fake.session_result,
+            SessionResult::Immediate
+        ));
+        state.fake.session_result = SessionResult::Held;
+    }
+    pub fn release_session_result(&self) {
+        let mut state = self.hub.shared.0.lock().unwrap();
+        let result = std::mem::replace(&mut state.fake.session_result, SessionResult::Immediate);
+        let SessionResult::Pending { label, response } = result else {
+            panic!("pending session result required")
+        };
+        let now = state.now;
+        emit(&mut state, &label, now, response);
+        self.hub.shared.1.notify_all();
+    }
     pub fn catalog(&self, models: &[ModelSpec]) {
         assert!(
             !models.is_empty() && models.len() <= 32,
@@ -265,6 +291,14 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                     .map(|v| v["modelId"].clone())
                     .unwrap_or(json!(first.value));
                 let metadata = json!({"sessionId":session,"models":{"currentModelId":current,"availableModels":available},"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":first.value,"options":options},{"id":"thinking_level","name":"Thinking Level","type":"select","currentValue":"high","options":levels}]});
+                if matches!(s.fake.session_result, SessionResult::Held) {
+                    s.fake.session_result = SessionResult::Pending {
+                        label: label.into(),
+                        response: result(id, metadata),
+                    };
+                    s.record(json!({"kind":"session-result-held"}));
+                    return;
+                }
                 emit(s, label, s.now, result(id, metadata));
                 return;
             }

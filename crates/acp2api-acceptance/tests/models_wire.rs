@@ -114,3 +114,80 @@ async fn model_lists_use_key_checks_and_one_metadata_record_with_absent_usage() 
         s.finish(true).await;
     }
 }
+
+#[tokio::test]
+async fn requests_before_startup_result_wait_for_the_same_check_without_http_acceptance() {
+    use acp2api_acceptance::client::ApiClient;
+    use std::time::{Duration, Instant};
+    let mut s = Scenario::default();
+    s.plan(Setup::normal());
+    s.fake().catalog(&sparse());
+    s.fake().hold_next_session_result();
+    let fake = s.fake();
+    let hub = s.hub.clone();
+    let mut time = s.time.clone();
+    let client = ApiClient::new(
+        format!("127.0.0.1:{}", s.root.port),
+        s.root.key.clone(),
+        hub.clone(),
+    );
+    let observer = async move {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while fake.record().session_meta().is_empty() {
+            assert!(Instant::now() < deadline, "startup observation cap: 10 s");
+            tokio::task::yield_now().await;
+        }
+        let mut request = ApiCall::one_user_message("POST /v1/messages", "private content");
+        request.body["model"] = "unknown-model".into();
+        request.body["stream"] = true.into();
+        let refused = client.send(request);
+        let listed = client.send(check::list());
+        let _ = tokio::time::timeout(Duration::from_millis(200), async {
+            while refused.status().is_none() && listed.status().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert_eq!(
+            refused.status(),
+            None,
+            "required startup check precedes HTTP acceptance"
+        );
+        assert!(refused.events().is_empty());
+        assert_eq!(
+            listed.status(),
+            None,
+            "model list waits for the same startup result"
+        );
+        assert_eq!(fake.record().session_meta().len(), 1);
+        assert!(
+            hub.entries()
+                .iter()
+                .any(|e| e.event["kind"] == "session-result-held")
+        );
+        fake.release_session_result();
+        let refused = refused.finish(&mut time).await;
+        let listed = listed.finish(&mut time).await;
+        assert_eq!(refused.status, 400);
+        assert!(refused.events.is_empty());
+        assert_eq!(
+            refused.json()["error"]["message"],
+            "acp2api: the model name unknown-model is not available. The model names are: boreal-9, boreal-9-low, boreal-9-high, south-2, south-2-medium."
+        );
+        check::membership(
+            &listed,
+            &[
+                "boreal-9",
+                "boreal-9-low",
+                "boreal-9-high",
+                "south-2",
+                "south-2-medium",
+            ],
+        );
+        assert_eq!(fake.record().session_meta().len(), 1);
+        assert_eq!(fake.record().client_info().len(), 1);
+        assert!(fake.prompts().is_empty());
+    };
+    tokio::join!(s.start(), observer);
+    s.finish(true).await;
+}
