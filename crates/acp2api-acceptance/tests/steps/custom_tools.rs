@@ -86,7 +86,11 @@ async fn namespace_offer(w: &mut World, endpoint: String, namespace: String, a: 
     expr = "the official runtime offers the model two tools, one for {string} and one for {string}"
 )]
 fn namespace_members(w: &mut World, a: String, b: String) {
-    c::offer_namespace(&w.scenario, &[&a, &b]);
+    c::offer_namespace(
+        &w.scenario,
+        w.custom_tools.tools[0]["name"].as_str().unwrap(),
+        &[&a, &b],
+    );
 }
 #[given(
     expr = "Codex sent a request with the namespace tool {string} that holds the tool {string}"
@@ -108,7 +112,11 @@ async fn namespace_call(w: &mut World, member: String) {
         answer.status, 200,
         "namespace declaration accepted before MCP call"
     );
-    let names = c::offer_namespace(&w.scenario, &[&member]);
+    let names = c::offer_namespace(
+        &w.scenario,
+        w.custom_tools.tools[0]["name"].as_str().unwrap(),
+        &[&member],
+    );
     for stream in [false, true] {
         w.custom_tools.answers.push(
             c::send(

@@ -60,7 +60,7 @@ pub fn offer_custom(s: &Scenario, name: &str, grammar: &str) {
         "original description retained"
     );
 }
-pub fn offer_namespace(s: &Scenario, members: &[&str]) -> Vec<String> {
+pub fn offer_namespace(s: &Scenario, namespace: &str, members: &[&str]) -> Vec<String> {
     let offers = offered(s);
     assert_eq!(
         offers.len(),
@@ -69,7 +69,10 @@ pub fn offer_namespace(s: &Scenario, members: &[&str]) -> Vec<String> {
     );
     let mut names = Vec::new();
     for (offer, member) in offers.iter().zip(members) {
-        assert_eq!(offer["description"], format!("Member {member}"));
+        assert_eq!(
+            offer["description"],
+            format!("Namespace {namespace}:\nNamespace {namespace}\n\nMember {member}")
+        );
         assert_eq!(offer["inputSchema"]["properties"]["path"]["type"], "string");
         names.push(offer["name"].as_str().unwrap().to_owned());
     }
