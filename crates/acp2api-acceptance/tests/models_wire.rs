@@ -118,7 +118,7 @@ async fn model_lists_use_key_checks_and_one_metadata_record_with_absent_usage() 
 #[tokio::test]
 async fn requests_before_startup_result_wait_for_the_same_check_without_http_acceptance() {
     use acp2api_acceptance::client::ApiClient;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     let mut s = Scenario::default();
     s.plan(Setup::normal());
     s.fake().catalog(&sparse());
@@ -132,11 +132,13 @@ async fn requests_before_startup_result_wait_for_the_same_check_without_http_acc
         hub.clone(),
     );
     let observer = async move {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while fake.record().session_meta().is_empty() {
-            assert!(Instant::now() < deadline, "startup observation cap: 10 s");
-            tokio::task::yield_now().await;
-        }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while fake.record().session_meta().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("startup observation cap: 10 s");
         let mut request = ApiCall::one_user_message("POST /v1/messages", "private content");
         request.body["model"] = "unknown-model".into();
         request.body["stream"] = true.into();
