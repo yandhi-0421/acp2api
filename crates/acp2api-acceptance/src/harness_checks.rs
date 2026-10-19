@@ -74,9 +74,10 @@ async fn virtual_external_inputs_precede_product_timers_and_waits_release_holds(
     });
     s.time.advance_to(200).await;
     task.await.unwrap();
+    assert_eq!(s.hub.now(), 200, "the external-input boundary stays exact");
     let answer = call.finish(&mut s.time).await;
     assert_eq!(answer.json()["content"][0]["text"], "boundary");
-    assert_eq!(s.hub.now(), 200);
+    assert_eq!(s.hub.now(), 400, "FR-028 adds its 200 ms completion wait");
     let events = s.hub.entries();
     let timer = events
         .iter()
@@ -322,10 +323,11 @@ async fn held_fake_plan_resumes_without_holding_virtual_time() {
     s.time.settle().await;
     assert!(s.hub.counts().balanced());
     s.time.advance_to(60 * 60 * 1000).await;
+    assert_eq!(s.hub.now(), 60 * 60 * 1000, "the gate permits time to pass");
     s.fake().open_gate("release");
     let answer = call.finish(&mut s.time).await;
     assert_eq!(answer.json()["content"][0]["text"], "released");
-    assert_eq!(s.hub.now(), 60 * 60 * 1000);
+    assert_eq!(s.hub.now(), 60 * 60 * 1000 + 200);
     s.finish(true).await;
 }
 
