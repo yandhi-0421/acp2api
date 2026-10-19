@@ -119,6 +119,12 @@ impl Writer {
             if size <= TOTAL_CAP {
                 break;
             }
+            if file.date == self.date && file.sequence == self.sequence {
+                let (replacement, sequence) = create_file(&self.folder, &self.date, self.sequence)?;
+                self.file = replacement;
+                self.sequence = sequence;
+                self.size = 0;
+            }
             std::fs::remove_file(file.path)?;
             size -= file.size;
         }
