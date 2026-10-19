@@ -628,13 +628,13 @@ Some rules cross the state, the places, the records, and the runtime process (FR
 
 1. Parse the four options (FR-002). `--help` and `--version` end here.
 2. Claim the account as section "Account ownership" defines. A duplicate gets M-24 with the first instance's panel address.
-3. Open the data folder. Read or make `config.toml` (FR-003 to FR-005). A wrong value, unknown key, or syntax error ends with M-26.
+3. Open the data folder. Read and validate `config.toml` (FR-003 to FR-005). A wrong value, unknown key, or syntax error ends with M-26. Generate each absent credential. Write each new credential to the terminal and flush it before atomic configuration persistence. If terminal delivery fails, end without persistence.
 4. Bind `127.0.0.1:<port>`. A port in use ends with M-25. Install the panel handlers, publish its actual address, and release the startup gate.
 5. Open the logs. Delete each log file older than 30 days (FR-057).
 6. Read `state.json` (FR-035, FR-044).
 7. After their process trees end, delete the owned session files and temporary folders (ADR-0004, ADR-0005). Section "Account ownership" limits cleanup.
 8. Start the conductor. It starts the runtime process from an accepted copy. With no accepted copy, it searches first (FR-042, FR-043). During a lockout, it starts none. After `initialize`, the sign-in check supplies the initial model names (FR-012, FR-038).
-9. Write the start lines to the terminal (section "Decided values"). At a first start, open the panel through the `Browser` port.
+9. Write the panel address to the terminal (section "Decided values"). Step 3 already delivered each new credential. At a first start, open the panel through the `Browser` port.
 10. Serve until `StopSignal::stopped`. Then do the exit of FR-045:
     - the core ends each prompt turn and each request in the queue with M-15;
     - the runtime process stops with its tree.
@@ -925,6 +925,8 @@ agy_acp_server_path = "/path/to/agy_acp_server.par"   # absent: none
   - `management_password_hash` gets the hash of a new random password;
   - `agy_acp_server_path` stays absent.
 - The terminal shows only the key or password made at this start (FR-004, FR-005, FR-056).
+- Before atomic persistence, write and flush each new credential to the terminal. If delivery fails, return the error without persistence.
+- Preserve valid saved credentials after a failed start. A later start generates and delivers only credentials whose fields remain absent.
 - The random management password has 20 characters from `a-z` and `2-9`, in four groups of five with `-` between them.
 - A change in the panel writes the whole file again, through a temporary file and a rename. A comment in the file does not survive such a write.
 
@@ -1442,6 +1444,21 @@ Independent review confirmed the concrete port revision: `Clock::sleep_until` re
 The two product call sites retain or release that ownership at the end of their work.
 The production clock returns an empty `Hold`; the harness clock reports delivery and completion separately.
 This removes the dependency on another timer registration and keeps the five-port structure unchanged.
+
+### 2026-10-19: preserve credential delivery across a failed first start
+
+The independent review of #37 found a failure window between configuration persistence and terminal delivery.
+An occupied port ended startup after the password hash was saved. A retry then showed no password because the saved field existed.
+The repair first validates settings and generates absent credentials. It delivers and flushes them before atomic persistence and other fallible startup work.
+A terminal write or flush error ends the start without persistence. Valid saved credentials remain unchanged on a retry.
+
+Two regressions use the real test host, isolated files, and real OS failures.
+One occupies the chosen port, then retries with the same configuration. The other closes the terminal reader before startup.
+Both failed at their assertions before their repairs. Independent verification passed both with the final code.
+
+This technical order implements FR-004 and FR-005 without plaintext password storage or a configuration format change.
+It affects #37 and the later credential and startup work in #55 and #64.
+The browser remains at the successful first-start point. Terminal delivery proves successful writes and a flush, not that the owner read them.
 
 ## Open questions
 
