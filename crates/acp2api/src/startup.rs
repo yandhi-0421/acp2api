@@ -124,6 +124,7 @@ pub(crate) async fn start(
         settings.local_api_key,
         tools,
         journal,
+        listener.local_addr().map_err(|e| e.to_string())?.port(),
     );
     if opened.first_start {
         ports.browser.open(&panel);
