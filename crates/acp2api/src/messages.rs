@@ -2,6 +2,10 @@ use std::fmt;
 
 pub(crate) enum Message {
     Field(String),
+    Model {
+        requested: String,
+        names: Vec<String>,
+    },
     Content(String),
     Media(String),
     Url(String),
@@ -34,7 +38,8 @@ impl Refusal {
         match self.message {
             Message::Key => Row::Key,
             Message::Upstream(_) => Row::Other502,
-            Message::Field(_)
+            Message::Model { .. }
+            | Message::Field(_)
             | Message::Content(_)
             | Message::Media(_)
             | Message::Url(_)
@@ -46,16 +51,21 @@ impl Refusal {
         }
     }
     pub fn param(&self) -> Option<&str> {
-        if let Message::Field(field) = &self.message {
-            Some(field)
-        } else {
-            None
+        match &self.message {
+            Message::Field(field) => Some(field),
+            Message::Model { .. } => Some("model"),
+            _ => None,
         }
     }
 }
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Model { requested, names } => write!(
+                f,
+                "acp2api: the model name {requested} is not available. The model names are: {}.",
+                names.join(", ")
+            ),
             Self::Field(field) => write!(f, "acp2api: the request field {field} is not supported."),
             Self::Content(kind) => write!(f, "acp2api: the content type {kind} is not supported."),
             Self::Media(media) => write!(f, "acp2api: the media type {media} is not supported."),
