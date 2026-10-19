@@ -82,7 +82,16 @@ pub async fn send(
     call.body[field] = marker.into();
     let response = s.client().await.send(call).finish(&mut s.time).await;
     assert_eq!(response.status, 200, "metadata request reached production");
-    serde_json::json!({"request_id":response.headers.get("x-request-id").cloned(),"api": match path {"POST /v1/messages"=>"messages", "POST /v1/responses"=>"responses", _=>"chat.completions"}, "model":model, "field":field, "usage":usage, "delay":delay})
+    let session = s
+        .fake()
+        .record()
+        .prompts()
+        .into_iter()
+        .rev()
+        .find(|p| p.text.contains(marker))
+        .expect("actual ACP prompt for this request")
+        .session;
+    serde_json::json!({"session":session,"request_id":response.headers.get("x-request-id").cloned(),"api": match path {"POST /v1/messages"=>"messages", "POST /v1/responses"=>"responses", _=>"chat.completions"}, "model":model, "field":field, "usage":usage, "delay":delay})
 }
 pub fn verify(s: &Scenario, expected: &[Value]) {
     let records = records(s);
@@ -115,7 +124,9 @@ pub fn verify(s: &Scenario, expected: &[Value]) {
         );
         assert_eq!(r["api"], expected["api"]);
         assert_eq!(r["model"], expected["model"]);
-        let session = s.fake().record().prompts().last().unwrap().session.clone();
+        let session = expected["session"]
+            .as_str()
+            .expect("captured per-request ACP session");
         assert_eq!(
             r["session"],
             session.chars().take(12).collect::<String>(),
