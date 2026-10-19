@@ -113,7 +113,9 @@ async fn disconnect_is_completed_once_by_the_core() {
 #[tokio::test]
 async fn metadata_line_escapes_newlines_without_serializing_unknown_values() {
     let mut s = Scenario::default();
-    s.plan(Setup::normal());
+    let mut setup = Setup::normal();
+    setup.model = "model\nname".into();
+    s.plan(setup);
     let expected = check::send(
         &mut s,
         "POST /v1/chat/completions",
