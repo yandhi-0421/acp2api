@@ -47,13 +47,7 @@ impl Catalog {
             .map_err(|error| format!("ACP session/new model metadata: {error}"))?;
         let models = options(&metadata.config_options, "model")?
             .ok_or("ACP session/new has no model config option")?;
-        let mut levels = options(&metadata.config_options, "thinking_level")?.unwrap_or_default();
-        levels.sort_by_key(|level| match level.value.to_string().as_str() {
-            "low" => 0,
-            "medium" => 1,
-            "high" => 2,
-            _ => 3,
-        });
+        let levels = ["low", "medium", "high"];
         let available: HashSet<_> = metadata
             .models
             .into_iter()
@@ -77,7 +71,7 @@ impl Catalog {
                 let mut seen_levels = HashSet::new();
                 let supported = levels
                     .iter()
-                    .map(|level| level.value.to_string())
+                    .map(|level| (*level).to_owned())
                     .filter(|level| {
                         let id = format!("{base}-{level}");
                         available.contains(&id)
