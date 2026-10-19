@@ -138,12 +138,12 @@ Feature: Request content
     And the log has a line with the field name "example_field"
     And the management panel counts "example_field" one time for the OpenAI Chat Completions API
 
-  @FR-014 @issue-39 @wip
+  @FR-014 @issue-39
   Scenario: acp2api uses an input item of the Responses API with a role and no type as a message item
     When an API client sends a request to "POST /v1/responses" with the input [{"role": "user", "content": "Hi"}]
     Then the prompt that the official runtime gets is "Hi"
 
-  @FR-014 @issue-39 @wip
+  @FR-014 @issue-39
   Scenario: The model gets an image with base64 data at its place
     When an API client sends a request to "POST /v1/messages" with one user message with these content blocks:
       | block | content                    |
@@ -152,7 +152,7 @@ Feature: Request content
       | text  | What is it?                |
     Then the prompt that the official runtime gets has the text "Look at this:", the image, and the text "What is it?" in this order
 
-  @FR-014 @issue-39 @wip
+  @FR-014 @issue-39
   Scenario Outline: acp2api rejects an image or a file with a URL and sends no HTTP request for it
     When an API client sends a request to "<endpoint>" with <block> with the URL "https://example.com/a.png"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the content type <type> with a URL is not supported. Send the data as base64."
@@ -164,12 +164,12 @@ Feature: Request content
       | POST /v1/chat/completions | an image_url part      | image_url   |
       | POST /v1/responses        | an input_image item    | input_image |
 
-  @FR-014 @issue-39 @wip
+  @FR-014 @issue-39
   Scenario: acp2api uses an image_url part with a data URL as an image with base64 data
     When an API client sends a request to "POST /v1/chat/completions" with an image_url part with a "data:image/png;base64," URL
     Then the prompt that the official runtime gets holds the image
 
-  @FR-014 @issue-39 @wip
+  @FR-014 @issue-39
   Scenario Outline: acp2api rejects a content block type that it does not use
     When an API client sends a request to "<endpoint>" with a content block of the type "<type>"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the content type <type> is not supported."
@@ -180,13 +180,13 @@ Feature: Request content
       | POST /v1/responses        | item_reference |
       | POST /v1/messages         | example_block  |
 
-  @FR-014 @issue-39 @wip
+  @FR-014 @issue-39
   Scenario: acp2api rejects a file_id
     When an API client sends a request to "POST /v1/responses" with an input_file item with the "file_id" "file_1"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the request field file_id is not supported."
     And the official runtime gets no prompt
 
-  @FR-014 @issue-39 @wip
+  @FR-014 @issue-39
   Scenario: acp2api rejects a last item from the assistant
     When an API client sends a request to "POST /v1/messages" whose last message has the role "assistant" and the text "The answer is"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: a last message from the assistant (a prefill) is not supported."
@@ -220,7 +220,7 @@ Feature: Request content
     Then the prompt that the official runtime gets has the text "Run this:" and the text "/logout"
     And the prompt has no role label
 
-  @FR-017 @issue-39 @wip
+  @FR-017 @issue-39
   Scenario Outline: acp2api rejects a PDF in a message
     When an API client sends a request to "<endpoint>" with a PDF document in <message>
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: a PDF document in a message (content type <type>) is not supported. Remove that message from the conversation."
@@ -239,7 +239,7 @@ Feature: Request content
     And the tool result in the prompt holds the text "Page count: 3"
     And the tool result in the prompt holds the line "[A PDF document was here. acp2api cannot give PDF documents to the model.]" at the place of the PDF
 
-  @FR-017 @issue-39 @wip
+  @FR-017 @issue-39
   Scenario Outline: The model gets a text document at its place
     When an API client sends a request to "<endpoint>" with <document> with the text "Line one."
     Then the prompt that the official runtime gets holds at the place of the document:
@@ -256,7 +256,7 @@ Feature: Request content
       | POST /v1/responses        | an input_file item with the media type "text/plain" and the filename "notes.txt" | [document: notes.txt] |
       | POST /v1/responses        | an input_file item with the media type "text/plain", no title, and no filename | [document] |
 
-  @FR-017 @issue-39 @wip
+  @FR-017 @issue-39
   Scenario: acp2api rejects a document with a media type other than PDF or text/plain
     When an API client sends a request to "POST /v1/responses" with an input_file item with the media type "text/csv"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the media type text/csv is not supported."
