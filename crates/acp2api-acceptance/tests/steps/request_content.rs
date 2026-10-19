@@ -176,7 +176,7 @@ fn document_place(w: &mut World, #[step] step: &cucumber::gherkin::Step) {
     assert_eq!(
         c::blocks(&w.scenario),
         vec![
-            json!([{"type":"text","text":"Before"},{"type":"text","text":step.docstring.as_ref().unwrap()},{"type":"text","text":"After"}])
+            json!([{"type":"text","text":"Before"},{"type":"text","text":step.docstring.as_ref().unwrap().trim_matches('\n')},{"type":"text","text":"After"}])
         ],
         "document delimiters and original position"
     );
