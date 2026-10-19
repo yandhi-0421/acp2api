@@ -101,6 +101,7 @@ mod tests {
         let first = sets
             .insert(&[ClientTool {
                 name: "must_not_execute".into(),
+                kind: crate::conversation::ToolKind::Function,
                 description: "First immutable tool".into(),
                 schema: r#"{"type":"object"}"#.into(),
             }])

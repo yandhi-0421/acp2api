@@ -369,6 +369,28 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
             if kind == "tool_search" {
                 return Err(Message::ToolSearch.into());
             }
+            if matches!(api, Api::Responses) && kind == "custom" {
+                let name = required(tool, "name")?;
+                if matches!(name, "list_resources" | "read_resource") {
+                    return Err(Message::ToolName(name.into()).into());
+                }
+                let mut description = tool["description"].as_str().unwrap_or("").to_owned();
+                match tool["format"]["type"].as_str() {
+                    Some("grammar") => {
+                        let definition = required(&tool["format"], "definition")?;
+                        let syntax = required(&tool["format"], "syntax")?;
+                        description.push_str(&format!("\n\nGrammar ({syntax}):\n{definition}"));
+                    }
+                    None | Some("text") => {}
+                    Some(_) => return Err(Refusal::invalid("unsupported custom tool format")),
+                }
+                return Ok(crate::conversation::ClientTool {
+                    name: name.into(),
+                    description,
+                    schema: serde_json::json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}).to_string(),
+                    kind: crate::conversation::ToolKind::Custom,
+                });
+            }
             if kind != "function" {
                 return Err(Refusal::invalid("unsupported client tool type"));
             }
@@ -393,6 +415,7 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
                 name: name.into(),
                 description: function["description"].as_str().unwrap_or("").into(),
                 schema: schema.to_string(),
+                kind: crate::conversation::ToolKind::Function,
             })
         })
         .collect()
