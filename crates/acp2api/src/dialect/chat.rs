@@ -51,9 +51,14 @@ impl WireDialect for Chat {
         vec![self.chunk(w, delta, Value::Null)]
     }
     fn end(&self, w: &mut Encoding, _: &Answer) -> Vec<Event> {
-        vec![
+        let mut events = Vec::new();
+        if w.text.is_empty() {
+            events.push(self.chunk(w, json!({"role":"assistant","content":""}), Value::Null));
+        }
+        events.extend([
             self.chunk(w, json!({}), "stop".into()),
             Event::default().data("[DONE]"),
-        ]
+        ]);
+        events
     }
 }
