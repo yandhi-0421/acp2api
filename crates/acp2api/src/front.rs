@@ -4,7 +4,12 @@ use crate::{
     dialect::{self, Dialect},
     messages::Message,
 };
-use axum::{Router, extract::State, http::HeaderMap, routing::post};
+use axum::{
+    Router,
+    extract::State,
+    http::HeaderMap,
+    routing::{get, post},
+};
 use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
@@ -23,6 +28,10 @@ pub(crate) fn router(
     journal: crate::journal::Journal,
 ) -> Router {
     Router::new()
+        .route(
+            "/v1/models",
+            get(|| async { axum::Json(serde_json::json!({"object":"list","data":[]})) }),
+        )
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(chat))
