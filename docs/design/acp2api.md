@@ -722,7 +722,7 @@ impl Scenario {
 - Its children are `account/`, `home/`, `local-app-data/`, `temp/`, `path/`, `exe/`, `data/`, and `builds/`.
 - The run file gives these folders to the test host as its `Environment`. Thus each scenario has its own platform folders, folders of Zed and JetBrains, account lock, and `~/.gemini`. Parallel scenarios do not block each other (FR-006).
 - A port number in a step text, for example 8329, is an alias of a free port of the scenario. A step that needs one real fixed port takes one lease for the whole test run. Thus the scenarios with that port run one at a time.
-- The harness deletes each test root after a passed scenario. At the start of a run, it deletes each earlier run folder.
+- The harness deletes each test root after a passed scenario. At startup, it removes owned output of earlier runs that have ended. It preserves active runs and unknown paths.
 
 #### `Setup::normal()`
 
@@ -792,6 +792,8 @@ pub enum TurnEndPlan { Stop(StopReason), RpcError { code: i64, message: String }
 
 The record holds each line in both directions, each `Hello`, each MCP request and its answer, and each end of a process. Each entry has its virtual time. Steps read it through typed queries, for example `prompts()`, `cancels()`, `client_info()`, `session_meta()`, `offered_tools()`, `usage_queries()`, and `processes_alive()`.
 
+The fake tracks active prompt turns and cancellation state by ACP session. A cancellation affects only its named session and cannot complete another session's turn. A completed turn leaves no pending cancellation state.
+
 #### The fake API client and the fake browser
 
 - `ApiClient` sends raw HTTP/1.1 through hyper, so a step can set each header, also a wrong `Host` or an `Origin`.
@@ -810,7 +812,7 @@ The hub owns the virtual time `now`. The wall time is a fixed epoch of the scena
 ```text
 settle():                                   # fails after 10 s of real time and names the open channel
   repeat:
-    wait until the test host reports: no live Hold, and each woken sleeper waits again
+    wait until the test host reports: no live Hold, and each awakened owner has finished or waits again
     s = snapshot of the counts
     if s is balanced and s == previous: return
     previous = s; send a drain tick with the same now   # drain mailboxes; do not wake product timers
@@ -834,6 +836,8 @@ advance_to(target):
 - The design uses no `tokio::time::pause`, no time scale, and no real sleep.
 - A self-test of the harness in #36 checks the settle against bursts of lines.
 - At one virtual instant, scheduled external inputs arrive before product deadline callbacks. Thus the 200 ms boundary of FR-028 is deterministic.
+- Timer delivery does not prove that the awakened work has finished. The protocol retains ownership until that work finishes or waits again.
+- A one-shot timer and a process-stop timer can finish without another sleep registration. Self-tests cover these terminal owners and work still executing after a wake.
 
 #### Runner and step files
 
@@ -1417,6 +1421,20 @@ The disk had about 9.5 GiB free at the review. The first-build measurement, not 
 The owner also approved every recommendation of the final review. FR-006 and M-28 close the account questions below.
 FR-011, FR-020, FR-025 to FR-028, FR-033, FR-036 to FR-040, FR-049, and FR-054 hold the revised product contracts.
 The feature files cover the clarified arguments, preconditions, and exact time boundaries. The admission revision above carries the changed contracts into the conductor.
+
+### 2026-10-19: repair the shared test harness
+
+The owner approved the four repair groups found during the independent verification of #36, then requested continued local implementation.
+The review found that the wake counter cleared only when another sleep registered. Terminal owners therefore prevented settlement after their work ended.
+The virtual-time section now includes owner completion and requires proof that callback work has finished.
+
+The same review found global cancellation state in the fake, missing cleanup of old runs, and a step-timeout setting outside the execution path.
+The harness must implement the per-session state, owned cleanup, captured wire shapes, and default step limit specified above.
+These repairs change test infrastructure, not PRD behavior or the expected results of existing scenarios.
+
+Issue #36 owns the repair and the replacement freeze record. Preserve the original freeze and failing evidence in history.
+The change affects every later slice that uses the shared harness, especially streaming, cancellation, runtime recovery, and quota deadlines.
+The parent records any further concrete clock-port revision after it reviews the implementation.
 
 ## Open questions
 
