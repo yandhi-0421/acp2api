@@ -11,6 +11,7 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+mod catalog;
 mod conductor;
 mod conversation;
 mod dialect;

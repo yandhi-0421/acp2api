@@ -7,11 +7,18 @@ use std::{collections::VecDeque, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
 #[derive(Clone)]
 pub(crate) struct Conductor(mpsc::Sender<Work>);
-struct Work {
+enum Work {
+    Turn(Box<TurnWork>),
+    Models {
+        reply: oneshot::Sender<Vec<crate::catalog::ModelEntry>>,
+        hold: Hold,
+    },
+}
+struct TurnWork {
     turn: TurnRequest,
     request: crate::journal::Request,
     hold: Hold,
-    admission: oneshot::Sender<Ticket>,
+    admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
 }
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
@@ -36,6 +43,7 @@ enum Phase {
     Settling(Moment),
 }
 struct Core {
+    catalog: crate::catalog::Catalog,
     active: Option<Active>,
     waiting: VecDeque<Accepted>,
     session: Option<Session>,
@@ -48,6 +56,7 @@ struct Session {
 impl Default for Core {
     fn default() -> Self {
         Self {
+            catalog: crate::catalog::Catalog::default(),
             active: None,
             waiting: VecDeque::new(),
             session: Some(Session {
@@ -62,6 +71,7 @@ enum SessionPlan {
     New(Session),
 }
 enum Event {
+    Catalog(crate::catalog::Catalog),
     Accepted(Accepted),
     Runtime(RuntimeEvent),
     Deadline,
@@ -91,6 +101,7 @@ impl Core {
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         match event {
+            Event::Catalog(catalog) => self.catalog = catalog,
             Event::Accepted(request) => self.waiting.push_back(request),
             Event::SessionReady(id) => {
                 if let Some(active) = &mut self.active {
@@ -247,13 +258,22 @@ impl Core {
 }
 impl Conductor {
     pub(crate) fn start(
-        mut runtime: Option<Runtime>,
+        started: Option<(Runtime, crate::catalog::Catalog)>,
         clock: Arc<dyn Clock>,
         journal: crate::journal::Journal,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Work>(32);
         let task = tokio::spawn(async move {
-            let mut core = Core::default();
+            let (mut runtime, mut core) = match started {
+                Some((runtime, catalog)) => (
+                    Some(runtime),
+                    Core {
+                        catalog,
+                        ..Core::default()
+                    },
+                ),
+                None => (None, Core::default()),
+            };
             let mut read_open = runtime.is_some();
             'events: loop {
                 let disconnected = core
@@ -267,8 +287,20 @@ impl Conductor {
                     ()=async {disconnected.as_ref().expect("connected ticket").closed().await},if disconnected.is_some()=> (Event::Disconnected, clock.hold(HoldKind::TurnEvent)),
                     work=recv.recv()=> {
                         let Some(work)=work else {break;};
+                        let work = match work {
+                            Work::Models { reply, hold } => {
+                                let _ = reply.send(core.catalog.entries());
+                                drop(hold);
+                                continue;
+                            }
+                            Work::Turn(work) => *work,
+                        };
+                        if let Err(error) = core.catalog.check(&work.turn.model) {
+                            let _ = work.admission.send(Err(error));
+                            continue;
+                        }
                         let (output,ticket)=mpsc::unbounded_channel();
-                        if work.admission.send(ticket).is_err() {continue;}
+                        if work.admission.send(Ok(ticket)).is_err() {continue;}
                         (Event::Accepted(Accepted {turn:work.turn,request:work.request,output}),work.hold)
                     }
                     (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=> {
@@ -296,12 +328,22 @@ impl Conductor {
                                     let prepared = match session {
                                         SessionPlan::Current => Ok(()),
                                         SessionPlan::New(session) => {
-                                            runtime
+                                            match runtime
                                                 .new_session(
                                                     &session.tools,
                                                     session.system.as_deref(),
                                                 )
                                                 .await
+                                            {
+                                                Ok(catalog) => {
+                                                    commands.extend(core.handle(
+                                                        Event::Catalog(catalog),
+                                                        clock.now(),
+                                                    ));
+                                                    Ok(())
+                                                }
+                                                Err(error) => Err(error),
+                                            }
                                         }
                                     };
                                     match prepared {
@@ -352,17 +394,44 @@ impl Conductor {
         turn: TurnRequest,
         hold: Hold,
         request: crate::journal::Request,
-    ) -> Result<Ticket, String> {
+    ) -> Result<Ticket, crate::messages::Refusal> {
         let (admission, reply) = oneshot::channel();
         self.0
-            .send(Work {
+            .send(Work::Turn(Box::new(TurnWork {
                 turn,
                 request,
                 hold,
                 admission,
-            })
+            })))
             .await
-            .map_err(|_| "conductor stopped")?;
-        reply.await.map_err(|_| "conductor stopped".into())
+            .map_err(|_| {
+                crate::messages::Refusal::from(crate::messages::Message::Upstream(
+                    "conductor stopped".into(),
+                ))
+            })?;
+        reply.await.map_err(|_| {
+            crate::messages::Refusal::from(crate::messages::Message::Upstream(
+                "conductor stopped".into(),
+            ))
+        })?
+    }
+    pub(crate) async fn model_names(
+        &self,
+        hold: Hold,
+    ) -> Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Work::Models { reply, hold })
+            .await
+            .map_err(|_| {
+                crate::messages::Refusal::from(crate::messages::Message::Upstream(
+                    "conductor stopped".into(),
+                ))
+            })?;
+        result.await.map_err(|_| {
+            crate::messages::Refusal::from(crate::messages::Message::Upstream(
+                "conductor stopped".into(),
+            ))
+        })
     }
 }

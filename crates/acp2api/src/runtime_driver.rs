@@ -28,7 +28,7 @@ impl Runtime {
         data: &std::path::Path,
         cwd: PathBuf,
         tool_sets: mcp::ToolSets,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, crate::catalog::Catalog), String> {
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
         let program = data.join("official-runtime").join(if cfg!(windows) {
             "agy_acp_server.exe"
@@ -113,14 +113,14 @@ impl Runtime {
             next_permission: 0,
         };
         runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
-        runtime.new_session(&[], None).await?;
-        Ok(runtime)
+        let catalog = runtime.new_session(&[], None).await?;
+        Ok((runtime, catalog))
     }
     pub(crate) async fn new_session(
         &mut self,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<crate::catalog::Catalog, String> {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
@@ -129,11 +129,12 @@ impl Runtime {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }
         let session = self.call("session/new", params).await?;
+        let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
         self.session = session["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?
             .to_owned();
-        Ok(())
+        Ok(catalog)
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;

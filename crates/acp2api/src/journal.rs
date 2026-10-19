@@ -3,6 +3,8 @@ use std::{io, path::Path, time::SystemTime};
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub enum Api {
+    #[serde(rename = "models")]
+    Models,
     #[serde(rename = "chat.completions")]
     Chat,
     #[serde(rename = "messages")]
@@ -260,6 +262,7 @@ pub(crate) struct Session {
     pub kind: SessionUse,
 }
 pub(crate) enum Outcome {
+    ModelList,
     Success { input: u64, output: u64 },
     Refused(&'static str),
     Failed,
@@ -304,6 +307,7 @@ impl Journal {
             outcome,
         } = completion;
         let (result, error_code, input_tokens, output_tokens) = match outcome {
+            Outcome::ModelList => (ResultKind::Success, None, None, None),
             Outcome::Success { input, output } => {
                 (ResultKind::Success, None, Some(input), Some(output))
             }

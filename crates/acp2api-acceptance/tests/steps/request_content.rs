@@ -127,6 +127,17 @@ async fn unsupported_media(w: &mut World, endpoint: String, media: String) {
 }
 #[then(expr = "acp2api refuses the request with HTTP 400 and the message {string}")]
 fn refusal(w: &mut World, message: String) {
+    if message.starts_with("acp2api: the model name ") {
+        let expected = message.replace("<names>", &crate::model_names::NAMES.join(", "));
+        c::refusal(
+            &w.scenario,
+            &w.models.endpoint,
+            &expected,
+            "model_not_found",
+            Some("model"),
+        );
+        return;
+    }
     if message.contains("tool tool_search") || message.contains("client tool name") {
         c::refusal(
             &w.scenario,

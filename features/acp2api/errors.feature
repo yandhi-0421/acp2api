@@ -34,7 +34,7 @@ Feature: Errors
     Then acp2api refuses the request with HTTP 401 in the error envelope of the Anthropic Messages API
     And the answer has no stream event
 
-  @FR-026 @issue-43 @wip
+  @FR-026 @issue-43
   Scenario Outline: A refusal before the acceptance has the error envelope of its API
     When an API client sends a request with a stream to "<endpoint>" with the model "claude-opus-5-5"
     Then acp2api refuses the request with HTTP 400 in the error envelope of the <api>
