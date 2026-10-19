@@ -2,6 +2,7 @@ use crate::{
     Clock, HoldKind,
     conductor::Conductor,
     dialect::{self, Dialect},
+    messages::Message,
 };
 use axum::{
     Json, Router,
@@ -81,15 +82,15 @@ async fn serve(
             .and_then(|v| v.strip_prefix("Bearer "))
             == Some(&app.key);
     if !authorized {
-        return dialect.refusal(StatusCode::UNAUTHORIZED, "Invalid API key");
+        return dialect.refusal(&Message::Key.into());
     }
     let parsed = match dialect.parse(&body) {
         Ok(parsed) => parsed,
-        Err(error) => return dialect.refusal(StatusCode::BAD_REQUEST, &error),
+        Err(error) => return dialect.refusal(&error),
     };
     match app.conductor.admit(parsed.turn, hold).await {
         Ok(ticket) => dialect.respond(parsed.form, ticket, app.clock).await,
-        Err(error) => dialect.refusal(StatusCode::BAD_GATEWAY, &error),
+        Err(error) => dialect.refusal(&Message::Upstream(error).into()),
     }
 }
 

@@ -39,7 +39,10 @@ enum Event {
     Deadline,
 }
 enum Command {
-    Prompt { text: String, model: String },
+    Prompt {
+        text: Vec<crate::conversation::PromptBlock>,
+        model: String,
+    },
     Emit(Output, TurnEvent),
 }
 impl Core {

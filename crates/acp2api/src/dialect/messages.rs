@@ -1,29 +1,11 @@
 use super::*;
-use serde::Deserialize;
 pub(super) struct Messages;
-#[derive(Deserialize)]
-struct Request {
-    model: String,
-    messages: Vec<Message>,
-    #[serde(default)]
-    stream: bool,
-}
-#[derive(Deserialize)]
-struct Message {
-    role: String,
-    content: String,
-}
 impl WireDialect for Messages {
-    fn parse(&self, body: &[u8]) -> Result<Parsed, String> {
-        let request: Request = serde_json::from_slice(body).map_err(|e| e.to_string())?;
-        let [message]: [Message; 1] = request
-            .messages
-            .try_into()
-            .map_err(|_| "one user message required")?;
-        if message.role != "user" {
-            return Err("one user message required".into());
-        }
-        Ok(parsed(request.model, message.content, request.stream))
+    fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
+        content::parse(content::Api::Messages, body)
+    }
+    fn refusal_body(&self, refusal: &Refusal) -> Value {
+        json!({"type":"error","error":{"type":if refusal_status(refusal)==axum::http::StatusCode::BAD_REQUEST {"invalid_request_error"} else if refusal_status(refusal)==axum::http::StatusCode::UNAUTHORIZED {"authentication_error"} else {"api_error"},"message":refusal.message.to_string()}})
     }
     fn prefix(&self) -> &'static str {
         "msg_"

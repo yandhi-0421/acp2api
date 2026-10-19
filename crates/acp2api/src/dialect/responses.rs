@@ -1,35 +1,5 @@
 use super::*;
-use serde::Deserialize;
 pub(super) struct Responses;
-#[derive(Deserialize)]
-struct Request {
-    model: String,
-    input: Input,
-    #[serde(default)]
-    stream: bool,
-}
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Input {
-    Text(String),
-    Messages(Vec<Message>),
-}
-#[derive(Deserialize)]
-struct Message {
-    role: String,
-    content: Content,
-}
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Content {
-    Text(String),
-    Parts(Vec<TextPart>),
-}
-#[derive(Deserialize)]
-struct TextPart {
-    r#type: String,
-    text: String,
-}
 impl Responses {
     fn part(&self, text: &str) -> Value {
         json!({"type":"output_text","text":text,"annotations":[],"logprobs":[]})
@@ -42,33 +12,8 @@ impl Responses {
     }
 }
 impl WireDialect for Responses {
-    fn parse(&self, body: &[u8]) -> Result<Parsed, String> {
-        let request: Request = serde_json::from_slice(body).map_err(|e| e.to_string())?;
-        let text = match request.input {
-            Input::Text(text) => text,
-            Input::Messages(messages) => {
-                let [message]: [Message; 1] = messages
-                    .try_into()
-                    .map_err(|_| "one user message required")?;
-                if message.role != "user" {
-                    return Err("one user message required".into());
-                }
-                match message.content {
-                    Content::Text(text) => text,
-                    Content::Parts(parts) => {
-                        let mut text = String::new();
-                        for part in parts {
-                            if part.r#type != "input_text" {
-                                return Err("input_text content required".into());
-                            }
-                            text.push_str(&part.text);
-                        }
-                        text
-                    }
-                }
-            }
-        };
-        Ok(parsed(request.model, text, request.stream))
+    fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
+        content::parse(content::Api::Responses, body)
     }
     fn prefix(&self) -> &'static str {
         "resp_"
