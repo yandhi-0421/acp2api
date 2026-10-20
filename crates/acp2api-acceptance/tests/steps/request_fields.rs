@@ -180,3 +180,9 @@ fn documented(w: &mut World, #[step] step: &cucumber::gherkin::Step) {
 fn quoted_refusal(w: &mut World, message: String) {
     refusal(w, &message);
 }
+
+#[then(regex = r"^the field policy probe gets this error message: (.+)$")]
+fn probe_refusal(w: &mut World, encoded: String) {
+    let message: String = serde_json::from_str(&encoded).unwrap();
+    refusal(w, &message);
+}

@@ -13,7 +13,7 @@ pub(super) enum Api {
     Responses,
 }
 pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
-    let value: Value = serde_json::from_slice(body).map_err(|e| Refusal::invalid(e.to_string()))?;
+    let value = fields::parse_json(body)?;
     if let Some(tools) = value["tools"].as_array() {
         for tool in tools {
             if let Some(kind) = tool["type"]

@@ -1,6 +1,43 @@
 use super::content::Api;
 use crate::messages::{Message, Refusal};
+use serde::Deserialize;
 use serde_json::Value;
+
+pub(super) fn parse_json(body: &[u8]) -> Result<Value, Refusal> {
+    let mut depth = 0_usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for byte in body {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                quoted = false;
+            }
+        } else {
+            match byte {
+                b'"' => quoted = true,
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > 128 {
+                        return Err(Message::InvalidJson.into());
+                    }
+                }
+                b'}' | b']' => {
+                    depth = depth.checked_sub(1).ok_or(Message::InvalidJson)?;
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    deserializer.disable_recursion_limit();
+    let value = Value::deserialize(&mut deserializer).map_err(|_| Message::InvalidJson)?;
+    deserializer.end().map_err(|_| Message::InvalidJson)?;
+    Ok(value)
+}
 
 pub(super) fn check(api: Api, value: &Value) -> Result<(), Refusal> {
     if value["n"].as_f64().is_some_and(|n| n > 1.0) {

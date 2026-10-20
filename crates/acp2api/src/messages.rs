@@ -27,6 +27,7 @@ pub(crate) enum Message {
         kind: String,
         name: String,
     },
+    InvalidJson,
     Invalid(String),
     Key,
     Upstream(String),
@@ -66,6 +67,7 @@ impl Refusal {
             | Message::CodexWebSearch
             | Message::ToolType { .. }
             | Message::Prefill
+            | Message::InvalidJson
             | Message::Invalid(_) => Row::Rejected,
         }
     }
@@ -122,6 +124,7 @@ impl fmt::Display for Message {
             Self::Prefill => f.write_str(
                 "acp2api: a last message from the assistant (a prefill) is not supported.",
             ),
+            Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
         }
