@@ -408,7 +408,17 @@ fn client_tool(
     let kind = match kind {
         "function" => ToolKind::Function,
         "custom" if matches!(api, Api::Responses) => ToolKind::Custom,
-        _ => return Err(Refusal::invalid("unsupported client tool type")),
+        other => {
+            return Err(Message::ToolType {
+                kind: other.into(),
+                name: tool["name"]
+                    .as_str()
+                    .or_else(|| tool["function"]["name"].as_str())
+                    .unwrap_or("")
+                    .into(),
+            }
+            .into());
+        }
     };
     let function = if matches!(api, Api::Chat) {
         &tool["function"]
