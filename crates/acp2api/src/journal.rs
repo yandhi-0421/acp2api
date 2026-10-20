@@ -90,6 +90,9 @@ impl Writer {
         Ok(writer)
     }
     pub fn write(&mut self, record: &RequestRecord) -> io::Result<usize> {
+        self.record(record)
+    }
+    fn record(&mut self, record: &impl Serialize) -> io::Result<usize> {
         let mut line = serde_json::to_vec(record)?;
         line.push(b'\n');
         if line.len() as u64 > FILE_CAP {
@@ -273,7 +276,37 @@ pub(crate) struct Completion {
     pub session: Option<Session>,
     pub outcome: Outcome,
 }
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SafetyKind {
+    PermissionRefused,
+}
+pub(crate) struct SafetyReport {
+    pub request: Request,
+    pub session: String,
+    pub kind: SafetyKind,
+    pub tool: String,
+}
 impl Journal {
+    pub(crate) fn safety(&self, report: SafetyReport, clock: &dyn crate::Clock) -> io::Result<()> {
+        let record = serde_json::json!({
+            "time":timestamp(clock.wall())?,
+            "request_id":report.request.id,
+            "session":report.session.chars().take(12).collect::<String>(),
+            "event":report.kind,
+            "tool":report.tool,
+        });
+        self.0
+            .writer
+            .lock()
+            .map_err(|_| io::Error::other("journal writer failed"))?
+            .record(&record)?;
+        use std::io::Write;
+        let mut terminal = std::io::stdout().lock();
+        writeln!(terminal, "acp2api: {record}")?;
+        terminal.flush()
+    }
+
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
         let mut random = [0; 8];
         getrandom::fill(&mut random).map_err(io::Error::other)?;

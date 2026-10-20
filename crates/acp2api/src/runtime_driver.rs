@@ -1,4 +1,6 @@
 pub(crate) mod mcp;
+mod safety;
+pub(crate) use safety::ToolName;
 #[cfg(test)]
 mod rpc_request_ids;
 use crate::*;
@@ -297,6 +299,10 @@ impl Runtime {
             let permission = PermissionId(self.next_permission);
             self.permissions
                 .insert(permission, (value["id"].clone(), session.clone()));
+            let name = ToolName::from_fields(
+                request.tool_call.fields.name.as_deref(),
+                request.tool_call.fields.title.as_deref(),
+            );
             let call = (|| {
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
@@ -326,9 +332,16 @@ impl Runtime {
             })();
             return RuntimeEvent::Turn {
                 session,
-                update: TurnUpdate::Permission {
-                    request: permission,
-                    call,
+                update: if call.is_some() {
+                    TurnUpdate::Permission {
+                        request: permission,
+                        call,
+                    }
+                } else {
+                    TurnUpdate::RefusedPermission {
+                        request: permission,
+                        name,
+                    }
                 },
             };
         }
@@ -389,6 +402,10 @@ pub(crate) enum TurnUpdate {
     Permission {
         request: PermissionId,
         call: Option<crate::conversation::ToolCall>,
+    },
+    RefusedPermission {
+        request: PermissionId,
+        name: ToolName,
     },
     PromptEnded,
     Failed(String),

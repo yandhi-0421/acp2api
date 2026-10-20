@@ -87,6 +87,7 @@ enum Event {
 }
 enum Command {
     Complete(crate::journal::Completion),
+    Safety(crate::journal::SafetyReport),
     Prepare {
         work: String,
         settings: Session,
@@ -174,7 +175,9 @@ impl Core {
                     .position(|active| active.session.as_ref().is_some_and(|s| s.id == session))
                 {
                     self.update(index, update, now, &mut commands);
-                } else if let TurnUpdate::Permission { request, .. } = update {
+                } else if let TurnUpdate::Permission { request, .. }
+                | TurnUpdate::RefusedPermission { request, .. } = update
+                {
                     commands.push(Command::Permission {
                         request,
                         cancel: false,
@@ -289,6 +292,20 @@ impl Core {
             TurnUpdate::Usage(used) => active.input_tokens = used,
             TurnUpdate::PromptEnded => active.phase = Phase::Settling(now.saturating_add(200)),
             TurnUpdate::Failed(error) => self.finish(index, Err(error), commands),
+            TurnUpdate::RefusedPermission { request, name } => {
+                if let Some(session) = &active.session {
+                    commands.push(Command::Safety(crate::journal::SafetyReport {
+                        request: active.request.clone(),
+                        session: session.id.clone(),
+                        kind: crate::journal::SafetyKind::PermissionRefused,
+                        tool: name.as_str().into(),
+                    }));
+                }
+                commands.push(Command::Permission {
+                    request,
+                    cancel: false,
+                });
+            }
             TurnUpdate::Permission { request, call } => {
                 let mut cancel = false;
                 if matches!(active.phase, Phase::Prompt)
@@ -470,6 +487,12 @@ impl Conductor {
     ) -> bool {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::Safety(report) => {
+                    if journal.safety(report, clock.as_ref()).is_err() {
+                        eprintln!("acp2api: cannot write runtime safety event");
+                        return false;
+                    }
+                }
                 Command::Complete(completion) => {
                     if journal.complete(completion, clock.as_ref()).is_err() {
                         eprintln!("acp2api: cannot write request metadata");
