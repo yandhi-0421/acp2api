@@ -88,6 +88,7 @@ enum Event {
 enum Command {
     Complete(crate::journal::Completion),
     Safety(crate::journal::SafetyReport),
+    Cancel(String),
     Prepare {
         work: String,
         settings: Session,
@@ -137,7 +138,11 @@ impl Core {
                     .iter()
                     .position(|active| active.request.id == work)
                 {
-                    self.finish(index, Err(error), &mut commands);
+                    self.finish(
+                        index,
+                        Err(crate::messages::Message::Upstream(error)),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Prepared { work, result }) => {
@@ -164,7 +169,11 @@ impl Core {
                                 });
                             }
                         }
-                        Err(error) => self.finish(index, Err(error), &mut commands),
+                        Err(error) => self.finish(
+                            index,
+                            Err(crate::messages::Message::Upstream(error)),
+                            &mut commands,
+                        ),
                     }
                 }
             }
@@ -187,13 +196,23 @@ impl Core {
             Event::Runtime(RuntimeEvent::Failed(error)) => {
                 self.idle.clear();
                 while !self.active.is_empty() {
-                    self.finish(0, Err(error.clone()), &mut commands);
+                    self.finish(
+                        0,
+                        Err(crate::messages::Message::Upstream(error.clone())),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
                 self.idle.clear();
                 while !self.active.is_empty() {
-                    self.finish(0, Err("runtime stdout closed".into()), &mut commands);
+                    self.finish(
+                        0,
+                        Err(crate::messages::Message::Upstream(
+                            "runtime stdout closed".into(),
+                        )),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
@@ -291,7 +310,29 @@ impl Core {
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
             TurnUpdate::PromptEnded => active.phase = Phase::Settling(now.saturating_add(200)),
-            TurnUpdate::Failed(error) => self.finish(index, Err(error), commands),
+            TurnUpdate::Failed(error) => self.finish(
+                index,
+                Err(crate::messages::Message::Upstream(error)),
+                commands,
+            ),
+            TurnUpdate::UnpermittedTool(name) => {
+                if let Some(session) = &active.session {
+                    commands.push(Command::Cancel(session.id.clone()));
+                    commands.push(Command::Safety(crate::journal::SafetyReport {
+                        request: active.request.clone(),
+                        session: session.id.clone(),
+                        kind: crate::journal::SafetyKind::BuiltInToolRan,
+                        tool: name.as_str().into(),
+                    }));
+                }
+                self.finish(
+                    index,
+                    Err(crate::messages::Message::BuiltInToolRan(
+                        name.as_str().into(),
+                    )),
+                    commands,
+                );
+            }
             TurnUpdate::RefusedPermission { request, name } => {
                 if let Some(session) = &active.session {
                     commands.push(Command::Safety(crate::journal::SafetyReport {
@@ -319,7 +360,12 @@ impl Core {
             }
         }
     }
-    fn finish(&mut self, index: usize, result: Result<(), String>, commands: &mut Vec<Command>) {
+    fn finish(
+        &mut self,
+        index: usize,
+        result: Result<(), crate::messages::Message>,
+        commands: &mut Vec<Command>,
+    ) {
         let mut active = self.active.remove(index);
         if result.is_ok()
             && !active.disconnected
@@ -357,6 +403,9 @@ impl Core {
                     input: usage.input_tokens,
                     output: usage.output_tokens,
                 },
+                Err(crate::messages::Message::BuiltInToolRan(_)) => {
+                    crate::journal::Outcome::BuiltInToolRan
+                }
                 Err(_) => crate::journal::Outcome::Failed,
             }
         };
@@ -487,6 +536,15 @@ impl Conductor {
     ) -> bool {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::Cancel(session) => {
+                    if let Some(runtime) = runtime.as_mut()
+                        && let Err(error) = runtime.cancel(&session).await
+                    {
+                        commands.extend(
+                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
+                        );
+                    }
+                }
                 Command::Safety(report) => {
                     if journal.safety(report, clock.as_ref()).is_err() {
                         eprintln!("acp2api: cannot write runtime safety event");

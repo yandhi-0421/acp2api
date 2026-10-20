@@ -21,3 +21,48 @@ impl ToolName {
         &self.0
     }
 }
+
+#[derive(Default)]
+pub(super) struct ToolCalls(std::collections::HashMap<(String, String), Observation>);
+enum Observation {
+    Pending(ToolName),
+    PermissionAsked,
+    Reported,
+}
+impl ToolCalls {
+    pub(super) fn begin_prompt(&mut self, session: &str) {
+        self.0.retain(|(owner, _), _| owner != session);
+    }
+    pub(super) fn permission(&mut self, session: &str, id: &str) {
+        self.0
+            .insert((session.into(), id.into()), Observation::PermissionAsked);
+    }
+    pub(super) fn update(
+        &mut self,
+        session: &str,
+        id: &str,
+        name: Option<&str>,
+        title: Option<&str>,
+        executing: bool,
+    ) -> Option<ToolName> {
+        let observation = self
+            .0
+            .entry((session.into(), id.into()))
+            .or_insert_with(|| Observation::Pending(ToolName::from_fields(name, title)));
+        match observation {
+            Observation::Pending(previous) => {
+                if name.is_some() || title.is_some() {
+                    *previous = ToolName::from_fields(name, title);
+                }
+                if executing {
+                    let name = previous.clone();
+                    *observation = Observation::Reported;
+                    Some(name)
+                } else {
+                    None
+                }
+            }
+            Observation::PermissionAsked | Observation::Reported => None,
+        }
+    }
+}

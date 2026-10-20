@@ -26,6 +26,7 @@ pub(crate) enum Message {
     Invalid(String),
     Key,
     Upstream(String),
+    BuiltInToolRan(String),
 }
 pub(crate) enum Row {
     Key,
@@ -47,7 +48,7 @@ impl Refusal {
     pub fn row(&self) -> Row {
         match self.message {
             Message::Key => Row::Key,
-            Message::Upstream(_) => Row::Other502,
+            Message::Upstream(_) | Message::BuiltInToolRan(_) => Row::Other502,
             Message::Model { .. }
             | Message::Field(_)
             | Message::Content(_)
@@ -115,6 +116,7 @@ impl fmt::Display for Message {
             Self::Prefill => f.write_str(
                 "acp2api: a last message from the assistant (a prefill) is not supported.",
             ),
+            Self::BuiltInToolRan(name) => write!(f, "acp2api: the built-in tool {name} of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
         }

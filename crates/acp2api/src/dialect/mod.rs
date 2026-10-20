@@ -39,6 +39,39 @@ trait WireDialect: Sync {
         let code = refusal_code(refusal);
         json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
     }
+    fn built_in_error(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+        match self.prefix() {
+            "msg_" => {
+                let mut events = Vec::new();
+                if !wire.text.is_empty() {
+                    events.push(named(
+                        "content_block_stop",
+                        json!({"type":"content_block_stop","index":0}),
+                    ));
+                }
+                events.push(named("error",json!({"type":"error","error":{"type":"invalid_request_error","message":message}})));
+                events
+            }
+            "resp_" => {
+                let mut response = self.body(
+                    wire,
+                    &Answer {
+                        text: wire.text.clone(),
+                        tool_call: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                );
+                response["status"] = json!("failed");
+                response["error"] = json!({"code":"invalid_prompt","message":message});
+                response["usage"] = Value::Null;
+                vec![wire.event("response.failed", json!({"response":response}))]
+            }
+            _ => vec![data(
+                json!({"error":{"message":message,"type":"server_error","param":null,"code":"built_in_tool_ran"}}),
+            )],
+        }
+    }
     fn prefix(&self) -> &'static str;
     fn call_prefix(&self) -> &'static str {
         "call_"
@@ -53,7 +86,15 @@ impl<T: WireDialect + 'static> Dialect for T {
         WireDialect::parse(self, body)
     }
     fn refusal(&self, refusal: &Refusal) -> Response {
-        (refusal_status(refusal), Json(self.refusal_body(refusal))).into_response()
+        let mut response =
+            (refusal_status(refusal), Json(self.refusal_body(refusal))).into_response();
+        if matches!(refusal.message, Message::BuiltInToolRan(_)) {
+            response.headers_mut().insert(
+                "x-should-retry",
+                axum::http::HeaderValue::from_static("false"),
+            );
+        }
+        response
     }
     fn respond(
         &'static self,
@@ -109,7 +150,13 @@ impl<T: WireDialect + 'static> Dialect for T {
                                 state.ended = true;
                             }
                             TurnEvent::End(Err(error)) => {
-                                state.pending.push_back(named("error",json!({"type":"error","error":{"type":"api_error","message":error}})));
+                                if matches!(error, Message::BuiltInToolRan(_)) {
+                                    state.pending.extend(
+                                        self.built_in_error(&mut state.wire, error.to_string()),
+                                    );
+                                } else {
+                                    state.pending.push_back(named("error",json!({"type":"error","error":{"type":"api_error","message":error.to_string()}})));
+                                }
                                 state.ended = true;
                             }
                         }
@@ -135,7 +182,7 @@ impl<T: WireDialect + 'static> Dialect for T {
                             .into_response();
                         }
                         TurnEvent::End(Err(error)) => {
-                            return self.refusal(&Message::Upstream(error).into());
+                            return self.refusal(&error.into());
                         }
                     }
                 }
@@ -250,5 +297,6 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
         Message::Upstream(_) => "upstream_error",
+        Message::BuiltInToolRan(_) => "built_in_tool_ran",
     }
 }

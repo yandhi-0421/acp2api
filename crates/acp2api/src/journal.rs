@@ -269,6 +269,7 @@ pub(crate) enum Outcome {
     Success { input: u64, output: u64 },
     Refused(&'static str),
     Failed,
+    BuiltInToolRan,
     Disconnected,
 }
 pub(crate) struct Completion {
@@ -280,6 +281,7 @@ pub(crate) struct Completion {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SafetyKind {
     PermissionRefused,
+    BuiltInToolRan,
 }
 pub(crate) struct SafetyReport {
     pub request: Request,
@@ -346,6 +348,7 @@ impl Journal {
             }
             Outcome::Refused(code) => (ResultKind::Refused, Some(code), None, None),
             Outcome::Failed => (ResultKind::Failed, Some("upstream_error"), None, None),
+            Outcome::BuiltInToolRan => (ResultKind::Failed, Some("built_in_tool_ran"), None, None),
             Outcome::Disconnected => (
                 ResultKind::Disconnected,
                 Some("client_disconnected"),
