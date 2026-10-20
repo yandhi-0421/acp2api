@@ -70,6 +70,10 @@ async fn send(w: &mut World, endpoint: String, choice: &str, pair: bool) {
 }
 #[when(expr = "an API client sends that request to {string}")]
 async fn send_pair(w: &mut World, endpoint: String) {
+    if crate::server_tools::has_request(w) {
+        crate::server_tools::combined(w, endpoint).await;
+        return;
+    }
     send(w, endpoint, "auto", true).await;
 }
 #[when(expr = "an API client sends that request to {string} with \"tool_choice\" set to \"none\"")]
