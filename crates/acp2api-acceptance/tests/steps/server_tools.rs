@@ -89,6 +89,10 @@ fn ends(w: &mut World, suffix: String) {
 }
 #[then("acp2api refuses the request with HTTP 400")]
 fn status(w: &mut World) {
+    if w.fields.active {
+        crate::request_fields::expected_refusal(w);
+        return;
+    }
     assert_eq!(w.scenario.answer.as_ref().unwrap().status, 400);
 }
 #[then("the log has a line for the advisor tool")]

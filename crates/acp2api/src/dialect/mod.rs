@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use std::{collections::VecDeque, convert::Infallible, sync::Arc};
 mod chat;
 mod content;
+mod fields;
 mod messages;
 mod responses;
 pub(crate) static MESSAGES: &dyn Dialect = &messages::Messages;
@@ -236,7 +237,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
 pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
     match refusal.message {
         Message::Model { .. } => "model_not_found",
-        Message::Field(_) => "unsupported_parameter",
+        Message::Field(_) | Message::FieldValue { .. } => "unsupported_parameter",
         Message::Content(_) => "unsupported_content_type",
         Message::Media(_) => "unsupported_media_type",
         Message::Url(_) => "unsupported_url",
@@ -247,6 +248,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::AdvisorTool(_) => "unsupported_advisor_tool",
         Message::ToolType { .. } => "unsupported_tool_type",
         Message::ServerTool { .. } | Message::CodexWebSearch => "unsupported_server_tool",
+        Message::InvalidJson => "invalid_json",
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
         Message::Upstream(_) => "upstream_error",
