@@ -7,6 +7,7 @@ mod selection;
 mod timed_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    fields: request_fields::FieldState,
     safety: runtime_safety::SafetyState,
     server_tools: server_tools::ServerToolState,
     scenario: Scenario,
@@ -38,6 +39,8 @@ mod logs;
 mod model_names;
 #[path = "steps/request_content.rs"]
 mod request_content;
+#[path = "steps/request_fields.rs"]
+mod request_fields;
 #[path = "steps/runtime_safety.rs"]
 mod runtime_safety;
 #[path = "steps/server_tools.rs"]

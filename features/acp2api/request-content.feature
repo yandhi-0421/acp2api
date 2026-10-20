@@ -7,7 +7,7 @@ Feature: Request content
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-014 @issue-53 @wip
+  @FR-014 @issue-53
   Scenario Outline: acp2api ignores a field that an API client sends by default or as a hint
     When an API client sends a valid request to "<endpoint>" with the field <field> set to <value>
     Then acp2api answers with HTTP 200
@@ -62,7 +62,7 @@ Feature: Request content
     When an API client sends a valid request to "POST /v1/chat/completions" with "tool_choice" set to "auto"
     Then the official runtime offers the model the client tool "read_file"
 
-  @FR-014 @issue-53 @wip
+  @FR-014 @issue-53
   Scenario Outline: acp2api rejects a field whose result it cannot give
     When an API client sends a valid request to "<endpoint>" with the field "<field>" set to <value>
     Then acp2api refuses the request with HTTP 400 and the message "<message>"
@@ -82,7 +82,7 @@ Feature: Request content
       | POST /v1/responses        | text.format          | {"type": "json_schema", "name": "x", "schema": {}} | acp2api: the request field text.format.type = "json_schema" is not supported. |
       | POST /v1/messages         | tool_choice          | {"type": "any"} | acp2api: the request field tool_choice.type = "any" is not supported.   |
 
-  @FR-014 @issue-53 @wip
+  @FR-014 @issue-53
   Scenario Outline: acp2api rejects a field that turns on a feature with no result in acp2api
     When an API client sends a valid request to "<endpoint>" with the field "<field>" set to <value>
     Then acp2api refuses the request with HTTP 400
@@ -97,13 +97,13 @@ Feature: Request content
       | POST /v1/chat/completions | modalities      | ["text", "audio"]                                      |
       | POST /v1/chat/completions | audio           | {"voice": "alloy", "format": "wav"}                    |
 
-  @FR-014 @issue-53 @wip
+  @FR-014 @issue-53
   Scenario: acp2api rejects citations that a request turns on
     When an API client sends a valid request to "POST /v1/messages" with a text document block with "citations" set to {"enabled": true}
     Then acp2api refuses the request with HTTP 400
     And the official runtime gets no prompt
 
-  @FR-014 @issue-53 @wip
+  @FR-014 @issue-53
   Scenario Outline: A field with a value that turns its feature off counts as an absent field
     When an API client sends a valid request to "<endpoint>" with <field and value>
     Then acp2api answers with HTTP 200
@@ -116,7 +116,7 @@ Feature: Request content
       | POST /v1/chat/completions | the field "audio" set to null                                    |
       | POST /v1/messages         | a text document block with "citations" set to {"enabled": false} |
 
-  @FR-014 @issue-53 @wip
+  @FR-014 @issue-53
   Scenario Outline: acp2api rejects a request body that is not JSON or that is too deep
     When an API client sends to "POST /v1/messages" <body>
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the request body is not valid JSON, or it has more than 128 levels."
@@ -126,7 +126,7 @@ Feature: Request content
       | the body "not JSON"                               |
       | a valid request with 129 levels of objects and arrays |
 
-  @FR-014 @issue-53 @wip
+  @FR-014 @issue-53
   Scenario: acp2api accepts a request body with 128 levels of objects and arrays
     When an API client sends to "POST /v1/messages" a valid request with 128 levels of objects and arrays
     Then acp2api answers with HTTP 200

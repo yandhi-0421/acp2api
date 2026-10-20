@@ -127,6 +127,10 @@ async fn unsupported_media(w: &mut World, endpoint: String, media: String) {
 }
 #[then(expr = "acp2api refuses the request with HTTP 400 and the message {string}")]
 fn refusal(w: &mut World, message: String) {
+    if w.fields.active {
+        crate::request_fields::refusal(w, &message);
+        return;
+    }
     if w.server_tools.endpoint.is_some() {
         crate::server_tools::refusal(w, &message);
         return;

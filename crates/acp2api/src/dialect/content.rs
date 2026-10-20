@@ -1,4 +1,4 @@
-use super::{Parsed, parsed};
+use super::{Parsed, fields, parsed};
 use crate::{
     conversation::{Conversation, Item, Part, Role, SystemPart},
     messages::{Message, Refusal},
@@ -13,7 +13,7 @@ pub(super) enum Api {
     Responses,
 }
 pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
-    let value: Value = serde_json::from_slice(body).map_err(|e| Refusal::invalid(e.to_string()))?;
+    let value = fields::parse_json(body)?;
     if let Some(tools) = value["tools"].as_array() {
         for tool in tools {
             if let Some(kind) = tool["type"]
@@ -24,6 +24,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             }
         }
     }
+    fields::check(api, &value)?;
     let model = required(&value, "model")?.to_owned();
     let client_tools = tools(api, &value["tools"])?;
     let input = &value[if matches!(api, Api::Responses) {

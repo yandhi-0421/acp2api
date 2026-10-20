@@ -111,7 +111,7 @@ Feature: Errors
       | a failure of the runtime process in a stream             | POST /v1/responses        | the "response.failed" event   | acp2api: the runtime process failed, so acp2api ended the prompt turn.                           |
       | the stop reason "max_turn_requests" in a stream          | POST /v1/chat/completions | the "error" object            | acp2api: the prompt turn reached the limit of model requests of the official runtime.            |
 
-  @FR-033 @issue-53 @wip
+  @FR-033 @issue-53
   Scenario Outline: A request that acp2api rejects gets the status and the error.type of its row
     Given <prior state>
     When an API client sends a request to "POST /v1/messages" with "stream" set to false
