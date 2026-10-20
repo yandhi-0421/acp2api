@@ -25,6 +25,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         }
     }
     let model = required(&value, "model")?.to_owned();
+    let client_tools = tools(api, &value["tools"])?;
     let input = &value[if matches!(api, Api::Responses) {
         "input"
     } else {
@@ -87,7 +88,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 )?);
             } else {
                 at_start = false;
-                let parts = parts(api, &item["content"])?;
+                let parts = parts(api, &item["content"], &client_tools)?;
                 items.push(Item::Message { role, parts });
             }
         }
@@ -113,7 +114,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         },
         value["stream"].as_bool().unwrap_or(false),
     );
-    parsed.turn.tools = tools(api, &value["tools"])?;
+    parsed.turn.tools = client_tools;
     parsed.turn.tool_choice =
         if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
             crate::conversation::ToolChoice::Off
@@ -218,16 +219,33 @@ fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
         .as_str()
         .ok_or_else(|| Refusal::invalid(format!("string field {key} required")))
 }
-fn parts(api: Api, value: &Value) -> Result<Vec<Part>, Refusal> {
+fn parts(
+    api: Api,
+    value: &Value,
+    tools: &[crate::conversation::ClientTool],
+) -> Result<Vec<Part>, Refusal> {
     if let Some(text) = value.as_str() {
         return Ok(vec![Part::Text(text.into())]);
     }
-    value
+    let mut parts = Vec::new();
+    for block in value
         .as_array()
         .ok_or_else(|| Refusal::invalid("content must be text or blocks"))?
-        .iter()
-        .map(|v| part(api, v))
-        .collect()
+    {
+        if matches!(api, Api::Messages) && block["type"] == "tool_addition" {
+            let tool = &block["tool"];
+            if tool["type"] != "tool_reference"
+                || !tool["name"]
+                    .as_str()
+                    .is_some_and(|name| tools.iter().any(|tool| tool.name == name))
+            {
+                return Err(Message::Content("tool_addition".into()).into());
+            }
+        } else {
+            parts.push(part(api, block)?);
+        }
+    }
+    Ok(parts)
 }
 fn part(api: Api, v: &Value) -> Result<Part, Refusal> {
     let kind = required(v, "type")?;
@@ -417,6 +435,7 @@ fn client_tool(
     }
     let kind = match kind {
         "function" => ToolKind::Function,
+        "custom" if matches!(api, Api::Messages) => ToolKind::Function,
         "custom" if matches!(api, Api::Responses) => ToolKind::Custom,
         other => {
             return Err(Message::ToolType {

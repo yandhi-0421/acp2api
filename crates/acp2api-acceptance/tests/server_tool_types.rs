@@ -33,6 +33,10 @@ async fn tool_contracts_are_classified_by_api_and_type() {
             "unsupported_tool_type",
         );
         println!("unknown type refused on {endpoint}; prompts=0");
+        println!(
+            "observed error envelope: {}",
+            s.answer.as_ref().unwrap().json()
+        );
     }
     for family in [
         "web_fetch",
@@ -50,6 +54,11 @@ async fn tool_contracts_are_classified_by_api_and_type() {
                 "capability_rejected: server tool {kind} (name {name}) is not supported by acp2api."
             ),
             "unsupported_server_tool",
+        );
+        println!(
+            "observed server tool envelope: {}; prompts={}",
+            s.answer.as_ref().unwrap().json(),
+            content_check::blocks(&s).len()
         );
     }
     let advisor = format!("advisor_{date}");
@@ -70,6 +79,16 @@ async fn tool_contracts_are_classified_by_api_and_type() {
         "unsupported_advisor_tool",
     );
     c::advisor_log(&s);
+    let records = acp2api_acceptance::journal_check::records(&s);
+    let logged = records.last().unwrap();
+    println!(
+        "observed advisor envelope: {}; product log result={}, error_code={}, session={}; prompts={}",
+        s.answer.as_ref().unwrap().json(),
+        logged["result"],
+        logged["error_code"],
+        logged["session"],
+        content_check::blocks(&s).len()
+    );
     println!(
         "advisor precedes invalid model, earlier unknown tool, and full addition; actual product log verified"
     );
