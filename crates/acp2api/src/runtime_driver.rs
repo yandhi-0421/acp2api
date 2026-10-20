@@ -1,10 +1,14 @@
 pub(crate) mod mcp;
+mod safety;
+mod session_folders;
+pub(crate) use safety::ToolName;
+pub(crate) use session_folders::root as session_root;
 #[cfg(test)]
 mod rpc_request_ids;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, SessionUpdate,
+    SessionNotification, SessionUpdate, ToolCallStatus,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -25,6 +29,7 @@ pub(crate) struct Runtime {
     tools: std::collections::HashMap<String, Vec<crate::conversation::ClientTool>>,
     permissions: std::collections::HashMap<PermissionId, (Value, String)>,
     next_permission: u64,
+    tool_calls: safety::ToolCalls,
 }
 impl Runtime {
     pub(crate) async fn start(
@@ -117,6 +122,7 @@ impl Runtime {
             tools: std::collections::HashMap::new(),
             permissions: std::collections::HashMap::new(),
             next_permission: 0,
+            tool_calls: safety::ToolCalls::default(),
         };
         runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
         let catalog = runtime.new_session(&[], None).await?;
@@ -144,7 +150,7 @@ impl Runtime {
     ) -> Result<Value, String> {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
-        std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
+        std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
         let mut params = json!({"cwd":cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}});
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
@@ -188,13 +194,19 @@ impl Runtime {
     ) -> Result<(), String> {
         if let Some((id, session)) = self.permissions.remove(&request) {
             if cancel {
-                self.write(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}})).await?;
+                self.cancel(&session).await?;
             }
             let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
             self.write(json!({"jsonrpc":"2.0","id":id,"result":outcome}))
                 .await?;
         }
         Ok(())
+    }
+    pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), String> {
+        self.write(
+            json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}),
+        )
+        .await
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.send(method, params).await?;
@@ -219,6 +231,7 @@ impl Runtime {
         _model: &str,
         session: &str,
     ) -> Result<(), String> {
+        self.tool_calls.begin_prompt(session);
         let blocks: Vec<agent_client_protocol_schema::v1::ContentBlock> = prompt
             .into_iter()
             .map(|block| match block {
@@ -293,10 +306,16 @@ impl Runtime {
                     }
                 };
             let session = request.session_id.to_string();
+            self.tool_calls
+                .permission(&session, &request.tool_call.tool_call_id.to_string());
             self.next_permission += 1;
             let permission = PermissionId(self.next_permission);
             self.permissions
                 .insert(permission, (value["id"].clone(), session.clone()));
+            let name = ToolName::from_fields(
+                request.tool_call.fields.name.as_deref(),
+                request.tool_call.fields.title.as_deref(),
+            );
             let call = (|| {
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
@@ -326,9 +345,16 @@ impl Runtime {
             })();
             return RuntimeEvent::Turn {
                 session,
-                update: TurnUpdate::Permission {
-                    request: permission,
-                    call,
+                update: if call.is_some() {
+                    TurnUpdate::Permission {
+                        request: permission,
+                        call,
+                    }
+                } else {
+                    TurnUpdate::RefusedPermission {
+                        request: permission,
+                        name,
+                    }
                 },
             };
         }
@@ -350,6 +376,38 @@ impl Runtime {
                     _ => return RuntimeEvent::Other,
                 },
                 SessionUpdate::UsageUpdate(usage) => TurnUpdate::Usage(usage.used),
+                SessionUpdate::ToolCall(call) => {
+                    let executing = matches!(
+                        call.status,
+                        ToolCallStatus::InProgress | ToolCallStatus::Completed
+                    );
+                    match self.tool_calls.update(
+                        &session,
+                        &call.tool_call_id.to_string(),
+                        call.name.as_deref(),
+                        Some(&call.title),
+                        executing,
+                    ) {
+                        Some(name) => TurnUpdate::UnpermittedTool(name),
+                        None => return RuntimeEvent::Other,
+                    }
+                }
+                SessionUpdate::ToolCallUpdate(call) => {
+                    let executing = matches!(
+                        call.fields.status,
+                        Some(ToolCallStatus::InProgress | ToolCallStatus::Completed)
+                    );
+                    match self.tool_calls.update(
+                        &session,
+                        &call.tool_call_id.to_string(),
+                        call.fields.name.as_deref(),
+                        call.fields.title.as_deref(),
+                        executing,
+                    ) {
+                        Some(name) => TurnUpdate::UnpermittedTool(name),
+                        None => return RuntimeEvent::Other,
+                    }
+                }
                 _ => return RuntimeEvent::Other,
             };
             RuntimeEvent::Turn { session, update }
@@ -390,6 +448,11 @@ pub(crate) enum TurnUpdate {
         request: PermissionId,
         call: Option<crate::conversation::ToolCall>,
     },
+    RefusedPermission {
+        request: PermissionId,
+        name: ToolName,
+    },
+    UnpermittedTool(ToolName),
     PromptEnded,
     Failed(String),
 }

@@ -9,12 +9,27 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub(crate) struct Conductor {
     send: mpsc::Sender<Work>,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
+    notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
 }
 pub(crate) enum OwnerAction {
     NewLocalApiKey,
     ChangePassword(String),
     SetConcurrencyLimit(u8),
+    DismissNotice(String),
+}
+#[derive(Clone)]
+pub(crate) struct Notice {
+    pub(crate) id: String,
+    name: String,
+}
+impl Notice {
+    pub(crate) fn text(&self) -> String {
+        format!(
+            "The built-in tool {} ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client.",
+            self.name
+        )
+    }
 }
 enum Work {
     Owner {
@@ -76,6 +91,7 @@ struct Core {
     waiting: VecDeque<Accepted>,
     idle: Vec<Idle>,
     limit: u8,
+    notices: Vec<Notice>,
 }
 enum Event {
     Accepted(Accepted),
@@ -83,10 +99,13 @@ enum Event {
     Deadline,
     Disconnected(String),
     Limit(u8),
+    DismissNotice(String),
     PreparationFailed(String, String),
 }
 enum Command {
     Complete(crate::journal::Completion),
+    Safety(crate::journal::SafetyReport),
+    Cancel(String),
     Prepare {
         work: String,
         settings: Session,
@@ -117,6 +136,7 @@ impl Core {
         let mut commands = Vec::new();
         match event {
             Event::Accepted(request) => self.waiting.push_back(request),
+            Event::DismissNotice(id) => self.notices.retain(|notice| notice.id != id),
             Event::Limit(limit) => {
                 self.limit = limit;
                 self.idle.truncate(usize::from(limit));
@@ -136,7 +156,11 @@ impl Core {
                     .iter()
                     .position(|active| active.request.id == work)
                 {
-                    self.finish(index, Err(error), &mut commands);
+                    self.finish(
+                        index,
+                        Err(crate::messages::Message::Upstream(error)),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Prepared { work, result }) => {
@@ -163,7 +187,11 @@ impl Core {
                                 });
                             }
                         }
-                        Err(error) => self.finish(index, Err(error), &mut commands),
+                        Err(error) => self.finish(
+                            index,
+                            Err(crate::messages::Message::Upstream(error)),
+                            &mut commands,
+                        ),
                     }
                 }
             }
@@ -174,7 +202,9 @@ impl Core {
                     .position(|active| active.session.as_ref().is_some_and(|s| s.id == session))
                 {
                     self.update(index, update, now, &mut commands);
-                } else if let TurnUpdate::Permission { request, .. } = update {
+                } else if let TurnUpdate::Permission { request, .. }
+                | TurnUpdate::RefusedPermission { request, .. } = update
+                {
                     commands.push(Command::Permission {
                         request,
                         cancel: false,
@@ -184,13 +214,23 @@ impl Core {
             Event::Runtime(RuntimeEvent::Failed(error)) => {
                 self.idle.clear();
                 while !self.active.is_empty() {
-                    self.finish(0, Err(error.clone()), &mut commands);
+                    self.finish(
+                        0,
+                        Err(crate::messages::Message::Upstream(error.clone())),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
                 self.idle.clear();
                 while !self.active.is_empty() {
-                    self.finish(0, Err("runtime stdout closed".into()), &mut commands);
+                    self.finish(
+                        0,
+                        Err(crate::messages::Message::Upstream(
+                            "runtime stdout closed".into(),
+                        )),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
@@ -288,7 +328,47 @@ impl Core {
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
             TurnUpdate::PromptEnded => active.phase = Phase::Settling(now.saturating_add(200)),
-            TurnUpdate::Failed(error) => self.finish(index, Err(error), commands),
+            TurnUpdate::Failed(error) => self.finish(
+                index,
+                Err(crate::messages::Message::Upstream(error)),
+                commands,
+            ),
+            TurnUpdate::UnpermittedTool(name) => {
+                if let Some(session) = &active.session {
+                    self.notices.push(Notice {
+                        id: active.request.id.clone(),
+                        name: name.as_str().into(),
+                    });
+                    commands.push(Command::Cancel(session.id.clone()));
+                    commands.push(Command::Safety(crate::journal::SafetyReport {
+                        request: active.request.clone(),
+                        session: session.id.clone(),
+                        kind: crate::journal::SafetyKind::BuiltInToolRan,
+                        tool: name.as_str().into(),
+                    }));
+                }
+                self.finish(
+                    index,
+                    Err(crate::messages::Message::BuiltInToolRan(
+                        name.as_str().into(),
+                    )),
+                    commands,
+                );
+            }
+            TurnUpdate::RefusedPermission { request, name } => {
+                if let Some(session) = &active.session {
+                    commands.push(Command::Safety(crate::journal::SafetyReport {
+                        request: active.request.clone(),
+                        session: session.id.clone(),
+                        kind: crate::journal::SafetyKind::PermissionRefused,
+                        tool: name.as_str().into(),
+                    }));
+                }
+                commands.push(Command::Permission {
+                    request,
+                    cancel: false,
+                });
+            }
             TurnUpdate::Permission { request, call } => {
                 let mut cancel = false;
                 if matches!(active.phase, Phase::Prompt)
@@ -302,7 +382,12 @@ impl Core {
             }
         }
     }
-    fn finish(&mut self, index: usize, result: Result<(), String>, commands: &mut Vec<Command>) {
+    fn finish(
+        &mut self,
+        index: usize,
+        result: Result<(), crate::messages::Message>,
+        commands: &mut Vec<Command>,
+    ) {
         let mut active = self.active.remove(index);
         if result.is_ok()
             && !active.disconnected
@@ -340,6 +425,9 @@ impl Core {
                     input: usage.input_tokens,
                     output: usage.output_tokens,
                 },
+                Err(crate::messages::Message::BuiltInToolRan(_)) => {
+                    crate::journal::Outcome::BuiltInToolRan
+                }
                 Err(_) => crate::journal::Outcome::Failed,
             }
         };
@@ -363,6 +451,7 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Work>(32);
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
+        let (publish_notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let task = tokio::spawn(async move {
             let (mut runtime, catalog, idle) = match started {
                 Some((runtime, catalog)) => {
@@ -383,6 +472,7 @@ impl Conductor {
                 limit,
                 active: Vec::new(),
                 waiting: VecDeque::new(),
+                notices: Vec::new(),
             };
             let mut read_open = runtime.is_some();
             'events: loop {
@@ -405,19 +495,21 @@ impl Conductor {
                             Work::Models {reply,hold}=>{let _=reply.send(core.catalog.entries());drop(hold);continue;}
                             Work::Owner {action,reply,hold}=>{
                                 let mut settings=(**publish.borrow()).clone();
+                                let mut commands = VecDeque::new();
                                 let result=(|| {
                                     match action {
                                         OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
                                         OwnerAction::ChangePassword(password)=>settings.management_password_hash=crate::store::hash_password(&password)?,
                                         OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
+                                        OwnerAction::DismissNotice(id)=>{commands.extend(core.handle(Event::DismissNotice(id),clock.now()));return Ok(());},
                                     }
-                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));Ok(())
+                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));
+                                    commands.extend(core.handle(Event::Limit(settings.concurrency_limit),clock.now()));Ok(())
                                 })();
-                                let success=result.is_ok();let _=reply.send(result);
-                                if success {
-                                    let mut commands:VecDeque<_>=core.handle(Event::Limit(settings.concurrency_limit),clock.now()).into();
-                                    if !Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await {break 'events;}
-                                }
+                                let success=result.is_ok();
+                                publish_notices.send_replace(Arc::new(core.notices.clone()));
+                                let _=reply.send(result);
+                                if success && !Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await {break 'events;}
                                 drop(hold);continue;
                             }
                             Work::Turn(work)=>*work,
@@ -433,6 +525,7 @@ impl Conductor {
                     hold=timer=>(Event::Deadline,hold),
                 };
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
+                publish_notices.send_replace(Arc::new(core.notices.clone()));
                 if !Self::commands(
                     &mut core,
                     &mut runtime,
@@ -455,6 +548,7 @@ impl Conductor {
             Self {
                 send,
                 settings: settings_watch,
+                notices: notices_watch,
                 highest,
             },
             task,
@@ -470,6 +564,21 @@ impl Conductor {
     ) -> bool {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::Cancel(session) => {
+                    if let Some(runtime) = runtime.as_mut()
+                        && let Err(error) = runtime.cancel(&session).await
+                    {
+                        commands.extend(
+                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
+                        );
+                    }
+                }
+                Command::Safety(report) => {
+                    if journal.safety(report, clock.as_ref()).is_err() {
+                        eprintln!("acp2api: cannot write runtime safety event");
+                        return false;
+                    }
+                }
                 Command::Complete(completion) => {
                     if journal.complete(completion, clock.as_ref()).is_err() {
                         eprintln!("acp2api: cannot write request metadata");
@@ -529,6 +638,9 @@ impl Conductor {
             }
         }
         true
+    }
+    pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
+        self.notices.borrow().clone()
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
