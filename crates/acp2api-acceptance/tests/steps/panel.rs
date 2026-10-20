@@ -18,6 +18,15 @@ async fn prepare(w: &mut World) {
 async fn session(w: &mut World) {
     prepare(w).await;
     w.panel.login_initial("B1").await;
+    w.panel.answer = Some(
+        w.panel
+            .submit(
+                "B1",
+                "/manage/concurrency",
+                json!({"concurrency_limit":"2"}),
+            )
+            .await,
+    );
 }
 #[given(
     expr = "the owner has a panel session in the browser {string} and a panel session in the browser {string}"
@@ -27,6 +36,17 @@ async fn sessions(w: &mut World, a: String, b: String) {
     w.panel.login_initial(&a).await;
     prepare(w).await;
     w.panel.login_initial(&b).await;
+    for name in [&a, &b] {
+        let a = w
+            .panel
+            .submit(
+                name,
+                "/manage/concurrency",
+                json!({"concurrency_limit":"2"}),
+            )
+            .await;
+        w.panel.answer = Some(a);
+    }
 }
 #[given("a browser with no panel session")]
 #[given("a request with no panel session")]
@@ -66,11 +86,16 @@ fn private(w: &mut World) {
 }
 #[when("the request asks a management endpoint for a new local API key")]
 async fn unauthed_key(w: &mut World) {
-    w.scenario.answer = Some(w.panel.submit("anonymous", "/panel/key", json!({})).await);
+    w.scenario.answer = Some(w.panel.submit("anonymous", "/manage/key", json!({})).await);
 }
 #[then(expr = "the local API key is still {string}")]
 async fn unchanged_key(w: &mut World, alias: String) {
     assert_eq!(alias, "K1");
+    assert_eq!(
+        w.scenario.answer.as_ref().unwrap().status,
+        401,
+        "FR-009 actual management action rejects anonymous session rather than missing route"
+    );
     let key = w.panel.old_key.clone();
     let a = w.panel.api(&key).await;
     assert_eq!(
@@ -101,7 +126,7 @@ fn cookie(w: &mut World, first: String, second: String) {
         cookie.is_some(),
         "FR-009 correct password must set a panel session cookie"
     );
-    for attribute in [first, second] {
+    for attribute in [first, second, "Path=/".into()] {
         assert!(
             cookie.unwrap().split(';').any(|s| s.trim() == attribute),
             "FR-009 required session cookie attribute missing"
@@ -110,6 +135,11 @@ fn cookie(w: &mut World, first: String, second: String) {
 }
 #[then("acp2api gives no panel session cookie")]
 fn no_cookie(w: &mut World) {
+    assert_eq!(
+        w.panel.login_answer.as_ref().unwrap().status,
+        401,
+        "FR-009 wrong management password is refused by the actual login endpoint"
+    );
     assert!(
         !w.panel
             .login_answer
@@ -203,7 +233,7 @@ async fn change_limit(w: &mut World, n: u8) {
         w.panel
             .submit(
                 "B1",
-                "/panel/concurrency",
+                "/manage/concurrency",
                 json!({"concurrency_limit":n.to_string()}),
             )
             .await,
@@ -213,7 +243,7 @@ async fn change_limit(w: &mut World, n: u8) {
 async fn rotate(w: &mut World) {
     prepare(w).await;
     w.panel.login_initial("B1").await;
-    w.panel.answer = Some(w.panel.submit("B1", "/panel/key", json!({})).await);
+    w.panel.answer = Some(w.panel.submit("B1", "/manage/key", json!({})).await);
     w.panel.new_key = Some(w.panel.saved()["local_api_key"].as_str().unwrap().into());
 }
 #[then(expr = "a request with the local API key {string} gets HTTP 401")]
@@ -259,12 +289,16 @@ async fn origin(w: &mut World) {
         .collect::<Vec<_>>()
         .join("; ");
     let call = owner.client.send(ApiCall {
-        method: "GET".into(),
-        path: "/panel/settings".into(),
-        body: json!(null),
+        method: "POST".into(),
+        path: "/manage/concurrency".into(),
+        body: json!({"concurrency_limit":"3"}),
         headers: vec![
             ("cookie".into(), cookie),
             ("origin".into(), format!("http://{address}")),
+            (
+                "content-type".into(),
+                "application/x-www-form-urlencoded".into(),
+            ),
         ],
     });
     w.panel.answer = Some(call.finish(&mut w.panel.time()).await);
@@ -274,6 +308,11 @@ fn accepted(w: &mut World) {
     assert!(
         (200..300).contains(&w.panel.answer.as_ref().unwrap().status),
         "FR-008 same-origin management request must be accepted"
+    );
+    assert_eq!(
+        w.panel.saved()["concurrency_limit"].as_integer(),
+        Some(3),
+        "FR-008 accepted same-origin form must change the actual setting"
     );
 }
 #[given(expr = "acp2api started one time before with the data folder {string}")]

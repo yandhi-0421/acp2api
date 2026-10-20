@@ -15,6 +15,7 @@ use std::{
 #[derive(Default)]
 pub struct Panel {
     owners: HashMap<String, Owner>,
+    proven: std::collections::HashSet<String>,
     config: PathBuf,
     client: Option<ApiClient>,
     hub: Option<Hub>,
@@ -32,10 +33,9 @@ impl std::fmt::Debug for Panel {
     }
 }
 impl Panel {
-    pub fn bind(&mut self, root: &TestRoot, data: &Path, hub: Hub) {
+    pub fn bind(&mut self, root: &TestRoot, data: &Path, hub: Hub, address: String) {
         self.config = data.join("config.toml");
-        let saved = self.saved();
-        self.address = format!("127.0.0.1:{}", saved["port"].as_integer().unwrap());
+        self.address = address;
         self.client = Some(
             ApiClient::new(self.address.clone(), String::new(), hub.clone())
                 .without_local_api_key(),
@@ -51,7 +51,16 @@ impl Panel {
             startup.panel_runtime();
             startup.launch_data(vec![]).await;
         }
-        self.bind(startup.root(), &startup.data, startup.panel_hub());
+        let address = startup
+            .terminal()
+            .lines()
+            .filter_map(|line| {
+                line.split_once("management panel at http://")
+                    .map(|(_, url)| url.trim_end_matches('/').to_owned())
+            })
+            .next_back()
+            .expect("actual published panel address");
+        self.bind(startup.root(), &startup.data, startup.panel_hub(), address);
     }
     pub async fn scenario(&mut self, scenario: &mut Scenario) {
         scenario.start().await;
@@ -59,6 +68,7 @@ impl Panel {
             &scenario.root,
             &scenario.root.path.join("data"),
             scenario.hub.clone(),
+            format!("127.0.0.1:{}", scenario.root.port),
         );
     }
     pub fn saved(&self) -> toml::Value {
@@ -76,10 +86,27 @@ impl Panel {
     pub async fn login(&mut self, name: &str, password: &str) {
         let call = self
             .owner(name)
-            .submit("/panel/login", json!({"password":password}));
+            .submit("/manage/login", json!({"password":password}));
         let answer = call.finish(&mut self.time()).await;
         self.owner(name).remember(&answer);
+        let opened = answer.headers.contains_key("set-cookie");
         self.login_answer = Some(answer);
+        if opened {
+            let limit = self.saved()["concurrency_limit"]
+                .as_integer()
+                .unwrap()
+                .to_string();
+            let proof = self
+                .submit(
+                    name,
+                    "/manage/concurrency",
+                    json!({"concurrency_limit":limit}),
+                )
+                .await;
+            if proof.status == 200 {
+                self.proven.insert(name.into());
+            }
+        }
     }
     pub async fn login_initial(&mut self, name: &str) {
         let password = self.initial_password.clone();
@@ -111,6 +138,24 @@ impl Panel {
             self.owners.get(name).is_some_and(|o| !o.cookies.is_empty()),
             "FR-009 correct management password must create a real panel session before its lifetime is tested"
         );
+        if !expected {
+            assert!(
+                self.proven.contains(name),
+                "FR-009 the previously-issued session must have worked on a real management action"
+            );
+            let before = toml::to_string(&self.saved()).unwrap();
+            for (path, body) in management_actions() {
+                let a = self.submit(name, path, body).await;
+                assert_eq!(
+                    a.status, 401,
+                    "FR-009 invalid previously-issued cookie cannot change management settings: {path}"
+                );
+                assert!(
+                    toml::to_string(&self.saved()).unwrap() == before,
+                    "FR-009 invalid management action must leave every setting unchanged"
+                );
+            }
+        }
         let page = self.page(name).await;
         let html = text(&page);
         assert_eq!(page.status, 200, "FR-009 page must remain available");
@@ -128,7 +173,7 @@ impl Panel {
     pub async fn change_password(&mut self, name: &str) {
         let password = crate::setup::random_hex(20);
         self.answer = Some(
-            self.submit(name, "/panel/password", json!({"password":password}))
+            self.submit(name, "/manage/password", json!({"password":password}))
                 .await,
         );
         self.new_password = Some(password);
@@ -194,4 +239,15 @@ pub fn generated(startup: &Startup, secret: &str) -> String {
                 .map(str::to_owned)
         })
         .unwrap_or_default()
+}
+
+pub fn management_actions() -> Vec<(&'static str, Value)> {
+    vec![
+        ("/manage/key", json!({})),
+        (
+            "/manage/password",
+            json!({"password":crate::setup::random_hex(20)}),
+        ),
+        ("/manage/concurrency", json!({"concurrency_limit":"3"})),
+    ]
 }
