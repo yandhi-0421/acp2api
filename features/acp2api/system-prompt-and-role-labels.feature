@@ -44,7 +44,7 @@ Feature: System prompt and role labels
     Then the ACP session gets the system prompt addition "You are Claude Code."
     And no content that the official runtime gets holds the text of the attribution block
 
-  @FR-019 @FR-020 @issue-47 @wip
+  @FR-019 @FR-020 @issue-47
   Scenario: A system message after a user message stays at its place with its role label
     Given an API client sent a request to "POST /v1/chat/completions" with the user message "Hello", and the official runtime replied "Hi."
     When the API client sends the next request of that conversation with the user message "Tell me more." and then the system message "Be brief."
@@ -62,7 +62,7 @@ Feature: System prompt and role labels
     When an API client sends a request to "POST /v1/messages" with one unnamed user message "Hello"
     Then the prompt that the official runtime gets is "Hello"
 
-  @FR-020 @issue-47 @wip
+  @FR-020 @issue-47
   Scenario: Two user messages with names keep their role labels
     Given an API client sent a request to "POST /v1/chat/completions" with the user message "Hello", and the official runtime replied "Hi."
     When the API client sends the next request of that conversation with the user messages "I agree." with the name "Alice" and "Me too." with the name "Bob"
@@ -74,7 +74,7 @@ Feature: System prompt and role labels
       Me too.
       """
 
-  @FR-020 @issue-47 @wip
+  @FR-020 @issue-47
   Scenario Outline: One new user message with a name keeps its role label
     Given <history>
     When an API client sends the only new user message "Hello" with the name "Alice" to "POST /v1/chat/completions"
@@ -101,7 +101,7 @@ Feature: System prompt and role labels
       Be brief.
       """
 
-  @FR-020 @issue-47 @wip
+  @FR-020 @issue-47
   Scenario: The text of a rebuild keeps the name of each message of each role
     When an API client sends a new conversation to "POST /v1/chat/completions" with these messages:
       | role      | name  | text         |

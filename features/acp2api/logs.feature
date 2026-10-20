@@ -26,7 +26,7 @@ Feature: Logs
       | the unknown field names       |
     And the unknown field names of the line hold "example_field"
 
-  @FR-056 @issue-47 @wip
+  @FR-056 @issue-47
   Scenario Outline: The log line shows how the request used an ACP session
     Given <history>
     When an API client sends that request
