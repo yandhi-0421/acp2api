@@ -1,6 +1,8 @@
 pub(crate) mod mcp;
 mod safety;
+mod session_folders;
 pub(crate) use safety::ToolName;
+pub(crate) use session_folders::root as session_root;
 #[cfg(test)]
 mod rpc_request_ids;
 use crate::*;
@@ -148,7 +150,7 @@ impl Runtime {
     ) -> Result<Value, String> {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
-        std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
+        std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
         let mut params = json!({"cwd":cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}});
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});

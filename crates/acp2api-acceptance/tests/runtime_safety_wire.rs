@@ -241,4 +241,14 @@ fn unpermitted_cancelled(s: &Scenario) {
         tool_check::permission_requests(s).is_empty(),
         "execution had no permission request"
     );
+    assert!(
+        !s.fake().record().offered_tools().is_empty(),
+        "actual MCP tools/list observed"
+    );
+    assert!(
+        s.hub
+            .entries()
+            .iter()
+            .all(|entry| entry.event["request"]["method"] != "tools/call")
+    );
 }

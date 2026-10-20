@@ -108,7 +108,7 @@ pub(crate) async fn start(
             crate::runtime_driver::Runtime::start(
                 &ports,
                 &data,
-                env.temp.join("sessions/initial"),
+                crate::runtime_driver::session_root(&env)?,
                 tools.clone(),
             )
             .await?,
