@@ -256,7 +256,9 @@ impl Runtime {
         (event, hold)
     }
     fn decode(&mut self, value: Value) -> RuntimeEvent {
-        if let Some(id) = value["id"].as_u64() {
+        if value.get("method").is_none()
+            && let Some(id) = value["id"].as_u64()
+        {
             if let Some((work, tools)) = self.creating.remove(&id) {
                 let result = (|| {
                     let response = value
