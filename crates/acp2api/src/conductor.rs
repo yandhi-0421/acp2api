@@ -6,8 +6,23 @@ use crate::{
 use std::{collections::VecDeque, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
 #[derive(Clone)]
-pub(crate) struct Conductor(mpsc::Sender<Work>);
+pub(crate) struct Conductor {
+    send: mpsc::Sender<Work>,
+    settings: tokio::sync::watch::Receiver<Arc<crate::store::Settings>>,
+    pub(crate) highest: u8,
+}
+pub(crate) enum OwnerAction {
+    NewLocalApiKey,
+    ChangePassword(String),
+    SetConcurrencyLimit(u8),
+}
+
 enum Work {
+    Owner {
+        action: OwnerAction,
+        reply: oneshot::Sender<Result<(), String>>,
+        hold: Hold,
+    },
     Turn(Box<TurnWork>),
     Models {
         reply: oneshot::Sender<Vec<crate::catalog::ModelEntry>>,
@@ -250,8 +265,12 @@ impl Conductor {
         started: Option<(Runtime, crate::catalog::Catalog)>,
         clock: Arc<dyn Clock>,
         journal: crate::journal::Journal,
+        settings: crate::store::Settings,
+        configuration: std::path::PathBuf,
+        highest: u8,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Work>(32);
+        let (publish, settings_watch) = tokio::sync::watch::channel(Arc::new(settings));
         let task = tokio::spawn(async move {
             let (mut runtime, mut core) = match started {
                 Some((runtime, catalog)) => (
@@ -277,6 +296,20 @@ impl Conductor {
                     work=recv.recv()=> {
                         let Some(work)=work else {break;};
                         let work = match work {
+                            Work::Owner {action,reply,hold}=> {
+                                let mut settings=(**publish.borrow()).clone();
+                                let result=(|| {
+                                    match action {
+                                        OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
+                                        OwnerAction::ChangePassword(password)=>settings.management_password_hash=crate::store::hash_password(&password)?,
+                                        OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
+                                    }
+                                    crate::store::save(&configuration,&settings)?;
+                                    publish.send_replace(Arc::new(settings));
+                                    Ok(())
+                                })();
+                                let _=reply.send(result);drop(hold);continue;
+                            }
                             Work::Models { reply, hold } => {
                                 let _ = reply.send(core.catalog.entries());
                                 drop(hold);
@@ -376,7 +409,29 @@ impl Conductor {
                 runtime.stop().await;
             }
         });
-        (Self(send), task)
+        (
+            Self {
+                send,
+                settings: settings_watch,
+                highest,
+            },
+            task,
+        )
+    }
+    pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
+        self.settings.borrow().clone()
+    }
+    pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
+        let (reply, result) = oneshot::channel();
+        self.send
+            .send(Work::Owner {
+                action,
+                reply,
+                hold,
+            })
+            .await
+            .map_err(|_| "conductor stopped")?;
+        result.await.map_err(|_| "conductor stopped")?
     }
     pub(crate) async fn admit(
         &self,
@@ -385,7 +440,7 @@ impl Conductor {
         request: crate::journal::Request,
     ) -> Result<Ticket, crate::messages::Refusal> {
         let (admission, reply) = oneshot::channel();
-        self.0
+        self.send
             .send(Work::Turn(Box::new(TurnWork {
                 turn,
                 request,
@@ -409,7 +464,7 @@ impl Conductor {
         hold: Hold,
     ) -> Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal> {
         let (reply, result) = oneshot::channel();
-        self.0
+        self.send
             .send(Work::Models { reply, hold })
             .await
             .map_err(|_| {

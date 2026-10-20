@@ -5,7 +5,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct Settings {
     pub port: u16,
     pub concurrency_limit: u8,
@@ -118,9 +118,7 @@ pub(crate) fn read(
             .ok_or_else(|| invalid(path, "local_api_key"))?
             .to_owned(),
         None => {
-            let mut bytes = [0u8; 32];
-            getrandom::fill(&mut bytes).map_err(|_| "cannot generate local API key")?;
-            let key = format!("acp2api-{}", base64url(&bytes));
+            let key = random_key()?;
             new_key = Some(key.clone());
             key
         }
@@ -138,12 +136,7 @@ pub(crate) fn read(
         }
         None => {
             let password = random_password()?;
-            let params = argon2::Params::new(19456, 2, 1, Some(32))
-                .map_err(|_| "cannot set password hash parameters")?;
-            let hash = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
-                .hash_password(password.as_bytes())
-                .map_err(|_| "cannot hash management password")?
-                .to_string();
+            let hash = hash_password(&password)?;
             new_password = Some(password);
             hash
         }
@@ -227,7 +220,7 @@ fn base64url(bytes: &[u8]) -> String {
     }
     result
 }
-fn save(path: &Path, settings: &Settings) -> Result<(), String> {
+pub(crate) fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     let parent = path.parent().ok_or("configuration path has no parent")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut suffix = [0u8; 16];
@@ -245,4 +238,26 @@ fn save(path: &Path, settings: &Settings) -> Result<(), String> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+pub(crate) fn random_key() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|_| "cannot generate local API key")?;
+    Ok(format!("acp2api-{}", base64url(&bytes)))
+}
+pub(crate) fn hash_password(password: &str) -> Result<String, String> {
+    let params = argon2::Params::new(19456, 2, 1, Some(32))
+        .map_err(|_| "cannot set password hash parameters")?;
+    Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
+        .hash_password(password.as_bytes())
+        .map(|h| h.to_string())
+        .map_err(|_| "cannot hash management password".into())
+}
+pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
+    use argon2::PasswordVerifier;
+    PasswordHash::new(hash).ok().is_some_and(|h| {
+        Argon2::default()
+            .verify_password(password.as_bytes(), &h)
+            .is_ok()
+    })
 }
