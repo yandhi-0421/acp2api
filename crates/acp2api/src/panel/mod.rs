@@ -103,7 +103,7 @@ async fn guard(
             "The request must use the local management panel address.",
         )
             .into_response()
-    } else if request.uri().path() != "/"
+    } else if request.uri().path().starts_with("/manage/")
         && request.uri().path() != "/manage/login"
         && !panel.session(headers)
     {
