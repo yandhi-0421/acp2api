@@ -40,6 +40,7 @@ async fn custom_and_namespace_http_lever() {
         evidence.push(capture(&answer, stream));
     }
     c::offer_custom(&s, custom, grammar);
+    let custom_offers = c::offered(&s);
     t::cancelled(&s, 2);
     // The name that resembles an encoded namespace member is a separate plain tool.
     let mut tools: Vec<Value> = namespaces
@@ -79,15 +80,29 @@ async fn custom_and_namespace_http_lever() {
             evidence.push(capture(&answer, stream));
         }
     }
-    t::cancelled(&s, 10);
+    t::cancelled_prompts(&s, 10, &[0, 1, 3, 4, 5, 6, 7, 8, 9, 10]);
     let records = s.fake().record();
     let prompts = records.prompts();
     let sessions: std::collections::HashSet<_> = prompts.iter().map(|p| &p.session).collect();
     assert_eq!(
         sessions.len(),
-        2,
-        "tool sets are immutable and repeated calls retain identity"
+        11,
+        "eleven separate one-user conversations use eleven distinct ACP sessions"
     );
+    let all_offers = records.offered_tools();
+    assert_eq!(
+        all_offers.len(),
+        11,
+        "each new session reads its immutable tool set"
+    );
+    for (index, offering) in all_offers.iter().enumerate() {
+        let expected = if index < 2 { &custom_offers } else { &offers };
+        assert_eq!(
+            offering["result"]["tools"],
+            json!(expected),
+            "each session retains its exact tool kind, namespace mapping, description, and schema"
+        );
+    }
     let record = json!({"mcp_offers":records.offered_tools(),"permission_requests":t::permission_requests(&s),"permission_replies":t::permission_replies(&s),"cancels":records.cancels(),"responses":evidence});
     let output = record.to_string();
     assert!(output.len() <= 2 * 1024 * 1024, "2 MiB result cap");
@@ -154,6 +169,6 @@ async fn custom_namespace_keeps_both_kind_and_namespace() {
             &json!("精确\ninput🙂\n"),
         );
     }
-    t::cancelled(&s, 2);
+    t::cancelled_prompts(&s, 2, &[1, 2]);
     s.finish(true).await;
 }

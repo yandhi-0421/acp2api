@@ -89,10 +89,19 @@ fn lines(s: &Scenario, direction: &str) -> Vec<Value> {
         .collect()
 }
 pub fn cancelled(s: &Scenario, expected: usize) {
+    cancelled_prompts(s, expected, &(0..expected).collect::<Vec<_>>());
+}
+pub fn cancelled_prompts(s: &Scenario, expected: usize, prompt_indices: &[usize]) {
+    assert_eq!(
+        prompt_indices.len(),
+        expected,
+        "one expected prompt for each cancel"
+    );
     let prompts = s.fake().record().prompts();
     let cancels = s.fake().record().cancels();
     assert_eq!(cancels.len(), expected, "actual session/cancel count");
-    for (cancel, prompt) in cancels.iter().zip(prompts) {
+    for (cancel, &index) in cancels.iter().zip(prompt_indices) {
+        let prompt = &prompts[index];
         assert_eq!(
             cancel["params"]["sessionId"], prompt.session,
             "cancel matches active ACP session"
