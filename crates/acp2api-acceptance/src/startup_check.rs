@@ -263,3 +263,21 @@ impl Drop for Startup {
         }
     }
 }
+
+impl Startup {
+    pub fn panel_hub(&self) -> Hub {
+        self.hub.as_ref().expect("initialized startup").clone()
+    }
+    pub fn panel_running(&self) -> bool {
+        self.child.is_some()
+    }
+    pub fn panel_runtime(&self) {
+        let source = self.root().path.join("builds/normal");
+        let target = self.data.join("official-runtime");
+        std::fs::create_dir_all(&target).unwrap();
+        for file in std::fs::read_dir(source).unwrap() {
+            let file = file.unwrap();
+            std::fs::copy(file.path(), target.join(file.file_name())).unwrap();
+        }
+    }
+}
