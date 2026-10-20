@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 pub struct ConversationState {
     system: Option<String>,
     initial: Vec<Value>,
+    initial_headers: Vec<(String, String)>,
+    initial_cache: Option<Value>,
     session: Option<String>,
     deferred: Option<acp2api_acceptance::client::ApiCall>,
     log_mode: Option<String>,
@@ -54,11 +56,13 @@ fn initial(w: &mut World, endpoint: String, system: String, user: String) {
     assert_eq!(endpoint, "POST /v1/chat/completions");
     w.conversation.system = Some(system.clone());
     w.conversation.initial = vec![c::message("user", None, &user)];
-    w.conversation.deferred = Some(c::call(
-        json!(w.conversation.initial),
-        Some(&system),
-        Value::Null,
-    ));
+    let mut call = c::call(json!(w.conversation.initial), Some(&system), Value::Null);
+    call.headers
+        .push(("x-claude-code-session-id".into(), "abc".into()));
+    call.body["prompt_cache_key"] = "key-1".into();
+    w.conversation.initial_headers = call.headers.clone();
+    w.conversation.initial_cache = call.body.get("prompt_cache_key").cloned();
+    w.conversation.deferred = Some(call);
 }
 #[given(expr = "the official runtime replied {string} in the ACP session {string}")]
 async fn initial_reply(w: &mut World, reply: String, label: String) {
@@ -198,15 +202,13 @@ async fn restart(w: &mut World) {
     w.scenario.restart().await;
 }
 #[given(expr = "the first request had the header {string}")]
-async fn first_header(w: &mut World, header: String) {
-    let mut call = c::call(
-        json!(w.conversation.initial),
-        w.conversation.system.as_deref(),
-        Value::Null,
-    );
+fn first_header(w: &mut World, header: String) {
     let (key, value) = header.split_once(": ").unwrap();
-    call.headers.push((key.into(), value.into()));
-    first(w, call, "Hi.").await;
+    assert_eq!(
+        w.conversation.initial_headers,
+        vec![(key.into(), value.into())],
+        "the first actual API call carries the declared header"
+    );
 }
 #[when(
     expr = "the API client sends the conversation with the edited user message {string} and the header {string}"
@@ -223,14 +225,13 @@ async fn edit_header(w: &mut World, text: String, header: String) {
     assert_eq!(w.scenario.answer.as_ref().unwrap().status, 200);
 }
 #[given(expr = "the first request had {string} set to {string}")]
-async fn first_cache(w: &mut World, field: String, value: String) {
-    let mut call = c::call(
-        json!(w.conversation.initial),
-        w.conversation.system.as_deref(),
-        Value::Null,
+fn first_cache(w: &mut World, field: String, value: String) {
+    assert_eq!(field, "prompt_cache_key");
+    assert_eq!(
+        w.conversation.initial_cache,
+        Some(json!(value)),
+        "the first actual API call carries the declared cache key"
     );
-    call.body[field] = value.into();
-    first(w, call, "Hi.").await;
 }
 #[when(
     expr = "the API client sends the same conversation with the reply {string}, the new user message {string}, and {string} set to {string}"
