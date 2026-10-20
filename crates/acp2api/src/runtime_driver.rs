@@ -1,4 +1,6 @@
 pub(crate) mod mcp;
+#[cfg(test)]
+mod rpc_request_ids;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
