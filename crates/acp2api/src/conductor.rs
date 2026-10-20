@@ -509,9 +509,7 @@ impl Conductor {
                                 let success=result.is_ok();
                                 publish_notices.send_replace(Arc::new(core.notices.clone()));
                                 let _=reply.send(result);
-                                if success {
-                                    if !Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await {break 'events;}
-                                }
+                                if success && !Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await {break 'events;}
                                 drop(hold);continue;
                             }
                             Work::Turn(work)=>*work,
