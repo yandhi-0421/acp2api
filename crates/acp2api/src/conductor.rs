@@ -1,3 +1,4 @@
+mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnEvent, TurnRequest, Usage},
@@ -55,15 +56,12 @@ struct Accepted {
     request: crate::journal::Request,
     output: Output,
 }
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 struct Session {
     tools: Vec<crate::conversation::ClientTool>,
     system: Option<String>,
 }
-struct Idle {
-    id: String,
-    settings: Session,
-}
+type Idle = records::ReadySession;
 struct PendingPrompt {
     text: Vec<crate::conversation::PromptBlock>,
     model: String,
@@ -77,7 +75,11 @@ struct Active {
     output: Output,
     request: crate::journal::Request,
     session: Option<crate::journal::Session>,
-    settings: Session,
+    hashes: Vec<crate::conversation::ItemHash>,
+    tools_hash: crate::conversation::ToolSetHash,
+    kind: crate::journal::SessionUse,
+    used: u64,
+    eligible: bool,
     disconnected: bool,
     held: Option<String>,
     text: String,
@@ -90,6 +92,7 @@ struct Core {
     active: Vec<Active>,
     waiting: VecDeque<Accepted>,
     idle: Vec<Idle>,
+    use_sequence: u64,
     limit: u8,
     notices: Vec<Notice>,
 }
@@ -139,7 +142,6 @@ impl Core {
             Event::DismissNotice(id) => self.notices.retain(|notice| notice.id != id),
             Event::Limit(limit) => {
                 self.limit = limit;
-                self.idle.truncate(usize::from(limit));
             }
             Event::Disconnected(work) => {
                 if let Some(active) = self
@@ -175,7 +177,7 @@ impl Core {
                             let active = &mut self.active[index];
                             active.session = Some(crate::journal::Session {
                                 id: session.clone(),
-                                kind: crate::journal::SessionUse::New,
+                                kind: active.kind,
                             });
                             if let Phase::Preparing(prompt) =
                                 std::mem::replace(&mut active.phase, Phase::Prompt)
@@ -249,10 +251,6 @@ impl Core {
             let Some(request) = self.waiting.pop_front() else {
                 break;
             };
-            let prompt = PendingPrompt {
-                text: crate::conversation::prompt(&request.turn),
-                model: request.turn.model,
-            };
             let settings = Session {
                 system: crate::conversation::system_prompt_addition(
                     &request.turn.conversation.system,
@@ -262,11 +260,49 @@ impl Core {
                     crate::conversation::ToolChoice::Auto => request.turn.tools,
                 },
             };
-            let idle = self
-                .idle
-                .iter()
-                .position(|session| session.settings == settings)
-                .map(|index| self.idle.remove(index));
+            let hashes = crate::conversation::record_hashes(&request.turn.conversation);
+            let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
+            let matched =
+                records::select(&self.idle, &hashes, tools_hash, &request.turn.conversation);
+            let kind = if matched.is_some() {
+                crate::journal::SessionUse::Continue
+            } else if request.turn.conversation.earlier.is_empty() {
+                crate::journal::SessionUse::New
+            } else {
+                crate::journal::SessionUse::Rebuild
+            };
+            let text = if let Some(index) = matched {
+                let start = self.idle[index]
+                    .record
+                    .as_ref()
+                    .expect("matched record")
+                    .hashes
+                    .len()
+                    - 1;
+                let items = request.turn.conversation.items();
+                crate::conversation::prompt(crate::conversation::PromptFor::Continue {
+                    new_items: &items[start..],
+                })
+            } else {
+                crate::conversation::prompt(crate::conversation::PromptFor::Rebuild {
+                    conversation: &request.turn.conversation,
+                })
+            };
+            let prompt = PendingPrompt {
+                text,
+                model: request.turn.model,
+            };
+            let ready = matched.or_else(|| {
+                (settings.system.is_none() && settings.tools.is_empty())
+                    .then(|| {
+                        self.idle
+                            .iter()
+                            .position(|session| session.record.is_none())
+                    })
+                    .flatten()
+            });
+            let idle = ready.map(|index| self.idle.remove(index));
+            self.use_sequence = self.use_sequence.saturating_add(1);
             let work = request.request.id.clone();
             let (session, phase) = match idle {
                 Some(idle) => {
@@ -276,10 +312,7 @@ impl Core {
                         prompt,
                     });
                     (
-                        Some(crate::journal::Session {
-                            id: idle.id,
-                            kind: crate::journal::SessionUse::New,
-                        }),
+                        Some(crate::journal::Session { id: idle.id, kind }),
                         Phase::Prompt,
                     )
                 }
@@ -295,7 +328,11 @@ impl Core {
                 output: request.output,
                 request: request.request,
                 session,
-                settings,
+                hashes,
+                tools_hash,
+                kind,
+                used: self.use_sequence,
+                eligible: false,
                 disconnected: false,
                 held: None,
                 text: String::new(),
@@ -327,7 +364,14 @@ impl Core {
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
-            TurnUpdate::PromptEnded => active.phase = Phase::Settling(now.saturating_add(200)),
+            TurnUpdate::PromptEnded => {
+                active.eligible = true;
+                active.phase = Phase::Settling(now.saturating_add(200));
+            }
+            TurnUpdate::Stopped => {
+                active.eligible = false;
+                active.phase = Phase::Settling(now.saturating_add(200));
+            }
             TurnUpdate::Failed(error) => self.finish(
                 index,
                 Err(crate::messages::Message::Upstream(error)),
@@ -389,18 +433,15 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let mut active = self.active.remove(index);
-        if result.is_ok()
-            && !active.disconnected
-            && let Some(session) = &active.session
-        {
-            self.idle.push(Idle {
-                id: session.id.clone(),
-                settings: active.settings,
-            });
-            if self.idle.len() > usize::from(self.limit) {
-                self.idle.remove(0);
-            }
-        }
+        let reply_end = if active.tool_call.is_some() {
+            records::ReplyEnd::ClientTool
+        } else {
+            records::ReplyEnd::EndTurn
+        };
+        let tool_hash = active
+            .tool_call
+            .as_ref()
+            .map(crate::conversation::tool_call_hash);
         let end = result.map(|()| {
             if let Some(text) = active.held.take() {
                 active.text.push_str(&text);
@@ -417,6 +458,27 @@ impl Core {
                 output_tokens: crate::conversation::output_tokens(&active.text),
             }
         });
+        if end.is_ok()
+            && !active.disconnected
+            && (active.eligible || matches!(reply_end, records::ReplyEnd::ClientTool))
+            && let Some(session) = &active.session
+        {
+            active
+                .hashes
+                .push(crate::conversation::reply_hash(&active.text));
+            if let Some(hash) = tool_hash {
+                active.hashes.push(hash);
+            }
+            self.idle.push(Idle {
+                id: session.id.clone(),
+                record: Some(records::Record {
+                    hashes: active.hashes,
+                    tools: active.tools_hash,
+                    end: reply_end,
+                    used: active.used,
+                }),
+            });
+        }
         let outcome = if active.disconnected {
             crate::journal::Outcome::Disconnected
         } else {
@@ -457,10 +519,7 @@ impl Conductor {
                 Some((runtime, catalog)) => {
                     let idle = vec![Idle {
                         id: runtime.session_id().into(),
-                        settings: Session {
-                            tools: Vec::new(),
-                            system: None,
-                        },
+                        record: None,
                     }];
                     (Some(runtime), catalog, idle)
                 }
@@ -469,6 +528,7 @@ impl Conductor {
             let mut core = Core {
                 catalog,
                 idle,
+                use_sequence: 0,
                 limit,
                 active: Vec::new(),
                 waiting: VecDeque::new(),

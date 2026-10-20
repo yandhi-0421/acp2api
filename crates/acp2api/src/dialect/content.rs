@@ -54,6 +54,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     if matches!(api, Api::Responses) && input.is_string() {
         items.push(Item::Message {
             role: Role::User,
+            name: None,
             parts: vec![Part::Text(input.as_str().unwrap().into())],
         });
     } else {
@@ -90,7 +91,11 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             } else {
                 at_start = false;
                 let parts = parts(api, &item["content"], &client_tools)?;
-                items.push(Item::Message { role, parts });
+                items.push(Item::Message {
+                    role,
+                    name: item["name"].as_str().map(str::to_owned),
+                    parts,
+                });
             }
         }
     }
