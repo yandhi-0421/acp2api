@@ -17,22 +17,19 @@ struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
 struct App {
     conductor: Conductor,
     clock: Arc<dyn Clock>,
-    key: String,
     port: u16,
     journal: crate::journal::Journal,
 }
 pub(crate) fn router(
     conductor: Conductor,
     clock: Arc<dyn Clock>,
-    key: String,
     tools: crate::runtime_driver::mcp::ToolSets,
     journal: crate::journal::Journal,
     port: u16,
 ) -> Router {
     let app = App {
-        conductor,
+        conductor: conductor.clone(),
         clock: clock.clone(),
-        key,
         journal,
         port,
     };
@@ -47,6 +44,7 @@ pub(crate) fn router(
         ))
         .with_state(app)
         .merge(tools.router())
+        .merge(crate::panel::router(conductor, clock.clone(), port))
         .layer(axum::middleware::from_fn_with_state(
             clock.clone(),
             input_hold,
@@ -103,7 +101,7 @@ fn access_error(headers: &HeaderMap, app: &App) -> Option<crate::messages::Refus
             "acp2api: the Host header does not match the local listener.",
         ));
     }
-    if !authorized(headers, &app.key) {
+    if !authorized(headers, &app.conductor.settings().local_api_key) {
         return Some(Message::Key.into());
     }
     None
