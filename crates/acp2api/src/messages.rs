@@ -2,6 +2,10 @@ use std::fmt;
 
 pub(crate) enum Message {
     Field(String),
+    FieldValue {
+        path: String,
+        value: serde_json::Value,
+    },
     Model {
         requested: String,
         names: Vec<String>,
@@ -49,6 +53,7 @@ impl Refusal {
             Message::Key => Row::Key,
             Message::Upstream(_) => Row::Other502,
             Message::Model { .. }
+            | Message::FieldValue { .. }
             | Message::Field(_)
             | Message::Content(_)
             | Message::Media(_)
@@ -67,6 +72,7 @@ impl Refusal {
     pub fn param(&self) -> Option<&str> {
         match &self.message {
             Message::Field(field) => Some(field),
+            Message::FieldValue { path, .. } => Some(path),
             Message::Model { .. } => Some("model"),
             _ => None,
         }
@@ -81,6 +87,7 @@ impl fmt::Display for Message {
                 names.join(", ")
             ),
             Self::Field(field) => write!(f, "acp2api: the request field {field} is not supported."),
+            Self::FieldValue { path, value } => write!(f, "acp2api: the request field {path} = {value} is not supported."),
             Self::Content(kind) => write!(f, "acp2api: the content type {kind} is not supported."),
             Self::Media(media) => write!(f, "acp2api: the media type {media} is not supported."),
             Self::Url(kind) => write!(
