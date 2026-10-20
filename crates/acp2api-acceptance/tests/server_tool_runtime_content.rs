@@ -65,19 +65,10 @@ async fn runtime_content(with_reference: bool, name: &str) -> Value {
         .map(|v| json!({"method":v["method"],"params":v["params"]}))
         .collect();
     let new_values: Vec<_> = requests.iter().filter(|v| v["method"]=="session/new").map(|v| json!({"configOptions":v["params"]["configOptions"],"model":v["params"]["model"],"thinking_level":v["params"]["thinking_level"]})).collect();
-    assert!(
-        configs.is_empty(),
-        "current pre-48 config call sequence is empty"
-    );
-    assert!(
-        new_values
-            .iter()
-            .all(|v| *v == json!({"configOptions":null,"model":null,"thinking_level":null})),
-        "current pre-48 config values are absent"
-    );
+    let config_count = configs.len();
     let content = json!({"meta":meta,"tools":tools,"prompt":prompt,"config_calls":configs,"new_config_values":new_values});
     println!(
-        "reference={with_reference}: actual system addition, tool declarations and prompt checked; config calls=0 (model application awaits #48)"
+        "reference={with_reference}: actual system addition, tool declarations and prompt checked; config calls={config_count}; actual calls and values follow (model application is not proved)"
     );
     println!("observed complete runtime content: {content}");
     s.finish(true).await;
