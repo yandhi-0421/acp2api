@@ -7,6 +7,7 @@ mod selection;
 mod timed_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    safety: runtime_safety::SafetyState,
     server_tools: server_tools::ServerToolState,
     scenario: Scenario,
     panel: acp2api_acceptance::panel_check::Panel,
@@ -37,6 +38,8 @@ mod logs;
 mod model_names;
 #[path = "steps/request_content.rs"]
 mod request_content;
+#[path = "steps/runtime_safety.rs"]
+mod runtime_safety;
 #[path = "steps/server_tools.rs"]
 mod server_tools;
 #[path = "steps/startup.rs"]

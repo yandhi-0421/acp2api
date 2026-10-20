@@ -32,3 +32,5 @@ pub mod journal_check;
 pub mod panel_check;
 
 pub mod server_tool_check;
+
+pub mod runtime_safety_check;
