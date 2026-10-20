@@ -183,3 +183,8 @@ async fn two_sessions(w: &mut World) {
 fn cwd(w: &mut World) {
     safety::cwd(&w.scenario);
 }
+
+#[then("the official runtime gets a cancel without a permission request")]
+fn unpermitted_cancel(w: &mut World) {
+    safety::unpermitted_cancelled(&w.scenario);
+}

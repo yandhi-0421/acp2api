@@ -42,7 +42,7 @@ async fn run(name: &str, reply: &str) {
     s.fake().next_prompt(safety::execution_plan(name));
     let answer = safety::send(&mut s, "fresh unpermitted execution probe").await;
     safety::error(&answer, name);
-    acp2api_acceptance::tool_check::cancelled(&s, 1);
+    safety::unpermitted_cancelled(&s);
     safety::event_log(&s, "built_in_tool_ran", name);
     let mut panel = safety::panel(&mut s).await;
     safety::notice_page(&mut panel, &safety::notice(name)).await;

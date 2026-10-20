@@ -396,3 +396,27 @@ pub fn cwd(s: &Scenario) {
         s.fake().record().prompts()[1].session
     );
 }
+
+pub fn unpermitted_cancelled(s: &Scenario) {
+    let prompts = s.fake().record().prompts();
+    let cancels = s.fake().record().cancels();
+    assert_eq!(prompts.len(), 1, "the corresponding actual prompt exists");
+    assert_eq!(cancels.len(), 1, "one actual cancellation delivered");
+    assert_eq!(cancels[0]["params"]["sessionId"], prompts[0].session);
+    assert!(cancels[0].get("id").is_none(), "cancel is a notification");
+    assert!(
+        tool_check::permission_requests(s).is_empty(),
+        "no permission request occurred"
+    );
+    assert!(
+        !s.fake().record().offered_tools().is_empty(),
+        "actual MCP tools/list was observed"
+    );
+    assert!(
+        s.hub
+            .entries()
+            .iter()
+            .all(|entry| entry.event["request"]["method"] != "tools/call"),
+        "no MCP execution or held call"
+    );
+}

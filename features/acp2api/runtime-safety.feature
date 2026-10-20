@@ -58,7 +58,7 @@ Feature: Safety toward Google and the official runtime
   Scenario: A built-in tool that runs with no permission request ends the response with M-22
     Given the built-in tool "view_file" of the official runtime runs with no permission request in the next prompt turn
     When an API client sends a valid request with "stream" set to false
-    Then the official runtime gets a cancel of the prompt turn
+    Then the official runtime gets a cancel without a permission request
     And acp2api answers with HTTP 502 and the message "acp2api: the built-in tool view_file of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."
     And the log has one line about the built-in tool "view_file"
 
