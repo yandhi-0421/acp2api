@@ -198,7 +198,18 @@ pub async fn raw(s: &mut Scenario, endpoint: &str, bytes: Vec<u8>) -> Answer {
     let path = endpoint.strip_prefix("POST ").unwrap();
     s.hub.shared.0.lock().unwrap().counts.http_sent += 1;
     s.hub.shared.1.notify_all();
-    let answer = tokio::time::timeout(Duration::from_secs(10), async {
+    let mut time = s.time.clone();
+    let driver = async {
+        loop {
+            time.settle().await;
+            if let Some(deadline) = time.next_deadline() {
+                time.advance_to(deadline).await;
+            } else {
+                tokio::task::yield_now().await;
+            }
+        }
+    };
+    let request = tokio::time::timeout(Duration::from_secs(10), async {
         let socket = tokio::net::TcpStream::connect(&address).await.unwrap();
         let (mut sender, connection) = http1::handshake(TokioIo::new(socket)).await.unwrap();
         let connection = tokio::spawn(async move {
@@ -239,9 +250,11 @@ pub async fn raw(s: &mut Scenario, endpoint: &str, bytes: Vec<u8>) -> Answer {
             body,
             events: Vec::new(),
         }
-    })
-    .await
-    .expect("field raw HTTP cap: 10 s");
+    });
+    let answer = tokio::select! {
+        result = request => result.expect("field raw HTTP cap: 10 s"),
+        _ = driver => unreachable!(),
+    };
     s.hub.shared.0.lock().unwrap().counts.http_finished += 1;
     s.hub.shared.1.notify_all();
     answer
