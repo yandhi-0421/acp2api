@@ -142,3 +142,26 @@ async fn tool_reference_is_removed_only_when_it_names_a_declared_client_tool() {
         rejected.finish(true).await;
     }
 }
+
+#[tokio::test]
+async fn mcp_server_tool_uses_its_declared_server_identity() {
+    let name = input("ACP2API_PROBE_NAME", "ledger_remote");
+    let mut s = Scenario::default();
+    s.plan(Setup::normal());
+    let mut call = c::request(c::MESSAGES, "mcp_toolset", None);
+    call.body["tools"][0]["mcp_server_name"] = json!(name);
+    c::send(&mut s, call).await;
+    c::envelope(
+        &s,
+        c::MESSAGES,
+        &format!(
+            "capability_rejected: server tool mcp_toolset (name {name}) is not supported by acp2api."
+        ),
+        "unsupported_server_tool",
+    );
+    println!(
+        "observed MCP server tool envelope: {}; prompts=0",
+        s.answer.as_ref().unwrap().json()
+    );
+    s.finish(true).await;
+}

@@ -423,7 +423,15 @@ fn client_tool(
     if matches!(api, Api::Messages) && server_tool(kind) {
         return Err(Message::ServerTool {
             kind: kind.into(),
-            name: required(tool, "name")?.into(),
+            name: required(
+                tool,
+                if kind == "mcp_toolset" {
+                    "mcp_server_name"
+                } else {
+                    "name"
+                },
+            )?
+            .into(),
         }
         .into());
     }
@@ -493,17 +501,19 @@ fn client_tool(
     })
 }
 fn server_tool(kind: &str) -> bool {
-    matches!(kind, "tool_search_tool_regex" | "tool_search_tool_bm25")
-        || [
-            "web_search_",
-            "web_fetch_",
-            "code_execution_",
-            "tool_search_tool_regex_",
-            "tool_search_tool_bm25_",
-        ]
-        .iter()
-        .any(|prefix| {
-            kind.strip_prefix(prefix)
-                .is_some_and(|date| date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()))
-        })
+    matches!(
+        kind,
+        "tool_search_tool_regex" | "tool_search_tool_bm25" | "mcp_toolset"
+    ) || [
+        "web_search_",
+        "web_fetch_",
+        "code_execution_",
+        "tool_search_tool_regex_",
+        "tool_search_tool_bm25_",
+    ]
+    .iter()
+    .any(|prefix| {
+        kind.strip_prefix(prefix)
+            .is_some_and(|date| date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
