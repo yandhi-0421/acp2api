@@ -14,6 +14,11 @@ pub(crate) enum Message {
     ToolSearch,
     ToolName(String),
     AdvisorTool(String),
+    ServerTool {
+        kind: String,
+        name: String,
+    },
+    CodexWebSearch,
     ToolType {
         kind: String,
         name: String,
@@ -52,6 +57,8 @@ impl Refusal {
             | Message::ToolSearch
             | Message::ToolName(_)
             | Message::AdvisorTool(_)
+            | Message::ServerTool { .. }
+            | Message::CodexWebSearch
             | Message::ToolType { .. }
             | Message::Prefill
             | Message::Invalid(_) => Row::Rejected,
@@ -85,6 +92,14 @@ impl fmt::Display for Message {
                 "acp2api: a PDF document in a message (content type {kind}) is not supported. Remove that message from the conversation."
             ),
             Self::ToolSearch => f.write_str("acp2api: the tool tool_search is not supported."),
+            Self::ServerTool { kind, name } => {
+                write!(f, "capability_rejected: server tool {kind} (name {name}) is not supported by acp2api.")?;
+                if kind == "web_search_20250305" {
+                    f.write_str(" To stop these calls, deny the WebSearch tool in the Claude Code settings.")?;
+                }
+                Ok(())
+            }
+            Self::CodexWebSearch => f.write_str("acp2api: the server tool web_search is not supported. To stop these calls, set web_search = \"disabled\" in the Codex configuration."),
             Self::ToolType { kind, name } => write!(
                 f,
                 "capability_rejected: tool type {kind} (name {name}) is not supported by acp2api."

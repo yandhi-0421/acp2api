@@ -402,6 +402,16 @@ fn client_tool(
 ) -> Result<crate::conversation::ClientTool, Refusal> {
     use crate::conversation::{ClientTool, ToolKind};
     let kind = tool["type"].as_str().unwrap_or("function");
+    if matches!(api, Api::Messages) && server_tool(kind) {
+        return Err(Message::ServerTool {
+            kind: kind.into(),
+            name: required(tool, "name")?.into(),
+        }
+        .into());
+    }
+    if matches!(api, Api::Responses) && kind == "web_search" {
+        return Err(Message::CodexWebSearch.into());
+    }
     if kind == "tool_search" {
         return Err(Message::ToolSearch.into());
     }
@@ -462,4 +472,19 @@ fn client_tool(
         kind,
         namespace: namespace.map(str::to_owned),
     })
+}
+fn server_tool(kind: &str) -> bool {
+    matches!(kind, "tool_search_tool_regex" | "tool_search_tool_bm25")
+        || [
+            "web_search_",
+            "web_fetch_",
+            "code_execution_",
+            "tool_search_tool_regex_",
+            "tool_search_tool_bm25_",
+        ]
+        .iter()
+        .any(|prefix| {
+            kind.strip_prefix(prefix)
+                .is_some_and(|date| date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()))
+        })
 }

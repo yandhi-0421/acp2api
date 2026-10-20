@@ -246,6 +246,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::ToolName(_) => "unsupported_tool_name",
         Message::AdvisorTool(_) => "unsupported_advisor_tool",
         Message::ToolType { .. } => "unsupported_tool_type",
+        Message::ServerTool { .. } | Message::CodexWebSearch => "unsupported_server_tool",
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
         Message::Upstream(_) => "upstream_error",
