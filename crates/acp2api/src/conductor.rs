@@ -9,12 +9,27 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub(crate) struct Conductor {
     send: mpsc::Sender<Work>,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
+    notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
 }
 pub(crate) enum OwnerAction {
     NewLocalApiKey,
     ChangePassword(String),
     SetConcurrencyLimit(u8),
+    DismissNotice(String),
+}
+#[derive(Clone)]
+pub(crate) struct Notice {
+    pub(crate) id: String,
+    name: String,
+}
+impl Notice {
+    pub(crate) fn text(&self) -> String {
+        format!(
+            "The built-in tool {} ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client.",
+            self.name
+        )
+    }
 }
 enum Work {
     Owner {
@@ -76,6 +91,7 @@ struct Core {
     waiting: VecDeque<Accepted>,
     idle: Vec<Idle>,
     limit: u8,
+    notices: Vec<Notice>,
 }
 enum Event {
     Accepted(Accepted),
@@ -83,6 +99,7 @@ enum Event {
     Deadline,
     Disconnected(String),
     Limit(u8),
+    DismissNotice(String),
     PreparationFailed(String, String),
 }
 enum Command {
@@ -119,6 +136,7 @@ impl Core {
         let mut commands = Vec::new();
         match event {
             Event::Accepted(request) => self.waiting.push_back(request),
+            Event::DismissNotice(id) => self.notices.retain(|notice| notice.id != id),
             Event::Limit(limit) => {
                 self.limit = limit;
                 self.idle.truncate(usize::from(limit));
@@ -317,6 +335,10 @@ impl Core {
             ),
             TurnUpdate::UnpermittedTool(name) => {
                 if let Some(session) = &active.session {
+                    self.notices.push(Notice {
+                        id: active.request.id.clone(),
+                        name: name.as_str().into(),
+                    });
                     commands.push(Command::Cancel(session.id.clone()));
                     commands.push(Command::Safety(crate::journal::SafetyReport {
                         request: active.request.clone(),
@@ -429,6 +451,7 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Work>(32);
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
+        let (publish_notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let task = tokio::spawn(async move {
             let (mut runtime, catalog, idle) = match started {
                 Some((runtime, catalog)) => {
@@ -449,6 +472,7 @@ impl Conductor {
                 limit,
                 active: Vec::new(),
                 waiting: VecDeque::new(),
+                notices: Vec::new(),
             };
             let mut read_open = runtime.is_some();
             'events: loop {
@@ -471,17 +495,21 @@ impl Conductor {
                             Work::Models {reply,hold}=>{let _=reply.send(core.catalog.entries());drop(hold);continue;}
                             Work::Owner {action,reply,hold}=>{
                                 let mut settings=(**publish.borrow()).clone();
+                                let mut commands = VecDeque::new();
                                 let result=(|| {
                                     match action {
                                         OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
                                         OwnerAction::ChangePassword(password)=>settings.management_password_hash=crate::store::hash_password(&password)?,
                                         OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
+                                        OwnerAction::DismissNotice(id)=>{commands.extend(core.handle(Event::DismissNotice(id),clock.now()));return Ok(());},
                                     }
-                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));Ok(())
+                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));
+                                    commands.extend(core.handle(Event::Limit(settings.concurrency_limit),clock.now()));Ok(())
                                 })();
-                                let success=result.is_ok();let _=reply.send(result);
+                                let success=result.is_ok();
+                                publish_notices.send_replace(Arc::new(core.notices.clone()));
+                                let _=reply.send(result);
                                 if success {
-                                    let mut commands:VecDeque<_>=core.handle(Event::Limit(settings.concurrency_limit),clock.now()).into();
                                     if !Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await {break 'events;}
                                 }
                                 drop(hold);continue;
@@ -499,6 +527,7 @@ impl Conductor {
                     hold=timer=>(Event::Deadline,hold),
                 };
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
+                publish_notices.send_replace(Arc::new(core.notices.clone()));
                 if !Self::commands(
                     &mut core,
                     &mut runtime,
@@ -521,6 +550,7 @@ impl Conductor {
             Self {
                 send,
                 settings: settings_watch,
+                notices: notices_watch,
                 highest,
             },
             task,
@@ -610,6 +640,9 @@ impl Conductor {
             }
         }
         true
+    }
+    pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
+        self.notices.borrow().clone()
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
