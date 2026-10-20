@@ -7,6 +7,7 @@ mod selection;
 mod timed_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    conversation: conversation::ConversationState,
     fields: request_fields::FieldState,
     safety: runtime_safety::SafetyState,
     server_tools: server_tools::ServerToolState,
@@ -27,6 +28,8 @@ mod access_protection;
 mod client_tools;
 #[path = "steps/common.rs"]
 mod common;
+#[path = "steps/conversation.rs"]
+mod conversation;
 #[path = "steps/custom_tools.rs"]
 mod custom_tools;
 #[path = "steps/endpoints_and_streams.rs"]
