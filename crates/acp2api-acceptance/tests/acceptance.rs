@@ -1,5 +1,7 @@
 use acp2api_acceptance::Scenario;
 use cucumber::{World as _, event::ScenarioFinished};
+#[path = "steps/panel.rs"]
+mod panel;
 mod selection;
 #[path = "support/timed_steps.rs"]
 mod timed_steps;
@@ -8,6 +10,7 @@ struct World {
     fields: request_fields::FieldState,
     server_tools: server_tools::ServerToolState,
     scenario: Scenario,
+    panel: acp2api_acceptance::panel_check::Panel,
     models: model_names::ModelState,
     logs: logs::LogState,
     startup: acp2api_acceptance::startup_check::Startup,

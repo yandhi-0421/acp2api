@@ -10,7 +10,7 @@ Feature: Start of acp2api
     Then the help text lists the options "--port", "--data-dir", "--version", and "--help"
     And the help text lists no other option and no command
 
-  @FR-002 @issue-55 @wip
+  @FR-002 @issue-55
   Scenario: A start that is not the first start shows the address of the management panel
     Given acp2api started one time before with the data folder "D"
     When the owner starts acp2api with the data folder "D" and the port 8329
@@ -30,7 +30,7 @@ Feature: Start of acp2api
     When a quota signal starts a quota wait
     Then the terminal shows one line for the change to the state "quota wait"
 
-  @FR-005 @FR-009 @issue-55 @wip
+  @FR-005 @FR-009 @issue-55
   Scenario: A first start makes a local API key and a management password and shows them
     Given the data folder "D" is empty
     When the owner starts acp2api with the data folder "D"

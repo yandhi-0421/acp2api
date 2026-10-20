@@ -116,12 +116,17 @@ pub(crate) async fn start(
     } else {
         None
     };
-    let (conductor, task) =
-        crate::conductor::Conductor::start(runtime, ports.clock.clone(), journal.clone());
+    let (conductor, task) = crate::conductor::Conductor::start(
+        runtime,
+        ports.clock.clone(),
+        journal.clone(),
+        settings,
+        data.join("config.toml"),
+        ports.release.highest_concurrency_limit(),
+    );
     let router = crate::front::router(
         conductor,
         ports.clock.clone(),
-        settings.local_api_key,
         tools,
         journal,
         listener.local_addr().map_err(|e| e.to_string())?.port(),
