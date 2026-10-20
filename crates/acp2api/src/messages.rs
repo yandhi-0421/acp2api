@@ -13,6 +13,7 @@ pub(crate) enum Message {
     Prefill,
     ToolSearch,
     ToolName(String),
+    AdvisorTool(String),
     Invalid(String),
     Key,
     Upstream(String),
@@ -46,6 +47,7 @@ impl Refusal {
             | Message::Pdf(_)
             | Message::ToolSearch
             | Message::ToolName(_)
+            | Message::AdvisorTool(_)
             | Message::Prefill
             | Message::Invalid(_) => Row::Rejected,
         }
@@ -78,6 +80,10 @@ impl fmt::Display for Message {
                 "acp2api: a PDF document in a message (content type {kind}) is not supported. Remove that message from the conversation."
             ),
             Self::ToolSearch => f.write_str("acp2api: the tool tool_search is not supported."),
+            Self::AdvisorTool(kind) => write!(
+                f,
+                "Input tag '{kind}' found using 'type' does not match any of the expected tags"
+            ),
             Self::ToolName(name) => write!(
                 f,
                 "acp2api: the client tool name {name} is not supported, because a built-in tool of the official runtime has this name."

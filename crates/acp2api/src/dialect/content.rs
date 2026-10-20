@@ -14,6 +14,16 @@ pub(super) enum Api {
 }
 pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let value: Value = serde_json::from_slice(body).map_err(|e| Refusal::invalid(e.to_string()))?;
+    if let Some(tools) = value["tools"].as_array() {
+        for tool in tools {
+            if let Some(kind) = tool["type"]
+                .as_str()
+                .filter(|kind| kind.starts_with("advisor_"))
+            {
+                return Err(Message::AdvisorTool(kind.into()).into());
+            }
+        }
+    }
     let model = required(&value, "model")?.to_owned();
     let input = &value[if matches!(api, Api::Responses) {
         "input"
