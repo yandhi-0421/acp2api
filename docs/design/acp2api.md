@@ -838,8 +838,7 @@ advance_to(target):
 - The design uses no `tokio::time::pause`, no time scale, and no real sleep.
 - A self-test of the harness in #36 checks the settle against bursts of lines.
 - At one virtual instant, scheduled external inputs arrive before product deadline callbacks. Thus the 200 ms boundary of FR-028 is deterministic.
-- Delivery transfers ownership from the sleep future to its returned `Hold`. The hub keeps that work pending until the `Hold` drops.
-- Timer delivery does not prove completion. An owner with unfinished callback work retains its `Hold`, including while another owner registers a timer.
+- Delivery transfers ownership from the sleep future to its returned `Hold`. The hub keeps that work pending until the `Hold` drops, also while another owner registers a timer. Section "Ports" gives the rule for the owner.
 - `ProcessTree::stop` keeps the timer's `Hold` until the forced stop and process wait finish.
 - A one-shot timer and a process-stop timer can finish without another sleep registration. Self-tests cover these terminal owners and work still executing after a wake.
 
@@ -1429,17 +1428,12 @@ The feature files cover the clarified arguments, preconditions, and exact time b
 ### 2026-10-19: repair the shared test harness
 
 The owner approved the four repair groups found during the independent verification of #36, then requested continued local implementation.
-The review found that the wake counter cleared only when another sleep registered. Terminal owners therefore prevented settlement after their work ended.
-The virtual-time section now includes owner completion and requires proof that callback work has finished.
 
-The same review found global cancellation state in the fake, missing cleanup of old runs, and a step-timeout setting outside the execution path.
-The harness must implement the per-session state, owned cleanup, captured wire shapes, and default step limit specified above.
-These repairs change test infrastructure, not PRD behavior or the expected results of existing scenarios.
+- Cause: the wake counter cleared only when another sleep registered. Thus, a terminal owner blocked the settle after its work ended.
+- Port change: `Clock::sleep_until` returns `Hold` instead of `()`. The two product call sites retain or release that ownership at the end of their work.
+- Other repairs: per-session state in the fake, owned cleanup of old runs, captured wire shapes, and the default step limit in the execution path. These repairs change test infrastructure, not PRD behavior or the expected results of existing scenarios.
+- Scope: issue #36 owns the repair and the replacement freeze record. History keeps the original freeze and the failing evidence. The change affects each later slice that uses the shared harness, for example streaming, cancellation, runtime recovery, and quota deadlines.
 
-Issue #36 owns the repair and the replacement freeze record. Preserve the original freeze and failing evidence in history.
-The change affects every later slice that uses the shared harness, especially streaming, cancellation, runtime recovery, and quota deadlines.
-Independent review confirmed the concrete port revision: `Clock::sleep_until` returns `Hold` instead of `()`.
-The two product call sites retain or release that ownership at the end of their work.
 The production clock returns an empty `Hold`; the harness clock reports delivery and completion separately.
 This removes the dependency on another timer registration and keeps the five-port structure unchanged.
 
