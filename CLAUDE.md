@@ -39,7 +39,6 @@ One bounded context: `GLOSSARY.md` at the root, and ADRs in `docs/adr/`.
 - `.claude/`: the workflow skills and the workflow manifest. The setup skill `/workflow-setup` writes them.
 - `docs/`: the issue tracker instructions in `docs/agents/`, ADRs in `docs/adr/`, PRDs in `docs/prd/`, and written designs in `docs/design/`. Research notes are in `docs/research/`, and probe captures are in `docs/research/captures/`.
 - `features/`: the Gherkin feature files, one directory for each PRD. The acceptance crate runs these files with Cucumber. `features/acp2api/` holds the scenarios of `docs/prd/acp2api.md`, one file for each capability.
-
 - `crates/`: the acp2api product and its separate acceptance harness.
 - `.github/`: the checks of the Rust workspace.
 
