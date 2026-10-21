@@ -58,8 +58,14 @@ pub(crate) fn read(
     highest: u8,
     deliver: impl FnOnce(&Opened) -> Result<(), String>,
 ) -> Result<Opened, String> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => Some(text),
+    let text = match fs::read(path) {
+        Ok(bytes) => Some(String::from_utf8(bytes).map_err(|e| {
+            let offset = e.utf8_error().valid_up_to();
+            invalid(
+                path,
+                &syntax_location(&String::from_utf8_lossy(e.as_bytes()), offset),
+            )
+        })?),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
@@ -245,4 +251,27 @@ fn save(path: &Path, settings: &Settings) -> Result<(), String> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn non_utf8_configuration_gives_m26() {
+        let folder = crate::os::environment()
+            .temp
+            .join(format!("acp2api-store-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("config.toml");
+        for (bytes, place) in [
+            (
+                &b"port = 8329\nlocal_api_key = \"\xff\"\n"[..],
+                "local_api_key",
+            ),
+            (&b"port = 8329\n\xff\n"[..], "at line 2"),
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            let error = super::read(&path, 3, |_| Ok(())).err().unwrap();
+            assert_eq!(error, super::invalid(&path, place));
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 }
