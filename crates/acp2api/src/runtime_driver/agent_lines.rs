@@ -131,10 +131,8 @@ async fn next(runtime: &mut Runtime) -> String {
             TurnUpdate::Text(text) => format!("text {text}"),
             TurnUpdate::Usage(used) => format!("usage {used}"),
             TurnUpdate::Permission { call, .. } => format!("permission {call:?}"),
-            TurnUpdate::RefusedPermission { name, .. } => {
-                format!("permission of {}", name.as_str())
-            }
-            TurnUpdate::UnpermittedTool(name) => format!("unpermitted {}", name.as_str()),
+            TurnUpdate::RefusedPermission { name, .. } => format!("permission of {name}"),
+            TurnUpdate::UnpermittedTool(name) => format!("unpermitted {name}"),
             TurnUpdate::PromptEnded => "prompt ended".into(),
             TurnUpdate::Failed(error) => format!("failed {error}"),
         },

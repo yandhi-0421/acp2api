@@ -207,7 +207,7 @@ impl Core {
                     .iter()
                     .position(|active| active.session.as_ref().is_some_and(|s| s.id == session))
                 {
-                    self.update(index, update, now, &mut commands);
+                    self.update(index, session, update, now, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } = update
                 {
@@ -315,6 +315,7 @@ impl Core {
     fn update(
         &mut self,
         index: usize,
+        session: String,
         update: TurnUpdate,
         now: Moment,
         commands: &mut Vec<Command>,
@@ -340,49 +341,39 @@ impl Core {
                 commands,
             ),
             TurnUpdate::UnpermittedTool(name) => {
-                if let Some(session) = &active.session {
-                    self.notices.push(Notice {
-                        id: active.request.id.clone(),
-                        name: name.as_str().into(),
-                    });
-                    commands.push(Command::Cancel(session.id.clone()));
-                    commands.push(Command::Safety(crate::journal::SafetyReport {
-                        request: active.request.clone(),
-                        session: session.id.clone(),
-                        kind: crate::journal::SafetyKind::BuiltInToolRan,
-                        tool: name.as_str().into(),
-                    }));
-                }
+                self.notices.push(Notice {
+                    id: active.request.id.clone(),
+                    name: name.clone(),
+                });
+                commands.push(Command::Cancel(session.clone()));
+                commands.push(Command::Safety(crate::journal::SafetyReport {
+                    request: active.request.clone(),
+                    session,
+                    kind: crate::journal::SafetyKind::BuiltInToolRan,
+                    tool: name.clone(),
+                }));
                 self.finish(
                     index,
-                    Err(crate::messages::Message::BuiltInToolRan(
-                        name.as_str().into(),
-                    )),
+                    Err(crate::messages::Message::BuiltInToolRan(name)),
                     commands,
                 );
             }
             TurnUpdate::RefusedPermission { request, name } => {
-                if let Some(session) = &active.session {
-                    commands.push(Command::Safety(crate::journal::SafetyReport {
-                        request: active.request.clone(),
-                        session: session.id.clone(),
-                        kind: crate::journal::SafetyKind::PermissionRefused,
-                        tool: name.as_str().into(),
-                    }));
-                }
+                commands.push(Command::Safety(crate::journal::SafetyReport {
+                    request: active.request.clone(),
+                    session,
+                    kind: crate::journal::SafetyKind::PermissionRefused,
+                    tool: name,
+                }));
                 commands.push(Command::Permission {
                     request,
                     cancel: false,
                 });
             }
             TurnUpdate::Permission { request, call } => {
-                let mut cancel = false;
-                if matches!(active.phase, Phase::Prompt)
-                    && active.tool_call.is_none()
-                    && let Some(call) = call
-                {
+                let cancel = matches!(active.phase, Phase::Prompt) && active.tool_call.is_none();
+                if cancel {
                     active.tool_call = Some(call);
-                    cancel = true;
                 }
                 commands.push(Command::Permission { request, cancel });
             }

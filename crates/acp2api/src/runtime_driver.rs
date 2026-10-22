@@ -3,14 +3,13 @@ mod agent_lines;
 pub(crate) mod mcp;
 mod safety;
 mod session_folders;
-pub(crate) use safety::ToolName;
 pub(crate) use session_folders::root as session_root;
 #[cfg(test)]
 mod rpc_request_ids;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, SessionUpdate, ToolCallStatus,
+    SessionNotification, SessionUpdate,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -315,10 +314,6 @@ impl Runtime {
             let permission = PermissionId(self.next_permission);
             self.permissions
                 .insert(permission, (value["id"].clone(), session.clone()));
-            let name = ToolName::from_fields(
-                request.tool_call.fields.name.as_deref(),
-                request.tool_call.fields.title.as_deref(),
-            );
             let call = (|| {
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
@@ -346,20 +341,20 @@ impl Runtime {
                     arguments,
                 })
             })();
-            return RuntimeEvent::Turn {
-                session,
-                update: if call.is_some() {
-                    TurnUpdate::Permission {
-                        request: permission,
-                        call,
-                    }
-                } else {
-                    TurnUpdate::RefusedPermission {
-                        request: permission,
-                        name,
-                    }
+            let update = match call {
+                Some(call) => TurnUpdate::Permission {
+                    request: permission,
+                    call,
+                },
+                None => TurnUpdate::RefusedPermission {
+                    request: permission,
+                    name: safety::tool_name(
+                        request.tool_call.fields.name.as_deref(),
+                        request.tool_call.fields.title.as_deref(),
+                    ),
                 },
             };
+            return RuntimeEvent::Turn { session, update };
         }
         if value["method"] == "session/update" {
             let notification: SessionNotification =
@@ -377,45 +372,36 @@ impl Runtime {
             }
             let update = match notification.update {
                 SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
-                    ContentBlock::Text(content) => TurnUpdate::Text(content.text),
-                    _ => return RuntimeEvent::Other,
+                    ContentBlock::Text(content) => Some(TurnUpdate::Text(content.text)),
+                    _ => None,
                 },
-                SessionUpdate::UsageUpdate(usage) => TurnUpdate::Usage(usage.used),
-                SessionUpdate::ToolCall(call) => {
-                    let executing = matches!(
-                        call.status,
-                        ToolCallStatus::InProgress | ToolCallStatus::Completed
-                    );
-                    match self.tool_calls.update(
+                SessionUpdate::UsageUpdate(usage) => Some(TurnUpdate::Usage(usage.used)),
+                SessionUpdate::ToolCall(call) => self
+                    .tool_calls
+                    .update(
                         &session,
                         &call.tool_call_id.to_string(),
                         call.name.as_deref(),
                         Some(&call.title),
-                        executing,
-                    ) {
-                        Some(name) => TurnUpdate::UnpermittedTool(name),
-                        None => return RuntimeEvent::Other,
-                    }
-                }
-                SessionUpdate::ToolCallUpdate(call) => {
-                    let executing = matches!(
-                        call.fields.status,
-                        Some(ToolCallStatus::InProgress | ToolCallStatus::Completed)
-                    );
-                    match self.tool_calls.update(
+                        Some(call.status),
+                    )
+                    .map(TurnUpdate::UnpermittedTool),
+                SessionUpdate::ToolCallUpdate(call) => self
+                    .tool_calls
+                    .update(
                         &session,
                         &call.tool_call_id.to_string(),
                         call.fields.name.as_deref(),
                         call.fields.title.as_deref(),
-                        executing,
-                    ) {
-                        Some(name) => TurnUpdate::UnpermittedTool(name),
-                        None => return RuntimeEvent::Other,
-                    }
-                }
-                _ => return RuntimeEvent::Other,
+                        call.fields.status,
+                    )
+                    .map(TurnUpdate::UnpermittedTool),
+                _ => None,
             };
-            RuntimeEvent::Turn { session, update }
+            match update {
+                Some(update) => RuntimeEvent::Turn { session, update },
+                None => RuntimeEvent::Other,
+            }
         } else if value.get("method").is_some() && value.get("id").is_some() {
             match self.refuse(&value).await {
                 Ok(()) => RuntimeEvent::Other,
@@ -469,13 +455,13 @@ pub(crate) enum TurnUpdate {
     Usage(u64),
     Permission {
         request: PermissionId,
-        call: Option<crate::conversation::ToolCall>,
+        call: crate::conversation::ToolCall,
     },
     RefusedPermission {
         request: PermissionId,
-        name: ToolName,
+        name: String,
     },
-    UnpermittedTool(ToolName),
+    UnpermittedTool(String),
     PromptEnded,
     Failed(String),
 }
