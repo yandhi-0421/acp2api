@@ -58,3 +58,40 @@ async fn namespace_members_get_readable_bounded_names_that_map_back() {
     t::cancelled(&s, 5);
     s.finish(true).await;
 }
+
+#[tokio::test]
+async fn malformed_custom_and_namespace_declarations_are_refused() {
+    let mut s = Scenario::default();
+    s.plan(Setup::normal());
+    for (tool, message) in [
+        (
+            json!({"type":"custom","name":"patch","format":{"type":"regex"}}),
+            "unsupported custom tool format",
+        ),
+        (
+            json!({"type":"custom","name":"patch","format":{"type":"grammar","syntax":"lark"}}),
+            "definition",
+        ),
+        (
+            json!({"type":"custom","name":"patch","format":{"type":"grammar","definition":"start: /x/"}}),
+            "syntax",
+        ),
+        (
+            json!({"type":"namespace","name":"docs","tools":{"read":{}}}),
+            "namespace tools must be an array",
+        ),
+    ] {
+        let answer = t::send(&mut s, c::request(&[tool], false)).await;
+        assert_eq!(answer.status, 400, "{message}");
+        let error = answer.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(error.contains(message), "{error:?} names {message}");
+    }
+    assert!(
+        s.fake().record().prompts().is_empty(),
+        "no refused request reaches the runtime"
+    );
+    s.finish(true).await;
+}
