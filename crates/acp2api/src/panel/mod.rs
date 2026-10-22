@@ -27,14 +27,12 @@ struct Panel {
     clock: Arc<dyn Clock>,
     port: u16,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
+    /// One login at a time runs its Argon2 check, so that logins without a session cannot use more
+    /// than one thread and its 19 MiB.
+    logins: Arc<tokio::sync::Semaphore>,
 }
 pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> Router {
-    let panel = Panel {
-        conductor,
-        clock,
-        port,
-        sessions: Arc::default(),
-    };
+    let panel = Panel::new(conductor, clock, port);
     Router::new()
         .route("/", get(index))
         .route("/manage/login", post(login))
@@ -46,6 +44,15 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .with_state(panel)
 }
 impl Panel {
+    fn new(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> Self {
+        Self {
+            conductor,
+            clock,
+            port,
+            sessions: Arc::default(),
+            logins: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
     fn session(&self, headers: &HeaderMap) -> bool {
         let now = self.clock.now();
         let hash = self.conductor.settings().management_password_hash.clone();
@@ -66,15 +73,16 @@ impl Panel {
         self.conductor
             .owner(action, self.clock.hold(crate::HoldKind::TurnEvent))
             .await
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Html(page::login(Some(
-                        "The settings could not be saved. Try again.",
-                    ))),
-                )
-                    .into_response()
-            })
+            .map_err(|_| self.failed())
+    }
+    fn failed(&self) -> Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(page::login(Some(
+                "The settings could not be saved. Try again.",
+            ))),
+        )
+            .into_response()
     }
 }
 async fn guard(
@@ -146,9 +154,18 @@ struct Password {
 }
 async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Response {
     let hash = panel.conductor.settings().management_password_hash.clone();
-    if !crate::store::verify_password(&form.password, &hash)
-        || panel.conductor.settings().management_password_hash != hash
-    {
+    let permit = panel
+        .logins
+        .acquire()
+        .await
+        .expect("the login semaphore stays open");
+    let check = (form.password, hash.clone());
+    let verified =
+        tokio::task::spawn_blocking(move || crate::store::verify_password(&check.0, &check.1))
+            .await
+            .unwrap_or(false);
+    drop(permit);
+    if !verified {
         return (
             StatusCode::UNAUTHORIZED,
             Html(page::login(Some("The management password is wrong."))),
@@ -196,7 +213,12 @@ async fn password(State(panel): State<Panel>, Form(form): Form<Password>) -> Res
         )
             .into_response();
     }
-    match panel.act(OwnerAction::ChangePassword(form.password)).await {
+    let Ok(Ok(hash)) =
+        tokio::task::spawn_blocking(move || crate::store::hash_password(&form.password)).await
+    else {
+        return panel.failed();
+    };
+    match panel.act(OwnerAction::ChangePassword(hash)).await {
         Ok(()) => Redirect::to("/").into_response(),
         Err(response) => response,
     }
@@ -229,5 +251,47 @@ async fn concurrency(State(panel): State<Panel>, Form(form): Form<Limit>) -> Res
         ))
         .into_response(),
         Err(response) => response,
+    }
+}
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_login_does_not_block_the_async_worker_with_its_hash() {
+        let folder = std::env::temp_dir().join(format!("acp2api-login-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: "acp2api-test".into(),
+            management_password_hash: crate::store::hash_password("right").unwrap(),
+            agy_acp_server_path: None,
+        };
+        let configuration = folder.join("config.toml");
+        let (conductor, _task) =
+            Conductor::start(None, clock.clone(), journal, settings, configuration, 1);
+        let panel = Panel::new(conductor, clock, 8329);
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let counter = ticks.clone();
+        tokio::spawn(async move {
+            loop {
+                counter.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+            }
+        });
+        let password = Password {
+            password: "wrong".into(),
+        };
+        let response = login(State(panel), Form(password)).await;
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            ticks.load(Ordering::Relaxed) > 0,
+            "another task runs on the one worker while the hash is checked"
+        );
     }
 }

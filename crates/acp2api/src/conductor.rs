@@ -13,6 +13,7 @@ pub(crate) struct Conductor {
 }
 pub(crate) enum OwnerAction {
     NewLocalApiKey,
+    /// Sets the Argon2id hash of a new management password.
     ChangePassword(String),
     SetConcurrencyLimit(u8),
 }
@@ -419,7 +420,7 @@ impl Conductor {
                                 let result=(|| {
                                     match action {
                                         OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
-                                        OwnerAction::ChangePassword(password)=>settings.management_password_hash=crate::store::hash_password(&password)?,
+                                        OwnerAction::ChangePassword(hash)=>settings.management_password_hash=hash,
                                         OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
                                     }
                                     crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));Ok(())
