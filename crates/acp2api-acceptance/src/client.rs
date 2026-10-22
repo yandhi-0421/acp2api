@@ -81,6 +81,7 @@ impl SseReader {
 pub struct ApiClient {
     address: String,
     key: String,
+    omit_default_key: bool,
     hub: Hub,
     requests: Arc<AtomicUsize>,
     status: Arc<Mutex<Option<u16>>>,
@@ -171,9 +172,16 @@ impl ApiClient {
         Self {
             address,
             key,
+            omit_default_key: false,
             hub,
             requests: Arc::new(AtomicUsize::new(0)),
             status: Arc::new(Mutex::new(None)),
+        }
+    }
+    pub fn without_local_api_key(&self) -> Self {
+        Self {
+            omit_default_key: true,
+            ..self.clone()
         }
     }
     pub fn send(&self, call: ApiCall) -> Call {
@@ -252,6 +260,12 @@ impl ApiClient {
             .header("host", &self.address)
             .header("content-type", "application/json")
             .header("x-api-key", &self.key);
+        if self.omit_default_key {
+            builder
+                .headers_mut()
+                .expect("request headers")
+                .remove("x-api-key");
+        }
         for (key, value) in call.headers {
             builder.headers_mut().expect("request headers").insert(
                 hyper::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| e.to_string())?,

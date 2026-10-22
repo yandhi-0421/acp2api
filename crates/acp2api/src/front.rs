@@ -7,7 +7,7 @@ use crate::{
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, State, rejection::BytesRejection},
+    extract::{DefaultBodyLimit, Extension, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -20,6 +20,7 @@ struct App {
     conductor: Conductor,
     clock: Arc<dyn Clock>,
     key: String,
+    port: u16,
     journal: crate::journal::Journal,
 }
 pub(crate) fn router(
@@ -28,103 +29,91 @@ pub(crate) fn router(
     key: String,
     tools: crate::runtime_driver::mcp::ToolSets,
     journal: crate::journal::Journal,
+    port: u16,
 ) -> Router {
+    let app = App {
+        conductor,
+        clock: clock.clone(),
+        key,
+        journal,
+        port,
+    };
+    use crate::journal::Api;
+    let guard = |api: Api, dialect: &'static dyn Dialect| {
+        axum::middleware::from_fn_with_state((app.clone(), api, dialect), access_guard)
+    };
     Router::new()
-        .route("/v1/models", get(models))
-        .route("/v1/messages", post(messages))
-        .route("/v1/responses", post(responses))
-        .route("/v1/chat/completions", post(chat))
+        .route(
+            "/v1/models",
+            get(models).layer(guard(Api::Models, dialect::CHAT)),
+        )
+        .route(
+            "/v1/messages",
+            post(turn).layer(guard(Api::Messages, dialect::MESSAGES)),
+        )
+        .route(
+            "/v1/responses",
+            post(turn).layer(guard(Api::Responses, dialect::RESPONSES)),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(turn).layer(guard(Api::Chat, dialect::CHAT)),
+        )
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
-        .with_state(App {
-            conductor,
-            clock: clock.clone(),
-            key,
-            journal,
-        })
+        .with_state(app)
         .merge(tools.router())
         .layer(axum::middleware::from_fn_with_state(
             clock.clone(),
             input_hold,
         ))
 }
-async fn messages(
-    State(app): State<App>,
-    headers: HeaderMap,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: Result<Bytes, BytesRejection>,
+async fn access_guard(
+    State((app, api, dialect)): State<(App, crate::journal::Api, &'static dyn Dialect)>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
 ) -> axum::response::Response {
-    serve(
-        app,
-        headers,
-        lease,
-        body,
-        dialect::MESSAGES,
-        crate::journal::Api::Messages,
-    )
-    .await
-}
-async fn responses(
-    State(app): State<App>,
-    headers: HeaderMap,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: Result<Bytes, BytesRejection>,
-) -> axum::response::Response {
-    serve(
-        app,
-        headers,
-        lease,
-        body,
-        dialect::RESPONSES,
-        crate::journal::Api::Responses,
-    )
-    .await
-}
-async fn chat(
-    State(app): State<App>,
-    headers: HeaderMap,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: Result<Bytes, BytesRejection>,
-) -> axum::response::Response {
-    serve(
-        app,
-        headers,
-        lease,
-        body,
-        dialect::CHAT,
-        crate::journal::Api::Chat,
-    )
-    .await
-}
-async fn serve(
-    app: App,
-    headers: HeaderMap,
-    lease: RequestHold,
-    body: Result<Bytes, BytesRejection>,
-    dialect: &'static dyn Dialect,
-    api: crate::journal::Api,
-) -> axum::response::Response {
-    let hold = lease.0.lock().unwrap().take().expect("request hold");
-    let request = app.journal.begin(api, app.clock.now());
-    let id = request.id.clone();
-    let mut response = dispatch(app, headers, hold, body, dialect, request).await;
+    let record = app.journal.begin(api, app.clock.now());
+    let id = record.id.clone();
+    let mut response = if let Some(error) = access_error(request.headers(), &app) {
+        refuse(&app, record, dialect, error)
+    } else {
+        request.extensions_mut().insert(record);
+        request.extensions_mut().insert(dialect);
+        next.run(request).await
+    };
     response.headers_mut().insert(
         "x-request-id",
         id.parse().expect("generated request identifier"),
     );
     response
 }
-async fn dispatch(
-    app: App,
-    headers: HeaderMap,
-    hold: crate::Hold,
-    body: Result<Bytes, BytesRejection>,
-    dialect: &'static dyn Dialect,
-    mut request: crate::journal::Request,
-) -> axum::response::Response {
-    let authorized = authorized(&headers, &app.key);
-    if !authorized {
-        return refuse(&app, request, dialect, Message::Key.into());
+fn access_error(headers: &HeaderMap, app: &App) -> Option<crate::messages::Refusal> {
+    if headers.contains_key("origin") {
+        return Some(crate::messages::Refusal::invalid(
+            "acp2api: the APIs do not accept an Origin header.",
+        ));
     }
+    let host = headers.get("host").and_then(|v| v.to_str().ok());
+    let address = format!("127.0.0.1:{}", app.port);
+    let localhost = format!("localhost:{}", app.port);
+    if host != Some(address.as_str()) && host != Some(localhost.as_str()) {
+        return Some(crate::messages::Refusal::invalid(
+            "acp2api: the Host header does not match the local listener.",
+        ));
+    }
+    if !authorized(headers, &app.key) {
+        return Some(Message::Key.into());
+    }
+    None
+}
+async fn turn(
+    State(app): State<App>,
+    Extension(mut request): Extension<crate::journal::Request>,
+    Extension(dialect): Extension<&'static dyn Dialect>,
+    Extension(lease): Extension<RequestHold>,
+    body: Result<Bytes, BytesRejection>,
+) -> axum::response::Response {
+    let hold = lease.0.lock().unwrap().take().expect("request hold");
     let body = match body {
         Ok(body) => body,
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
@@ -157,35 +146,22 @@ fn authorized(headers: &HeaderMap, key: &str) -> bool {
 }
 async fn models(
     State(app): State<App>,
-    headers: HeaderMap,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
+    Extension(request): Extension<crate::journal::Request>,
+    Extension(lease): Extension<RequestHold>,
 ) -> axum::response::Response {
     let hold = lease.0.lock().unwrap().take().expect("request hold");
-    let request = app
-        .journal
-        .begin(crate::journal::Api::Models, app.clock.now());
-    let id = request.id.clone();
-    let mut response = if !authorized(&headers, &app.key) {
-        refuse(&app, request, dialect::CHAT, Message::Key.into())
-    } else {
-        match app.conductor.model_names(hold).await {
-            Ok(entries) => {
-                let completion = crate::journal::Completion {
-                    request,
-                    session: None,
-                    outcome: crate::journal::Outcome::ModelList,
-                };
-                app.journal.complete(completion, app.clock.as_ref());
-                axum::Json(serde_json::json!({"object":"list","data":entries})).into_response()
-            }
-            Err(error) => refuse(&app, request, dialect::CHAT, error),
+    match app.conductor.model_names(hold).await {
+        Ok(entries) => {
+            let completion = crate::journal::Completion {
+                request,
+                session: None,
+                outcome: crate::journal::Outcome::ModelList,
+            };
+            app.journal.complete(completion, app.clock.as_ref());
+            axum::Json(serde_json::json!({"object":"list","data":entries})).into_response()
         }
-    };
-    response.headers_mut().insert(
-        "x-request-id",
-        id.parse().expect("generated request identifier"),
-    );
-    response
+        Err(error) => refuse(&app, request, dialect::CHAT, error),
+    }
 }
 
 async fn input_hold(
