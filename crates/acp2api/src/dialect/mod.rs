@@ -46,6 +46,7 @@ trait WireDialect: Sync {
             Message::ToolName(_) => "unsupported_tool_name",
             Message::Invalid(_) => "invalid_request_error",
             Message::Key => "invalid_api_key",
+            Message::TooLarge => "request_too_large",
             Message::Upstream(_) => "upstream_error",
         };
         json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
@@ -239,6 +240,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
     match refusal.row() {
         Row::Key => StatusCode::UNAUTHORIZED,
         Row::Rejected => StatusCode::BAD_REQUEST,
+        Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
     }
 }
