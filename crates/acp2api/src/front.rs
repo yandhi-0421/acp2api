@@ -4,7 +4,14 @@ use crate::{
     dialect::{self, Dialect},
     messages::Message,
 };
-use axum::{Router, extract::State, http::HeaderMap, routing::post};
+use axum::{
+    Router,
+    body::Bytes,
+    extract::{DefaultBodyLimit, State, rejection::BytesRejection},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::post,
+};
 use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
@@ -26,6 +33,7 @@ pub(crate) fn router(
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(chat))
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(App {
             conductor,
             clock: clock.clone(),
@@ -42,7 +50,7 @@ async fn messages(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(
         app,
@@ -58,7 +66,7 @@ async fn responses(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(
         app,
@@ -74,7 +82,7 @@ async fn chat(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(
         app,
@@ -90,7 +98,7 @@ async fn serve(
     app: App,
     headers: HeaderMap,
     lease: RequestHold,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
     dialect: &'static dyn Dialect,
     api: crate::journal::Api,
 ) -> axum::response::Response {
@@ -108,7 +116,7 @@ async fn dispatch(
     app: App,
     headers: HeaderMap,
     hold: crate::Hold,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
     dialect: &'static dyn Dialect,
     mut request: crate::journal::Request,
 ) -> axum::response::Response {
@@ -121,6 +129,13 @@ async fn dispatch(
     if !authorized {
         return refuse(&app, request, dialect, Message::Key.into());
     }
+    let body = match body {
+        Ok(body) => body,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return refuse(&app, request, dialect, Message::TooLarge.into());
+        }
+        Err(rejection) => return rejection.into_response(),
+    };
     let parsed = match dialect.parse(&body) {
         Ok(parsed) => parsed,
         Err(error) => return refuse(&app, request, dialect, error),
