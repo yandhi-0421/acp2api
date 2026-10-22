@@ -34,6 +34,17 @@ fn options(args: Vec<OsString>) -> Result<Options, String> {
     }
     Ok(options)
 }
+fn deliver(opened: &crate::store::Opened) -> io::Result<()> {
+    use std::io::Write;
+    let mut terminal = std::io::stdout().lock();
+    if let Some(key) = &opened.new_key {
+        writeln!(terminal, "acp2api: local API key: {key}")?;
+    }
+    if let Some(password) = &opened.new_password {
+        writeln!(terminal, "acp2api: management password: {password}")?;
+    }
+    terminal.flush()
+}
 pub(crate) async fn start(
     mut ports: Ports,
     args: Vec<OsString>,
@@ -61,24 +72,12 @@ pub(crate) async fn start(
             .map(|p| p.join("Library/Application Support/acp2api"))
             .ok_or("missing HOME for the data folder")?
     };
-    let opened = crate::store::read(
-        &data.join("config.toml"),
-        ports.release.highest_concurrency_limit(),
-        |opened| {
-            use std::io::Write;
-            let mut terminal = std::io::stdout().lock();
-            let result = (|| {
-                if let Some(key) = &opened.new_key {
-                    writeln!(terminal, "acp2api: local API key: {key}")?;
-                }
-                if let Some(password) = &opened.new_password {
-                    writeln!(terminal, "acp2api: management password: {password}")?;
-                }
-                terminal.flush()
-            })();
-            result.map_err(|_| "cannot deliver generated credentials to the terminal".into())
-        },
-    )?;
+    let config = data.join("config.toml");
+    let opened = crate::store::read(&config, ports.release.highest_concurrency_limit())?;
+    deliver(&opened).map_err(|_| "cannot deliver generated credentials to the terminal")?;
+    if opened.needs_save {
+        crate::store::save(&config, &opened.settings)?;
+    }
     let settings = opened.settings;
     let port = options.port.unwrap_or(settings.port);
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
@@ -124,7 +123,7 @@ pub(crate) async fn start(
         settings.local_api_key,
         tools,
         journal,
-        listener.local_addr().map_err(|e| e.to_string())?.port(),
+        port,
     );
     if opened.first_start {
         ports.browser.open(&panel);
