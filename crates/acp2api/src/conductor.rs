@@ -94,7 +94,8 @@ struct Core {
     waiting: VecDeque<Accepted>,
     idle: Vec<Idle>,
     limit: u8,
-    notices: Vec<Notice>,
+    /// The notices of the panel, published to it at each change.
+    notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
     Accepted(Accepted),
@@ -141,7 +142,13 @@ impl Core {
         let mut commands = Vec::new();
         match event {
             Event::Accepted(request) => self.waiting.push_back(request),
-            Event::DismissNotice(id) => self.notices.retain(|notice| notice.id != id),
+            Event::DismissNotice(id) => {
+                self.notices.send_if_modified(|notices| {
+                    let count = notices.len();
+                    Arc::make_mut(notices).retain(|notice| notice.id != id);
+                    notices.len() != count
+                });
+            }
             Event::Limit(limit) => {
                 self.limit = limit;
                 let kept = self.idle.len().min(usize::from(limit));
@@ -341,10 +348,12 @@ impl Core {
                 commands,
             ),
             TurnUpdate::UnpermittedTool(name) => {
-                self.notices.push(Notice {
+                let notice = Notice {
                     id: active.request.id.clone(),
                     name: name.clone(),
-                });
+                };
+                self.notices
+                    .send_modify(|notices| Arc::make_mut(notices).push(notice));
                 commands.push(Command::Cancel(session.clone()));
                 commands.push(Command::Safety(crate::journal::SafetyReport {
                     request: active.request.clone(),
@@ -454,7 +463,7 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Work>(32);
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
-        let (publish_notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
+        let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let task = tokio::spawn(async move {
             let (mut runtime, catalog, idle) = match started {
                 Some((runtime, catalog)) => {
@@ -475,7 +484,7 @@ impl Conductor {
                 limit,
                 active: Vec::new(),
                 waiting: VecDeque::new(),
-                notices: Vec::new(),
+                notices,
             };
             let mut read_open = runtime.is_some();
             loop {
@@ -510,7 +519,6 @@ impl Conductor {
                                     commands.extend(core.handle(Event::Limit(settings.concurrency_limit),clock.now()));Ok(())
                                 })();
                                 let success=result.is_ok();
-                                publish_notices.send_replace(Arc::new(core.notices.clone()));
                                 let _=reply.send(result);
                                 if success {Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await;}
                                 drop(hold);continue;
@@ -534,7 +542,6 @@ impl Conductor {
                     hold=timer=>(Event::Deadline,hold),
                 };
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
-                publish_notices.send_replace(Arc::new(core.notices.clone()));
                 Self::commands(
                     &mut core,
                     &mut runtime,
@@ -728,7 +735,7 @@ mod tests {
             waiting: VecDeque::new(),
             idle: Vec::new(),
             limit: 1,
-            notices: Vec::new(),
+            notices: watch::channel(Arc::new(Vec::new())).0,
         };
         let mut outputs = Vec::new();
         let mut forgotten = Vec::new();
