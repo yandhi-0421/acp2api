@@ -230,6 +230,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
     match refusal.row() {
         Row::Key => StatusCode::UNAUTHORIZED,
         Row::Rejected => StatusCode::BAD_REQUEST,
+        Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
     }
 }
@@ -251,6 +252,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::InvalidJson => "invalid_json",
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
+        Message::TooLarge => "request_too_large",
         Message::Upstream(_) => "upstream_error",
     }
 }

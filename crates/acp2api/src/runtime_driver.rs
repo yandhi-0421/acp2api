@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod agent_lines;
 pub(crate) mod mcp;
 #[cfg(test)]
 mod rpc_request_ids;
@@ -15,14 +17,14 @@ pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
     prompts: std::collections::HashMap<u64, String>,
-    creating: std::collections::HashMap<u64, (String, Vec<crate::conversation::ClientTool>)>,
+    creating: std::collections::HashMap<u64, (String, SessionTools)>,
     tree: Box<dyn ProcessTree>,
     clock: Arc<dyn Clock>,
     next_id: u64,
     session: String,
     cwd: PathBuf,
     tool_sets: mcp::ToolSets,
-    tools: std::collections::HashMap<String, Vec<crate::conversation::ClientTool>>,
+    tools: std::collections::HashMap<String, SessionTools>,
     permissions: std::collections::HashMap<PermissionId, (Value, String)>,
     next_permission: u64,
 }
@@ -54,52 +56,27 @@ impl Runtime {
             })
             .map_err(|e| format!("runtime launch: {e:?}"))?;
         let (tx, lines) = mpsc::channel(128);
+        let (stdout_tx, clock) = (tx.clone(), ports.clock.clone());
+        tokio::spawn(async move {
+            let mut stdout = BufReader::new(child.stdout);
+            while let Some(line) = read_line(&mut stdout).await {
+                let hold = clock.hold(HoldKind::RuntimeLine);
+                let line = serde_json::from_slice(&line).map_err(|e| format!("ACP JSON: {e}"));
+                if stdout_tx.send((Line::Stdout(line), hold)).await.is_err() {
+                    return;
+                }
+            }
+            let _ = stdout_tx
+                .send((Line::Closed, clock.hold(HoldKind::TurnEvent)))
+                .await;
+        });
         let clock = ports.clock.clone();
         tokio::spawn(async move {
-            let mut stdout = BufReader::new(child.stdout).lines();
-            let mut stderr = BufReader::new(child.stderr).lines();
-            let mut stdout_open = true;
-            let mut stderr_open = true;
-            while stdout_open || stderr_open {
-                let (is_stdout, result) = tokio::select! {
-                    line=stdout.next_line(),if stdout_open=>(true,line),
-                    line=stderr.next_line(),if stderr_open=>(false,line),
-                };
-                let (line, hold) = match result {
-                    Ok(Some(line)) => {
-                        let hold = clock.hold(HoldKind::RuntimeLine);
-                        let line = if is_stdout {
-                            Line::Stdout(
-                                serde_json::from_str(&line).map_err(|e| format!("ACP JSON: {e}")),
-                            )
-                        } else {
-                            Line::Stderr
-                        };
-                        (line, hold)
-                    }
-                    Ok(None) => {
-                        if is_stdout {
-                            stdout_open = false;
-                        } else {
-                            stderr_open = false;
-                            continue;
-                        }
-                        (Line::Closed, clock.hold(HoldKind::TurnEvent))
-                    }
-                    Err(error) => {
-                        if is_stdout {
-                            stdout_open = false;
-                        } else {
-                            stderr_open = false;
-                        }
-                        (
-                            Line::Stdout(Err(error.to_string())),
-                            clock.hold(HoldKind::TurnEvent),
-                        )
-                    }
-                };
-                if tx.send((line, hold)).await.is_err() {
-                    break;
+            let mut stderr = BufReader::new(child.stderr);
+            while read_line(&mut stderr).await.is_some() {
+                let hold = clock.hold(HoldKind::RuntimeLine);
+                if tx.send((Line::Stderr, hold)).await.is_err() {
+                    return;
                 }
             }
         });
@@ -127,21 +104,21 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
     ) -> Result<crate::catalog::Catalog, String> {
-        let params = self.session_parameters(tools, system)?;
+        let (params, tools) = self.session_parameters(tools, system)?;
         let session = self.call("session/new", params).await?;
         let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
         self.session = session["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?
             .to_owned();
-        self.tools.insert(self.session.clone(), tools.to_vec());
+        self.tools.insert(self.session.clone(), tools);
         Ok(catalog)
     }
     fn session_parameters(
         &self,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> Result<(Value, SessionTools), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
@@ -149,7 +126,11 @@ impl Runtime {
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }
-        Ok(params)
+        let tools = SessionTools {
+            mcp_url,
+            tools: tools.to_vec(),
+        };
+        Ok((params, tools))
     }
     pub(crate) async fn request_session(
         &mut self,
@@ -157,10 +138,16 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
     ) -> Result<(), String> {
-        let params = self.session_parameters(tools, system)?;
+        let (params, tools) = self.session_parameters(tools, system)?;
         let id = self.send("session/new", params).await?;
-        self.creating.insert(id, (work, tools.to_vec()));
+        self.creating.insert(id, (work, tools));
         Ok(())
+    }
+    /// Drops the client tools of a session that acp2api does not use again.
+    pub(crate) fn forget(&mut self, session: &str) {
+        if let Some(tools) = self.tools.remove(session) {
+            self.tool_sets.remove(&tools.mcp_url);
+        }
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
@@ -196,6 +183,11 @@ impl Runtime {
         }
         Ok(())
     }
+    /// Answers an agent request whose method acp2api does not handle.
+    async fn refuse(&mut self, request: &Value) -> Result<(), String> {
+        self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
+            .await
+    }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.send(method, params).await?;
         while let Some((line, _hold)) = self.lines.recv().await {
@@ -204,6 +196,12 @@ impl Runtime {
                 Line::Stderr => continue,
                 Line::Closed => return Err("runtime stdout closed".into()),
             };
+            if value.get("method").is_some() {
+                if value.get("id").is_some() {
+                    self.refuse(&value).await?;
+                }
+                continue;
+            }
             if value["id"] == id {
                 return value
                     .get("result")
@@ -251,11 +249,11 @@ impl Runtime {
             Line::Closed => RuntimeEvent::Closed,
             Line::Stderr => RuntimeEvent::Stderr,
             Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
-            Line::Stdout(Ok(value)) => self.decode(value),
+            Line::Stdout(Ok(value)) => self.decode(value).await,
         };
         (event, hold)
     }
-    fn decode(&mut self, value: Value) -> RuntimeEvent {
+    async fn decode(&mut self, value: Value) -> RuntimeEvent {
         if value.get("method").is_none()
             && let Some(id) = value["id"].as_u64()
         {
@@ -269,9 +267,14 @@ impl Runtime {
                         .ok_or("missing sessionId")?
                         .to_owned();
                     let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
-                    self.tools.insert(session.clone(), tools);
                     Ok((session, catalog))
                 })();
+                match &result {
+                    Ok((session, _)) => {
+                        self.tools.insert(session.clone(), tools);
+                    }
+                    Err(_) => self.tool_sets.remove(&tools.mcp_url),
+                }
                 return RuntimeEvent::Prepared { work, result };
             }
             if let Some(session) = self.prompts.remove(&id) {
@@ -300,11 +303,11 @@ impl Runtime {
             let call = (|| {
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
-                let tool = self
-                    .tools
-                    .get(&session)?
-                    .iter()
-                    .find(|tool| tool.mcp_name() == name)?;
+                let tools = &self.tools.get(&session)?.tools;
+                let tool = mcp::tool_names(tools)
+                    .into_iter()
+                    .zip(tools)
+                    .find_map(|(mcp_name, tool)| (mcp_name == name).then_some(tool))?;
                 let input = request
                     .tool_call
                     .fields
@@ -336,8 +339,10 @@ impl Runtime {
             let notification: SessionNotification =
                 match serde_json::from_value(value["params"].clone()) {
                     Ok(notification) => notification,
-                    Err(error) => {
-                        return RuntimeEvent::Failed(format!("ACP session/update: {error}"));
+                    Err(_) => {
+                        let kind = &value["params"]["update"]["sessionUpdate"];
+                        eprintln!("acp2api: skipped an ACP session/update of kind {kind}");
+                        return RuntimeEvent::Other;
                     }
                 };
             let session = notification.session_id.to_string();
@@ -353,6 +358,11 @@ impl Runtime {
                 _ => return RuntimeEvent::Other,
             };
             RuntimeEvent::Turn { session, update }
+        } else if value.get("method").is_some() && value.get("id").is_some() {
+            match self.refuse(&value).await {
+                Ok(()) => RuntimeEvent::Other,
+                Err(error) => RuntimeEvent::Failed(error),
+            }
         } else {
             RuntimeEvent::Other
         }
@@ -364,6 +374,19 @@ impl Runtime {
     }
 }
 
+/// The next line in bytes, so that one non-UTF-8 line does not end the stream.
+/// A read error ends the stream like its end.
+async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
+    let mut line = Vec::new();
+    match input.read_until(b'\n', &mut line).await {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line),
+    }
+}
+struct SessionTools {
+    mcp_url: String,
+    tools: Vec<crate::conversation::ClientTool>,
+}
 enum Line {
     Stdout(Result<Value, String>),
     Stderr,
