@@ -24,7 +24,7 @@ acp2api starts each runtime process with `GEMINI_HOME` set to a runtime home tha
 - On macOS, the system temporary folder is not in the folder of the user. The macOS probe found no `.agents`, `.gemini`, `.git`, `AGENTS.md`, or `GEMINI.md` in the parent folders of such a `cwd` (issue 8). A data folder in the folder of the user can have `~/.gemini` or a `.git` in a parent folder.
 - A later runtime process can load the ACP session. Thus its `cwd` is not in the folder of the runtime process, which acp2api deletes after the stop (ADR-0004).
 - The login keychain protects the token better than a file. acp2api serves one Google account, so an editor and acp2api can share the token of that account.
-- The official runtime 1.4.0 obeys `GEMINI_HOME`. Its stderr says `Gemini home resolved to ~/.gemini (default; $GEMINI_HOME is unset)` (issue 8). A `session/resume` of an unknown ACP session gives `-32002` `Session not found in the current GEMINI_HOME` (the same note, section 3.2).
+- The official runtime 1.4.0 obeys `GEMINI_HOME`. Its stderr says `Gemini home resolved to ~/.gemini (default; $GEMINI_HOME is unset)` (issue 8). A `session/resume` of an unknown ACP session gives `-32002` `Session not found in the current GEMINI_HOME` (`docs/research/2026-10-15-official-runtime-acp-probe.md`, section 3.2).
 
 ## Considered options
 
