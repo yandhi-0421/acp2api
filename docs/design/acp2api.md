@@ -1389,7 +1389,7 @@ The owner accepted these ten choices on 2026-10-18. Their definitions are in the
 | Reset-time forms | "Quota reset time" under "Decided values"; unknown forms follow FR-036 |
 | Final independent review | One `prd-review` round with a cold reader and an attacker, after revision |
 
-The disk had about 9.5 GiB free at the review. The first-build measurement, not an estimate, decides the next storage action.
+The first-build measurement, not an estimate, decides the next storage action. Section "Problem" gives the free disk at the review.
 
 The owner also approved every recommendation of the final review. FR-006 and M-28 close the account questions below.
 FR-011, FR-020, FR-025 to FR-028, FR-033, FR-036 to FR-040, FR-049, and FR-054 hold the revised product contracts.
