@@ -268,7 +268,10 @@ impl Conductor {
                     work=recv.recv()=> {
                         let Some(work)=work else {break;};
                         let (output,ticket)=mpsc::unbounded_channel();
-                        if work.admission.send(ticket).is_err() {continue;}
+                        if work.admission.send(ticket).is_err() {
+                            journal.complete(crate::journal::Completion {request:work.request,session:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
+                            continue;
+                        }
                         (Event::Accepted(Accepted {turn:work.turn,request:work.request,output}),work.hold)
                     }
                     (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=> {
@@ -361,5 +364,44 @@ impl Conductor {
             .await
             .map_err(|_| "conductor stopped")?;
         reply.await.map_err(|_| "conductor stopped".into())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn a_client_gone_before_admission_still_has_its_request_line() {
+        let folder = std::env::temp_dir().join(format!("acp2api-conductor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (conductor, _task) = Conductor::start(None, clock.clone(), journal.clone());
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = || crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = || journal.begin(crate::journal::Api::Chat, clock.now());
+        let (admission, reply) = oneshot::channel();
+        drop(reply);
+        conductor
+            .0
+            .send(Work {
+                turn: turn(),
+                request: request(),
+                hold: clock.hold(HoldKind::HttpRequest),
+                admission,
+            })
+            .await
+            .ok()
+            .unwrap();
+        let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request());
+        assert!(next.await.is_ok(), "the conductor serves the next request");
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(
+            lines.contains(r#""result":"disconnected""#),
+            "request line of the gone client: {lines}"
+        );
     }
 }
