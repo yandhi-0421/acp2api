@@ -14,15 +14,15 @@ pub(super) enum Api {
 }
 pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let value: Value = serde_json::from_slice(body).map_err(|e| Refusal::invalid(e.to_string()))?;
-    if let Some(tools) = value["tools"].as_array() {
-        for tool in tools {
-            if let Some(kind) = tool["type"]
-                .as_str()
-                .filter(|kind| kind.starts_with("advisor_"))
-            {
-                return Err(Message::AdvisorTool(kind.into()).into());
-            }
-        }
+    if matches!(api, Api::Messages)
+        && let Some(kind) = value["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| tool["type"].as_str())
+            .find(|kind| kind.starts_with("advisor_"))
+    {
+        return Err(Message::AdvisorTool(kind.into()).into());
     }
     let model = required(&value, "model")?.to_owned();
     let client_tools = tools(api, &value["tools"])?;
@@ -565,5 +565,26 @@ mod tests {
         let responses = json!([{"type":"function","name":"now","parameters":null}]);
         assert_eq!(schema(Api::Responses, responses), empty);
         assert!(tools(Api::Messages, &json!([{"name":"now"}])).is_err());
+    }
+    #[test]
+    fn an_advisor_tool_is_an_unknown_tool_type_outside_the_messages_api() {
+        let message = |api, tools: Value| {
+            let body = json!({"model":"m","tools":tools,"input":"Hi","messages":[]});
+            match parse(api, body.to_string().as_bytes()) {
+                Err(refusal) => refusal.message,
+                Ok(_) => panic!("accepted"),
+            }
+        };
+        let advisor = json!([{"type":"advisor_20260301","name":"advisor"}]);
+        assert!(matches!(
+            message(Api::Messages, advisor.clone()),
+            Message::AdvisorTool(kind) if kind == "advisor_20260301"
+        ));
+        for api in [Api::Chat, Api::Responses] {
+            assert!(matches!(
+                message(api, advisor.clone()),
+                Message::ToolType { kind, name } if kind == "advisor_20260301" && name == "advisor"
+            ));
+        }
     }
 }
