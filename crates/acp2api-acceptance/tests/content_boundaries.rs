@@ -5,6 +5,13 @@ const ENDPOINTS: [&str; 3] = [
     "POST /v1/responses",
     "POST /v1/chat/completions",
 ];
+fn input_key(endpoint: &str) -> &'static str {
+    if endpoint == "POST /v1/responses" {
+        "input"
+    } else {
+        "messages"
+    }
+}
 fn setup() -> Scenario {
     let mut s = Scenario::default();
     s.plan(Setup::normal());
@@ -21,12 +28,7 @@ async fn rejected(
     let mut s = setup();
     let mut call = c::request(endpoint, json!([part]));
     if earlier {
-        let key = if endpoint == "POST /v1/responses" {
-            "input"
-        } else {
-            "messages"
-        };
-        call.body[key]
+        call.body[input_key(endpoint)]
             .as_array_mut()
             .unwrap()
             .push(json!({"role":"user","content":"Last text"}));
@@ -154,12 +156,7 @@ async fn file_id_and_prefill_envelopes_in_all_dialects() {
         .await;
         let mut s = setup();
         let mut call = c::request(endpoint, json!("prefill"));
-        let key = if endpoint.ends_with("responses") {
-            "input"
-        } else {
-            "messages"
-        };
-        call.body[key][0]["role"] = "assistant".into();
+        call.body[input_key(endpoint)][0]["role"] = "assistant".into();
         c::send(&mut s, call).await;
         c::refusal(
             &s,
