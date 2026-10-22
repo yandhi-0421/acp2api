@@ -995,6 +995,8 @@ The release workflow writes this file from the result of the acceptance test (SC
 | M-10 | 400 | `unsupported_tool_name` |
 | M-11 | 400 | `unsupported_server_tool` |
 | FR-024, a tool type that acp2api does not know | 400 | `unsupported_tool_type` |
+| FR-024, the advisor tool | 400 | `unsupported_advisor_tool` |
+| FR-024, another server tool of the Anthropic Messages API | 400 | `unsupported_server_tool` |
 | M-12 | 400 | `lockout` |
 | M-13 | 400 | `sign_in_required` |
 | M-14 | 400 | `runtime_unavailable` |
