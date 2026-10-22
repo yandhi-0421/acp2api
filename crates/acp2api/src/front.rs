@@ -158,6 +158,7 @@ async fn models(
             let completion = crate::journal::Completion {
                 request,
                 session: None,
+                session_use: None,
                 outcome: crate::journal::Outcome::ModelList,
             };
             app.journal.complete(completion, app.clock.as_ref());
@@ -193,6 +194,7 @@ fn refuse(
     let completion = crate::journal::Completion {
         request,
         session: None,
+        session_use: None,
         outcome: crate::journal::Outcome::Refused(dialect::refusal_code(&error)),
     };
     app.journal.complete(completion, app.clock.as_ref());

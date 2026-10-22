@@ -75,7 +75,7 @@ enum Phase {
 struct Active {
     output: Output,
     request: crate::journal::Request,
-    session: Option<crate::journal::Session>,
+    session: Option<String>,
     hashes: Vec<crate::conversation::ItemHash>,
     tools_hash: crate::conversation::ToolSetHash,
     kind: crate::journal::SessionUse,
@@ -187,10 +187,7 @@ impl Core {
                         Ok((session, catalog)) => {
                             self.catalog = Some(catalog);
                             let active = &mut self.active[index];
-                            active.session = Some(crate::journal::Session {
-                                id: session.clone(),
-                                kind: active.kind,
-                            });
+                            active.session = Some(session.clone());
                             if let Phase::Preparing(prompt) =
                                 std::mem::replace(&mut active.phase, Phase::Prompt)
                             {
@@ -213,7 +210,7 @@ impl Core {
                 if let Some(index) = self
                     .active
                     .iter()
-                    .position(|active| active.session.as_ref().is_some_and(|s| s.id == session))
+                    .position(|active| active.session.as_ref() == Some(&session))
                 {
                     self.update(index, session, update, now, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
@@ -302,7 +299,7 @@ impl Core {
                         session: id.clone(),
                         prompt,
                     });
-                    (Some(crate::journal::Session { id, kind }), Phase::Prompt)
+                    (Some(id), Phase::Prompt)
                 }
                 None => {
                     commands.push(Command::Prepare {
@@ -439,14 +436,14 @@ impl Core {
                     .hashes
                     .push(crate::conversation::reply_hash(&active.text));
                 self.records.push(records::Record {
-                    session: session.id.clone(),
+                    session: session.clone(),
                     hashes: active.hashes,
                     tools: active.tools_hash,
                     used: active.used,
                 });
             } else {
                 // No record matches this ACP session again.
-                commands.push(Command::Forget(session.id.clone()));
+                commands.push(Command::Forget(session.clone()));
             }
         }
         let outcome = if active.disconnected {
@@ -466,6 +463,7 @@ impl Core {
         commands.push(Command::Complete(crate::journal::Completion {
             request: active.request,
             session: active.session,
+            session_use: Some(active.kind),
             outcome,
         }));
         commands.push(Command::Emit(active.output, TurnEvent::End(end)));
@@ -539,7 +537,7 @@ impl Conductor {
                         let admitted = core.catalog.as_ref().map_or(Ok(()), |catalog| catalog.check(&work.turn.model)).map(|()| ticket);
                         let refused = admitted.is_err();
                         if work.admission.send(admitted).is_err() {
-                            journal.complete(crate::journal::Completion {request:work.request,session:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
+                            journal.complete(crate::journal::Completion {request:work.request,session:None,session_use:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
                             continue;
                         }
                         if refused {continue;}
@@ -808,6 +806,55 @@ mod tests {
             ["s1", "s2"],
             "a failed session and a session with no record; records stay above the limit"
         );
+    }
+    #[test]
+    fn a_failed_session_creation_still_logs_its_session_use() {
+        let folder = std::env::temp_dir().join(format!("acp2api-use-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            records: Vec::new(),
+            fresh: None,
+            use_sequence: 0,
+            limit: 1,
+            notices: watch::channel(Arc::new(Vec::new())).0,
+        };
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello"},{"role":"user","content":"Again"}]}"#;
+        let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = journal.begin(crate::journal::Api::Chat, 0);
+        let work = request.id.clone();
+        let (output, _ticket) = mpsc::unbounded_channel();
+        let accepted = Event::Accepted(Accepted {
+            turn,
+            request,
+            output,
+        });
+        assert!(matches!(
+            &core.handle(accepted, 0)[..],
+            [Command::Prepare { .. }]
+        ));
+        let failed = Event::Runtime(RuntimeEvent::Prepared {
+            work,
+            result: Err("session/new failed".into()),
+        });
+        for command in core.handle(failed, 0) {
+            if let Command::Complete(completion) = command {
+                journal.complete(completion, clock.as_ref());
+            }
+        }
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&folder).unwrap();
+        let line: serde_json::Value = serde_json::from_str(lines.trim()).unwrap();
+        assert_eq!(line["result"], "failed");
+        assert_eq!(line["session"], serde_json::Value::Null);
+        assert_eq!(line["session_use"], "rebuild", "FR-056 and FR-021");
     }
     #[tokio::test]
     async fn without_a_runtime_a_request_gets_no_model_name_error() {
