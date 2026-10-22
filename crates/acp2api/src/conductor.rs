@@ -70,7 +70,7 @@ struct PendingPrompt {
 enum Phase {
     Preparing(PendingPrompt),
     Prompt,
-    Settling(Moment),
+    Settling { at: Moment, end_turn: bool },
 }
 struct Active {
     output: Output,
@@ -80,7 +80,6 @@ struct Active {
     tools_hash: crate::conversation::ToolSetHash,
     kind: crate::journal::SessionUse,
     used: u64,
-    eligible: bool,
     disconnected: bool,
     held: Option<String>,
     text: String,
@@ -136,7 +135,7 @@ impl Core {
         self.active
             .iter()
             .filter_map(|active| match active.phase {
-                Phase::Settling(at) => Some(at),
+                Phase::Settling { at, .. } => Some(at),
                 _ => None,
             })
             .min()
@@ -252,7 +251,7 @@ impl Core {
             Event::Deadline => {
                 let mut index = 0;
                 while index < self.active.len() {
-                    if matches!(self.active[index].phase,Phase::Settling(at) if at<=now) {
+                    if matches!(self.active[index].phase,Phase::Settling { at, .. } if at<=now) {
                         self.finish(index, Ok(()), &mut commands);
                     } else {
                         index += 1;
@@ -321,7 +320,6 @@ impl Core {
                 tools_hash,
                 kind,
                 used: self.use_sequence,
-                eligible: false,
                 disconnected: false,
                 held: None,
                 text: String::new(),
@@ -354,13 +352,11 @@ impl Core {
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
-            TurnUpdate::PromptEnded => {
-                active.eligible = true;
-                active.phase = Phase::Settling(now.saturating_add(200));
-            }
-            TurnUpdate::Stopped => {
-                active.eligible = false;
-                active.phase = Phase::Settling(now.saturating_add(200));
+            TurnUpdate::PromptEnded { end_turn } => {
+                active.phase = Phase::Settling {
+                    at: now.saturating_add(200),
+                    end_turn,
+                };
             }
             TurnUpdate::Failed(error) => self.finish(
                 index,
@@ -419,7 +415,8 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let mut active = self.active.remove(index);
-        let ends_turn = active.eligible && active.tool_call.is_none();
+        let ends_turn = matches!(active.phase, Phase::Settling { end_turn: true, .. })
+            && active.tool_call.is_none();
         let end = result.map(|()| {
             if let Some(text) = active.held.take() {
                 active.text.push_str(&text);
@@ -800,10 +797,11 @@ mod tests {
                 _ => None,
             }));
         };
+        let ended = |end_turn| TurnUpdate::PromptEnded { end_turn };
         turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
-        turn(&mut core, "B", "s2", TurnUpdate::Stopped);
-        turn(&mut core, "C", "s3", TurnUpdate::PromptEnded);
-        turn(&mut core, "D", "s4", TurnUpdate::PromptEnded);
+        turn(&mut core, "B", "s2", ended(false));
+        turn(&mut core, "C", "s3", ended(true));
+        turn(&mut core, "D", "s4", ended(true));
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(
             forgotten,

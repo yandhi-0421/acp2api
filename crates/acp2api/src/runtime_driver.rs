@@ -292,8 +292,9 @@ impl Runtime {
             if let Some(session) = self.prompts.remove(&id) {
                 let update = match value.get("error") {
                     Some(error) => TurnUpdate::Failed(error.to_string()),
-                    None if value["result"]["stopReason"] == "end_turn" => TurnUpdate::PromptEnded,
-                    None => TurnUpdate::Stopped,
+                    None => TurnUpdate::PromptEnded {
+                        end_turn: value["result"]["stopReason"] == "end_turn",
+                    },
                 };
                 return RuntimeEvent::Turn { session, update };
             }
@@ -463,7 +464,8 @@ pub(crate) enum TurnUpdate {
         name: String,
     },
     UnpermittedTool(String),
-    PromptEnded,
-    Stopped,
+    PromptEnded {
+        end_turn: bool,
+    },
     Failed(String),
 }
