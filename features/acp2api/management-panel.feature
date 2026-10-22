@@ -193,7 +193,7 @@ Feature: Management panel
     When the owner opens the management panel with a panel session and reloads it 3 times
     Then the official runtime gets no call
 
-  @FR-054 @issue-53 @wip
+  @FR-054 @issue-53
   Scenario: The README lists each request field that acp2api ignores
     Given the README of acp2api
     Then the README lists these request fields as fields that acp2api ignores:

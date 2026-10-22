@@ -1,4 +1,4 @@
-use super::{Parsed, parsed};
+use super::{Parsed, fields, parsed};
 use crate::{
     conversation::{Conversation, Item, Part, Role, SystemPart},
     messages::{Message, Refusal},
@@ -13,7 +13,7 @@ pub(super) enum Api {
     Responses,
 }
 pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
-    let value: Value = serde_json::from_slice(body).map_err(|e| Refusal::invalid(e.to_string()))?;
+    let value = fields::parse_json(body)?;
     if matches!(api, Api::Messages)
         && let Some(kind) = value["tools"]
             .as_array()
@@ -24,6 +24,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     {
         return Err(Message::AdvisorTool(kind.into()).into());
     }
+    fields::check(api, &value)?;
     let model = required(&value, "model")?.to_owned();
     let client_tools = tools(api, &value["tools"])?;
     let input = &value[if matches!(api, Api::Responses) {
@@ -282,7 +283,7 @@ fn part(api: Api, v: &Value) -> Result<Part, Refusal> {
 }
 fn reject_id(value: &Value) -> Result<(), Refusal> {
     if !value["file_id"].is_null() {
-        return Err(Message::Field("file_id".into()).into());
+        return Err(Refusal::field("file_id", None));
     }
     Ok(())
 }

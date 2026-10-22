@@ -1,7 +1,10 @@
 use std::fmt;
 
 pub(crate) enum Message {
-    Field(String),
+    Field {
+        path: String,
+        value: Option<serde_json::Value>,
+    },
     Model {
         requested: String,
         names: Vec<String>,
@@ -23,6 +26,7 @@ pub(crate) enum Message {
         kind: String,
         name: String,
     },
+    InvalidJson,
     Invalid(String),
     Key,
     TooLarge,
@@ -46,13 +50,20 @@ impl Refusal {
     pub fn invalid(message: impl Into<String>) -> Self {
         Message::Invalid(message.into()).into()
     }
+    pub fn field(path: impl Into<String>, value: Option<&serde_json::Value>) -> Self {
+        Message::Field {
+            path: path.into(),
+            value: value.cloned(),
+        }
+        .into()
+    }
     pub fn row(&self) -> Row {
         match self.message {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
             Message::Upstream(_) => Row::Other502,
             Message::Model { .. }
-            | Message::Field(_)
+            | Message::Field { .. }
             | Message::Content(_)
             | Message::Media(_)
             | Message::Url(_)
@@ -64,12 +75,13 @@ impl Refusal {
             | Message::CodexWebSearch
             | Message::ToolType { .. }
             | Message::Prefill
+            | Message::InvalidJson
             | Message::Invalid(_) => Row::Rejected,
         }
     }
     pub fn param(&self) -> Option<&str> {
         match &self.message {
-            Message::Field(field) => Some(field),
+            Message::Field { path, .. } => Some(path),
             Message::Model { .. } => Some("model"),
             _ => None,
         }
@@ -83,7 +95,8 @@ impl fmt::Display for Message {
                 "acp2api: the model name {requested} is not available. The model names are: {}.",
                 names.join(", ")
             ),
-            Self::Field(field) => write!(f, "acp2api: the request field {field} is not supported."),
+            Self::Field { path, value: None } => write!(f, "acp2api: the request field {path} is not supported."),
+            Self::Field { path, value: Some(value) } => write!(f, "acp2api: the request field {path} = {value} is not supported."),
             Self::Content(kind) => write!(f, "acp2api: the content type {kind} is not supported."),
             Self::Media(media) => write!(f, "acp2api: the media type {media} is not supported."),
             Self::Url(kind) => write!(
@@ -118,6 +131,7 @@ impl fmt::Display for Message {
             Self::Prefill => f.write_str(
                 "acp2api: a last message from the assistant (a prefill) is not supported.",
             ),
+            Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
             Self::TooLarge => f.write_str("acp2api: the request body is larger than 32 MB."),
