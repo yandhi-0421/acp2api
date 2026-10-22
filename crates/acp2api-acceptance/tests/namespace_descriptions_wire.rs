@@ -96,7 +96,7 @@ async fn namespace_context_reaches_mcp_and_preserves_member_identity() {
             responses.push(json!({"stream":stream,"status":answer.status,"body":if stream {Value::Null} else {answer.json()},"events":answer.events.iter().map(|event|json!({"event":event.event,"data":event.data})).collect::<Vec<_>>()}));
         }
     }
-    t::cancelled(&s, 6);
+    t::cancelled_prompts(&s, 6, &[1, 2, 3, 4, 5, 6]);
     let records = s.fake().record();
     assert_eq!(
         records
@@ -105,9 +105,22 @@ async fn namespace_context_reaches_mcp_and_preserves_member_identity() {
             .map(|prompt| &prompt.session)
             .collect::<std::collections::HashSet<_>>()
             .len(),
-        1,
-        "immutable tool context retains one namespace mapping"
+        7,
+        "seven separate one-user conversations use seven distinct ACP sessions"
     );
+    let all_offers = records.offered_tools();
+    assert_eq!(
+        all_offers.len(),
+        7,
+        "each new session reads its immutable tool set"
+    );
+    for offering in all_offers {
+        assert_eq!(
+            offering["result"]["tools"],
+            json!(offers),
+            "every session retains the exact namespace mapping and declarations"
+        );
+    }
     let record = json!({"http_requests":7,"mcp_offers":records.offered_tools(),"permission_requests":t::permission_requests(&s),"permission_replies":t::permission_replies(&s),"cancels":records.cancels(),"responses":responses});
     let output = record.to_string();
     assert!(output.len() <= 2 * 1024 * 1024, "2 MiB result cap");

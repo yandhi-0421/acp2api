@@ -366,8 +366,8 @@ pub enum EffortAsk { Absent, Level(ThinkingLevel), Unknown(String) }
 pub enum ToolChoice { Auto, Off }
 pub struct ReplyForm { pub stream: bool, pub include_usage: bool, pub model_name: String }
 
-pub fn prompt(input: PromptFor<'_>) -> Vec<PromptBlock>;               // FR-016, FR-017, FR-020, FR-021, FR-023
-pub enum PromptFor<'a> { Continue { new_items: &'a [Item] }, Rebuild { conversation: &'a Conversation } }
+pub fn prompt(kind: SessionUse, items: &[Item]) -> Vec<PromptBlock>;   // FR-016, FR-017, FR-020, FR-021, FR-023
+                                                                       // items: the new items for Continue, else all items
 pub fn system_prompt_addition(system: &[SystemPart]) -> Option<String>; // FR-019
 pub fn record_hashes(conversation: &Conversation) -> Vec<ItemHash>;    // ADR-0003
 pub fn tool_set_hash(tools: &ClientTools) -> ToolSetHash;              // ADR-0003
@@ -554,7 +554,7 @@ No work entry, unresolved admission, or external wait owns a `Hold`. The shell r
 A completion or disconnect carries a new short hold through the next core transition. An occupied place can therefore wait while virtual time advances.
 Only an accepted stream has a keep-alive timer. Its first deadline starts at acceptance (FR-011).
 
-Transitional state (#55): the conductor keeps a list of active requests and a pool of idle ACP sessions. The pool has at most as many sessions as the concurrency limit. #60 replaces this state with the work table above.
+Transitional state (#47): the conductor keeps a list of active requests and the records of the idle ACP sessions (ADR-0003). The count of records has no limit, because the drop of ADR-0003 does not exist yet. When a turn writes no record, acp2api forgets its ACP session. #60 replaces this state with the work table above.
 
 ### The runtime driver
 

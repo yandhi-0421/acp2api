@@ -55,7 +55,8 @@ async fn namespace_members_get_readable_bounded_names_that_map_back() {
         let answer = c::send(&mut s, &tools, false, Some(name), &args).await;
         c::output(&answer, false, "function_call", member, namespace, &args);
     }
-    t::cancelled(&s, 5);
+    // The first request ends with no tool call, so prompts 1 to 5 get the cancels.
+    t::cancelled_prompts(&s, 5, &[1, 2, 3, 4, 5]);
     s.finish(true).await;
 }
 

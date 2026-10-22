@@ -253,10 +253,6 @@ pub(crate) struct Request {
     pub unknown_fields: Vec<String>,
     started: crate::Moment,
 }
-pub(crate) struct Session {
-    pub id: String,
-    pub kind: SessionUse,
-}
 pub(crate) enum Outcome {
     ModelList,
     Success { input: u64, output: u64 },
@@ -267,7 +263,8 @@ pub(crate) enum Outcome {
 }
 pub(crate) struct Completion {
     pub request: Request,
-    pub session: Option<Session>,
+    pub session: Option<String>,
+    pub session_use: Option<SessionUse>,
     pub outcome: Outcome,
 }
 #[derive(Clone, Copy, Serialize)]
@@ -344,6 +341,7 @@ impl Journal {
         let Completion {
             request,
             session,
+            session_use,
             outcome,
         } = completion;
         let (result, error_code, input_tokens, output_tokens) = match outcome {
@@ -361,9 +359,7 @@ impl Journal {
                 None,
             ),
         };
-        let (session, session_use) = session
-            .map(|s| (Some(s.id.chars().take(12).collect()), Some(s.kind)))
-            .unwrap_or((None, None));
+        let session = session.map(|id| id.chars().take(12).collect());
         let record = RequestRecord {
             time: timestamp(clock.wall())?,
             request_id: request.id,

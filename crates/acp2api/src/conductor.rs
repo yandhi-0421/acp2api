@@ -1,3 +1,4 @@
+mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnEvent, TurnRequest, Usage},
@@ -57,14 +58,10 @@ struct Accepted {
     request: crate::journal::Request,
     output: Output,
 }
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 struct Session {
     tools: Vec<crate::conversation::ClientTool>,
     system: Option<String>,
-}
-struct Idle {
-    id: String,
-    settings: Session,
 }
 struct PendingPrompt {
     text: Vec<crate::conversation::PromptBlock>,
@@ -73,13 +70,16 @@ struct PendingPrompt {
 enum Phase {
     Preparing(PendingPrompt),
     Prompt,
-    Settling(Moment),
+    Settling { at: Moment, end_turn: bool },
 }
 struct Active {
     output: Output,
     request: crate::journal::Request,
-    session: Option<crate::journal::Session>,
-    settings: Session,
+    session: Option<String>,
+    hashes: Vec<crate::conversation::ItemHash>,
+    tools_hash: crate::conversation::ToolSetHash,
+    kind: crate::journal::SessionUse,
+    used: u64,
     disconnected: bool,
     held: Option<String>,
     text: String,
@@ -92,7 +92,10 @@ struct Core {
     catalog: Option<crate::catalog::Catalog>,
     active: Vec<Active>,
     waiting: VecDeque<Accepted>,
-    idle: Vec<Idle>,
+    records: Vec<records::Record>,
+    /// The ACP session from the start of the runtime: no system prompt addition, no client tools.
+    fresh: Option<String>,
+    use_sequence: u64,
     limit: u8,
     /// The notices of the panel, published to it at each change.
     notices: watch::Sender<Arc<Vec<Notice>>>,
@@ -132,7 +135,7 @@ impl Core {
         self.active
             .iter()
             .filter_map(|active| match active.phase {
-                Phase::Settling(at) => Some(at),
+                Phase::Settling { at, .. } => Some(at),
                 _ => None,
             })
             .min()
@@ -151,8 +154,6 @@ impl Core {
             }
             Event::Limit(limit) => {
                 self.limit = limit;
-                let kept = self.idle.len().min(usize::from(limit));
-                self.forget_idle(kept, &mut commands);
             }
             Event::Disconnected(work) => {
                 if let Some(active) = self
@@ -186,10 +187,7 @@ impl Core {
                         Ok((session, catalog)) => {
                             self.catalog = Some(catalog);
                             let active = &mut self.active[index];
-                            active.session = Some(crate::journal::Session {
-                                id: session.clone(),
-                                kind: crate::journal::SessionUse::New,
-                            });
+                            active.session = Some(session.clone());
                             if let Phase::Preparing(prompt) =
                                 std::mem::replace(&mut active.phase, Phase::Prompt)
                             {
@@ -212,7 +210,7 @@ impl Core {
                 if let Some(index) = self
                     .active
                     .iter()
-                    .position(|active| active.session.as_ref().is_some_and(|s| s.id == session))
+                    .position(|active| active.session.as_ref() == Some(&session))
                 {
                     self.update(index, session, update, now, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
@@ -225,7 +223,7 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Failed(error)) => {
-                self.forget_idle(0, &mut commands);
+                self.forget_idle(&mut commands);
                 while !self.active.is_empty() {
                     self.finish(
                         0,
@@ -235,7 +233,7 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
-                self.forget_idle(0, &mut commands);
+                self.forget_idle(&mut commands);
                 while !self.active.is_empty() {
                     self.finish(
                         0,
@@ -250,7 +248,7 @@ impl Core {
             Event::Deadline => {
                 let mut index = 0;
                 while index < self.active.len() {
-                    if matches!(self.active[index].phase,Phase::Settling(at) if at<=now) {
+                    if matches!(self.active[index].phase,Phase::Settling { at, .. } if at<=now) {
                         self.finish(index, Ok(()), &mut commands);
                     } else {
                         index += 1;
@@ -262,10 +260,6 @@ impl Core {
             let Some(request) = self.waiting.pop_front() else {
                 break;
             };
-            let prompt = PendingPrompt {
-                text: crate::conversation::prompt(&request.turn),
-                model: request.turn.model,
-            };
             let settings = Session {
                 system: crate::conversation::system_prompt_addition(
                     &request.turn.conversation.system,
@@ -275,26 +269,37 @@ impl Core {
                     crate::conversation::ToolChoice::Auto => request.turn.tools,
                 },
             };
-            let idle = self
-                .idle
-                .iter()
-                .position(|session| session.settings == settings)
-                .map(|index| self.idle.remove(index));
+            let hashes = crate::conversation::record_hashes(&request.turn.conversation);
+            let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
+            let items = request.turn.conversation.items();
+            let matched = records::select(&self.records, &hashes, tools_hash, &items);
+            let (kind, prompt_items) = match matched {
+                Some((_, new_items)) => (crate::journal::SessionUse::Continue, new_items),
+                None if request.turn.conversation.earlier.is_empty() => {
+                    (crate::journal::SessionUse::New, &items[..])
+                }
+                None => (crate::journal::SessionUse::Rebuild, &items[..]),
+            };
+            let text = crate::conversation::prompt(kind, prompt_items);
+            let prompt = PendingPrompt {
+                text,
+                model: request.turn.model,
+            };
+            let ready = match matched {
+                Some((index, _)) => Some(self.records.remove(index).session),
+                None if settings.system.is_none() && settings.tools.is_empty() => self.fresh.take(),
+                None => None,
+            };
+            self.use_sequence += 1;
             let work = request.request.id.clone();
-            let (session, phase) = match idle {
-                Some(idle) => {
+            let (session, phase) = match ready {
+                Some(id) => {
                     commands.push(Command::Prompt {
                         work: work.clone(),
-                        session: idle.id.clone(),
+                        session: id.clone(),
                         prompt,
                     });
-                    (
-                        Some(crate::journal::Session {
-                            id: idle.id,
-                            kind: crate::journal::SessionUse::New,
-                        }),
-                        Phase::Prompt,
-                    )
+                    (Some(id), Phase::Prompt)
                 }
                 None => {
                     commands.push(Command::Prepare {
@@ -308,7 +313,10 @@ impl Core {
                 output: request.output,
                 request: request.request,
                 session,
-                settings,
+                hashes,
+                tools_hash,
+                kind,
+                used: self.use_sequence,
                 disconnected: false,
                 held: None,
                 text: String::new(),
@@ -341,7 +349,12 @@ impl Core {
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
-            TurnUpdate::PromptEnded => active.phase = Phase::Settling(now.saturating_add(200)),
+            TurnUpdate::PromptEnded { end_turn } => {
+                active.phase = Phase::Settling {
+                    at: now.saturating_add(200),
+                    end_turn,
+                };
+            }
             TurnUpdate::Failed(error) => self.finish(
                 index,
                 Err(crate::messages::Message::Upstream(error)),
@@ -388,9 +401,9 @@ impl Core {
             }
         }
     }
-    /// Keeps the first `kept` idle sessions and forgets the others.
-    fn forget_idle(&mut self, kept: usize, commands: &mut Vec<Command>) {
-        commands.extend(self.idle.drain(kept..).map(|idle| Command::Forget(idle.id)));
+    fn forget_idle(&mut self, commands: &mut Vec<Command>) {
+        let idle = self.records.drain(..).map(|record| record.session);
+        commands.extend(idle.chain(self.fresh.take()).map(Command::Forget));
     }
     fn finish(
         &mut self,
@@ -399,20 +412,8 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let mut active = self.active.remove(index);
-        if let Some(session) = &active.session {
-            if result.is_ok() && !active.disconnected {
-                self.idle.push(Idle {
-                    id: session.id.clone(),
-                    settings: active.settings,
-                });
-                if self.idle.len() > usize::from(self.limit) {
-                    let oldest = self.idle.remove(0);
-                    commands.push(Command::Forget(oldest.id));
-                }
-            } else {
-                commands.push(Command::Forget(session.id.clone()));
-            }
-        }
+        let ends_turn = matches!(active.phase, Phase::Settling { end_turn: true, .. })
+            && active.tool_call.is_none();
         let end = result.map(|()| {
             if let Some(text) = active.held.take() {
                 active.text.push_str(&text);
@@ -429,6 +430,22 @@ impl Core {
                 output_tokens: crate::conversation::output_tokens(&active.text),
             }
         });
+        if let Some(session) = &active.session {
+            if end.is_ok() && !active.disconnected && ends_turn {
+                active
+                    .hashes
+                    .push(crate::conversation::reply_hash(&active.text));
+                self.records.push(records::Record {
+                    session: session.clone(),
+                    hashes: active.hashes,
+                    tools: active.tools_hash,
+                    used: active.used,
+                });
+            } else {
+                // No record matches this ACP session again.
+                commands.push(Command::Forget(session.clone()));
+            }
+        }
         let outcome = if active.disconnected {
             crate::journal::Outcome::Disconnected
         } else {
@@ -446,6 +463,7 @@ impl Core {
         commands.push(Command::Complete(crate::journal::Completion {
             request: active.request,
             session: active.session,
+            session_use: Some(active.kind),
             outcome,
         }));
         commands.push(Command::Emit(active.output, TurnEvent::End(end)));
@@ -465,22 +483,12 @@ impl Conductor {
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let task = tokio::spawn(async move {
-            let (mut runtime, catalog, idle) = match started {
-                Some((runtime, catalog)) => {
-                    let idle = vec![Idle {
-                        id: runtime.session_id().into(),
-                        settings: Session {
-                            tools: Vec::new(),
-                            system: None,
-                        },
-                    }];
-                    (Some(runtime), Some(catalog), idle)
-                }
-                None => (None, None, Vec::new()),
-            };
+            let (mut runtime, catalog) = started.unzip();
             let mut core = Core {
+                fresh: runtime.as_ref().map(|runtime| runtime.session_id().into()),
                 catalog,
-                idle,
+                records: Vec::new(),
+                use_sequence: 0,
                 limit,
                 active: Vec::new(),
                 waiting: VecDeque::new(),
@@ -529,7 +537,7 @@ impl Conductor {
                         let admitted = core.catalog.as_ref().map_or(Ok(()), |catalog| catalog.check(&work.turn.model)).map(|()| ticket);
                         let refused = admitted.is_err();
                         if work.admission.send(admitted).is_err() {
-                            journal.complete(crate::journal::Completion {request:work.request,session:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
+                            journal.complete(crate::journal::Completion {request:work.request,session:None,session_use:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
                             continue;
                         }
                         if refused {continue;}
@@ -733,7 +741,9 @@ mod tests {
             catalog: None,
             active: Vec::new(),
             waiting: VecDeque::new(),
-            idle: Vec::new(),
+            records: Vec::new(),
+            fresh: None,
+            use_sequence: 0,
             limit: 1,
             notices: watch::channel(Arc::new(Vec::new())).0,
         };
@@ -785,15 +795,66 @@ mod tests {
                 _ => None,
             }));
         };
+        let ended = |end_turn| TurnUpdate::PromptEnded { end_turn };
         turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
-        turn(&mut core, "B", "s2", TurnUpdate::PromptEnded);
-        turn(&mut core, "C", "s3", TurnUpdate::PromptEnded);
+        turn(&mut core, "B", "s2", ended(false));
+        turn(&mut core, "C", "s3", ended(true));
+        turn(&mut core, "D", "s4", ended(true));
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(
             forgotten,
             ["s1", "s2"],
-            "a failed session and an idle session over the limit"
+            "a failed session and a session with no record; records stay above the limit"
         );
+    }
+    #[test]
+    fn a_failed_session_creation_still_logs_its_session_use() {
+        let folder = std::env::temp_dir().join(format!("acp2api-use-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            records: Vec::new(),
+            fresh: None,
+            use_sequence: 0,
+            limit: 1,
+            notices: watch::channel(Arc::new(Vec::new())).0,
+        };
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello"},{"role":"user","content":"Again"}]}"#;
+        let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = journal.begin(crate::journal::Api::Chat, 0);
+        let work = request.id.clone();
+        let (output, _ticket) = mpsc::unbounded_channel();
+        let accepted = Event::Accepted(Accepted {
+            turn,
+            request,
+            output,
+        });
+        assert!(matches!(
+            &core.handle(accepted, 0)[..],
+            [Command::Prepare { .. }]
+        ));
+        let failed = Event::Runtime(RuntimeEvent::Prepared {
+            work,
+            result: Err("session/new failed".into()),
+        });
+        for command in core.handle(failed, 0) {
+            if let Command::Complete(completion) = command {
+                journal.complete(completion, clock.as_ref());
+            }
+        }
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&folder).unwrap();
+        let line: serde_json::Value = serde_json::from_str(lines.trim()).unwrap();
+        assert_eq!(line["result"], "failed");
+        assert_eq!(line["session"], serde_json::Value::Null);
+        assert_eq!(line["session_use"], "rebuild", "FR-056 and FR-021");
     }
     #[tokio::test]
     async fn without_a_runtime_a_request_gets_no_model_name_error() {

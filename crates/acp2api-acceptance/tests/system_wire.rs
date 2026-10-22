@@ -76,10 +76,13 @@ async fn extraction_stops_at_the_first_other_role_and_keeps_later_items_in_order
             s::addition(&scenario, "initial");
             assert_eq!(
                 c::blocks(&scenario),
-                vec![
-                    json!([{"type":"text","text":"boundary"},{"type":"text","text":"later system"},{"type":"text","text":"later developer"},{"type":"text","text":"last"}])
-                ],
-                "later system parts stay at their conversation positions; labels belong to issue 47"
+                vec![json!([
+                    {"type":"text","text":format!("The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.\n\n[{boundary}]\nboundary")},
+                    {"type":"text","text":"\n[system: late]\nlater system"},
+                    {"type":"text","text":"\n[developer]\nlater developer"},
+                    {"type":"text","text":"\n[user]\nlast"}
+                ])],
+                "rebuild keeps every role, name, item position, and exact separator"
             );
             scenario.finish(true).await;
         }
@@ -151,15 +154,43 @@ async fn changed_system_addition_with_same_tools_uses_a_new_session() {
         .await;
         s::addition(&scenario, text);
     }
+    let mut continuation = s::request(
+        "POST /v1/messages",
+        json!("Second rule 🙂"),
+        Value::Null,
+        "New user 雪",
+    );
+    continuation.body["messages"] = json!([
+        s::message("user", None, "Same user"),
+        s::message("assistant", None, "OK"),
+        s::message("user", None, "New user 雪")
+    ]);
+    s::send(&mut scenario, continuation).await;
+    s::addition(&scenario, "Second rule 🙂");
+    assert_eq!(
+        c::blocks(&scenario),
+        vec![
+            json!([{"type":"text","text":"Same user"}]),
+            json!([{"type":"text","text":"Same user"}]),
+            json!([{"type":"text","text":"Same user"}]),
+            json!([{"type":"text","text":"New user 雪"}])
+        ],
+        "fresh conversations send their own user content; continuation sends only new content"
+    );
     let prompts = scenario.fake().record().prompts();
-    assert_eq!(prompts.len(), 3);
+    assert_eq!(prompts.len(), 4);
     assert_ne!(
         prompts[0].session, prompts[1].session,
         "changed system additions never reuse immutable session metadata"
     );
-    assert_eq!(
+    assert_ne!(
         prompts[1].session, prompts[2].session,
-        "unchanged system addition and tools keep current session until issue 47 supplies full matching"
+        "a separate one-user request does not continue a completed reply"
+    );
+    assert_ne!(prompts[0].session, prompts[2].session);
+    assert_eq!(
+        prompts[2].session, prompts[3].session,
+        "the full matching history continues the latest matching ACP session"
     );
     scenario.finish(true).await;
 }
