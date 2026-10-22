@@ -6,8 +6,10 @@ use crate::{
 };
 use axum::{
     Router,
-    extract::State,
-    http::HeaderMap,
+    body::Bytes,
+    extract::{DefaultBodyLimit, State, rejection::BytesRejection},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::{get, post},
 };
 use std::sync::{Arc, Mutex};
@@ -32,6 +34,7 @@ pub(crate) fn router(
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(chat))
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(App {
             conductor,
             clock: clock.clone(),
@@ -48,7 +51,7 @@ async fn messages(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(
         app,
@@ -64,7 +67,7 @@ async fn responses(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(
         app,
@@ -80,7 +83,7 @@ async fn chat(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(
         app,
@@ -96,7 +99,7 @@ async fn serve(
     app: App,
     headers: HeaderMap,
     lease: RequestHold,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
     dialect: &'static dyn Dialect,
     api: crate::journal::Api,
 ) -> axum::response::Response {
@@ -114,7 +117,7 @@ async fn dispatch(
     app: App,
     headers: HeaderMap,
     hold: crate::Hold,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
     dialect: &'static dyn Dialect,
     mut request: crate::journal::Request,
 ) -> axum::response::Response {
@@ -122,6 +125,13 @@ async fn dispatch(
     if !authorized {
         return refuse(&app, request, dialect, Message::Key.into());
     }
+    let body = match body {
+        Ok(body) => body,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return refuse(&app, request, dialect, Message::TooLarge.into());
+        }
+        Err(rejection) => return rejection.into_response(),
+    };
     let parsed = match dialect.parse(&body) {
         Ok(parsed) => parsed,
         Err(error) => return refuse(&app, request, dialect, error),
@@ -150,7 +160,6 @@ async fn models(
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
 ) -> axum::response::Response {
-    use axum::response::IntoResponse;
     let hold = lease.0.lock().unwrap().take().expect("request hold");
     let request = app
         .journal
@@ -166,12 +175,8 @@ async fn models(
                     session: None,
                     outcome: crate::journal::Outcome::ModelList,
                 };
-                match app.journal.complete(completion, app.clock.as_ref()) {
-                    Ok(()) => axum::Json(serde_json::json!({"object":"list","data":entries}))
-                        .into_response(),
-                    Err(_) => dialect::CHAT
-                        .refusal(&Message::Upstream("cannot write request metadata".into()).into()),
-                }
+                app.journal.complete(completion, app.clock.as_ref());
+                axum::Json(serde_json::json!({"object":"list","data":entries})).into_response()
             }
             Err(error) => refuse(&app, request, dialect::CHAT, error),
         }
@@ -211,10 +216,6 @@ fn refuse(
         session: None,
         outcome: crate::journal::Outcome::Refused(dialect::refusal_code(&error)),
     };
-    match app.journal.complete(completion, app.clock.as_ref()) {
-        Ok(()) => dialect.refusal(&error),
-        Err(_) => {
-            dialect.refusal(&Message::Upstream("cannot write request metadata".into()).into())
-        }
-    }
+    app.journal.complete(completion, app.clock.as_ref());
+    dialect.refusal(&error)
 }

@@ -275,7 +275,7 @@ impl Conductor {
                 None => (None, Core::default()),
             };
             let mut read_open = runtime.is_some();
-            'events: loop {
+            loop {
                 let disconnected = core
                     .active
                     .as_ref()
@@ -295,12 +295,14 @@ impl Conductor {
                             }
                             Work::Turn(work) => *work,
                         };
-                        if let Err(error) = core.catalog.check(&work.turn.model) {
-                            let _ = work.admission.send(Err(error));
+                        let (output,ticket)=mpsc::unbounded_channel();
+                        let admitted = core.catalog.check(&work.turn.model).map(|()| ticket);
+                        let refused = admitted.is_err();
+                        if work.admission.send(admitted).is_err() {
+                            journal.complete(crate::journal::Completion {request:work.request,session:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
                             continue;
                         }
-                        let (output,ticket)=mpsc::unbounded_channel();
-                        if work.admission.send(Ok(ticket)).is_err() {continue;}
+                        if refused {continue;}
                         (Event::Accepted(Accepted {turn:work.turn,request:work.request,output}),work.hold)
                     }
                     (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=> {
@@ -313,10 +315,7 @@ impl Conductor {
                 while let Some(command) = commands.pop_front() {
                     match command {
                         Command::Complete(completion) => {
-                            if journal.complete(completion, clock.as_ref()).is_err() {
-                                eprintln!("acp2api: cannot write request metadata");
-                                break 'events;
-                            }
+                            journal.complete(completion, clock.as_ref())
                         }
                         Command::Prompt {
                             text,
@@ -433,5 +432,45 @@ impl Conductor {
                 "conductor stopped".into(),
             ))
         })
+    }
+}
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn a_client_gone_before_admission_still_has_its_request_line() {
+        let folder = std::env::temp_dir().join(format!("acp2api-conductor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (conductor, _task) = Conductor::start(None, clock.clone(), journal.clone());
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = || crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = || journal.begin(crate::journal::Api::Chat, clock.now());
+        let (admission, reply) = oneshot::channel();
+        drop(reply);
+        conductor
+            .0
+            .send(Work::Turn(Box::new(TurnWork {
+                turn: turn(),
+                request: request(),
+                hold: clock.hold(HoldKind::HttpRequest),
+                admission,
+            })))
+            .await
+            .ok()
+            .unwrap();
+        let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request());
+        assert!(next.await.is_ok(), "the conductor serves the next request");
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(
+            lines.contains(r#""result":"disconnected""#),
+            "request line of the gone client: {lines}"
+        );
     }
 }
