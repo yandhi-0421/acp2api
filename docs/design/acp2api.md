@@ -454,7 +454,7 @@ pub(crate) enum RuntimePhase { Starting { since: Moment }, Ready { generation: u
                                Replacing(ReplaceCause), Checking(Build) }
 pub(crate) enum OwnerAction { StartSignIn, CancelSignIn, Search, SetRuntimePath(PathBuf),
     RunCompatibilityCheck(Build), UseBuild(Build), Retry, EndLockout, NewLocalApiKey,
-    ChangePassword(String), SetConcurrencyLimit(ConcurrencyLimit), RefreshQuota, ReadModelNames,
+    SetPasswordHash(String), SetConcurrencyLimit(ConcurrencyLimit), RefreshQuota, ReadModelNames,
     DismissNotice(NoticeId) }
 ```
 
