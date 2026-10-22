@@ -152,8 +152,10 @@ impl Runtime {
             let notification: SessionNotification =
                 match serde_json::from_value(value["params"].clone()) {
                     Ok(notification) => notification,
-                    Err(error) => {
-                        return RuntimeEvent::Failed(format!("ACP session/update: {error}"));
+                    Err(_) => {
+                        let kind = &value["params"]["update"]["sessionUpdate"];
+                        eprintln!("acp2api: skipped an ACP session/update of kind {kind}");
+                        return RuntimeEvent::Other;
                     }
                 };
             if notification.session_id.to_string() != self.session {

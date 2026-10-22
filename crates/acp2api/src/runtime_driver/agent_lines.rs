@@ -167,3 +167,17 @@ async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runt
     drop(agent.stdout);
     assert_eq!(next(&mut runtime).await, "closed");
 }
+
+#[tokio::test]
+async fn an_unparsable_session_update_is_skipped() {
+    let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+    runtime.start_prompt("Hi".into(), "m").await.unwrap();
+    agent
+        .stdout(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"a_later_kind"}}}))
+        .await;
+    agent.stdout(chunk("Hello")).await;
+    agent
+        .stdout(result(3, json!({"stopReason":"end_turn"})))
+        .await;
+    assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+}
