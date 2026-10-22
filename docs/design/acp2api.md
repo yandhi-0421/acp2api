@@ -1049,6 +1049,8 @@ The release workflow writes this file from the result of the acceptance test (SC
 - Each change of state, also the first state after a start: `acp2api: <time> state <state>`. `<state>` is the English name of the panel text, for example `Running` or `Quota wait`. A lockout line adds `: ` and the notice M-12.
 - A step that checks the state of acp2api reads the last state line.
 
+**Request ID header (FR-056).** Each response of an API endpoint has the header `x-request-id`. Its value is the request ID of the request line.
+
 **Times.** Each time in a message, a log line, the terminal, and `state.json` is RFC 3339 in UTC, to the second.
 
 **Quota reset time (FR-036).** The parser accepts RFC 3339 and the captured `/usage` form, such as `resets Oct 24, 2026, 12:34 UTC`.
