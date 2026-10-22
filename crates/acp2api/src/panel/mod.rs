@@ -97,11 +97,7 @@ async fn guard(
     next: axum::middleware::Next,
 ) -> Response {
     let headers = request.headers();
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    let local = format!("127.0.0.1:{}", panel.port);
-    let localhost = format!("localhost:{}", panel.port);
-    let valid_host = headers.get_all(header::HOST).iter().count() == 1
-        && (host == Some(&local) || host == Some(&localhost));
+    let host = crate::front::local_host(headers, panel.port);
     let origin = headers.get_all(header::ORIGIN);
     let mut origins = origin.iter();
     let valid_origin = match origins.next() {
@@ -111,7 +107,7 @@ async fn guard(
                 && host.is_some_and(|host| value.as_bytes() == format!("http://{host}").as_bytes())
         }
     };
-    let mut response = if !valid_host || !valid_origin {
+    let mut response = if host.is_none() || !valid_origin {
         (
             StatusCode::BAD_REQUEST,
             "The request must use the local management panel address.",

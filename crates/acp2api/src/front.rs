@@ -91,10 +91,7 @@ fn access_error(headers: &HeaderMap, app: &App) -> Option<crate::messages::Refus
             "acp2api: the APIs do not accept an Origin header.",
         ));
     }
-    let host = headers.get("host").and_then(|v| v.to_str().ok());
-    let address = format!("127.0.0.1:{}", app.port);
-    let localhost = format!("localhost:{}", app.port);
-    if host != Some(address.as_str()) && host != Some(localhost.as_str()) {
+    if local_host(headers, app.port).is_none() {
         return Some(crate::messages::Refusal::invalid(
             "acp2api: the Host header does not match the local listener.",
         ));
@@ -103,6 +100,14 @@ fn access_error(headers: &HeaderMap, app: &App) -> Option<crate::messages::Refus
         return Some(Message::Key.into());
     }
     None
+}
+/// The `Host` header of a request to the local listener (FR-008): one header with the value
+/// `127.0.0.1:<port>` or `localhost:<port>`.
+pub(crate) fn local_host(headers: &HeaderMap, port: u16) -> Option<&str> {
+    let mut hosts = headers.get_all(axum::http::header::HOST).iter();
+    let host = hosts.next()?.to_str().ok()?;
+    let local = host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}");
+    (local && hosts.next().is_none()).then_some(host)
 }
 async fn turn(
     State(app): State<App>,
@@ -192,4 +197,27 @@ fn refuse(
     };
     app.journal.complete(completion, app.clock.as_ref());
     dialect.refusal(&error)
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_one_local_host_header_passes() {
+        let host = |values: &[&str]| {
+            let mut headers = axum::http::HeaderMap::new();
+            for value in values {
+                headers.append("host", value.parse().unwrap());
+            }
+            super::local_host(&headers, 8329).map(str::to_owned)
+        };
+        assert_eq!(host(&["127.0.0.1:8329"]).as_deref(), Some("127.0.0.1:8329"));
+        assert_eq!(host(&["localhost:8329"]).as_deref(), Some("localhost:8329"));
+        for refused in [
+            &[][..],
+            &["example.com"],
+            &["127.0.0.1:8330"],
+            &["127.0.0.1:8329", "127.0.0.1:8329"],
+        ] {
+            assert_eq!(host(refused), None, "Host headers {refused:?}");
+        }
+    }
 }
