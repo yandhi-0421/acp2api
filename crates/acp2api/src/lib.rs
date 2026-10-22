@@ -18,6 +18,7 @@ mod dialect;
 mod front;
 mod messages;
 pub mod os;
+mod panel;
 mod runtime_driver;
 mod startup;
 mod store;

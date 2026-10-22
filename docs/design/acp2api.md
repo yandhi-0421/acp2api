@@ -554,6 +554,8 @@ No work entry, unresolved admission, or external wait owns a `Hold`. The shell r
 A completion or disconnect carries a new short hold through the next core transition. An occupied place can therefore wait while virtual time advances.
 Only an accepted stream has a keep-alive timer. Its first deadline starts at acceptance (FR-011).
 
+Transitional state (#55): the conductor keeps a list of active requests and a pool of idle ACP sessions. The pool has at most as many sessions as the concurrency limit. #60 replaces this state with the work table above.
+
 ### The runtime driver
 
 `runtime_driver` carries out the ACP commands of the conductor on one runtime process. It gives the conductor each line as an event.
@@ -1032,6 +1034,7 @@ The release workflow writes this file from the result of the acceptance test (SC
 - The address of the sign-in entry is `http://127.0.0.1:<port>/#sign-in`. The page puts the sign-in entry in the element with the ID `sign-in`. After the entry of the password, the page goes back to the same fragment.
 - The management endpoints are `POST /manage/<action>`, one for each action of FR-053.
 - The server writes the page as HTML, with forms. A small script on the page only updates the time left of a sign-in wait.
+- Residual risk, accepted: a browser does not isolate a cookie by port. Thus, the browser also sends the panel session cookie to other services on `127.0.0.1`. Such a service can then use the panel, and it can read the local API key. A local process can already connect to each loopback port, so this risk adds little. On an HTTP loopback address, each fix changes FR-009 or the page design.
 - The MCP path of each ACP session is `/mcp/<32 random bytes as hex>`.
 
 **Attribution block of Claude Code (FR-019).** When the first `system` block is a text block whose text starts with `x-anthropic-billing-header:`, `dialect::messages` removes it.

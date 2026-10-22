@@ -115,16 +115,15 @@ pub(crate) async fn start(
     } else {
         None
     };
-    let (conductor, task) =
-        crate::conductor::Conductor::start(runtime, ports.clock.clone(), journal.clone());
-    let router = crate::front::router(
-        conductor,
+    let (conductor, task) = crate::conductor::Conductor::start(
+        runtime,
         ports.clock.clone(),
-        settings.local_api_key,
-        tools,
-        journal,
-        port,
+        journal.clone(),
+        settings,
+        data.join("config.toml"),
+        ports.release.highest_concurrency_limit(),
     );
+    let router = crate::front::router(conductor, ports.clock.clone(), tools, journal, port);
     if opened.first_start {
         ports.browser.open(&panel);
     }

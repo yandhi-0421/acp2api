@@ -1,13 +1,28 @@
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnEvent, TurnRequest, Usage},
-    runtime_driver::{Runtime, RuntimeEvent},
+    runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use std::{collections::VecDeque, sync::Arc};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 #[derive(Clone)]
-pub(crate) struct Conductor(mpsc::Sender<Work>);
+pub(crate) struct Conductor {
+    send: mpsc::Sender<Work>,
+    settings: watch::Receiver<Arc<crate::store::Settings>>,
+    pub(crate) highest: u8,
+}
+pub(crate) enum OwnerAction {
+    NewLocalApiKey,
+    /// Sets the Argon2id hash of a new management password.
+    ChangePassword(String),
+    SetConcurrencyLimit(u8),
+}
 enum Work {
+    Owner {
+        action: OwnerAction,
+        reply: oneshot::Sender<Result<(), String>>,
+        hold: Hold,
+    },
     Turn(Box<TurnWork>),
     Models {
         reply: oneshot::Sender<Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal>>,
@@ -27,10 +42,29 @@ struct Accepted {
     request: crate::journal::Request,
     output: Output,
 }
+#[derive(Clone, PartialEq, Eq)]
+struct Session {
+    tools: Vec<crate::conversation::ClientTool>,
+    system: Option<String>,
+}
+struct Idle {
+    id: String,
+    settings: Session,
+}
+struct PendingPrompt {
+    text: Vec<crate::conversation::PromptBlock>,
+    model: String,
+}
+enum Phase {
+    Preparing(PendingPrompt),
+    Prompt,
+    Settling(Moment),
+}
 struct Active {
     output: Output,
     request: crate::journal::Request,
     session: Option<crate::journal::Session>,
+    settings: Session,
     disconnected: bool,
     held: Option<String>,
     text: String,
@@ -38,96 +72,217 @@ struct Active {
     phase: Phase,
     tool_call: Option<crate::conversation::ToolCall>,
 }
-enum Phase {
-    Prompt,
-    Settling(Moment),
-}
 struct Core {
     /// `None` while acp2api has no runtime process.
     catalog: Option<crate::catalog::Catalog>,
-    active: Option<Active>,
+    active: Vec<Active>,
     waiting: VecDeque<Accepted>,
-    session: Option<Session>,
-}
-#[derive(PartialEq, Eq)]
-struct Session {
-    tools: Vec<crate::conversation::ClientTool>,
-    system: Option<String>,
-}
-impl Default for Core {
-    fn default() -> Self {
-        Self {
-            catalog: None,
-            active: None,
-            waiting: VecDeque::new(),
-            session: Some(Session {
-                tools: Vec::new(),
-                system: None,
-            }),
-        }
-    }
-}
-enum SessionPlan {
-    Current,
-    New(Session),
+    idle: Vec<Idle>,
+    limit: u8,
 }
 enum Event {
-    Catalog(crate::catalog::Catalog),
     Accepted(Accepted),
     Runtime(RuntimeEvent),
     Deadline,
-    SessionReady(String),
-    Disconnected,
+    Disconnected(String),
+    Limit(u8),
+    PreparationFailed(String, String),
 }
 enum Command {
     Complete(crate::journal::Completion),
+    Prepare {
+        work: String,
+        settings: Session,
+    },
     Prompt {
-        text: Vec<crate::conversation::PromptBlock>,
-        model: String,
-        session: SessionPlan,
+        work: String,
+        session: String,
+        prompt: PendingPrompt,
     },
     Emit(Output, TurnEvent),
     Permission {
         request: crate::runtime_driver::PermissionId,
         cancel: bool,
     },
+    /// The ACP session leaves for good; its client tools go too.
+    Forget(String),
 }
 impl Core {
     fn next_deadline(&self) -> Moment {
-        match self.active.as_ref().map(|a| &a.phase) {
-            Some(Phase::Settling(at)) => *at,
-            _ => u64::MAX,
-        }
+        self.active
+            .iter()
+            .filter_map(|active| match active.phase {
+                Phase::Settling(at) => Some(at),
+                _ => None,
+            })
+            .min()
+            .unwrap_or(u64::MAX)
     }
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         match event {
-            Event::Catalog(catalog) => self.catalog = Some(catalog),
             Event::Accepted(request) => self.waiting.push_back(request),
-            Event::SessionReady(id) => {
-                if let Some(active) = &mut self.active {
-                    active.session = Some(crate::journal::Session {
-                        id,
-                        kind: crate::journal::SessionUse::New,
-                    });
-                }
+            Event::Limit(limit) => {
+                self.limit = limit;
+                let kept = self.idle.len().min(usize::from(limit));
+                self.forget_idle(kept, &mut commands);
             }
-            Event::Disconnected => {
-                if let Some(active) = &mut self.active {
+            Event::Disconnected(work) => {
+                if let Some(active) = self
+                    .active
+                    .iter_mut()
+                    .find(|active| active.request.id == work)
+                {
                     active.disconnected = true;
                 }
             }
+            Event::PreparationFailed(work, error) => {
+                if let Some(index) = self
+                    .active
+                    .iter()
+                    .position(|active| active.request.id == work)
+                {
+                    self.finish(index, Err(error), &mut commands);
+                }
+            }
+            Event::Runtime(RuntimeEvent::Prepared { work, result }) => {
+                if let Some(index) = self
+                    .active
+                    .iter()
+                    .position(|active| active.request.id == work)
+                {
+                    match result {
+                        Ok((session, catalog)) => {
+                            self.catalog = Some(catalog);
+                            let active = &mut self.active[index];
+                            active.session = Some(crate::journal::Session {
+                                id: session.clone(),
+                                kind: crate::journal::SessionUse::New,
+                            });
+                            if let Phase::Preparing(prompt) =
+                                std::mem::replace(&mut active.phase, Phase::Prompt)
+                            {
+                                commands.push(Command::Prompt {
+                                    work,
+                                    session,
+                                    prompt,
+                                });
+                            }
+                        }
+                        Err(error) => self.finish(index, Err(error), &mut commands),
+                    }
+                }
+            }
+            Event::Runtime(RuntimeEvent::Turn { session, update }) => {
+                if let Some(index) = self
+                    .active
+                    .iter()
+                    .position(|active| active.session.as_ref().is_some_and(|s| s.id == session))
+                {
+                    self.update(index, update, now, &mut commands);
+                } else if let TurnUpdate::Permission { request, .. } = update {
+                    commands.push(Command::Permission {
+                        request,
+                        cancel: false,
+                    });
+                }
+            }
             Event::Runtime(RuntimeEvent::Failed(error)) => {
-                self.session = None;
-                self.finish(Err(error), &mut commands);
+                self.forget_idle(0, &mut commands);
+                while !self.active.is_empty() {
+                    self.finish(0, Err(error.clone()), &mut commands);
+                }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
-                self.session = None;
-                self.finish(Err("runtime stdout closed".into()), &mut commands)
+                self.forget_idle(0, &mut commands);
+                while !self.active.is_empty() {
+                    self.finish(0, Err("runtime stdout closed".into()), &mut commands);
+                }
             }
-            Event::Runtime(RuntimeEvent::Text(text)) => {
-                if let Some(active) = self.active.as_mut()
-                    && active.tool_call.is_none()
+            Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
+            Event::Deadline => {
+                let mut index = 0;
+                while index < self.active.len() {
+                    if matches!(self.active[index].phase,Phase::Settling(at) if at<=now) {
+                        self.finish(index, Ok(()), &mut commands);
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+        }
+        while self.active.len() < usize::from(self.limit) {
+            let Some(request) = self.waiting.pop_front() else {
+                break;
+            };
+            let prompt = PendingPrompt {
+                text: crate::conversation::prompt(&request.turn),
+                model: request.turn.model,
+            };
+            let settings = Session {
+                system: crate::conversation::system_prompt_addition(
+                    &request.turn.conversation.system,
+                ),
+                tools: match request.turn.tool_choice {
+                    crate::conversation::ToolChoice::Off => Vec::new(),
+                    crate::conversation::ToolChoice::Auto => request.turn.tools,
+                },
+            };
+            let idle = self
+                .idle
+                .iter()
+                .position(|session| session.settings == settings)
+                .map(|index| self.idle.remove(index));
+            let work = request.request.id.clone();
+            let (session, phase) = match idle {
+                Some(idle) => {
+                    commands.push(Command::Prompt {
+                        work: work.clone(),
+                        session: idle.id.clone(),
+                        prompt,
+                    });
+                    (
+                        Some(crate::journal::Session {
+                            id: idle.id,
+                            kind: crate::journal::SessionUse::New,
+                        }),
+                        Phase::Prompt,
+                    )
+                }
+                None => {
+                    commands.push(Command::Prepare {
+                        work,
+                        settings: settings.clone(),
+                    });
+                    (None, Phase::Preparing(prompt))
+                }
+            };
+            self.active.push(Active {
+                output: request.output,
+                request: request.request,
+                session,
+                settings,
+                disconnected: false,
+                held: None,
+                text: String::new(),
+                input_tokens: 0,
+                phase,
+                tool_call: None,
+            });
+        }
+        commands
+    }
+    fn update(
+        &mut self,
+        index: usize,
+        update: TurnUpdate,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        let active = &mut self.active[index];
+        match update {
+            TurnUpdate::Text(text) => {
+                if active.tool_call.is_none()
                     && let Some(previous) = active.held.replace(text)
                 {
                     active.text.push_str(&previous);
@@ -137,10 +292,12 @@ impl Core {
                     ));
                 }
             }
-            Event::Runtime(RuntimeEvent::Permission { request, call }) => {
+            TurnUpdate::Usage(used) => active.input_tokens = used,
+            TurnUpdate::PromptEnded => active.phase = Phase::Settling(now.saturating_add(200)),
+            TurnUpdate::Failed(error) => self.finish(index, Err(error), commands),
+            TurnUpdate::Permission { request, call } => {
                 let mut cancel = false;
-                if let Some(active) = self.active.as_mut()
-                    && matches!(active.phase, Phase::Prompt)
+                if matches!(active.phase, Phase::Prompt)
                     && active.tool_call.is_none()
                     && let Some(call) = call
                 {
@@ -149,102 +306,61 @@ impl Core {
                 }
                 commands.push(Command::Permission { request, cancel });
             }
-            Event::Runtime(RuntimeEvent::Usage(used)) => {
-                if let Some(active) = self.active.as_mut() {
-                    active.input_tokens = used;
-                }
-            }
-            Event::Runtime(RuntimeEvent::PromptEnded) => {
-                if let Some(active) = self.active.as_mut() {
-                    active.phase = Phase::Settling(now.saturating_add(200));
-                }
-            }
-            Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
-            Event::Deadline => {
-                if self.next_deadline() <= now {
-                    self.finish(Ok(()), &mut commands);
-                }
-            }
         }
-        if self.active.is_none()
-            && let Some(request) = self.waiting.pop_front()
-        {
-            let prompt = crate::conversation::prompt(&request.turn);
-            let system =
-                crate::conversation::system_prompt_addition(&request.turn.conversation.system);
-            let tools = match request.turn.tool_choice {
-                crate::conversation::ToolChoice::Off => Vec::new(),
-                crate::conversation::ToolChoice::Auto => request.turn.tools,
-            };
-            let requested = Session {
-                tools: tools.clone(),
-                system,
-            };
-            let session = if self.session.as_ref() == Some(&requested) {
-                SessionPlan::Current
-            } else {
-                self.session = Some(Session {
-                    tools: requested.tools.clone(),
-                    system: requested.system.clone(),
-                });
-                SessionPlan::New(requested)
-            };
-            self.active = Some(Active {
-                output: request.output,
-                request: request.request,
-                session: None,
-                disconnected: false,
-                held: None,
-                text: String::new(),
-                input_tokens: 0,
-                phase: Phase::Prompt,
-                tool_call: None,
-            });
-            commands.push(Command::Prompt {
-                text: prompt,
-                model: request.turn.model,
-                session,
-            });
-        }
-        commands
     }
-    fn finish(&mut self, result: Result<(), String>, commands: &mut Vec<Command>) {
-        if let Some(mut active) = self.active.take() {
-            let end = result.map(|()| {
-                if let Some(text) = active.held.take() {
-                    active.text.push_str(&text);
-                    commands.push(Command::Emit(active.output.clone(), TurnEvent::Text(text)));
+    /// Keeps the first `kept` idle sessions and forgets the others.
+    fn forget_idle(&mut self, kept: usize, commands: &mut Vec<Command>) {
+        commands.extend(self.idle.drain(kept..).map(|idle| Command::Forget(idle.id)));
+    }
+    fn finish(&mut self, index: usize, result: Result<(), String>, commands: &mut Vec<Command>) {
+        let mut active = self.active.remove(index);
+        if let Some(session) = &active.session {
+            if result.is_ok() && !active.disconnected {
+                self.idle.push(Idle {
+                    id: session.id.clone(),
+                    settings: active.settings,
+                });
+                if self.idle.len() > usize::from(self.limit) {
+                    let oldest = self.idle.remove(0);
+                    commands.push(Command::Forget(oldest.id));
                 }
-                if let Some(call) = active.tool_call.take() {
-                    commands.push(Command::Emit(
-                        active.output.clone(),
-                        TurnEvent::ToolCall(call),
-                    ));
-                }
-                Usage {
-                    input_tokens: active.input_tokens,
-                    output_tokens: crate::conversation::output_tokens(&active.text),
-                }
-            });
-            let outcome = if active.disconnected {
-                self.session = None;
-                crate::journal::Outcome::Disconnected
             } else {
-                match &end {
-                    Ok(usage) => crate::journal::Outcome::Success {
-                        input: usage.input_tokens,
-                        output: usage.output_tokens,
-                    },
-                    Err(_) => crate::journal::Outcome::Failed,
-                }
-            };
-            commands.push(Command::Complete(crate::journal::Completion {
-                request: active.request,
-                session: active.session,
-                outcome,
-            }));
-            commands.push(Command::Emit(active.output, TurnEvent::End(end)));
+                commands.push(Command::Forget(session.id.clone()));
+            }
         }
+        let end = result.map(|()| {
+            if let Some(text) = active.held.take() {
+                active.text.push_str(&text);
+                commands.push(Command::Emit(active.output.clone(), TurnEvent::Text(text)));
+            }
+            if let Some(call) = active.tool_call.take() {
+                commands.push(Command::Emit(
+                    active.output.clone(),
+                    TurnEvent::ToolCall(call),
+                ));
+            }
+            Usage {
+                input_tokens: active.input_tokens,
+                output_tokens: crate::conversation::output_tokens(&active.text),
+            }
+        });
+        let outcome = if active.disconnected {
+            crate::journal::Outcome::Disconnected
+        } else {
+            match &end {
+                Ok(usage) => crate::journal::Outcome::Success {
+                    input: usage.input_tokens,
+                    output: usage.output_tokens,
+                },
+                Err(_) => crate::journal::Outcome::Failed,
+            }
+        };
+        commands.push(Command::Complete(crate::journal::Completion {
+            request: active.request,
+            session: active.session,
+            outcome,
+        }));
+        commands.push(Command::Emit(active.output, TurnEvent::End(end)));
     }
 }
 impl Conductor {
@@ -252,39 +368,71 @@ impl Conductor {
         started: Option<(Runtime, crate::catalog::Catalog)>,
         clock: Arc<dyn Clock>,
         journal: crate::journal::Journal,
+        settings: crate::store::Settings,
+        configuration: std::path::PathBuf,
+        highest: u8,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Work>(32);
+        let limit = settings.concurrency_limit;
+        let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let task = tokio::spawn(async move {
-            let (mut runtime, mut core) = match started {
-                Some((runtime, catalog)) => (
-                    Some(runtime),
-                    Core {
-                        catalog: Some(catalog),
-                        ..Core::default()
-                    },
-                ),
-                None => (None, Core::default()),
+            let (mut runtime, catalog, idle) = match started {
+                Some((runtime, catalog)) => {
+                    let idle = vec![Idle {
+                        id: runtime.session_id().into(),
+                        settings: Session {
+                            tools: Vec::new(),
+                            system: None,
+                        },
+                    }];
+                    (Some(runtime), Some(catalog), idle)
+                }
+                None => (None, None, Vec::new()),
+            };
+            let mut core = Core {
+                catalog,
+                idle,
+                limit,
+                active: Vec::new(),
+                waiting: VecDeque::new(),
             };
             let mut read_open = runtime.is_some();
             loop {
-                let disconnected = core
+                let disconnected: Vec<_> = core
                     .active
-                    .as_ref()
-                    .filter(|a| !a.disconnected)
-                    .map(|a| a.output.clone());
+                    .iter()
+                    .filter(|active| !active.disconnected)
+                    .map(|active| (active.request.id.clone(), active.output.clone()))
+                    .collect();
                 let timer = clock.sleep_until(core.next_deadline());
                 let (event, hold) = tokio::select! {
                     biased;
-                    ()=async {disconnected.as_ref().expect("connected ticket").closed().await},if disconnected.is_some()=> (Event::Disconnected, clock.hold(HoldKind::TurnEvent)),
-                    work=recv.recv()=> {
+                    work=async {
+                        let waits=disconnected.iter().map(|(id,output)|Box::pin(async move {output.closed().await;id.clone()}));
+                        futures_util::future::select_all(waits).await.0
+                    },if !disconnected.is_empty()=>(Event::Disconnected(work),clock.hold(HoldKind::TurnEvent)),
+                    work=recv.recv()=>{
                         let Some(work)=work else {break;};
-                        let work = match work {
-                            Work::Models { reply, hold } => {
-                                let _ = reply.send(core.catalog.as_ref().map(crate::catalog::Catalog::entries).ok_or_else(|| crate::messages::Message::Upstream(UNAVAILABLE.into()).into()));
-                                drop(hold);
-                                continue;
+                        let work=match work {
+                            Work::Models {reply,hold}=>{let _=reply.send(Ok(core.catalog.as_ref().map(crate::catalog::Catalog::entries).unwrap_or_default()));drop(hold);continue;}
+                            Work::Owner {action,reply,hold}=>{
+                                let mut settings=(**publish.borrow()).clone();
+                                let result=(|| {
+                                    match action {
+                                        OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
+                                        OwnerAction::ChangePassword(hash)=>settings.management_password_hash=hash,
+                                        OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
+                                    }
+                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));Ok(())
+                                })();
+                                let success=result.is_ok();let _=reply.send(result);
+                                if success {
+                                    let mut commands:VecDeque<_>=core.handle(Event::Limit(settings.concurrency_limit),clock.now()).into();
+                                    Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await;
+                                }
+                                drop(hold);continue;
                             }
-                            Work::Turn(work) => *work,
+                            Work::Turn(work)=>*work,
                         };
                         let (output,ticket)=mpsc::unbounded_channel();
                         let admitted = core.catalog.as_ref().map_or(Ok(()), |catalog| catalog.check(&work.turn.model)).map(|()| ticket);
@@ -296,88 +444,120 @@ impl Conductor {
                         if refused {continue;}
                         (Event::Accepted(Accepted {turn:work.turn,request:work.request,output}),work.hold)
                     }
-                    (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=> {
+                    (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=>{
                         if matches!(event,RuntimeEvent::Closed) {read_open=false;}
                         (Event::Runtime(event),hold)
                     }
                     hold=timer=>(Event::Deadline,hold),
                 };
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
-                while let Some(command) = commands.pop_front() {
-                    match command {
-                        Command::Complete(completion) => {
-                            journal.complete(completion, clock.as_ref())
-                        }
-                        Command::Prompt {
-                            text,
-                            model,
-                            session,
-                        } => {
-                            let result = match runtime.as_mut().filter(|_| read_open) {
-                                Some(runtime) => {
-                                    let prepared = match session {
-                                        SessionPlan::Current => Ok(()),
-                                        SessionPlan::New(session) => {
-                                            match runtime
-                                                .new_session(
-                                                    &session.tools,
-                                                    session.system.as_deref(),
-                                                )
-                                                .await
-                                            {
-                                                Ok(catalog) => {
-                                                    commands.extend(core.handle(
-                                                        Event::Catalog(catalog),
-                                                        clock.now(),
-                                                    ));
-                                                    Ok(())
-                                                }
-                                                Err(error) => Err(error),
-                                            }
-                                        }
-                                    };
-                                    match prepared {
-                                        Ok(()) => {
-                                            commands.extend(core.handle(
-                                                Event::SessionReady(runtime.session_id().into()),
-                                                clock.now(),
-                                            ));
-                                            runtime.start_prompt(text, &model).await
-                                        }
-                                        Err(error) => Err(error),
-                                    }
-                                }
-                                None => Err(UNAVAILABLE.into()),
-                            };
-                            if let Err(error) = result {
-                                commands.extend(core.handle(
-                                    Event::Runtime(RuntimeEvent::Failed(error)),
-                                    clock.now(),
-                                ));
-                            }
-                        }
-                        Command::Permission { request, cancel } => {
-                            if let Some(runtime) = runtime.as_mut()
-                                && let Err(error) = runtime.permission(request, cancel).await
-                            {
-                                commands.extend(core.handle(
-                                    Event::Runtime(RuntimeEvent::Failed(error)),
-                                    clock.now(),
-                                ));
-                            }
-                        }
-                        Command::Emit(output, event) => {
-                            let _ = output.send((event, clock.hold(HoldKind::TurnEvent)));
-                        }
-                    }
-                }
+                Self::commands(
+                    &mut core,
+                    &mut runtime,
+                    &mut read_open,
+                    &clock,
+                    &journal,
+                    &mut commands,
+                )
+                .await;
                 drop(hold);
             }
             if let Some(runtime) = runtime {
                 runtime.stop().await;
             }
         });
-        (Self(send), task)
+        (
+            Self {
+                send,
+                settings: settings_watch,
+                highest,
+            },
+            task,
+        )
+    }
+    async fn commands(
+        core: &mut Core,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        commands: &mut VecDeque<Command>,
+    ) {
+        while let Some(command) = commands.pop_front() {
+            match command {
+                Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
+                Command::Prepare { work, settings } => {
+                    let result = match runtime.as_mut().filter(|_| *read_open) {
+                        Some(runtime) => {
+                            runtime
+                                .request_session(
+                                    work.clone(),
+                                    &settings.tools,
+                                    settings.system.as_deref(),
+                                )
+                                .await
+                        }
+                        None => Err(UNAVAILABLE.into()),
+                    };
+                    if let Err(error) = result {
+                        commands.extend(
+                            core.handle(Event::PreparationFailed(work, error), clock.now()),
+                        );
+                    }
+                }
+                Command::Prompt {
+                    work,
+                    session,
+                    prompt,
+                } => {
+                    let result = match runtime.as_mut().filter(|_| *read_open) {
+                        Some(runtime) => {
+                            runtime
+                                .start_prompt(prompt.text, &prompt.model, &session)
+                                .await
+                        }
+                        None => Err(UNAVAILABLE.into()),
+                    };
+                    if let Err(error) = result {
+                        commands.extend(
+                            core.handle(Event::PreparationFailed(work, error), clock.now()),
+                        );
+                    }
+                }
+                Command::Permission { request, cancel } => {
+                    if let Some(runtime) = runtime.as_mut()
+                        && let Err(error) = runtime.permission(request, cancel).await
+                    {
+                        commands.extend(
+                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
+                        );
+                    }
+                }
+                Command::Forget(session) => {
+                    if let Some(runtime) = runtime.as_mut() {
+                        runtime.forget(&session);
+                    }
+                }
+                Command::Emit(output, event) => {
+                    let _ = output.send((event, clock.hold(HoldKind::TurnEvent)));
+                }
+            }
+        }
+    }
+    pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
+        self.settings.borrow().clone()
+    }
+    pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
+        let (reply, result) = oneshot::channel();
+        self.send
+            .send(Work::Owner {
+                action,
+                reply,
+                hold,
+            })
+            .await
+            .map_err(|_| "conductor stopped")?;
+        result.await.map_err(|_| "conductor stopped")?
     }
     pub(crate) async fn admit(
         &self,
@@ -386,7 +566,7 @@ impl Conductor {
         request: crate::journal::Request,
     ) -> Result<Ticket, crate::messages::Refusal> {
         let (admission, reply) = oneshot::channel();
-        self.0
+        self.send
             .send(Work::Turn(Box::new(TurnWork {
                 turn,
                 request,
@@ -402,7 +582,7 @@ impl Conductor {
         hold: Hold,
     ) -> Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal> {
         let (reply, result) = oneshot::channel();
-        self.0
+        self.send
             .send(Work::Models { reply, hold })
             .await
             .map_err(stopped)?;
@@ -416,6 +596,99 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    fn start_without_runtime(
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        folder: &std::path::Path,
+    ) -> (Conductor, tokio::task::JoinHandle<()>) {
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: String::new(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let configuration = folder.join("config.toml");
+        Conductor::start(
+            None,
+            clock.clone(),
+            journal.clone(),
+            settings,
+            configuration,
+            3,
+        )
+    }
+    #[test]
+    fn a_session_that_leaves_for_good_is_forgotten() {
+        let folder = std::env::temp_dir().join(format!("acp2api-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            idle: Vec::new(),
+            limit: 1,
+        };
+        let mut outputs = Vec::new();
+        let mut forgotten = Vec::new();
+        // One turn on its own new session; `ends` is the update that ends the prompt.
+        let mut turn = |core: &mut Core, system: &str, session: &str, ends: TurnUpdate| {
+            let body = format!(
+                r#"{{"model":"m","messages":[{{"role":"system","content":"{system}"}},{{"role":"user","content":"Hi"}}]}}"#
+            );
+            let turn = crate::dialect::CHAT
+                .parse(body.as_bytes())
+                .ok()
+                .unwrap()
+                .turn;
+            let request = journal.begin(crate::journal::Api::Chat, 0);
+            let work = request.id.clone();
+            let (output, ticket) = mpsc::unbounded_channel();
+            outputs.push(ticket);
+            let mut commands = core.handle(
+                Event::Accepted(Accepted {
+                    turn,
+                    request,
+                    output,
+                }),
+                0,
+            );
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let catalog = crate::catalog::Catalog::decode(&options, clock.wall()).unwrap();
+            let prepared = Ok((session.to_owned(), catalog));
+            commands.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work,
+                    result: prepared,
+                }),
+                0,
+            ));
+            let session = session.to_owned();
+            commands.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session,
+                    update: ends,
+                }),
+                0,
+            ));
+            commands.extend(core.handle(Event::Deadline, 1000));
+            forgotten.extend(commands.into_iter().filter_map(|command| match command {
+                Command::Forget(session) => Some(session),
+                _ => None,
+            }));
+        };
+        turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
+        turn(&mut core, "B", "s2", TurnUpdate::PromptEnded);
+        turn(&mut core, "C", "s3", TurnUpdate::PromptEnded);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            forgotten,
+            ["s1", "s2"],
+            "a failed session and an idle session over the limit"
+        );
+    }
     #[tokio::test]
     async fn without_a_runtime_a_request_gets_no_model_name_error() {
         let folder =
@@ -423,7 +696,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
-        let (conductor, _task) = Conductor::start(None, clock.clone(), journal.clone());
+        let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
         let body = br#"{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let request = journal.begin(crate::journal::Api::Chat, clock.now());
@@ -441,12 +714,13 @@ mod tests {
         let listed = conductor
             .model_names(clock.hold(HoldKind::HttpRequest))
             .await
-            .err()
-            .map(|refusal| refusal.message.to_string());
+            .ok()
+            .map(|entries| entries.len());
         std::fs::remove_dir_all(&folder).unwrap();
         let unavailable = Some("official runtime is not available".to_owned());
         assert_eq!(end, unavailable, "answer to a request");
-        assert_eq!(listed, unavailable, "answer to GET /v1/models");
+        // The frozen #55 steps check a new local API key with GET /v1/models and no runtime.
+        assert_eq!(listed, Some(0), "GET /v1/models lists no model");
     }
     #[tokio::test]
     async fn a_client_gone_before_admission_still_has_its_request_line() {
@@ -454,14 +728,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
-        let (conductor, _task) = Conductor::start(None, clock.clone(), journal.clone());
+        let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = || crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let request = || journal.begin(crate::journal::Api::Chat, clock.now());
         let (admission, reply) = oneshot::channel();
         drop(reply);
         conductor
-            .0
+            .send
             .send(Work::Turn(Box::new(TurnWork {
                 turn: turn(),
                 request: request(),

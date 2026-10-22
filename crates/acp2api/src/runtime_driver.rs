@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod agent_lines;
 pub(crate) mod mcp;
+#[cfg(test)]
+mod rpc_request_ids;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
@@ -14,15 +16,16 @@ pub(crate) struct PermissionId(u64);
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
-    prompt_id: Option<u64>,
+    prompts: std::collections::HashMap<u64, String>,
+    creating: std::collections::HashMap<u64, (String, SessionTools)>,
     tree: Box<dyn ProcessTree>,
     clock: Arc<dyn Clock>,
     next_id: u64,
     session: String,
     cwd: PathBuf,
     tool_sets: mcp::ToolSets,
-    tools: Vec<crate::conversation::ClientTool>,
-    permissions: std::collections::HashMap<PermissionId, Value>,
+    tools: std::collections::HashMap<String, SessionTools>,
+    permissions: std::collections::HashMap<PermissionId, (Value, String)>,
     next_permission: u64,
 }
 impl Runtime {
@@ -80,14 +83,15 @@ impl Runtime {
         let mut runtime = Self {
             input: child.stdin,
             lines,
-            prompt_id: None,
+            prompts: std::collections::HashMap::new(),
+            creating: std::collections::HashMap::new(),
             tree: child.tree,
             clock: ports.clock.clone(),
             next_id: 0,
             session: String::new(),
             cwd: cwd.clone(),
             tool_sets,
-            tools: Vec::new(),
+            tools: std::collections::HashMap::new(),
             permissions: std::collections::HashMap::new(),
             next_permission: 0,
         };
@@ -100,6 +104,21 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
     ) -> Result<crate::catalog::Catalog, String> {
+        let (params, tools) = self.session_parameters(tools, system)?;
+        let session = self.call("session/new", params).await?;
+        let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
+        self.session = session["sessionId"]
+            .as_str()
+            .ok_or("missing sessionId")?
+            .to_owned();
+        self.tools.insert(self.session.clone(), tools);
+        Ok(catalog)
+    }
+    fn session_parameters(
+        &self,
+        tools: &[crate::conversation::ClientTool],
+        system: Option<&str>,
+    ) -> Result<(Value, SessionTools), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
@@ -107,14 +126,28 @@ impl Runtime {
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }
-        let session = self.call("session/new", params).await?;
-        let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
-        self.session = session["sessionId"]
-            .as_str()
-            .ok_or("missing sessionId")?
-            .to_owned();
-        self.tools = tools.to_vec();
-        Ok(catalog)
+        let tools = SessionTools {
+            mcp_url,
+            tools: tools.to_vec(),
+        };
+        Ok((params, tools))
+    }
+    pub(crate) async fn request_session(
+        &mut self,
+        work: String,
+        tools: &[crate::conversation::ClientTool],
+        system: Option<&str>,
+    ) -> Result<(), String> {
+        let (params, tools) = self.session_parameters(tools, system)?;
+        let id = self.send("session/new", params).await?;
+        self.creating.insert(id, (work, tools));
+        Ok(())
+    }
+    /// Drops the client tools of a session that acp2api does not use again.
+    pub(crate) fn forget(&mut self, session: &str) {
+        if let Some(tools) = self.tools.remove(session) {
+            self.tool_sets.remove(&tools.mcp_url);
+        }
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
@@ -140,10 +173,10 @@ impl Runtime {
         request: PermissionId,
         cancel: bool,
     ) -> Result<(), String> {
-        if cancel {
-            self.write(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.session}})).await?;
-        }
-        if let Some(id) = self.permissions.remove(&request) {
+        if let Some((id, session)) = self.permissions.remove(&request) {
+            if cancel {
+                self.write(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}})).await?;
+            }
             let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
             self.write(json!({"jsonrpc":"2.0","id":id,"result":outcome}))
                 .await?;
@@ -182,6 +215,7 @@ impl Runtime {
         &mut self,
         prompt: Vec<crate::conversation::PromptBlock>,
         _model: &str,
+        session: &str,
     ) -> Result<(), String> {
         let blocks: Vec<agent_client_protocol_schema::v1::ContentBlock> = prompt
             .into_iter()
@@ -201,10 +235,10 @@ impl Runtime {
         let id = self
             .send(
                 "session/prompt",
-                json!({"sessionId":self.session,"prompt":blocks}),
+                json!({"sessionId":session,"prompt":blocks}),
             )
             .await?;
-        self.prompt_id = Some(id);
+        self.prompts.insert(id, session.into());
         Ok(())
     }
     pub(crate) async fn next(&mut self) -> (RuntimeEvent, Hold) {
@@ -220,6 +254,37 @@ impl Runtime {
         (event, hold)
     }
     async fn decode(&mut self, value: Value) -> RuntimeEvent {
+        if value.get("method").is_none()
+            && let Some(id) = value["id"].as_u64()
+        {
+            if let Some((work, tools)) = self.creating.remove(&id) {
+                let result = (|| {
+                    let response = value
+                        .get("result")
+                        .ok_or_else(|| value["error"].to_string())?;
+                    let session = response["sessionId"]
+                        .as_str()
+                        .ok_or("missing sessionId")?
+                        .to_owned();
+                    let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
+                    Ok((session, catalog))
+                })();
+                match &result {
+                    Ok((session, _)) => {
+                        self.tools.insert(session.clone(), tools);
+                    }
+                    Err(_) => self.tool_sets.remove(&tools.mcp_url),
+                }
+                return RuntimeEvent::Prepared { work, result };
+            }
+            if let Some(session) = self.prompts.remove(&id) {
+                let update = match value.get("error") {
+                    Some(error) => TurnUpdate::Failed(error.to_string()),
+                    None => TurnUpdate::PromptEnded,
+                };
+                return RuntimeEvent::Turn { session, update };
+            }
+        }
         if value["method"] == "session/request_permission" {
             let request: RequestPermissionRequest =
                 match serde_json::from_value(value["params"].clone()) {
@@ -230,25 +295,25 @@ impl Runtime {
                         ));
                     }
                 };
+            let session = request.session_id.to_string();
             self.next_permission += 1;
             let permission = PermissionId(self.next_permission);
-            self.permissions.insert(permission, value["id"].clone());
+            self.permissions
+                .insert(permission, (value["id"].clone(), session.clone()));
             let call = (|| {
-                if request.session_id.to_string() != self.session {
-                    return None;
-                }
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
-                let tool = mcp::tool_names(&self.tools)
+                let tools = &self.tools.get(&session)?.tools;
+                let tool = mcp::tool_names(tools)
                     .into_iter()
-                    .zip(&self.tools)
+                    .zip(tools)
                     .find_map(|(mcp_name, tool)| (mcp_name == name).then_some(tool))?;
                 let input = request
                     .tool_call
                     .fields
                     .raw_input
                     .as_ref()
-                    .filter(|v| v.is_object())?;
+                    .filter(|value| value.is_object())?;
                 let arguments = match tool.kind {
                     crate::conversation::ToolKind::Function => input.to_string(),
                     crate::conversation::ToolKind::Custom => {
@@ -262,17 +327,13 @@ impl Runtime {
                     arguments,
                 })
             })();
-            return RuntimeEvent::Permission {
-                request: permission,
-                call,
+            return RuntimeEvent::Turn {
+                session,
+                update: TurnUpdate::Permission {
+                    request: permission,
+                    call,
+                },
             };
-        }
-        if value.get("method").is_none() && self.prompt_id.is_some_and(|id| value["id"] == id) {
-            self.prompt_id = None;
-            if let Some(error) = value.get("error") {
-                return RuntimeEvent::Failed(error.to_string());
-            }
-            return RuntimeEvent::PromptEnded;
         }
         if value["method"] == "session/update" {
             let notification: SessionNotification =
@@ -284,20 +345,19 @@ impl Runtime {
                         return RuntimeEvent::Other;
                     }
                 };
-            if notification.session_id.to_string() != self.session {
+            let session = notification.session_id.to_string();
+            if !self.tools.contains_key(&session) {
                 return RuntimeEvent::Other;
             }
-            match notification.update {
-                SessionUpdate::AgentMessageChunk(chunk) => {
-                    if let ContentBlock::Text(content) = chunk.content {
-                        RuntimeEvent::Text(content.text)
-                    } else {
-                        RuntimeEvent::Other
-                    }
-                }
-                SessionUpdate::UsageUpdate(usage) => RuntimeEvent::Usage(usage.used),
-                _ => RuntimeEvent::Other,
-            }
+            let update = match notification.update {
+                SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
+                    ContentBlock::Text(content) => TurnUpdate::Text(content.text),
+                    _ => return RuntimeEvent::Other,
+                },
+                SessionUpdate::UsageUpdate(usage) => TurnUpdate::Usage(usage.used),
+                _ => return RuntimeEvent::Other,
+            };
+            RuntimeEvent::Turn { session, update }
         } else if value.get("method").is_some() && value.get("id").is_some() {
             match self.refuse(&value).await {
                 Ok(()) => RuntimeEvent::Other,
@@ -323,12 +383,30 @@ async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
         Ok(_) => Some(line),
     }
 }
+struct SessionTools {
+    mcp_url: String,
+    tools: Vec<crate::conversation::ClientTool>,
+}
 enum Line {
     Stdout(Result<Value, String>),
     Stderr,
     Closed,
 }
 pub(crate) enum RuntimeEvent {
+    Prepared {
+        work: String,
+        result: Result<(String, crate::catalog::Catalog), String>,
+    },
+    Turn {
+        session: String,
+        update: TurnUpdate,
+    },
+    Failed(String),
+    Stderr,
+    Other,
+    Closed,
+}
+pub(crate) enum TurnUpdate {
     Text(String),
     Usage(u64),
     Permission {
@@ -337,7 +415,4 @@ pub(crate) enum RuntimeEvent {
     },
     PromptEnded,
     Failed(String),
-    Stderr,
-    Other,
-    Closed,
 }

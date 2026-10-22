@@ -30,7 +30,7 @@ Feature: Access protection
       | Authorization: Bearer |
       | x-api-key             |
 
-  @FR-007 @issue-55 @wip
+  @FR-007 @issue-55
   Scenario: A new local API key replaces the old key at once
     When the owner makes a new local API key in the management panel
     Then a request with the local API key "K1" gets HTTP 401
@@ -54,7 +54,7 @@ Feature: Access protection
     Then acp2api answers with an HTTP status from 400 to 499
     And no prompt turn starts
 
-  @FR-008 @issue-55 @wip
+  @FR-008 @issue-55
   Scenario: A request to the management panel with the Origin of the management panel is accepted
     Given the owner has a panel session
     When a request with the Origin of the management panel goes to a management endpoint
@@ -83,31 +83,31 @@ Feature: Access protection
     Then acp2api answers with HTTP 200
     And the answer has no header whose name starts with "Access-Control-"
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario: The management panel shows only the password entry with no panel session
     Given a browser with no panel session
     When the browser opens the management panel
     Then the page holds the entry for the management password
     And the page holds no local API key and no state of acp2api
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario: A management endpoint refuses a request with no panel session
     Given a request with no panel session
     When the request asks a management endpoint for a new local API key
     Then acp2api answers with an HTTP status from 400 to 499
     And the local API key is still "K1"
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario: A correct management password gives a panel session cookie
     When the owner enters the correct management password
     Then acp2api gives a panel session cookie with the attributes "HttpOnly" and "SameSite=Strict"
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario: A wrong management password gives no panel session
     When the owner enters a wrong management password
     Then acp2api gives no panel session cookie
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario Outline: The age of a panel session decides if it is valid
     Given the owner opened a panel session
     When <age> pass with no restart of acp2api
@@ -118,20 +118,20 @@ Feature: Access protection
       | 11 hours 59 minutes   | still valid    |
       | 12 hours              | no longer valid |
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario: A restart of acp2api ends a panel session
     Given the owner opened a panel session
     When the owner restarts acp2api
     Then the panel session is no longer valid
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario: A change of the management password ends each panel session
     Given the owner has a panel session in the browser "B1" and a panel session in the browser "B2"
     When the owner changes the management password in the browser "B1"
     Then the panel session in the browser "B1" is no longer valid
     And the panel session in the browser "B2" is no longer valid
 
-  @FR-009 @issue-55 @wip
+  @FR-009 @issue-55
   Scenario: acp2api keeps only a hash of a management password that the owner sets
     When the owner changes the management password to "P2"
     Then the configuration file does not hold "P2"

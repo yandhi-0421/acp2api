@@ -45,7 +45,7 @@ Feature: Data folder and settings
     When the owner starts acp2api
     Then acp2api answers requests on the port 8400
 
-  @FR-004 @issue-55 @wip
+  @FR-004 @issue-55
   Scenario: A change in the management panel goes into the configuration file with no restart
     Given acp2api runs with the concurrency limit 2
     And the platform maximum concurrency limit is 3
@@ -130,7 +130,7 @@ Feature: Data folder and settings
     Then acp2api answers requests on the port 8400
     And acp2api accepts no connection on the port 8329
 
-  @FR-004 @issue-55 @wip
+  @FR-004 @issue-55
   Scenario: An absent local API key gives a new saved key
     Given acp2api is stopped
     And the owner removed the local API key "K1" from the configuration file
@@ -150,7 +150,7 @@ Feature: Data folder and settings
     Then the start fails with the message "acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use."
     And the message names the setting of the concurrency limit and the path of the configuration file
 
-  @FR-004 @issue-55 @wip
+  @FR-004 @issue-55
   Scenario: A start with no field of the management password makes a new management password
     Given acp2api is stopped
     And the owner removed the field of the management password from the configuration file

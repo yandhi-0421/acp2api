@@ -127,10 +127,14 @@ async fn next(runtime: &mut Runtime) -> String {
         .await
         .expect("a runtime event");
     match event {
-        RuntimeEvent::Text(text) => format!("text {text}"),
-        RuntimeEvent::Usage(used) => format!("usage {used}"),
-        RuntimeEvent::Permission { call, .. } => format!("permission {call:?}"),
-        RuntimeEvent::PromptEnded => "prompt ended".into(),
+        RuntimeEvent::Turn { update, .. } => match update {
+            TurnUpdate::Text(text) => format!("text {text}"),
+            TurnUpdate::Usage(used) => format!("usage {used}"),
+            TurnUpdate::Permission { call, .. } => format!("permission {call:?}"),
+            TurnUpdate::PromptEnded => "prompt ended".into(),
+            TurnUpdate::Failed(error) => format!("failed {error}"),
+        },
+        RuntimeEvent::Prepared { .. } => "prepared".into(),
         RuntimeEvent::Failed(error) => format!("failed {error}"),
         RuntimeEvent::Stderr => "stderr".into(),
         RuntimeEvent::Other => "other".into(),
@@ -162,7 +166,7 @@ async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runt
     assert_eq!(next(&mut runtime).await, "stderr");
     assert_eq!(next(&mut runtime).await, "stderr");
     runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m", "s1")
         .await
         .unwrap();
     agent.stdout(chunk("Hello")).await;
@@ -178,7 +182,7 @@ async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runt
 async fn an_unparsable_session_update_is_skipped() {
     let (mut runtime, mut agent, _root) = start(Vec::new()).await;
     runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m", "s1")
         .await
         .unwrap();
     agent
@@ -200,7 +204,7 @@ async fn an_agent_request_with_an_unknown_method_gets_32601_and_is_no_reply() {
         json!({"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found"}})
     );
     runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m", "s1")
         .await
         .unwrap();
     assert_eq!(agent.stdin().await["method"], "session/prompt");
@@ -220,7 +224,7 @@ async fn an_agent_request_with_an_unknown_method_gets_32601_and_is_no_reply() {
 async fn a_permission_request_is_a_permission_event_and_not_refused() {
     let (mut runtime, mut agent, _root) = start(Vec::new()).await;
     runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m", "s1")
         .await
         .unwrap();
     assert_eq!(agent.stdin().await["method"], "session/prompt");
