@@ -63,7 +63,6 @@ struct Session {
     tools: Vec<crate::conversation::ClientTool>,
     system: Option<String>,
 }
-type Idle = records::ReadySession;
 struct PendingPrompt {
     text: Vec<crate::conversation::PromptBlock>,
     model: String,
@@ -94,7 +93,9 @@ struct Core {
     catalog: Option<crate::catalog::Catalog>,
     active: Vec<Active>,
     waiting: VecDeque<Accepted>,
-    idle: Vec<Idle>,
+    records: Vec<records::Record>,
+    /// The ACP session from the start of the runtime: no system prompt addition, no client tools.
+    fresh: Option<String>,
     use_sequence: u64,
     limit: u8,
     /// The notices of the panel, published to it at each change.
@@ -226,7 +227,7 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Failed(error)) => {
-                self.forget_idle(0, &mut commands);
+                self.forget_idle(&mut commands);
                 while !self.active.is_empty() {
                     self.finish(
                         0,
@@ -236,7 +237,7 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
-                self.forget_idle(0, &mut commands);
+                self.forget_idle(&mut commands);
                 while !self.active.is_empty() {
                     self.finish(
                         0,
@@ -274,8 +275,8 @@ impl Core {
             };
             let hashes = crate::conversation::record_hashes(&request.turn.conversation);
             let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
-            let matched =
-                records::select(&self.idle, &hashes, tools_hash, &request.turn.conversation);
+            let items = request.turn.conversation.items();
+            let matched = records::select(&self.records, &hashes, tools_hash, &items);
             let kind = if matched.is_some() {
                 crate::journal::SessionUse::Continue
             } else if request.turn.conversation.earlier.is_empty() {
@@ -283,50 +284,31 @@ impl Core {
             } else {
                 crate::journal::SessionUse::Rebuild
             };
-            let text = if let Some(index) = matched {
-                let start = self.idle[index]
-                    .record
-                    .as_ref()
-                    .expect("matched record")
-                    .hashes
-                    .len()
-                    - 1;
-                let items = request.turn.conversation.items();
-                crate::conversation::prompt(crate::conversation::PromptFor::Continue {
-                    new_items: &items[start..],
-                })
-            } else {
-                crate::conversation::prompt(crate::conversation::PromptFor::Rebuild {
+            let text = crate::conversation::prompt(match matched {
+                Some((_, new_items)) => crate::conversation::PromptFor::Continue { new_items },
+                None => crate::conversation::PromptFor::Rebuild {
                     conversation: &request.turn.conversation,
-                })
-            };
+                },
+            });
             let prompt = PendingPrompt {
                 text,
                 model: request.turn.model,
             };
-            let ready = matched.or_else(|| {
-                (settings.system.is_none() && settings.tools.is_empty())
-                    .then(|| {
-                        self.idle
-                            .iter()
-                            .position(|session| session.record.is_none())
-                    })
-                    .flatten()
-            });
-            let idle = ready.map(|index| self.idle.remove(index));
+            let ready = match matched {
+                Some((index, _)) => Some(self.records.remove(index).session),
+                None if settings.system.is_none() && settings.tools.is_empty() => self.fresh.take(),
+                None => None,
+            };
             self.use_sequence = self.use_sequence.saturating_add(1);
             let work = request.request.id.clone();
-            let (session, phase) = match idle {
-                Some(idle) => {
+            let (session, phase) = match ready {
+                Some(id) => {
                     commands.push(Command::Prompt {
                         work: work.clone(),
-                        session: idle.id.clone(),
+                        session: id.clone(),
                         prompt,
                     });
-                    (
-                        Some(crate::journal::Session { id: idle.id, kind }),
-                        Phase::Prompt,
-                    )
+                    (Some(crate::journal::Session { id, kind }), Phase::Prompt)
                 }
                 None => {
                     commands.push(Command::Prepare {
@@ -431,9 +413,9 @@ impl Core {
             }
         }
     }
-    /// Keeps the first `kept` idle sessions and forgets the others.
-    fn forget_idle(&mut self, kept: usize, commands: &mut Vec<Command>) {
-        commands.extend(self.idle.drain(kept..).map(|idle| Command::Forget(idle.id)));
+    fn forget_idle(&mut self, commands: &mut Vec<Command>) {
+        let idle = self.records.drain(..).map(|record| record.session);
+        commands.extend(idle.chain(self.fresh.take()).map(Command::Forget));
     }
     fn finish(
         &mut self,
@@ -464,13 +446,11 @@ impl Core {
                 active
                     .hashes
                     .push(crate::conversation::reply_hash(&active.text));
-                self.idle.push(Idle {
-                    id: session.id.clone(),
-                    record: Some(records::Record {
-                        hashes: active.hashes,
-                        tools: active.tools_hash,
-                        used: active.used,
-                    }),
+                self.records.push(records::Record {
+                    session: session.id.clone(),
+                    hashes: active.hashes,
+                    tools: active.tools_hash,
+                    used: active.used,
                 });
             } else {
                 // No record matches this ACP session again.
@@ -513,19 +493,11 @@ impl Conductor {
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let task = tokio::spawn(async move {
-            let (mut runtime, catalog, idle) = match started {
-                Some((runtime, catalog)) => {
-                    let idle = vec![Idle {
-                        id: runtime.session_id().into(),
-                        record: None,
-                    }];
-                    (Some(runtime), Some(catalog), idle)
-                }
-                None => (None, None, Vec::new()),
-            };
+            let (mut runtime, catalog) = started.unzip();
             let mut core = Core {
+                fresh: runtime.as_ref().map(|runtime| runtime.session_id().into()),
                 catalog,
-                idle,
+                records: Vec::new(),
                 use_sequence: 0,
                 limit,
                 active: Vec::new(),
@@ -779,7 +751,8 @@ mod tests {
             catalog: None,
             active: Vec::new(),
             waiting: VecDeque::new(),
-            idle: Vec::new(),
+            records: Vec::new(),
+            fresh: None,
             use_sequence: 0,
             limit: 1,
             notices: watch::channel(Arc::new(Vec::new())).0,
