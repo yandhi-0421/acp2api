@@ -442,15 +442,7 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let mut active = self.active.remove(index);
-        let reply_end = if active.tool_call.is_some() {
-            records::ReplyEnd::ClientTool
-        } else {
-            records::ReplyEnd::EndTurn
-        };
-        let tool_hash = active
-            .tool_call
-            .as_ref()
-            .map(crate::conversation::tool_call_hash);
+        let ends_turn = active.eligible && active.tool_call.is_none();
         let end = result.map(|()| {
             if let Some(text) = active.held.take() {
                 active.text.push_str(&text);
@@ -468,22 +460,15 @@ impl Core {
             }
         });
         if let Some(session) = &active.session {
-            if end.is_ok()
-                && !active.disconnected
-                && (active.eligible || matches!(reply_end, records::ReplyEnd::ClientTool))
-            {
+            if end.is_ok() && !active.disconnected && ends_turn {
                 active
                     .hashes
                     .push(crate::conversation::reply_hash(&active.text));
-                if let Some(hash) = tool_hash {
-                    active.hashes.push(hash);
-                }
                 self.idle.push(Idle {
                     id: session.id.clone(),
                     record: Some(records::Record {
                         hashes: active.hashes,
                         tools: active.tools_hash,
-                        end: reply_end,
                         used: active.used,
                     }),
                 });

@@ -252,17 +252,6 @@ pub(crate) fn reply_hash(text: &str) -> ItemHash {
         parts: vec![Part::Text(text.into())],
     })
 }
-pub(crate) fn tool_call_hash(call: &ToolCall) -> ItemHash {
-    let mut hash = ItemHasher::new("tool call");
-    hash.field(match call.kind {
-        ToolKind::Function => "function",
-        ToolKind::Custom => "custom",
-    });
-    hash.name(call.namespace.as_deref());
-    hash.field(&call.name);
-    hash.text(&call.arguments);
-    ItemHash(hash.finish())
-}
 pub(crate) fn tool_set_hash(tools: &[ClientTool]) -> ToolSetHash {
     let mut members = tools
         .iter()

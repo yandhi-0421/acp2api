@@ -1,13 +1,7 @@
 use crate::conversation::{self, Conversation, ItemHash, ToolSetHash};
-#[derive(Clone, Copy)]
-pub(super) enum ReplyEnd {
-    EndTurn,
-    ClientTool,
-}
 pub(super) struct Record {
     pub hashes: Vec<ItemHash>,
     pub tools: ToolSetHash,
-    pub end: ReplyEnd,
     pub used: u64,
 }
 pub(super) struct ReadySession {
@@ -28,7 +22,6 @@ pub(super) fn select(
             let record = session.record.as_ref()?;
             let start = record.hashes.len().checked_sub(1)?;
             (record.tools == tools
-                && matches!(record.end, ReplyEnd::EndTurn)
                 && hashes.starts_with(&record.hashes)
                 && start < items.len()
                 && conversation::user_suffix(&items[start..]))
@@ -64,7 +57,6 @@ mod tests {
                 record: Some(Record {
                     hashes: hashes[..2].into(),
                     tools,
-                    end: ReplyEnd::EndTurn,
                     used: 99,
                 }),
             },
@@ -73,7 +65,6 @@ mod tests {
                 record: Some(Record {
                     hashes: hashes[..3].into(),
                     tools,
-                    end: ReplyEnd::EndTurn,
                     used: 1,
                 }),
             },

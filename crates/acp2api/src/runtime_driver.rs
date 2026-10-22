@@ -30,7 +30,6 @@ pub(crate) struct Runtime {
     tools: std::collections::HashMap<String, SessionTools>,
     permissions: std::collections::HashMap<PermissionId, (Value, String)>,
     next_permission: u64,
-    cancelled_at_permission: std::collections::HashSet<String>,
     tool_calls: safety::ToolCalls,
 }
 impl Runtime {
@@ -99,7 +98,6 @@ impl Runtime {
             tools: std::collections::HashMap::new(),
             permissions: std::collections::HashMap::new(),
             next_permission: 0,
-            cancelled_at_permission: std::collections::HashSet::new(),
             tool_calls: safety::ToolCalls::default(),
         };
         runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
@@ -183,7 +181,6 @@ impl Runtime {
         if let Some((id, session)) = self.permissions.remove(&request) {
             if cancel {
                 self.cancel(&session).await?;
-                self.cancelled_at_permission.insert(session.clone());
             }
             let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
             self.write(json!({"jsonrpc":"2.0","id":id,"result":outcome}))
@@ -232,7 +229,6 @@ impl Runtime {
         session: &str,
     ) -> Result<(), String> {
         self.tool_calls.begin_prompt(session);
-        self.cancelled_at_permission.remove(session);
         let blocks: Vec<agent_client_protocol_schema::v1::ContentBlock> = prompt
             .into_iter()
             .map(|block| match block {
@@ -297,11 +293,6 @@ impl Runtime {
                 let update = match value.get("error") {
                     Some(error) => TurnUpdate::Failed(error.to_string()),
                     None if value["result"]["stopReason"] == "end_turn" => TurnUpdate::PromptEnded,
-                    None if value["result"]["stopReason"] == "cancelled"
-                        && self.cancelled_at_permission.remove(&session) =>
-                    {
-                        TurnUpdate::PromptEnded
-                    }
                     None => TurnUpdate::Stopped,
                 };
                 return RuntimeEvent::Turn { session, update };

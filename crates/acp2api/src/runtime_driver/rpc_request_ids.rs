@@ -129,7 +129,7 @@ async fn start(root: &Root) -> (Runtime, Agent) {
 async fn ended(runtime: &mut Runtime, expected: &str) {
     let (event, _hold) = runtime.next().await;
     assert!(
-        matches!(event, RuntimeEvent::Turn {session, update:TurnUpdate::PromptEnded} if session == expected),
+        matches!(event, RuntimeEvent::Turn {session, update:TurnUpdate::PromptEnded | TurnUpdate::Stopped} if session == expected),
         "the real outgoing prompt response must still complete its own session"
     );
 }
