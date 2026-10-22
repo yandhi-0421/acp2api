@@ -76,13 +76,19 @@ impl Panel {
             .map_err(|_| self.failed())
     }
     fn failed(&self) -> Response {
-        (
+        self.page(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Html(page::login(Some(
-                "The settings could not be saved. Try again.",
-            ))),
+            "The settings could not be saved. Try again.",
         )
-            .into_response()
+    }
+    /// The settings page of a panel session, with a notice.
+    fn page(&self, status: StatusCode, notice: &str) -> Response {
+        let page = page::settings(
+            &self.conductor.settings(),
+            self.conductor.highest,
+            Some(notice),
+        );
+        (status, Html(page)).into_response()
     }
 }
 async fn guard(
@@ -207,11 +213,10 @@ async fn new_key(State(panel): State<Panel>) -> Response {
 }
 async fn password(State(panel): State<Panel>, Form(form): Form<Password>) -> Response {
     if form.password.is_empty() {
-        return (
+        return panel.page(
             StatusCode::UNPROCESSABLE_ENTITY,
             "Enter a new management password.",
-        )
-            .into_response();
+        );
     }
     let Ok(Ok(hash)) =
         tokio::task::spawn_blocking(move || crate::store::hash_password(&form.password)).await
@@ -236,20 +241,14 @@ async fn concurrency(State(panel): State<Panel>, Form(form): Form<Limit>) -> Res
     {
         Some(n) => n,
         None => {
-            return (
+            return panel.page(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Choose a concurrency limit supported on this platform.",
-            )
-                .into_response();
+            );
         }
     };
     match panel.act(OwnerAction::SetConcurrencyLimit(limit)).await {
-        Ok(()) => Html(page::settings(
-            &panel.conductor.settings(),
-            panel.conductor.highest,
-            Some("Concurrency limit saved."),
-        ))
-        .into_response(),
+        Ok(()) => panel.page(StatusCode::OK, "Concurrency limit saved."),
         Err(response) => response,
     }
 }
@@ -258,6 +257,46 @@ async fn concurrency(State(panel): State<Panel>, Form(form): Form<Limit>) -> Res
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[tokio::test]
+    async fn a_failed_save_and_an_unusable_value_keep_the_settings_page() {
+        let folder = std::env::temp_dir().join(format!("acp2api-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: "acp2api-test".into(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        // A folder in the place of the file makes each save fail.
+        let configuration = folder.join("config.toml");
+        std::fs::create_dir(&configuration).unwrap();
+        let (conductor, _task) =
+            Conductor::start(None, clock.clone(), journal, settings, configuration, 1);
+        let panel = Panel::new(conductor, clock, 8329);
+        let empty = Password {
+            password: String::new(),
+        };
+        let zero = Limit {
+            concurrency_limit: "0".into(),
+        };
+        let answers = [
+            new_key(State(panel.clone())).await,
+            password(State(panel.clone()), Form(empty)).await,
+            concurrency(State(panel), Form(zero)).await,
+        ];
+        let mut pages = Vec::new();
+        for answer in answers {
+            let status = answer.status().as_u16();
+            let body = axum::body::to_bytes(answer.into_body(), 1 << 16).await;
+            let body = String::from_utf8(body.unwrap().to_vec()).unwrap();
+            pages.push((status, body.contains("<h1>Settings</h1>")));
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(pages, [(500, true), (422, true), (422, true)]);
+    }
     #[tokio::test(flavor = "current_thread")]
     async fn a_login_does_not_block_the_async_worker_with_its_hash() {
         let folder = std::env::temp_dir().join(format!("acp2api-login-{}", std::process::id()));
