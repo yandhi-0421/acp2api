@@ -72,8 +72,12 @@ impl Writer {
             if wall
                 .duration_since(file.modified)
                 .is_ok_and(|age| age > MAX_AGE)
+                && let Err(error) = std::fs::remove_file(&file.path)
             {
-                std::fs::remove_file(file.path)?;
+                eprintln!(
+                    "acp2api: cannot delete the old log file {}: {error}",
+                    file.path.display()
+                );
             }
         }
         let (file, sequence) = create_file(folder, &date, sequence)?;
@@ -120,10 +124,7 @@ impl Writer {
                 break;
             }
             if file.date == self.date && file.sequence == self.sequence {
-                let (replacement, sequence) = create_file(&self.folder, &self.date, self.sequence)?;
-                self.file = replacement;
-                self.sequence = sequence;
-                self.size = 0;
+                continue;
             }
             std::fs::remove_file(file.path)?;
             size -= file.size;
@@ -345,5 +346,79 @@ impl Journal {
         let mut terminal = std::io::stdout().lock();
         writeln!(terminal, "acp2api: {}", serde_json::to_string(&record)?)?;
         terminal.flush()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    fn folder(name: &str) -> std::path::PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-journal-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+    fn log(folder: &Path, name: &str, size: u64, modified: SystemTime) -> std::path::PathBuf {
+        let path = folder.join(name);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(size).unwrap();
+        file.set_modified(modified).unwrap();
+        path
+    }
+    fn record(id: &str) -> RequestRecord {
+        RequestRecord {
+            time: "2026-10-22T00:00:00Z".into(),
+            request_id: id.into(),
+            api: Api::Chat,
+            model: None,
+            session: None,
+            session_use: None,
+            duration_ms: 0,
+            input_tokens: None,
+            output_tokens: None,
+            result: ResultKind::Success,
+            error_code: None,
+            unknown_fields: Vec::new(),
+        }
+    }
+    #[test]
+    fn retention_keeps_the_active_file_after_the_clock_went_back() {
+        let folder = folder("clock");
+        let now = SystemTime::now();
+        let later = now + Duration::from_secs(86_400);
+        for day in 1..=5 {
+            log(
+                &folder,
+                &format!("acp2api-2026-01-0{day}-1.log"),
+                9_000_000,
+                later,
+            );
+        }
+        let mut writer = Writer::open(&folder, now).unwrap();
+        writer.write(&record("first-line")).unwrap();
+        log(&folder, "acp2api-2026-01-06-1.log", 9_000_000, later);
+        writer.write(&record("second-line")).unwrap();
+        let active = folder.join(format!("acp2api-{}-1.log", &timestamp(now).unwrap()[..10]));
+        let text = std::fs::read_to_string(active).unwrap_or_default();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(text.contains("first-line") && text.contains("second-line"));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_stale_log_that_cannot_be_deleted_does_not_stop_the_start() {
+        use std::os::unix::ffi::OsStrExt;
+        let folder = folder("stale");
+        let old = SystemTime::now() - Duration::from_secs(31 * 86_400);
+        let path = log(&folder, "acp2api-2026-01-01-1.log", 10, old);
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::chflags(c_path.as_ptr(), libc::UF_IMMUTABLE.into()) },
+            0
+        );
+        let opened = Writer::open(&folder, SystemTime::now());
+        assert_eq!(unsafe { libc::chflags(c_path.as_ptr(), 0) }, 0);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(opened.is_ok(), "{:?}", opened.err());
     }
 }
