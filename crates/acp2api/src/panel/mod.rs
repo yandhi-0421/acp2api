@@ -39,6 +39,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/key", post(new_key))
         .route("/manage/password", post(password))
         .route("/manage/concurrency", post(concurrency))
+        .route("/manage/notice", post(dismiss_notice))
         .layer(axum::extract::DefaultBodyLimit::max(16384))
         .layer(axum::middleware::from_fn_with_state(panel.clone(), guard))
         .with_state(panel)
@@ -87,6 +88,7 @@ impl Panel {
             &self.conductor.settings(),
             self.conductor.highest,
             Some(notice),
+            &self.conductor.notices(),
         );
         (status, Html(page)).into_response()
     }
@@ -145,7 +147,12 @@ async fn guard(
 }
 async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
     Html(if panel.session(&headers) {
-        page::settings(&panel.conductor.settings(), panel.conductor.highest, None)
+        page::settings(
+            &panel.conductor.settings(),
+            panel.conductor.highest,
+            None,
+            &panel.conductor.notices(),
+        )
     } else {
         page::login(None)
     })
@@ -246,6 +253,27 @@ async fn concurrency(State(panel): State<Panel>, Form(form): Form<Limit>) -> Res
     match panel.act(OwnerAction::SetConcurrencyLimit(limit)).await {
         Ok(()) => panel.page(StatusCode::OK, "Concurrency limit saved."),
         Err(response) => response,
+    }
+}
+#[derive(Deserialize)]
+struct DismissNotice {
+    notice_id: String,
+}
+async fn dismiss_notice(State(panel): State<Panel>, Form(form): Form<DismissNotice>) -> Response {
+    match panel
+        .conductor
+        .owner(
+            OwnerAction::DismissNotice(form.notice_id),
+            panel.clock.hold(crate::HoldKind::TurnEvent),
+        )
+        .await
+    {
+        Ok(()) => Redirect::to("/").into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The notice could not be dismissed. Try again.",
+        )
+            .into_response(),
     }
 }
 #[cfg(test)]

@@ -110,6 +110,73 @@ impl Scenario {
             self.hub.clone(),
         ));
     }
+    pub async fn start_isolated_owner(&mut self) {
+        if self.host.is_some() {
+            return;
+        }
+        let run = self
+            .root
+            .seed(&self.hub, self.plan.as_ref().expect("Given normal state"));
+        let path = self.root.path.join("run.toml");
+        std::fs::write(&path, toml::to_string(&run).unwrap()).unwrap();
+        let mut host = Command::new(binary("acp2api-test-host"))
+            .env_clear()
+            .env("ACP2API_TEST_RUN", path)
+            .env("HOME", self.root.path.join("home"))
+            .env("GEMINI_HOME", self.root.path.join("home/.gemini"))
+            .args(["--data-dir", self.root.path.join("data").to_str().unwrap()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("test host launch");
+        for pipe in [
+            Box::new(host.stdout.take().unwrap()) as Box<dyn std::io::Read + Send>,
+            Box::new(host.stderr.take().unwrap()),
+        ] {
+            let hub = self.hub.clone();
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(pipe);
+                loop {
+                    let mut line = Vec::new();
+                    match reader
+                        .by_ref()
+                        .take(4 * 1024 * 1024 + 1)
+                        .read_until(b'\n', &mut line)
+                    {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => hub.terminal(&line),
+                    }
+                }
+            });
+        }
+        self.host = Some(host);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.hub.ready() {
+            if let Some(status) = self.host.as_mut().unwrap().try_wait().unwrap() {
+                panic!(
+                    "test host exited {status}; terminal: {:?}",
+                    self.hub
+                        .entries()
+                        .iter()
+                        .filter(|e| e.event["kind"] == "terminal")
+                        .map(|e| e.event["text"].clone())
+                        .collect::<Vec<_>>()
+                );
+            }
+            assert!(Instant::now() < deadline, "test host startup cap: 10 s");
+            let hub = self.hub.clone();
+            tokio::task::spawn_blocking(move || hub.wait_change(deadline))
+                .await
+                .unwrap();
+        }
+        self.time.settle().await;
+        self.client = Some(ApiClient::new(
+            format!("127.0.0.1:{}", self.root.port),
+            self.root.key.clone(),
+            self.hub.clone(),
+        ));
+    }
     async fn start_saved(&mut self) {
         let path = self.root.path.join("run.toml");
         assert!(path.is_file(), "restart requires an existing run file");

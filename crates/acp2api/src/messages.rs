@@ -31,6 +31,7 @@ pub(crate) enum Message {
     Key,
     TooLarge,
     Upstream(String),
+    BuiltInToolRan(String),
 }
 pub(crate) enum Row {
     Key,
@@ -61,7 +62,7 @@ impl Refusal {
         match self.message {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
-            Message::Upstream(_) => Row::Other502,
+            Message::Upstream(_) | Message::BuiltInToolRan(_) => Row::Other502,
             Message::Model { .. }
             | Message::Field { .. }
             | Message::Content(_)
@@ -131,6 +132,7 @@ impl fmt::Display for Message {
             Self::Prefill => f.write_str(
                 "acp2api: a last message from the assistant (a prefill) is not supported.",
             ),
+            Self::BuiltInToolRan(name) => write!(f, "acp2api: the built-in tool {name} of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),

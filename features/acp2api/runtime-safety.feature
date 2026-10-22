@@ -20,19 +20,19 @@ Feature: Safety toward Google and the official runtime
       | a lockout signal starts a lockout    |
       | the owner stops acp2api              |
 
-  @FR-046 @issue-57 @wip
+  @FR-046 @issue-57
   Scenario: The runtime process uses the runtime home in the data folder
     Given the data folder of acp2api is "D"
     When acp2api starts a runtime process
     Then the runtime home of the runtime process is a folder in "D"
 
-  @FR-046 @issue-57 @wip
+  @FR-046 @issue-57
   Scenario: No global configuration of the owner reaches an ACP session
     Given the folder "~/.gemini" of the owner names the MCP server "owner-mcp"
     When an API client sends a request with no client tool
     Then the official runtime offers the model no tool of "owner-mcp"
 
-  @FR-047 @issue-57 @wip
+  @FR-047 @issue-57
   Scenario: acp2api declares no file system capability and no terminal capability
     When acp2api starts a runtime process
     Then the official runtime gets no file system capability and no terminal capability from acp2api
@@ -45,7 +45,7 @@ Feature: Safety toward Google and the official runtime
     And the official runtime gets a cancel of the prompt turn
     And the response holds the tool call of "read_file"
 
-  @FR-047 @issue-57 @wip
+  @FR-047 @issue-57
   Scenario: acp2api refuses the permission request of a built-in tool and the prompt turn continues
     Given the official runtime sends the permission request of the built-in tool "view_file" in a prompt turn
     And the official runtime then replies "I cannot read files."
@@ -54,15 +54,15 @@ Feature: Safety toward Google and the official runtime
     And the reply text of the response is "I cannot read files."
     And the log has a line about the refused permission request
 
-  @FR-047 @issue-57 @wip
+  @FR-047 @issue-57
   Scenario: A built-in tool that runs with no permission request ends the response with M-22
     Given the built-in tool "view_file" of the official runtime runs with no permission request in the next prompt turn
     When an API client sends a valid request with "stream" set to false
-    Then the official runtime gets a cancel of the prompt turn
+    Then the official runtime gets a cancel without a permission request
     And acp2api answers with HTTP 502 and the message "acp2api: the built-in tool view_file of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."
     And the log has one line about the built-in tool "view_file"
 
-  @FR-047 @issue-57 @wip
+  @FR-047 @issue-57
   Scenario: A built-in tool that runs with no permission request gives one notice until the owner dismisses it
     Given the built-in tool "view_file" ran with no permission request in one prompt turn
     Then the management panel shows one notice "The built-in tool view_file ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client."
@@ -70,14 +70,14 @@ Feature: Safety toward Google and the official runtime
     When the owner dismisses the notice
     Then the management panel shows no notice
 
-  @FR-047 @issue-57 @wip
+  @FR-047 @issue-57
   Scenario: A built-in tool that runs with no permission request starts no new state
     Given the built-in tool "view_file" ran with no permission request in one prompt turn
     When an API client sends a valid request of another conversation
     Then acp2api is in the normal state
     And the official runtime gets a prompt for the request
 
-  @FR-047 @issue-57 @wip
+  @FR-047 @issue-57
   Scenario: Each ACP session has a new empty cwd folder in the system temporary folder
     When two requests of two conversations make two new ACP sessions
     Then the cwd of each ACP session is a folder in the system temporary folder

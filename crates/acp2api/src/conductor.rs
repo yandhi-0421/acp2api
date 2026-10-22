@@ -9,6 +9,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub(crate) struct Conductor {
     send: mpsc::Sender<Work>,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
+    notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
 }
 pub(crate) enum OwnerAction {
@@ -16,6 +17,20 @@ pub(crate) enum OwnerAction {
     /// Sets the Argon2id hash of a new management password.
     ChangePassword(String),
     SetConcurrencyLimit(u8),
+    DismissNotice(String),
+}
+#[derive(Clone)]
+pub(crate) struct Notice {
+    pub(crate) id: String,
+    name: String,
+}
+impl Notice {
+    pub(crate) fn text(&self) -> String {
+        format!(
+            "The built-in tool {} ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client.",
+            self.name
+        )
+    }
 }
 enum Work {
     Owner {
@@ -79,6 +94,8 @@ struct Core {
     waiting: VecDeque<Accepted>,
     idle: Vec<Idle>,
     limit: u8,
+    /// The notices of the panel, published to it at each change.
+    notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
     Accepted(Accepted),
@@ -86,10 +103,13 @@ enum Event {
     Deadline,
     Disconnected(String),
     Limit(u8),
+    DismissNotice(String),
     PreparationFailed(String, String),
 }
 enum Command {
     Complete(crate::journal::Completion),
+    Safety(crate::journal::SafetyReport),
+    Cancel(String),
     Prepare {
         work: String,
         settings: Session,
@@ -122,6 +142,13 @@ impl Core {
         let mut commands = Vec::new();
         match event {
             Event::Accepted(request) => self.waiting.push_back(request),
+            Event::DismissNotice(id) => {
+                self.notices.send_if_modified(|notices| {
+                    let count = notices.len();
+                    Arc::make_mut(notices).retain(|notice| notice.id != id);
+                    notices.len() != count
+                });
+            }
             Event::Limit(limit) => {
                 self.limit = limit;
                 let kept = self.idle.len().min(usize::from(limit));
@@ -142,7 +169,11 @@ impl Core {
                     .iter()
                     .position(|active| active.request.id == work)
                 {
-                    self.finish(index, Err(error), &mut commands);
+                    self.finish(
+                        index,
+                        Err(crate::messages::Message::Upstream(error)),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Prepared { work, result }) => {
@@ -169,7 +200,11 @@ impl Core {
                                 });
                             }
                         }
-                        Err(error) => self.finish(index, Err(error), &mut commands),
+                        Err(error) => self.finish(
+                            index,
+                            Err(crate::messages::Message::Upstream(error)),
+                            &mut commands,
+                        ),
                     }
                 }
             }
@@ -179,8 +214,10 @@ impl Core {
                     .iter()
                     .position(|active| active.session.as_ref().is_some_and(|s| s.id == session))
                 {
-                    self.update(index, update, now, &mut commands);
-                } else if let TurnUpdate::Permission { request, .. } = update {
+                    self.update(index, session, update, now, &mut commands);
+                } else if let TurnUpdate::Permission { request, .. }
+                | TurnUpdate::RefusedPermission { request, .. } = update
+                {
                     commands.push(Command::Permission {
                         request,
                         cancel: false,
@@ -190,13 +227,23 @@ impl Core {
             Event::Runtime(RuntimeEvent::Failed(error)) => {
                 self.forget_idle(0, &mut commands);
                 while !self.active.is_empty() {
-                    self.finish(0, Err(error.clone()), &mut commands);
+                    self.finish(
+                        0,
+                        Err(crate::messages::Message::Upstream(error.clone())),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
                 self.forget_idle(0, &mut commands);
                 while !self.active.is_empty() {
-                    self.finish(0, Err("runtime stdout closed".into()), &mut commands);
+                    self.finish(
+                        0,
+                        Err(crate::messages::Message::Upstream(
+                            "runtime stdout closed".into(),
+                        )),
+                        &mut commands,
+                    );
                 }
             }
             Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
@@ -275,6 +322,7 @@ impl Core {
     fn update(
         &mut self,
         index: usize,
+        session: String,
         update: TurnUpdate,
         now: Moment,
         commands: &mut Vec<Command>,
@@ -294,15 +342,47 @@ impl Core {
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
             TurnUpdate::PromptEnded => active.phase = Phase::Settling(now.saturating_add(200)),
-            TurnUpdate::Failed(error) => self.finish(index, Err(error), commands),
+            TurnUpdate::Failed(error) => self.finish(
+                index,
+                Err(crate::messages::Message::Upstream(error)),
+                commands,
+            ),
+            TurnUpdate::UnpermittedTool(name) => {
+                let notice = Notice {
+                    id: active.request.id.clone(),
+                    name: name.clone(),
+                };
+                self.notices
+                    .send_modify(|notices| Arc::make_mut(notices).push(notice));
+                commands.push(Command::Cancel(session.clone()));
+                commands.push(Command::Safety(crate::journal::SafetyReport {
+                    request: active.request.clone(),
+                    session,
+                    kind: crate::journal::SafetyKind::BuiltInToolRan,
+                    tool: name.clone(),
+                }));
+                self.finish(
+                    index,
+                    Err(crate::messages::Message::BuiltInToolRan(name)),
+                    commands,
+                );
+            }
+            TurnUpdate::RefusedPermission { request, name } => {
+                commands.push(Command::Safety(crate::journal::SafetyReport {
+                    request: active.request.clone(),
+                    session,
+                    kind: crate::journal::SafetyKind::PermissionRefused,
+                    tool: name,
+                }));
+                commands.push(Command::Permission {
+                    request,
+                    cancel: false,
+                });
+            }
             TurnUpdate::Permission { request, call } => {
-                let mut cancel = false;
-                if matches!(active.phase, Phase::Prompt)
-                    && active.tool_call.is_none()
-                    && let Some(call) = call
-                {
+                let cancel = matches!(active.phase, Phase::Prompt) && active.tool_call.is_none();
+                if cancel {
                     active.tool_call = Some(call);
-                    cancel = true;
                 }
                 commands.push(Command::Permission { request, cancel });
             }
@@ -312,7 +392,12 @@ impl Core {
     fn forget_idle(&mut self, kept: usize, commands: &mut Vec<Command>) {
         commands.extend(self.idle.drain(kept..).map(|idle| Command::Forget(idle.id)));
     }
-    fn finish(&mut self, index: usize, result: Result<(), String>, commands: &mut Vec<Command>) {
+    fn finish(
+        &mut self,
+        index: usize,
+        result: Result<(), crate::messages::Message>,
+        commands: &mut Vec<Command>,
+    ) {
         let mut active = self.active.remove(index);
         if let Some(session) = &active.session {
             if result.is_ok() && !active.disconnected {
@@ -352,6 +437,9 @@ impl Core {
                     input: usage.input_tokens,
                     output: usage.output_tokens,
                 },
+                Err(crate::messages::Message::BuiltInToolRan(_)) => {
+                    crate::journal::Outcome::BuiltInToolRan
+                }
                 Err(_) => crate::journal::Outcome::Failed,
             }
         };
@@ -375,6 +463,7 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Work>(32);
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
+        let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let task = tokio::spawn(async move {
             let (mut runtime, catalog, idle) = match started {
                 Some((runtime, catalog)) => {
@@ -395,6 +484,7 @@ impl Conductor {
                 limit,
                 active: Vec::new(),
                 waiting: VecDeque::new(),
+                notices,
             };
             let mut read_open = runtime.is_some();
             loop {
@@ -417,19 +507,20 @@ impl Conductor {
                             Work::Models {reply,hold}=>{let _=reply.send(Ok(core.catalog.as_ref().map(crate::catalog::Catalog::entries).unwrap_or_default()));drop(hold);continue;}
                             Work::Owner {action,reply,hold}=>{
                                 let mut settings=(**publish.borrow()).clone();
+                                let mut commands = VecDeque::new();
                                 let result=(|| {
                                     match action {
                                         OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
                                         OwnerAction::ChangePassword(hash)=>settings.management_password_hash=hash,
                                         OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
+                                        OwnerAction::DismissNotice(id)=>{commands.extend(core.handle(Event::DismissNotice(id),clock.now()));return Ok(());},
                                     }
-                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));Ok(())
+                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));
+                                    commands.extend(core.handle(Event::Limit(settings.concurrency_limit),clock.now()));Ok(())
                                 })();
-                                let success=result.is_ok();let _=reply.send(result);
-                                if success {
-                                    let mut commands:VecDeque<_>=core.handle(Event::Limit(settings.concurrency_limit),clock.now()).into();
-                                    Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await;
-                                }
+                                let success=result.is_ok();
+                                let _=reply.send(result);
+                                if success {Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await;}
                                 drop(hold);continue;
                             }
                             Work::Turn(work)=>*work,
@@ -470,6 +561,7 @@ impl Conductor {
             Self {
                 send,
                 settings: settings_watch,
+                notices: notices_watch,
                 highest,
             },
             task,
@@ -485,6 +577,16 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::Cancel(session) => {
+                    if let Some(runtime) = runtime.as_mut()
+                        && let Err(error) = runtime.cancel(&session).await
+                    {
+                        commands.extend(
+                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
+                        );
+                    }
+                }
+                Command::Safety(report) => journal.safety(report, clock.as_ref()),
                 Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
                 Command::Prepare { work, settings } => {
                     let result = match runtime.as_mut().filter(|_| *read_open) {
@@ -543,6 +645,9 @@ impl Conductor {
                 }
             }
         }
+    }
+    pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
+        self.notices.borrow().clone()
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
@@ -630,6 +735,7 @@ mod tests {
             waiting: VecDeque::new(),
             idle: Vec::new(),
             limit: 1,
+            notices: watch::channel(Arc::new(Vec::new())).0,
         };
         let mut outputs = Vec::new();
         let mut forgotten = Vec::new();
@@ -706,7 +812,7 @@ mod tests {
         let end = match admitted {
             Ok(mut ticket) => loop {
                 if let (TurnEvent::End(end), _) = ticket.recv().await.unwrap() {
-                    break end.err();
+                    break end.err().map(|message| message.to_string());
                 }
             },
             Err(refusal) => Some(refusal.message.to_string()),

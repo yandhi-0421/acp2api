@@ -42,6 +42,21 @@ impl WireDialect for Responses {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         content::parse(content::Api::Responses, body)
     }
+    fn built_in_error(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+        let mut response = self.body(
+            wire,
+            &Answer {
+                text: wire.text.clone(),
+                tool_call: None,
+                input_tokens: 0,
+                output_tokens: 0,
+            },
+        );
+        response["status"] = json!("failed");
+        response["error"] = json!({"code":"invalid_prompt","message":message});
+        response["usage"] = Value::Null;
+        vec![wire.event("response.failed", json!({"response":response}))]
+    }
     fn prefix(&self) -> &'static str {
         "resp_"
     }

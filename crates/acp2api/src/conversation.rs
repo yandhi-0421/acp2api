@@ -126,6 +126,6 @@ pub(crate) struct Usage {
 pub(crate) enum TurnEvent {
     Text(String),
     ToolCall(ToolCall),
-    End(Result<Usage, String>),
+    End(Result<Usage, crate::messages::Message>),
 }
 pub(crate) type Ticket = tokio::sync::mpsc::UnboundedReceiver<(TurnEvent, crate::Hold)>;

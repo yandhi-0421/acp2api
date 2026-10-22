@@ -23,6 +23,12 @@ pub enum TurnStep {
     BuiltInRuns {
         name: String,
     },
+    SafetyToolReport {
+        id: String,
+        title: Option<String>,
+        status: String,
+        update: bool,
+    },
     /// Uses captured Error 400 grammar. Other account error classes are synthetic assumptions.
     ErrorLine {
         code: u16,
@@ -586,6 +592,18 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
             }
             TurnStep::BuiltInRuns { name } => {
                 json!({"sessionUpdate":"tool_call","toolCallId":"builtin-1","title":name,"status":"completed"})
+            }
+            TurnStep::SafetyToolReport {
+                id,
+                title,
+                status,
+                update,
+            } => {
+                let mut report = json!({"sessionUpdate":if update {"tool_call_update"} else {"tool_call"},"toolCallId":id,"status":status});
+                if let Some(title) = title {
+                    report["title"] = title.into();
+                }
+                report
             }
             TurnStep::HoldUntil(gate) => {
                 s.record(json!({"kind":"gate","name":gate}));

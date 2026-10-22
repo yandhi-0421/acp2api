@@ -93,7 +93,7 @@ impl Writer {
         writer.retain()?;
         Ok(writer)
     }
-    pub fn write(&mut self, record: &RequestRecord) -> io::Result<usize> {
+    pub fn write(&mut self, record: &impl Serialize) -> io::Result<usize> {
         let mut line = serde_json::to_vec(record)?;
         line.push(b'\n');
         if line.len() as u64 > FILE_CAP {
@@ -262,6 +262,7 @@ pub(crate) enum Outcome {
     Success { input: u64, output: u64 },
     Refused(&'static str),
     Failed,
+    BuiltInToolRan,
     Disconnected,
 }
 pub(crate) struct Completion {
@@ -269,7 +270,48 @@ pub(crate) struct Completion {
     pub session: Option<Session>,
     pub outcome: Outcome,
 }
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SafetyKind {
+    PermissionRefused,
+    BuiltInToolRan,
+}
+pub(crate) struct SafetyReport {
+    pub request: Request,
+    pub session: String,
+    pub kind: SafetyKind,
+    pub tool: String,
+}
 impl Journal {
+    /// Like `complete`, a failed write drops the line and reports it on stderr.
+    pub(crate) fn safety(&self, report: SafetyReport, clock: &dyn crate::Clock) {
+        if let Err(error) = self.safety_line(report, clock) {
+            eprintln!("acp2api: cannot write runtime safety event: {error}");
+        }
+    }
+    fn safety_line(&self, report: SafetyReport, clock: &dyn crate::Clock) -> io::Result<()> {
+        let record = serde_json::json!({
+            "time":timestamp(clock.wall())?,
+            "request_id":report.request.id,
+            "session":report.session.chars().take(12).collect::<String>(),
+            "event":report.kind,
+            "tool":report.tool,
+        });
+        self.emit(&record)
+    }
+    /// Writes one line to the log file and to stdout, in the same order for both.
+    fn emit(&self, record: &impl Serialize) -> io::Result<()> {
+        let mut writer = self
+            .0
+            .writer
+            .lock()
+            .map_err(|_| io::Error::other("journal writer failed"))?;
+        writer.write(record)?;
+        use std::io::Write;
+        let mut terminal = std::io::stdout().lock();
+        writeln!(terminal, "acp2api: {}", serde_json::to_string(record)?)?;
+        terminal.flush()
+    }
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
         let mut random = [0; 8];
         getrandom::fill(&mut random).map_err(io::Error::other)?;
@@ -311,6 +353,7 @@ impl Journal {
             }
             Outcome::Refused(code) => (ResultKind::Refused, Some(code), None, None),
             Outcome::Failed => (ResultKind::Failed, Some("upstream_error"), None, None),
+            Outcome::BuiltInToolRan => (ResultKind::Failed, Some("built_in_tool_ran"), None, None),
             Outcome::Disconnected => (
                 ResultKind::Disconnected,
                 Some("client_disconnected"),
@@ -335,16 +378,7 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
-        let mut writer = self
-            .0
-            .writer
-            .lock()
-            .map_err(|_| io::Error::other("journal writer failed"))?;
-        writer.write(&record)?;
-        use std::io::Write;
-        let mut terminal = std::io::stdout().lock();
-        writeln!(terminal, "acp2api: {}", serde_json::to_string(&record)?)?;
-        terminal.flush()
+        self.emit(&record)
     }
 }
 #[cfg(test)]

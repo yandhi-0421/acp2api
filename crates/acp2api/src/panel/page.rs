@@ -24,6 +24,7 @@ pub(super) fn settings(
     settings: &crate::store::Settings,
     highest: u8,
     notice: Option<&str>,
+    notices: &[crate::conductor::Notice],
 ) -> String {
     let key = escape(&settings.local_api_key);
     let options = (1..=highest)
@@ -41,7 +42,11 @@ pub(super) fn settings(
     let notice = notice
         .map(|text| format!("<p class=\"notice\" role=\"status\">{}</p>", escape(text)))
         .unwrap_or_default();
+    let runtime_notices = notices.iter().map(|notice| format!(
+        r#"<section><h2>Runtime notice</h2><p role="status">{}</p><form method="post" action="/manage/notice"><input type="hidden" name="notice_id" value="{}"><button type="submit">Dismiss notice</button></form></section>"#,
+        escape(&notice.text()),escape(&notice.id)
+    )).collect::<String>();
     document(&format!(
-        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{notice}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Concurrency limit</h2><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{runtime_notices}{notice}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Concurrency limit</h2><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
     ))
 }

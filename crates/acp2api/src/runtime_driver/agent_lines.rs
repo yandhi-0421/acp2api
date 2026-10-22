@@ -131,6 +131,8 @@ async fn next(runtime: &mut Runtime) -> String {
             TurnUpdate::Text(text) => format!("text {text}"),
             TurnUpdate::Usage(used) => format!("usage {used}"),
             TurnUpdate::Permission { call, .. } => format!("permission {call:?}"),
+            TurnUpdate::RefusedPermission { name, .. } => format!("permission of {name}"),
+            TurnUpdate::UnpermittedTool(name) => format!("unpermitted {name}"),
             TurnUpdate::PromptEnded => "prompt ended".into(),
             TurnUpdate::Failed(error) => format!("failed {error}"),
         },
@@ -236,6 +238,6 @@ async fn a_permission_request_is_a_permission_event_and_not_refused() {
         .await;
     assert_eq!(
         turn(&mut runtime).await,
-        ["permission None", "prompt ended"]
+        ["permission of lookup", "prompt ended"]
     );
 }
