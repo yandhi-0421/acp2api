@@ -21,19 +21,20 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         "messages"
     }];
     let mut items = Vec::new();
-    if matches!(api, Api::Responses) && input.is_string() {
+    if let (Api::Responses, Some(text)) = (api, input.as_str()) {
         items.push(Item::Message {
             role: Role::User,
-            parts: vec![Part::Text(input.as_str().unwrap().into())],
+            parts: vec![Part::Text(text.into())],
         });
     } else {
         for item in input
             .as_array()
             .ok_or_else(|| Refusal::invalid("message array required"))?
         {
-            let kind = item["type"].as_str();
-            if matches!(api, Api::Responses) && kind.is_some_and(|k| k != "message") {
-                return Err(Message::Content(kind.unwrap().into()).into());
+            if let (Api::Responses, Some(kind)) = (api, item["type"].as_str())
+                && kind != "message"
+            {
+                return Err(Message::Content(kind.into()).into());
             }
             let role = match required(item, "role")? {
                 "user" => Role::User,
