@@ -134,9 +134,7 @@ impl Writer {
 }
 fn create_file(folder: &Path, date: &str, mut sequence: u64) -> io::Result<(std::fs::File, u64)> {
     loop {
-        sequence = sequence
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("log file sequence exhausted"))?;
+        sequence += 1;
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -196,9 +194,6 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_secs();
-    if seconds > 253_402_300_799 {
-        return Err(io::Error::other("wall time is outside the RFC 3339 range"));
-    }
     let mut days = seconds / 86_400;
     let mut year = 1970;
     let leap = |year: u64| {
