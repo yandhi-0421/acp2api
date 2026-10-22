@@ -405,7 +405,9 @@ impl Hub {
             s.failure = Some("terminal capture cap: 4 MiB".into());
             return;
         }
-        if String::from_utf8_lossy(bytes).contains("Listening http://127.0.0.1:") {
+        if String::from_utf8_lossy(bytes).contains("Listening http://127.0.0.1:")
+            || String::from_utf8_lossy(bytes).contains("management panel at http://127.0.0.1:")
+        {
             s.ready = true;
         }
         s.record(json!({"kind":"terminal","text":String::from_utf8_lossy(bytes)}));

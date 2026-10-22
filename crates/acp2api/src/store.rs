@@ -1,26 +1,262 @@
-use serde::Deserialize;
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+use argon2::{Argon2, PasswordHasher, password_hash::phc::PasswordHash};
+use serde::Serialize;
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
+#[derive(Serialize)]
 pub(crate) struct Settings {
     pub port: u16,
     pub concurrency_limit: u8,
     pub local_api_key: String,
     pub management_password_hash: String,
-    pub agy_acp_server_path: Option<std::path::PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agy_acp_server_path: Option<PathBuf>,
 }
-pub(crate) fn read(path: &std::path::Path, highest: u8) -> Result<Settings, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let settings: Settings = toml::from_str(&text).map_err(|e| e.to_string())?;
-    if settings.port == 0
-        || !(1..=highest).contains(&settings.concurrency_limit)
-        || settings.local_api_key.is_empty()
-        || !settings.management_password_hash.starts_with("$argon2id$")
-        || settings
-            .agy_acp_server_path
-            .as_ref()
-            .is_some_and(|p| !p.is_absolute())
-    {
-        return Err("unusable configuration".into());
+pub(crate) struct Opened {
+    pub settings: Settings,
+    pub first_start: bool,
+    pub needs_save: bool,
+    pub new_key: Option<String>,
+    pub new_password: Option<String>,
+}
+// A start saves each absent key of the first four, because each of them always has a value.
+const KEYS: [&str; 5] = [
+    "port",
+    "concurrency_limit",
+    "local_api_key",
+    "management_password_hash",
+    "agy_acp_server_path",
+];
+fn invalid(path: &Path, key: &str) -> String {
+    format!(
+        "the setting {key} in {} has a value that acp2api cannot use.",
+        path.display()
+    )
+}
+fn syntax_location(text: &str, offset: usize) -> String {
+    let offset = offset.min(text.len());
+    let line = text.as_bytes()[..offset]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
+        + 1;
+    let failed = text.lines().nth(line - 1).unwrap_or_default();
+    if let Some((key, _)) = failed.split_once('=') {
+        let key = key.trim();
+        if !key.is_empty()
+            && key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return key.into();
+        }
+        if let Some(key) = key
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .filter(|s| !s.is_empty())
+        {
+            return key.into();
+        }
     }
-    Ok(settings)
+    format!("at line {line}")
+}
+pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
+    let text = match fs::read(path) {
+        Ok(bytes) => Some(String::from_utf8(bytes).map_err(|e| {
+            let offset = e.utf8_error().valid_up_to();
+            invalid(
+                path,
+                &syntax_location(&String::from_utf8_lossy(e.as_bytes()), offset),
+            )
+        })?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    let table = match &text {
+        Some(text) => toml::from_str::<toml::Table>(text).map_err(|e| {
+            invalid(
+                path,
+                &syntax_location(text, e.span().map_or(0, |s| s.start)),
+            )
+        })?,
+        None => toml::Table::new(),
+    };
+    for key in table.keys() {
+        if !KEYS.contains(&key.as_str()) {
+            return Err(invalid(path, key));
+        }
+    }
+    let port = match table.get("port") {
+        None => 8329,
+        Some(value) => value
+            .as_integer()
+            .and_then(|n| u16::try_from(n).ok())
+            .filter(|&n| n > 0)
+            .ok_or_else(|| invalid(path, "port"))?,
+    };
+    let concurrency_limit = match table.get("concurrency_limit") {
+        None => highest.min(2),
+        Some(value) => value
+            .as_integer()
+            .and_then(|n| u8::try_from(n).ok())
+            .filter(|n| (1..=highest).contains(n))
+            .ok_or_else(|| invalid(path, "concurrency_limit"))?,
+    };
+    let agy_acp_server_path = match table.get("agy_acp_server_path") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .ok_or_else(|| invalid(path, "agy_acp_server_path"))?,
+        ),
+    };
+    let mut new_key = None;
+    let local_api_key = match table.get("local_api_key") {
+        Some(value) => value
+            .as_str()
+            .filter(|s| !s.is_empty() && s.bytes().all(|b| (0x21..=0x7e).contains(&b)))
+            .ok_or_else(|| invalid(path, "local_api_key"))?
+            .to_owned(),
+        None => {
+            let mut bytes = [0u8; 32];
+            getrandom::fill(&mut bytes).map_err(|_| "cannot generate local API key")?;
+            let key = format!("acp2api-{}", base64url(&bytes));
+            new_key = Some(key.clone());
+            key
+        }
+    };
+    let mut new_password = None;
+    let management_password_hash = match table.get("management_password_hash") {
+        Some(value) => {
+            let hash = value
+                .as_str()
+                .ok_or_else(|| invalid(path, "management_password_hash"))?;
+            if !valid_password_hash(hash) {
+                return Err(invalid(path, "management_password_hash"));
+            }
+            hash.to_owned()
+        }
+        None => {
+            let password = random_password()?;
+            let params = argon2::Params::new(19456, 2, 1, Some(32))
+                .map_err(|_| "cannot set password hash parameters")?;
+            let hash = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
+                .hash_password(password.as_bytes())
+                .map_err(|_| "cannot hash management password")?
+                .to_string();
+            new_password = Some(password);
+            hash
+        }
+    };
+    let settings = Settings {
+        port,
+        concurrency_limit,
+        local_api_key,
+        management_password_hash,
+        agy_acp_server_path,
+    };
+    Ok(Opened {
+        settings,
+        first_start: text.is_none(),
+        needs_save: KEYS[..4].iter().any(|key| !table.contains_key(*key)),
+        new_key,
+        new_password,
+    })
+}
+fn valid_password_hash(value: &str) -> bool {
+    let Ok(hash) = PasswordHash::new(value) else {
+        return false;
+    };
+    hash.algorithm.as_str() == "argon2id"
+        && hash
+            .version
+            .is_some_and(|v| argon2::Version::try_from(v).is_ok())
+        && hash.salt.as_ref().is_some_and(|salt| salt.len() >= 8)
+        && hash.hash.as_ref().is_some_and(|output| output.len() >= 4)
+        && ["m", "t", "p"]
+            .iter()
+            .all(|key| hash.params.get(*key).is_some())
+        && argon2::Params::try_from(&hash).is_ok()
+}
+fn random_password() -> Result<String, String> {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz23456789";
+    let mut password = String::new();
+    for i in 0..20 {
+        if i > 0 && i % 5 == 0 {
+            password.push('-');
+        }
+        loop {
+            let mut byte = [0u8; 1];
+            getrandom::fill(&mut byte).map_err(|_| "cannot generate management password")?;
+            if byte[0] < 238 {
+                password.push(ALPHABET[byte[0] as usize % ALPHABET.len()] as char);
+                break;
+            }
+        }
+    }
+    Ok(password)
+}
+fn base64url(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut result = String::new();
+    let mut bits = 0u32;
+    let mut count = 0;
+    for &byte in bytes {
+        bits = (bits << 8) | u32::from(byte);
+        count += 8;
+        while count >= 6 {
+            count -= 6;
+            result.push(ALPHABET[((bits >> count) & 63) as usize] as char);
+        }
+    }
+    if count > 0 {
+        result.push(ALPHABET[((bits << (6 - count)) & 63) as usize] as char);
+    }
+    result
+}
+pub(crate) fn save(path: &Path, settings: &Settings) -> Result<(), String> {
+    let parent = path.parent().ok_or("configuration path has no parent")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let mut suffix = [0u8; 16];
+    getrandom::fill(&mut suffix).map_err(|_| "cannot generate configuration temporary name")?;
+    let temporary = parent.join(format!(".config-{}.tmp", base64url(&suffix)));
+    let mut file = crate::os::private_file(&temporary).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let text = toml::to_string(settings).map_err(|_| "cannot encode configuration")?;
+        file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        fs::rename(&temporary, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn non_utf8_configuration_gives_m26() {
+        let folder = crate::os::environment()
+            .temp
+            .join(format!("acp2api-store-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("config.toml");
+        for (bytes, place) in [
+            (
+                &b"port = 8329\nlocal_api_key = \"\xff\"\n"[..],
+                "local_api_key",
+            ),
+            (&b"port = 8329\n\xff\n"[..], "at line 2"),
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            let error = super::read(&path, 3).err().unwrap();
+            assert_eq!(error, super::invalid(&path, place));
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 }
