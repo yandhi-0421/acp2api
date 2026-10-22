@@ -5,7 +5,27 @@ impl WireDialect for Messages {
         content::parse(content::Api::Messages, body)
     }
     fn refusal_body(&self, refusal: &Refusal) -> Value {
-        json!({"type":"error","error":{"type":if refusal_status(refusal)==axum::http::StatusCode::BAD_REQUEST {"invalid_request_error"} else if refusal_status(refusal)==axum::http::StatusCode::UNAUTHORIZED {"authentication_error"} else {"api_error"},"message":refusal.message.to_string()}})
+        let kind = match refusal.row() {
+            Row::Key => "authentication_error",
+            Row::Rejected => "invalid_request_error",
+            Row::TooLarge => "request_too_large",
+            Row::Other502 => "api_error",
+        };
+        json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}})
+    }
+    fn built_in_error(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+        let mut events = Vec::new();
+        if !wire.text.is_empty() {
+            events.push(named(
+                "content_block_stop",
+                json!({"type":"content_block_stop","index":0}),
+            ));
+        }
+        events.push(named(
+            "error",
+            json!({"type":"error","error":{"type":"invalid_request_error","message":message}}),
+        ));
+        events
     }
     fn prefix(&self) -> &'static str {
         "msg_"

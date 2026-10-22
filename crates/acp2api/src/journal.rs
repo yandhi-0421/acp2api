@@ -74,8 +74,12 @@ impl Writer {
             if wall
                 .duration_since(file.modified)
                 .is_ok_and(|age| age > MAX_AGE)
+                && let Err(error) = std::fs::remove_file(&file.path)
             {
-                std::fs::remove_file(file.path)?;
+                eprintln!(
+                    "acp2api: cannot delete the old log file {}: {error}",
+                    file.path.display()
+                );
             }
         }
         let (file, sequence) = create_file(folder, &date, sequence)?;
@@ -89,10 +93,7 @@ impl Writer {
         writer.retain()?;
         Ok(writer)
     }
-    pub fn write(&mut self, record: &RequestRecord) -> io::Result<usize> {
-        self.record(record)
-    }
-    fn record(&mut self, record: &impl Serialize) -> io::Result<usize> {
+    pub fn write(&mut self, record: &impl Serialize) -> io::Result<usize> {
         let mut line = serde_json::to_vec(record)?;
         line.push(b'\n');
         if line.len() as u64 > FILE_CAP {
@@ -125,10 +126,7 @@ impl Writer {
                 break;
             }
             if file.date == self.date && file.sequence == self.sequence {
-                let (replacement, sequence) = create_file(&self.folder, &self.date, self.sequence)?;
-                self.file = replacement;
-                self.sequence = sequence;
-                self.size = 0;
+                continue;
             }
             std::fs::remove_file(file.path)?;
             size -= file.size;
@@ -138,9 +136,7 @@ impl Writer {
 }
 fn create_file(folder: &Path, date: &str, mut sequence: u64) -> io::Result<(std::fs::File, u64)> {
     loop {
-        sequence = sequence
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("log file sequence exhausted"))?;
+        sequence += 1;
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -200,9 +196,6 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_secs();
-    if seconds > 253_402_300_799 {
-        return Err(io::Error::other("wall time is outside the RFC 3339 range"));
-    }
     let mut days = seconds / 86_400;
     let mut year = 1970;
     let leap = |year: u64| {
@@ -290,7 +283,13 @@ pub(crate) struct SafetyReport {
     pub tool: String,
 }
 impl Journal {
-    pub(crate) fn safety(&self, report: SafetyReport, clock: &dyn crate::Clock) -> io::Result<()> {
+    /// Like `complete`, a failed write drops the line and reports it on stderr.
+    pub(crate) fn safety(&self, report: SafetyReport, clock: &dyn crate::Clock) {
+        if let Err(error) = self.safety_line(report, clock) {
+            eprintln!("acp2api: cannot write runtime safety event: {error}");
+        }
+    }
+    fn safety_line(&self, report: SafetyReport, clock: &dyn crate::Clock) -> io::Result<()> {
         let record = serde_json::json!({
             "time":timestamp(clock.wall())?,
             "request_id":report.request.id,
@@ -298,17 +297,21 @@ impl Journal {
             "event":report.kind,
             "tool":report.tool,
         });
-        self.0
+        self.emit(&record)
+    }
+    /// Writes one line to the log file and to stdout, in the same order for both.
+    fn emit(&self, record: &impl Serialize) -> io::Result<()> {
+        let mut writer = self
+            .0
             .writer
             .lock()
-            .map_err(|_| io::Error::other("journal writer failed"))?
-            .record(&record)?;
+            .map_err(|_| io::Error::other("journal writer failed"))?;
+        writer.write(record)?;
         use std::io::Write;
         let mut terminal = std::io::stdout().lock();
-        writeln!(terminal, "acp2api: {record}")?;
+        writeln!(terminal, "acp2api: {}", serde_json::to_string(record)?)?;
         terminal.flush()
     }
-
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
         let mut random = [0; 8];
         getrandom::fill(&mut random).map_err(io::Error::other)?;
@@ -331,11 +334,13 @@ impl Journal {
             started,
         }
     }
-    pub(crate) fn complete(
-        &self,
-        completion: Completion,
-        clock: &dyn crate::Clock,
-    ) -> io::Result<()> {
+    /// A failed write drops the line and reports it on stderr, so a full disk never stops a request.
+    pub(crate) fn complete(&self, completion: Completion, clock: &dyn crate::Clock) {
+        if let Err(error) = self.write_line(completion, clock) {
+            eprintln!("acp2api: cannot write request metadata: {error}");
+        }
+    }
+    fn write_line(&self, completion: Completion, clock: &dyn crate::Clock) -> io::Result<()> {
         let Completion {
             request,
             session,
@@ -373,15 +378,81 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
-        let mut writer = self
-            .0
-            .writer
-            .lock()
-            .map_err(|_| io::Error::other("journal writer failed"))?;
-        writer.write(&record)?;
-        use std::io::Write;
-        let mut terminal = std::io::stdout().lock();
-        writeln!(terminal, "acp2api: {}", serde_json::to_string(&record)?)?;
-        terminal.flush()
+        self.emit(&record)
+    }
+}
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    fn folder(name: &str) -> std::path::PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-journal-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+    fn log(folder: &Path, name: &str, size: u64, modified: SystemTime) -> std::path::PathBuf {
+        let path = folder.join(name);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(size).unwrap();
+        file.set_modified(modified).unwrap();
+        path
+    }
+    fn record(id: &str) -> RequestRecord {
+        RequestRecord {
+            time: "2026-10-22T00:00:00Z".into(),
+            request_id: id.into(),
+            api: Api::Chat,
+            model: None,
+            session: None,
+            session_use: None,
+            duration_ms: 0,
+            input_tokens: None,
+            output_tokens: None,
+            result: ResultKind::Success,
+            error_code: None,
+            unknown_fields: Vec::new(),
+        }
+    }
+    #[test]
+    fn retention_keeps_the_active_file_after_the_clock_went_back() {
+        let folder = folder("clock");
+        let now = SystemTime::now();
+        let later = now + Duration::from_secs(86_400);
+        for day in 1..=5 {
+            log(
+                &folder,
+                &format!("acp2api-2026-01-0{day}-1.log"),
+                9_000_000,
+                later,
+            );
+        }
+        let mut writer = Writer::open(&folder, now).unwrap();
+        writer.write(&record("first-line")).unwrap();
+        log(&folder, "acp2api-2026-01-06-1.log", 9_000_000, later);
+        writer.write(&record("second-line")).unwrap();
+        let active = folder.join(format!("acp2api-{}-1.log", &timestamp(now).unwrap()[..10]));
+        let text = std::fs::read_to_string(active).unwrap_or_default();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(text.contains("first-line") && text.contains("second-line"));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_stale_log_that_cannot_be_deleted_does_not_stop_the_start() {
+        use std::os::unix::ffi::OsStrExt;
+        let folder = folder("stale");
+        let old = SystemTime::now() - Duration::from_secs(31 * 86_400);
+        let path = log(&folder, "acp2api-2026-01-01-1.log", 10, old);
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::chflags(c_path.as_ptr(), libc::UF_IMMUTABLE) },
+            0
+        );
+        let opened = Writer::open(&folder, SystemTime::now());
+        assert_eq!(unsafe { libc::chflags(c_path.as_ptr(), 0) }, 0);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(opened.is_ok(), "{:?}", opened.err());
     }
 }

@@ -40,38 +40,11 @@ trait WireDialect: Sync {
         let code = refusal_code(refusal);
         json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
     }
-    fn built_in_error(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
-        match self.prefix() {
-            "msg_" => {
-                let mut events = Vec::new();
-                if !wire.text.is_empty() {
-                    events.push(named(
-                        "content_block_stop",
-                        json!({"type":"content_block_stop","index":0}),
-                    ));
-                }
-                events.push(named("error",json!({"type":"error","error":{"type":"invalid_request_error","message":message}})));
-                events
-            }
-            "resp_" => {
-                let mut response = self.body(
-                    wire,
-                    &Answer {
-                        text: wire.text.clone(),
-                        tool_call: None,
-                        input_tokens: 0,
-                        output_tokens: 0,
-                    },
-                );
-                response["status"] = json!("failed");
-                response["error"] = json!({"code":"invalid_prompt","message":message});
-                response["usage"] = Value::Null;
-                vec![wire.event("response.failed", json!({"response":response}))]
-            }
-            _ => vec![data(
-                json!({"error":{"message":message,"type":"server_error","param":null,"code":"built_in_tool_ran"}}),
-            )],
-        }
+    /// The stream events that end a turn after a built-in tool ran with no permission request.
+    fn built_in_error(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
+        vec![data(
+            json!({"error":{"message":message,"type":"server_error","param":null,"code":"built_in_tool_ran"}}),
+        )]
     }
     fn prefix(&self) -> &'static str;
     fn call_prefix(&self) -> &'static str {
@@ -277,6 +250,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
     match refusal.row() {
         Row::Key => StatusCode::UNAUTHORIZED,
         Row::Rejected => StatusCode::BAD_REQUEST,
+        Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
     }
 }
@@ -284,7 +258,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
 pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
     match refusal.message {
         Message::Model { .. } => "model_not_found",
-        Message::Field(_) | Message::FieldValue { .. } => "unsupported_parameter",
+        Message::Field { .. } => "unsupported_parameter",
         Message::Content(_) => "unsupported_content_type",
         Message::Media(_) => "unsupported_media_type",
         Message::Url(_) => "unsupported_url",
@@ -298,6 +272,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::InvalidJson => "invalid_json",
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
+        Message::TooLarge => "request_too_large",
         Message::Upstream(_) => "upstream_error",
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
     }

@@ -27,7 +27,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type Moment = u64;
 pub type ProcessRead = Pin<Box<dyn AsyncRead + Send>>;
 pub type ProcessWrite = Pin<Box<dyn AsyncWrite + Send>>;
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub enum HoldKind {
     HttpRequest,
     RuntimeLine,

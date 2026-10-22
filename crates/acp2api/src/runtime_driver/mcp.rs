@@ -6,8 +6,9 @@ use axum::{
     routing::post,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{HashMap, HashSet, hash_map::Entry},
     sync::{Arc, RwLock},
 };
 
@@ -27,7 +28,7 @@ impl ToolSets {
         let mut random = [0; 32];
         getrandom::fill(&mut random).map_err(|e| e.to_string())?;
         let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        let tools:Result<Vec<_>,_>=tools.iter().map(|tool|serde_json::from_str::<Value>(&tool.schema).map(|schema|json!({"name":tool.mcp_name(),"description":tool.description,"inputSchema":schema}))).collect();
+        let tools:Result<Vec<_>,_>=tools.iter().zip(tool_names(tools)).map(|(tool,name)|serde_json::from_str::<Value>(&tool.schema).map(|schema|json!({"name":name,"description":tool.description,"inputSchema":schema}))).collect();
         match self.sets.write().unwrap().entry(secret.clone()) {
             Entry::Vacant(entry) => {
                 entry.insert(tools.map_err(|e| e.to_string())?);
@@ -36,11 +37,60 @@ impl ToolSets {
         }
         Ok(format!("http://127.0.0.1:{}/mcp/{secret}", self.port))
     }
+    /// Removes the tool set of a URL from `insert`.
+    pub(crate) fn remove(&self, url: &str) {
+        if let Some((_, secret)) = url.rsplit_once('/') {
+            self.sets.write().unwrap().remove(secret);
+        }
+    }
     pub(crate) fn router(self) -> Router {
         Router::new()
             .route("/mcp/{secret}", post(serve))
             .with_state(self)
     }
+}
+/// Gives each tool its MCP name, in the order of `tools`. A plain tool keeps its name. A namespace
+/// member gets `<namespace>__<name>`. If that name is too long or is already in use, the member gets
+/// a cut name with a hash suffix.
+pub(crate) fn tool_names(tools: &[ClientTool]) -> Vec<String> {
+    // The runtime shows a tool of the MCP server "client-tools" to the model as
+    // `mcp_client-tools_<name>` (docs/research/2026-10-18-earlier-cli-bridge-findings.md, RT-3).
+    // Model function names have at most 64 characters.
+    const LIMIT: usize = 64 - "mcp_client-tools_".len();
+    let mut used: HashSet<String> = tools
+        .iter()
+        .filter(|tool| tool.namespace.is_none())
+        .map(|tool| tool.name.clone())
+        .collect();
+    tools
+        .iter()
+        .map(|tool| {
+            let Some(namespace) = &tool.namespace else {
+                return tool.name.clone();
+            };
+            let readable = format!("{namespace}__{}", tool.name);
+            if readable.len() <= LIMIT && used.insert(readable.clone()) {
+                return readable;
+            }
+            let mut end = readable.len().min(LIMIT - "_12345678".len());
+            while !readable.is_char_boundary(end) {
+                end -= 1;
+            }
+            (0u32..)
+                .map(|attempt| {
+                    let hash = Sha256::new()
+                        .chain_update(namespace)
+                        .chain_update([0])
+                        .chain_update(&tool.name)
+                        .chain_update(attempt.to_le_bytes())
+                        .finalize();
+                    let suffix: String = hash[..4].iter().map(|b| format!("{b:02x}")).collect();
+                    format!("{}_{suffix}", &readable[..end])
+                })
+                .find(|name| used.insert(name.clone()))
+                .unwrap()
+        })
+        .collect()
 }
 async fn serve(
     State(sets): State<ToolSets>,
@@ -93,6 +143,13 @@ mod tests {
             (status,serde_json::from_slice(&bytes[split+4..]).unwrap())
         }).await.expect("MCP test request cap: 2 s")
     }
+    #[test]
+    fn a_removed_tool_set_is_gone() {
+        let sets = ToolSets::new(1);
+        let url = sets.insert(&[]).unwrap();
+        sets.remove(&url);
+        assert!(sets.sets.read().unwrap().is_empty());
+    }
     #[tokio::test]
     async fn mcp_paths_keep_their_tool_set_and_calls_finish_with_an_error() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -117,7 +174,6 @@ mod tests {
             )
             .await;
         });
-        // Four bounded requests exercise the production HTTP handler.
         let path = |url: &str| {
             url.strip_prefix(&format!("http://{address}"))
                 .unwrap()
