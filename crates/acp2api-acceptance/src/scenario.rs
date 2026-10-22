@@ -7,6 +7,7 @@ use crate::{
 };
 use std::{
     io::{BufRead, BufReader, Read},
+    path::PathBuf,
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -46,140 +47,35 @@ impl Scenario {
         FakeRuntime::new(self.hub.clone())
     }
     pub async fn start(&mut self) {
-        if self.host.is_some() {
-            return;
-        }
-        let run = self
-            .root
-            .seed(&self.hub, self.plan.as_ref().expect("Given normal state"));
-        let path = self.root.path.join("run.toml");
-        std::fs::write(&path, toml::to_string(&run).unwrap()).unwrap();
-        let mut host = Command::new(binary("acp2api-test-host"))
-            .env_clear()
-            .env("ACP2API_TEST_RUN", path)
-            .args(["--data-dir", self.root.path.join("data").to_str().unwrap()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("test host launch");
-        for pipe in [
-            Box::new(host.stdout.take().unwrap()) as Box<dyn std::io::Read + Send>,
-            Box::new(host.stderr.take().unwrap()),
-        ] {
-            let hub = self.hub.clone();
-            std::thread::spawn(move || {
-                let mut reader = BufReader::new(pipe);
-                loop {
-                    let mut line = Vec::new();
-                    match reader
-                        .by_ref()
-                        .take(4 * 1024 * 1024 + 1)
-                        .read_until(b'\n', &mut line)
-                    {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => hub.terminal(&line),
-                    }
-                }
-            });
-        }
-        self.host = Some(host);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !self.hub.ready() {
-            if let Some(status) = self.host.as_mut().unwrap().try_wait().unwrap() {
-                panic!(
-                    "test host exited {status}; terminal: {:?}",
-                    self.hub
-                        .entries()
-                        .iter()
-                        .filter(|e| e.event["kind"] == "terminal")
-                        .map(|e| e.event["text"].clone())
-                        .collect::<Vec<_>>()
-                );
-            }
-            assert!(Instant::now() < deadline, "test host startup cap: 10 s");
-            let hub = self.hub.clone();
-            tokio::task::spawn_blocking(move || hub.wait_change(deadline))
-                .await
-                .unwrap();
-        }
-        self.time.settle().await;
-        self.client = Some(ApiClient::new(
-            format!("127.0.0.1:{}", self.root.port),
-            self.root.key.clone(),
-            self.hub.clone(),
-        ));
+        self.start_fresh(&[]).await;
     }
     pub async fn start_isolated_owner(&mut self) {
+        let env = [
+            ("HOME", self.root.path.join("home")),
+            ("GEMINI_HOME", self.root.path.join("home/.gemini")),
+        ];
+        self.start_fresh(&env).await;
+    }
+    async fn start_fresh(&mut self, env: &[(&str, PathBuf)]) {
         if self.host.is_some() {
             return;
         }
         let run = self
             .root
             .seed(&self.hub, self.plan.as_ref().expect("Given normal state"));
-        let path = self.root.path.join("run.toml");
-        std::fs::write(&path, toml::to_string(&run).unwrap()).unwrap();
-        let mut host = Command::new(binary("acp2api-test-host"))
-            .env_clear()
-            .env("ACP2API_TEST_RUN", path)
-            .env("HOME", self.root.path.join("home"))
-            .env("GEMINI_HOME", self.root.path.join("home/.gemini"))
-            .args(["--data-dir", self.root.path.join("data").to_str().unwrap()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("test host launch");
-        for pipe in [
-            Box::new(host.stdout.take().unwrap()) as Box<dyn std::io::Read + Send>,
-            Box::new(host.stderr.take().unwrap()),
-        ] {
-            let hub = self.hub.clone();
-            std::thread::spawn(move || {
-                let mut reader = BufReader::new(pipe);
-                loop {
-                    let mut line = Vec::new();
-                    match reader
-                        .by_ref()
-                        .take(4 * 1024 * 1024 + 1)
-                        .read_until(b'\n', &mut line)
-                    {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => hub.terminal(&line),
-                    }
-                }
-            });
-        }
-        self.host = Some(host);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !self.hub.ready() {
-            if let Some(status) = self.host.as_mut().unwrap().try_wait().unwrap() {
-                panic!(
-                    "test host exited {status}; terminal: {:?}",
-                    self.hub
-                        .entries()
-                        .iter()
-                        .filter(|e| e.event["kind"] == "terminal")
-                        .map(|e| e.event["text"].clone())
-                        .collect::<Vec<_>>()
-                );
-            }
-            assert!(Instant::now() < deadline, "test host startup cap: 10 s");
-            let hub = self.hub.clone();
-            tokio::task::spawn_blocking(move || hub.wait_change(deadline))
-                .await
-                .unwrap();
-        }
-        self.time.settle().await;
-        self.client = Some(ApiClient::new(
-            format!("127.0.0.1:{}", self.root.port),
-            self.root.key.clone(),
-            self.hub.clone(),
-        ));
+        std::fs::write(
+            self.root.path.join("run.toml"),
+            toml::to_string(&run).unwrap(),
+        )
+        .unwrap();
+        let address = format!("127.0.0.1:{}", self.root.port);
+        self.spawn_host(env, address, self.root.key.clone()).await;
     }
     async fn start_saved(&mut self) {
-        let path = self.root.path.join("run.toml");
-        assert!(path.is_file(), "restart requires an existing run file");
+        assert!(
+            self.root.path.join("run.toml").is_file(),
+            "restart requires an existing run file"
+        );
         let config: toml::Value = toml::from_str(
             &std::fs::read_to_string(self.root.path.join("data/config.toml")).unwrap(),
         )
@@ -189,9 +85,13 @@ impl Scenario {
             .as_str()
             .expect("saved key")
             .to_owned();
+        self.spawn_host(&[], format!("127.0.0.1:{port}"), key).await;
+    }
+    async fn spawn_host(&mut self, env: &[(&str, PathBuf)], address: String, key: String) {
         let mut host = Command::new(binary("acp2api-test-host"))
             .env_clear()
-            .env("ACP2API_TEST_RUN", path)
+            .env("ACP2API_TEST_RUN", self.root.path.join("run.toml"))
+            .envs(env.iter().map(|(name, value)| (name, value)))
             .args(["--data-dir", self.root.path.join("data").to_str().unwrap()])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -239,11 +139,7 @@ impl Scenario {
                 .unwrap();
         }
         self.time.settle().await;
-        self.client = Some(ApiClient::new(
-            format!("127.0.0.1:{port}"),
-            key,
-            self.hub.clone(),
-        ));
+        self.client = Some(ApiClient::new(address, key, self.hub.clone()));
     }
     pub async fn client(&mut self) -> &mut ApiClient {
         self.start().await;
