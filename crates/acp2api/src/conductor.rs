@@ -414,7 +414,7 @@ impl Conductor {
                     work=recv.recv()=>{
                         let Some(work)=work else {break;};
                         let work=match work {
-                            Work::Models {reply,hold}=>{let _=reply.send(core.catalog.as_ref().map(crate::catalog::Catalog::entries).ok_or_else(|| crate::messages::Message::Upstream(UNAVAILABLE.into()).into()));drop(hold);continue;}
+                            Work::Models {reply,hold}=>{let _=reply.send(Ok(core.catalog.as_ref().map(crate::catalog::Catalog::entries).unwrap_or_default()));drop(hold);continue;}
                             Work::Owner {action,reply,hold}=>{
                                 let mut settings=(**publish.borrow()).clone();
                                 let result=(|| {
@@ -714,12 +714,13 @@ mod tests {
         let listed = conductor
             .model_names(clock.hold(HoldKind::HttpRequest))
             .await
-            .err()
-            .map(|refusal| refusal.message.to_string());
+            .ok()
+            .map(|entries| entries.len());
         std::fs::remove_dir_all(&folder).unwrap();
         let unavailable = Some("official runtime is not available".to_owned());
         assert_eq!(end, unavailable, "answer to a request");
-        assert_eq!(listed, unavailable, "answer to GET /v1/models");
+        // The frozen #55 steps check a new local API key with GET /v1/models and no runtime.
+        assert_eq!(listed, Some(0), "GET /v1/models lists no model");
     }
     #[tokio::test]
     async fn a_client_gone_before_admission_still_has_its_request_line() {
