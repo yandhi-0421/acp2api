@@ -10,7 +10,7 @@ pub(crate) struct Conductor(mpsc::Sender<Work>);
 enum Work {
     Turn(Box<TurnWork>),
     Models {
-        reply: oneshot::Sender<Vec<crate::catalog::ModelEntry>>,
+        reply: oneshot::Sender<Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal>>,
         hold: Hold,
     },
 }
@@ -20,6 +20,7 @@ struct TurnWork {
     hold: Hold,
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
 }
+const UNAVAILABLE: &str = "official runtime is not available";
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
@@ -43,7 +44,8 @@ enum Phase {
     Settling(Moment),
 }
 struct Core {
-    catalog: crate::catalog::Catalog,
+    /// `None` while acp2api has no runtime process.
+    catalog: Option<crate::catalog::Catalog>,
     active: Option<Active>,
     waiting: VecDeque<Accepted>,
     session: Option<Session>,
@@ -56,7 +58,7 @@ struct Session {
 impl Default for Core {
     fn default() -> Self {
         Self {
-            catalog: crate::catalog::Catalog::default(),
+            catalog: None,
             active: None,
             waiting: VecDeque::new(),
             session: Some(Session {
@@ -101,7 +103,7 @@ impl Core {
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         match event {
-            Event::Catalog(catalog) => self.catalog = catalog,
+            Event::Catalog(catalog) => self.catalog = Some(catalog),
             Event::Accepted(request) => self.waiting.push_back(request),
             Event::SessionReady(id) => {
                 if let Some(active) = &mut self.active {
@@ -268,7 +270,7 @@ impl Conductor {
                 Some((runtime, catalog)) => (
                     Some(runtime),
                     Core {
-                        catalog,
+                        catalog: Some(catalog),
                         ..Core::default()
                     },
                 ),
@@ -289,14 +291,14 @@ impl Conductor {
                         let Some(work)=work else {break;};
                         let work = match work {
                             Work::Models { reply, hold } => {
-                                let _ = reply.send(core.catalog.entries());
+                                let _ = reply.send(core.catalog.as_ref().map(crate::catalog::Catalog::entries).ok_or_else(|| crate::messages::Message::Upstream(UNAVAILABLE.into()).into()));
                                 drop(hold);
                                 continue;
                             }
                             Work::Turn(work) => *work,
                         };
                         let (output,ticket)=mpsc::unbounded_channel();
-                        let admitted = core.catalog.check(&work.turn.model).map(|()| ticket);
+                        let admitted = core.catalog.as_ref().map_or(Ok(()), |catalog| catalog.check(&work.turn.model)).map(|()| ticket);
                         let refused = admitted.is_err();
                         if work.admission.send(admitted).is_err() {
                             journal.complete(crate::journal::Completion {request:work.request,session:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
@@ -356,7 +358,7 @@ impl Conductor {
                                         Err(error) => Err(error),
                                     }
                                 }
-                                None => Err("official runtime is not available".into()),
+                                None => Err(UNAVAILABLE.into()),
                             };
                             if let Err(error) = result {
                                 commands.extend(core.handle(
@@ -431,13 +433,45 @@ impl Conductor {
             crate::messages::Refusal::from(crate::messages::Message::Upstream(
                 "conductor stopped".into(),
             ))
-        })
+        })?
     }
 }
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn without_a_runtime_a_request_gets_no_model_name_error() {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-no-runtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (conductor, _task) = Conductor::start(None, clock.clone(), journal.clone());
+        let body = br#"{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = journal.begin(crate::journal::Api::Chat, clock.now());
+        let admitted = conductor
+            .admit(turn, clock.hold(HoldKind::HttpRequest), request)
+            .await;
+        let end = match admitted {
+            Ok(mut ticket) => loop {
+                if let (TurnEvent::End(end), _) = ticket.recv().await.unwrap() {
+                    break end.err();
+                }
+            },
+            Err(refusal) => Some(refusal.message.to_string()),
+        };
+        let listed = conductor
+            .model_names(clock.hold(HoldKind::HttpRequest))
+            .await
+            .err()
+            .map(|refusal| refusal.message.to_string());
+        std::fs::remove_dir_all(&folder).unwrap();
+        let unavailable = Some("official runtime is not available".to_owned());
+        assert_eq!(end, unavailable, "answer to a request");
+        assert_eq!(listed, unavailable, "answer to GET /v1/models");
+    }
     #[tokio::test]
     async fn a_client_gone_before_admission_still_has_its_request_line() {
         let folder = std::env::temp_dir().join(format!("acp2api-conductor-{}", std::process::id()));
