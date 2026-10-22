@@ -122,7 +122,7 @@ enum Command {
     Forget(String),
 }
 impl Core {
-    fn next_deadline(&self) -> Moment {
+    fn next_deadline(&self) -> Option<Moment> {
         self.active
             .iter()
             .filter_map(|active| match active.phase {
@@ -130,7 +130,69 @@ impl Core {
                 _ => None,
             })
             .min()
-            .unwrap_or(u64::MAX)
+    }
+    fn check_model(&self, model: &str) -> Result<(), crate::messages::Refusal> {
+        self.catalog
+            .as_ref()
+            .map_or(Ok(()), |catalog| catalog.check(model))
+    }
+    fn model_entries(&self) -> Vec<crate::catalog::ModelEntry> {
+        self.catalog
+            .as_ref()
+            .map(crate::catalog::Catalog::entries)
+            .unwrap_or_default()
+    }
+    fn owner_action(
+        &mut self,
+        action: OwnerAction,
+        settings: &watch::Sender<Arc<crate::store::Settings>>,
+        configuration: &std::path::Path,
+        clock: &dyn Clock,
+    ) -> Result<Vec<Command>, String> {
+        let mut changed = (**settings.borrow()).clone();
+        match action {
+            OwnerAction::NewLocalApiKey => changed.local_api_key = crate::store::random_key()?,
+            OwnerAction::SetPasswordHash(hash) => changed.management_password_hash = hash,
+            OwnerAction::SetConcurrencyLimit(limit) => changed.concurrency_limit = limit,
+            OwnerAction::DismissNotice(id) => {
+                return Ok(self.handle(Event::DismissNotice(id), clock.now()));
+            }
+        }
+        crate::store::save(configuration, &changed)?;
+        let limit = changed.concurrency_limit;
+        settings.send_replace(Arc::new(changed));
+        Ok(self.handle(Event::Limit(limit), clock.now()))
+    }
+    fn admit(
+        &self,
+        work: TurnWork,
+        journal: &crate::journal::Journal,
+        clock: &dyn Clock,
+    ) -> Option<(Event, Hold)> {
+        let (output, ticket) = mpsc::unbounded_channel();
+        let admitted = self.check_model(&work.turn.model).map(|()| ticket);
+        let refused = admitted.is_err();
+        if work.admission.send(admitted).is_err() {
+            journal.complete(
+                crate::journal::Completion {
+                    request: work.request,
+                    session: None,
+                    session_use: None,
+                    outcome: crate::journal::Outcome::Disconnected,
+                },
+                clock,
+            );
+            return None;
+        }
+        if refused {
+            return None;
+        }
+        let accepted = Accepted {
+            turn: work.turn,
+            request: work.request,
+            output,
+        };
+        Some((Event::Accepted(accepted), work.hold))
     }
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
@@ -484,58 +546,69 @@ impl Conductor {
             };
             let mut read_open = runtime.is_some();
             loop {
-                let disconnected: Vec<_> = core
+                let connected: Vec<_> = core
                     .active
                     .iter()
                     .filter(|active| !active.disconnected)
                     .map(|active| (active.request.id.clone(), active.output.clone()))
                     .collect();
-                let timer = clock.sleep_until(core.next_deadline());
+                let timer = core.next_deadline().map(|at| clock.sleep_until(at));
                 let (event, hold) = tokio::select! {
                     biased;
-                    work=async {
-                        let waits=disconnected.iter().map(|(id,output)|Box::pin(async move {output.closed().await;id.clone()}));
-                        futures_util::future::select_all(waits).await.0
-                    },if !disconnected.is_empty()=>(Event::Disconnected(work),clock.hold(HoldKind::TurnEvent)),
-                    work=recv.recv()=>{
-                        let Some(work)=work else {break;};
-                        let work=match work {
-                            Work::Models {reply,hold}=>{let _=reply.send(Ok(core.catalog.as_ref().map(crate::catalog::Catalog::entries).unwrap_or_default()));drop(hold);continue;}
-                            Work::Owner {action,reply,hold}=>{
-                                let mut settings=(**publish.borrow()).clone();
-                                let mut commands = VecDeque::new();
-                                let result=(|| {
-                                    match action {
-                                        OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
-                                        OwnerAction::SetPasswordHash(hash)=>settings.management_password_hash=hash,
-                                        OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
-                                        OwnerAction::DismissNotice(id)=>{commands.extend(core.handle(Event::DismissNotice(id),clock.now()));return Ok(());},
-                                    }
-                                    crate::store::save(&configuration,&settings)?;publish.send_replace(Arc::new(settings.clone()));
-                                    commands.extend(core.handle(Event::Limit(settings.concurrency_limit),clock.now()));Ok(())
-                                })();
-                                let success=result.is_ok();
-                                let _=reply.send(result);
-                                if success {Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await;}
-                                drop(hold);continue;
-                            }
-                            Work::Turn(work)=>*work,
+                    work = first_closed(&connected), if !connected.is_empty() => {
+                        (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
+                    }
+                    work = recv.recv() => {
+                        let Some(work) = work else {
+                            break;
                         };
-                        let (output,ticket)=mpsc::unbounded_channel();
-                        let admitted = core.catalog.as_ref().map_or(Ok(()), |catalog| catalog.check(&work.turn.model)).map(|()| ticket);
-                        let refused = admitted.is_err();
-                        if work.admission.send(admitted).is_err() {
-                            journal.complete(crate::journal::Completion {request:work.request,session:None,session_use:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
-                            continue;
+                        match work {
+                            Work::Models { reply, hold } => {
+                                let _ = reply.send(Ok(core.model_entries()));
+                                drop(hold);
+                                continue;
+                            }
+                            Work::Owner { action, reply, hold } => {
+                                let result = core.owner_action(
+                                    action,
+                                    &publish,
+                                    &configuration,
+                                    clock.as_ref(),
+                                );
+                                let (result, mut commands) = match result {
+                                    Ok(commands) => (Ok(()), commands.into()),
+                                    Err(error) => (Err(error), VecDeque::new()),
+                                };
+                                let _ = reply.send(result);
+                                Self::commands(
+                                    &mut core,
+                                    &mut runtime,
+                                    &mut read_open,
+                                    &clock,
+                                    &journal,
+                                    &mut commands,
+                                )
+                                .await;
+                                drop(hold);
+                                continue;
+                            }
+                            Work::Turn(work) => {
+                                match core.admit(*work, &journal, clock.as_ref()) {
+                                    Some(accepted) => accepted,
+                                    None => continue,
+                                }
+                            }
                         }
-                        if refused {continue;}
-                        (Event::Accepted(Accepted {turn:work.turn,request:work.request,output}),work.hold)
                     }
-                    (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=>{
-                        if matches!(event,RuntimeEvent::Closed) {read_open=false;}
-                        (Event::Runtime(event),hold)
+                    (event, hold) = async {
+                        runtime.as_mut().expect("readable runtime").next().await
+                    }, if read_open => {
+                        if matches!(event, RuntimeEvent::Closed) {
+                            read_open = false;
+                        }
+                        (Event::Runtime(event), hold)
                     }
-                    hold=timer=>(Event::Deadline,hold),
+                    hold = deadline(timer) => (Event::Deadline, hold),
                 };
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
                 Self::commands(
@@ -585,8 +658,8 @@ impl Conductor {
                 Command::Safety(report) => journal.safety(report, clock.as_ref()),
                 Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
                 Command::Prepare { work, settings } => {
-                    let result = match runtime.as_mut().filter(|_| *read_open) {
-                        Some(runtime) => {
+                    let result = match readable(runtime, *read_open) {
+                        Ok(runtime) => {
                             runtime
                                 .request_session(
                                     work.clone(),
@@ -595,7 +668,7 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        None => Err(UNAVAILABLE.into()),
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(
@@ -608,9 +681,9 @@ impl Conductor {
                     session,
                     prompt,
                 } => {
-                    let result = match runtime.as_mut().filter(|_| *read_open) {
-                        Some(runtime) => runtime.start_prompt(prompt, &session).await,
-                        None => Err(UNAVAILABLE.into()),
+                    let result = match readable(runtime, *read_open) {
+                        Ok(runtime) => runtime.start_prompt(prompt, &session).await,
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(
@@ -684,6 +757,27 @@ impl Conductor {
             .await
             .map_err(stopped)?;
         result.await.map_err(stopped)?
+    }
+}
+fn readable(runtime: &mut Option<Runtime>, read_open: bool) -> Result<&mut Runtime, String> {
+    runtime
+        .as_mut()
+        .filter(|_| read_open)
+        .ok_or_else(|| UNAVAILABLE.into())
+}
+async fn first_closed(outputs: &[(String, Output)]) -> String {
+    let waits = outputs.iter().map(|(id, output)| {
+        Box::pin(async move {
+            output.closed().await;
+            id.clone()
+        })
+    });
+    futures_util::future::select_all(waits).await.0
+}
+async fn deadline(timer: Option<crate::BoxFuture<'static, Hold>>) -> Hold {
+    match timer {
+        Some(timer) => timer.await,
+        None => std::future::pending().await,
     }
 }
 fn stopped<T>(_: T) -> crate::messages::Refusal {

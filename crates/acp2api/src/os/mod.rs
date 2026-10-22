@@ -28,9 +28,6 @@ impl Clock for SystemClock {
         SystemTime::now()
     }
     fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
-        if at == u64::MAX {
-            return Box::pin(std::future::pending());
-        }
         let remaining = at.saturating_sub(self.now());
         Box::pin(async move {
             tokio::time::sleep(Duration::from_millis(remaining)).await;
