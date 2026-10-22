@@ -2,7 +2,10 @@ use agent_client_protocol_schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, time::SystemTime};
+use std::{
+    collections::HashSet,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Serialize)]
 pub(crate) struct ModelEntry {
@@ -14,7 +17,6 @@ pub(crate) struct ModelEntry {
     created_at: String,
     owned_by: &'static str,
 }
-#[derive(Default)]
 pub(crate) struct Catalog {
     models: Vec<OfferedModel>,
     created: u64,
@@ -28,7 +30,7 @@ struct OfferedModel {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Metadata {
-    config_options: Vec<SessionConfigOption>,
+    config_options: Vec<serde_json::Value>,
     models: Option<Models>,
 }
 #[derive(Deserialize)]
@@ -43,56 +45,37 @@ struct AvailableModel {
 }
 impl Catalog {
     pub(crate) fn decode(value: &serde_json::Value, wall: SystemTime) -> Result<Self, String> {
-        let metadata: Metadata = serde_json::from_value(value.clone())
+        let metadata = Metadata::deserialize(value)
             .map_err(|error| format!("ACP session/new model metadata: {error}"))?;
-        let models = options(&metadata.config_options, "model")?
-            .ok_or("ACP session/new has no model config option")?;
-        let levels = ["low", "medium", "high"];
         let available: HashSet<_> = metadata
             .models
             .into_iter()
             .flat_map(|m| m.available_models)
             .map(|m| m.model_id)
             .collect();
-        let created = wall
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_secs();
-        let created_at = crate::journal::timestamp(wall).map_err(|e| e.to_string())?;
-        let mut entries = Vec::new();
-        let mut seen = HashSet::new();
-        let bases: HashSet<_> = models.iter().map(|m| m.value.to_string()).collect();
-        for model in models {
-            let base = model.value.to_string();
-            if base.is_empty() || model.name.is_empty() {
-                return Err("ACP session/new has an empty model value or display name".into());
-            }
-            if seen.insert(base.clone()) {
-                let mut seen_levels = HashSet::new();
-                let supported = levels
-                    .iter()
-                    .map(|level| (*level).to_owned())
-                    .filter(|level| {
-                        let id = format!("{base}-{level}");
-                        available.contains(&id)
-                            && !bases.contains(&id)
-                            && seen_levels.insert(level.clone())
-                    })
+        let models: Vec<_> = model_options(&metadata.config_options)?
+            .into_iter()
+            .map(|option| {
+                let value = option.value.to_string();
+                let levels = ["low", "medium", "high"]
+                    .into_iter()
+                    .filter(|level| available.contains(&format!("{value}-{level}")))
+                    .map(str::to_owned)
                     .collect();
-                entries.push(OfferedModel {
-                    value: base,
-                    name: model.name.clone(),
-                    levels: supported,
-                });
-            }
-        }
-        if entries.is_empty() {
+                OfferedModel {
+                    value,
+                    name: option.name,
+                    levels,
+                }
+            })
+            .collect();
+        if models.is_empty() {
             return Err("ACP session/new has no model values".into());
         }
         Ok(Self {
-            models: entries,
-            created,
-            created_at,
+            models,
+            created_at: crate::journal::timestamp(wall).map_err(|e| e.to_string())?,
+            created: wall.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
         })
     }
     fn names(&self) -> impl Iterator<Item = (String, &str)> {
@@ -132,25 +115,62 @@ impl Catalog {
         }
     }
 }
-fn options<'a>(
-    config: &'a [SessionConfigOption],
-    id: &str,
-) -> Result<Option<Vec<&'a SessionConfigSelectOption>>, String> {
-    let Some(option) = config.iter().find(|o| o.id.to_string() == id) else {
-        return Ok(None);
-    };
-    match &option.kind {
-        SessionConfigKind::Select(select) => Ok(Some(match &select.options {
-            SessionConfigSelectOptions::Ungrouped(options) => options.iter().collect(),
+/// Reads only the `model` option, so that an option of a later kind does not stop the decode.
+fn model_options(config: &[serde_json::Value]) -> Result<Vec<SessionConfigSelectOption>, String> {
+    let option = config
+        .iter()
+        .find(|o| o["id"] == "model")
+        .ok_or("ACP session/new has no model config option")?;
+    let option = SessionConfigOption::deserialize(option)
+        .map_err(|error| format!("ACP session/new model config option: {error}"))?;
+    match option.kind {
+        SessionConfigKind::Select(select) => match select.options {
+            SessionConfigSelectOptions::Ungrouped(options) => Ok(options),
             SessionConfigSelectOptions::Grouped(groups) => {
-                groups.iter().flat_map(|g| &g.options).collect()
+                Ok(groups.into_iter().flat_map(|g| g.options).collect())
             }
-            _ => {
-                return Err(format!(
-                    "ACP session/new config option {id} has unsupported select options"
-                ));
-            }
-        })),
-        _ => Err(format!("ACP session/new config option {id} is not select")),
+            _ => Err("ACP session/new model config option has unsupported select options".into()),
+        },
+        _ => Err("ACP session/new model config option is not select".into()),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
+    fn captured_session_new() -> serde_json::Value {
+        let capture = include_str!(
+            "../../../docs/research/captures/2026-10-15-acp-probe/bad-model.transcript.ndjson"
+        );
+        let line: serde_json::Value =
+            serde_json::from_str(capture.lines().nth(3).unwrap()).unwrap();
+        line["msg"]["result"].clone()
+    }
+    fn ids(catalog: &Catalog) -> Vec<String> {
+        catalog.names().map(|(id, _)| id).collect()
+    }
+    const WALL: Duration = Duration::from_secs(1_792_281_600);
+    #[test]
+    fn a_captured_session_new_gives_the_model_and_its_levels() {
+        let catalog = Catalog::decode(&captured_session_new(), UNIX_EPOCH + WALL).unwrap();
+        assert_eq!(
+            ids(&catalog),
+            [
+                "gemini-3.8-flash",
+                "gemini-3.8-flash-low",
+                "gemini-3.8-flash-medium",
+                "gemini-3.8-flash-high"
+            ]
+        );
+    }
+    #[test]
+    fn an_unknown_config_option_type_does_not_stop_the_decode() {
+        let mut result = captured_session_new();
+        result["configOptions"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"id":"later","name":"Later","type":"a_later_kind"}));
+        let catalog = Catalog::decode(&result, UNIX_EPOCH + WALL).unwrap();
+        assert_eq!(ids(&catalog).len(), 4);
     }
 }
