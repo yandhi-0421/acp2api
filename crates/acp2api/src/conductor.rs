@@ -255,7 +255,7 @@ impl Conductor {
         let task = tokio::spawn(async move {
             let mut core = Core::default();
             let mut read_open = runtime.is_some();
-            'events: loop {
+            loop {
                 let disconnected = core
                     .active
                     .as_ref()
@@ -281,10 +281,7 @@ impl Conductor {
                 while let Some(command) = commands.pop_front() {
                     match command {
                         Command::Complete(completion) => {
-                            if journal.complete(completion, clock.as_ref()).is_err() {
-                                eprintln!("acp2api: cannot write request metadata");
-                                break 'events;
-                            }
+                            journal.complete(completion, clock.as_ref())
                         }
                         Command::Prompt {
                             text,

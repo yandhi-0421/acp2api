@@ -293,11 +293,13 @@ impl Journal {
             started,
         }
     }
-    pub(crate) fn complete(
-        &self,
-        completion: Completion,
-        clock: &dyn crate::Clock,
-    ) -> io::Result<()> {
+    /// A failed write drops the line and reports it on stderr, so a full disk never stops a request.
+    pub(crate) fn complete(&self, completion: Completion, clock: &dyn crate::Clock) {
+        if let Err(error) = self.write_line(completion, clock) {
+            eprintln!("acp2api: cannot write request metadata: {error}");
+        }
+    }
+    fn write_line(&self, completion: Completion, clock: &dyn crate::Clock) -> io::Result<()> {
         let Completion {
             request,
             session,

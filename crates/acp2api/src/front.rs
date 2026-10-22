@@ -180,10 +180,6 @@ fn refuse(
         session: None,
         outcome: crate::journal::Outcome::Refused(dialect::refusal_code(&error)),
     };
-    match app.journal.complete(completion, app.clock.as_ref()) {
-        Ok(()) => dialect.refusal(&error),
-        Err(_) => {
-            dialect.refusal(&Message::Upstream("cannot write request metadata".into()).into())
-        }
-    }
+    app.journal.complete(completion, app.clock.as_ref());
+    dialect.refusal(&error)
 }
