@@ -40,7 +40,7 @@ trait WireDialect: Sync {
         let code = refusal_code(refusal);
         json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
     }
-    fn built_in_error(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn built_in_tool_ran_events(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
         vec![data(
             json!({"error":{"message":message,"type":"server_error","param":null,"code":"built_in_tool_ran"}}),
         )]
@@ -124,9 +124,10 @@ impl<T: WireDialect + 'static> Dialect for T {
                             }
                             TurnEvent::End(Err(error)) => {
                                 if matches!(error, Message::BuiltInToolRan(_)) {
-                                    state.pending.extend(
-                                        self.built_in_error(&mut state.wire, error.to_string()),
-                                    );
+                                    state.pending.extend(self.built_in_tool_ran_events(
+                                        &mut state.wire,
+                                        error.to_string(),
+                                    ));
                                 } else {
                                     state.pending.push_back(named("error",json!({"type":"error","error":{"type":"api_error","message":error.to_string()}})));
                                 }

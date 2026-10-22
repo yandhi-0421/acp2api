@@ -3,7 +3,18 @@ use crate::messages::{Message, Refusal};
 use serde::Deserialize;
 use serde_json::Value;
 
+const MAX_DEPTH: usize = 128;
 pub(super) fn parse_json(body: &[u8]) -> Result<Value, Refusal> {
+    if !nesting_within_max_depth(body) {
+        return Err(Message::InvalidJson.into());
+    }
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    deserializer.disable_recursion_limit();
+    let value = Value::deserialize(&mut deserializer).map_err(|_| Message::InvalidJson)?;
+    deserializer.end().map_err(|_| Message::InvalidJson)?;
+    Ok(value)
+}
+fn nesting_within_max_depth(body: &[u8]) -> bool {
     let mut depth = 0_usize;
     let mut quoted = false;
     let mut escaped = false;
@@ -21,22 +32,19 @@ pub(super) fn parse_json(body: &[u8]) -> Result<Value, Refusal> {
                 b'"' => quoted = true,
                 b'{' | b'[' => {
                     depth += 1;
-                    if depth > 128 {
-                        return Err(Message::InvalidJson.into());
+                    if depth > MAX_DEPTH {
+                        return false;
                     }
                 }
-                b'}' | b']' => {
-                    depth = depth.checked_sub(1).ok_or(Message::InvalidJson)?;
-                }
+                b'}' | b']' => match depth.checked_sub(1) {
+                    Some(outer) => depth = outer,
+                    None => return false,
+                },
                 _ => {}
             }
         }
     }
-    let mut deserializer = serde_json::Deserializer::from_slice(body);
-    deserializer.disable_recursion_limit();
-    let value = Value::deserialize(&mut deserializer).map_err(|_| Message::InvalidJson)?;
-    deserializer.end().map_err(|_| Message::InvalidJson)?;
-    Ok(value)
+    true
 }
 
 pub(super) fn check(api: Api, value: &Value) -> Result<(), Refusal> {

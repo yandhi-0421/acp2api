@@ -12,6 +12,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+pub(crate) const SERVER_NAME: &str = "client-tools";
+const FUNCTION_NAME_LIMIT: usize = 64;
 #[derive(Clone)]
 pub(crate) struct ToolSets {
     port: u16,
@@ -49,7 +51,7 @@ impl ToolSets {
     }
 }
 pub(crate) fn tool_names(tools: &[ClientTool]) -> Vec<String> {
-    const LIMIT: usize = 64 - "mcp_client-tools_".len();
+    const LIMIT: usize = FUNCTION_NAME_LIMIT - "mcp_".len() - SERVER_NAME.len() - "_".len();
     let mut used: HashSet<String> = tools
         .iter()
         .filter(|tool| tool.namespace.is_none())

@@ -13,7 +13,7 @@ impl WireDialect for Messages {
         };
         json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}})
     }
-    fn built_in_error(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn built_in_tool_ran_events(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
         let mut events = Vec::new();
         if !wire.text.is_empty() {
             events.push(named(

@@ -127,7 +127,7 @@ impl Runtime {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
-        let mut params = json!({"cwd":cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}});
+        let mut params = json!({"cwd":cwd,"mcpServers":[{"type":"http","name":mcp::SERVER_NAME,"url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":[mcp::SERVER_NAME]}}});
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }

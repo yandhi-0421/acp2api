@@ -17,6 +17,7 @@ use std::{
 mod page;
 const LIFETIME: u64 = 12 * 60 * 60 * 1000;
 const COOKIE: &str = "acp2api_session";
+const ARGON2_CHECKS_AT_ONCE: usize = 1;
 struct Session {
     since: u64,
     password_hash: String,
@@ -49,7 +50,7 @@ impl Panel {
             clock,
             port,
             sessions: Arc::default(),
-            logins: Arc::new(tokio::sync::Semaphore::new(1)),
+            logins: Arc::new(tokio::sync::Semaphore::new(ARGON2_CHECKS_AT_ONCE)),
         }
     }
     fn session(&self, headers: &HeaderMap) -> bool {
@@ -223,7 +224,7 @@ async fn password(State(panel): State<Panel>, Form(form): Form<Password>) -> Res
     else {
         return panel.failed();
     };
-    match panel.act(OwnerAction::ChangePassword(hash)).await {
+    match panel.act(OwnerAction::SetPasswordHash(hash)).await {
         Ok(()) => Redirect::to("/").into_response(),
         Err(response) => response,
     }
@@ -291,10 +292,16 @@ mod tests {
             management_password_hash: String::new(),
             agy_acp_server_path: None,
         };
-        let configuration = folder.join("config.toml");
-        std::fs::create_dir(&configuration).unwrap();
-        let (conductor, _task) =
-            Conductor::start(None, clock.clone(), journal, settings, configuration, 1);
+        let unsaveable_configuration = folder.join("config.toml");
+        std::fs::create_dir(&unsaveable_configuration).unwrap();
+        let (conductor, _task) = Conductor::start(
+            None,
+            clock.clone(),
+            journal,
+            settings,
+            unsaveable_configuration,
+            1,
+        );
         let panel = Panel::new(conductor, clock, 8329);
         let empty = Password {
             password: String::new(),

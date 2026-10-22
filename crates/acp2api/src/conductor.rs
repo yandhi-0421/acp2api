@@ -15,7 +15,7 @@ pub(crate) struct Conductor {
 }
 pub(crate) enum OwnerAction {
     NewLocalApiKey,
-    ChangePassword(String),
+    SetPasswordHash(String),
     SetConcurrencyLimit(u8),
     DismissNotice(String),
 }
@@ -91,7 +91,7 @@ struct Core {
     active: Vec<Active>,
     waiting: VecDeque<Accepted>,
     records: Vec<records::Record>,
-    fresh: Option<String>,
+    startup_session: Option<String>,
     use_sequence: u64,
     limit: u8,
     notices: watch::Sender<Arc<Vec<Notice>>>,
@@ -282,7 +282,9 @@ impl Core {
             };
             let ready = match matched {
                 Some((index, _)) => Some(self.records.remove(index).session),
-                None if settings.system.is_none() && settings.tools.is_empty() => self.fresh.take(),
+                None if settings.system.is_none() && settings.tools.is_empty() => {
+                    self.startup_session.take()
+                }
                 None => None,
             };
             self.use_sequence += 1;
@@ -398,7 +400,7 @@ impl Core {
     }
     fn forget_idle(&mut self, commands: &mut Vec<Command>) {
         let idle = self.records.drain(..).map(|record| record.session);
-        commands.extend(idle.chain(self.fresh.take()).map(Command::Forget));
+        commands.extend(idle.chain(self.startup_session.take()).map(Command::Forget));
     }
     fn finish(
         &mut self,
@@ -479,7 +481,7 @@ impl Conductor {
         let task = tokio::spawn(async move {
             let (mut runtime, catalog) = started.unzip();
             let mut core = Core {
-                fresh: runtime.as_ref().map(|runtime| runtime.session_id().into()),
+                startup_session: runtime.as_ref().map(|runtime| runtime.session_id().into()),
                 catalog,
                 records: Vec::new(),
                 use_sequence: 0,
@@ -513,7 +515,7 @@ impl Conductor {
                                 let result=(|| {
                                     match action {
                                         OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
-                                        OwnerAction::ChangePassword(hash)=>settings.management_password_hash=hash,
+                                        OwnerAction::SetPasswordHash(hash)=>settings.management_password_hash=hash,
                                         OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
                                         OwnerAction::DismissNotice(id)=>{commands.extend(core.handle(Event::DismissNotice(id),clock.now()));return Ok(());},
                                     }
@@ -736,7 +738,7 @@ mod tests {
             active: Vec::new(),
             waiting: VecDeque::new(),
             records: Vec::new(),
-            fresh: None,
+            startup_session: None,
             use_sequence: 0,
             limit: 1,
             notices: watch::channel(Arc::new(Vec::new())).0,
@@ -811,7 +813,7 @@ mod tests {
             active: Vec::new(),
             waiting: VecDeque::new(),
             records: Vec::new(),
-            fresh: None,
+            startup_session: None,
             use_sequence: 0,
             limit: 1,
             notices: watch::channel(Arc::new(Vec::new())).0,

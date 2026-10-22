@@ -42,7 +42,7 @@ impl WireDialect for Responses {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         content::parse(content::Api::Responses, body)
     }
-    fn built_in_error(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn built_in_tool_ran_events(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
         let mut response = self.body(
             wire,
             &Answer {
