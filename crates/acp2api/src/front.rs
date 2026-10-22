@@ -1,11 +1,14 @@
-use crate::{Clock, HoldKind, conductor::Conductor, conversation::TurnRequest};
+use crate::{
+    Clock, HoldKind,
+    conductor::Conductor,
+    dialect::{self, Dialect},
+};
 use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
     routing::post,
 };
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 #[derive(Clone)]
@@ -17,16 +20,6 @@ struct App {
     key: String,
     secret: String,
 }
-#[derive(Deserialize)]
-struct Request {
-    model: String,
-    messages: Vec<Message>,
-}
-#[derive(Deserialize)]
-struct Message {
-    role: String,
-    content: String,
-}
 pub(crate) fn router(
     conductor: Conductor,
     clock: Arc<dyn Clock>,
@@ -35,6 +28,8 @@ pub(crate) fn router(
 ) -> Router {
     Router::new()
         .route("/v1/messages", post(messages))
+        .route("/v1/responses", post(responses))
+        .route("/v1/chat/completions", post(chat))
         .route("/mcp/{secret}", post(mcp))
         .layer(axum::middleware::from_fn_with_state(
             clock.clone(),
@@ -51,55 +46,51 @@ async fn messages(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    Json(request): Json<Request>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    serve(app, headers, lease, body, dialect::MESSAGES).await
+}
+async fn responses(
+    State(app): State<App>,
+    headers: HeaderMap,
+    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    serve(app, headers, lease, body, dialect::RESPONSES).await
+}
+async fn chat(
+    State(app): State<App>,
+    headers: HeaderMap,
+    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    serve(app, headers, lease, body, dialect::CHAT).await
+}
+async fn serve(
+    app: App,
+    headers: HeaderMap,
+    lease: RequestHold,
+    body: axum::body::Bytes,
+    dialect: &'static dyn Dialect,
+) -> axum::response::Response {
     let hold = lease.0.lock().unwrap().take().expect("request hold");
-    if headers.get("x-api-key").and_then(|v| v.to_str().ok()) != Some(&app.key) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":{"type":"authentication_error","message":"Invalid API key"}})),
-        ));
+    let authorized = headers.get("x-api-key").and_then(|v| v.to_str().ok()) == Some(&app.key)
+        || headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            == Some(&app.key);
+    if !authorized {
+        return dialect.refusal(StatusCode::UNAUTHORIZED, "Invalid API key");
     }
-    if request.messages.len() != 1 || request.messages[0].role != "user" {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":{"message":"one user message required"}})),
-        ));
+    let parsed = match dialect.parse(&body) {
+        Ok(parsed) => parsed,
+        Err(error) => return dialect.refusal(StatusCode::BAD_REQUEST, &error),
+    };
+    match app.conductor.admit(parsed.turn, hold).await {
+        Ok(ticket) => dialect.respond(parsed.form, ticket, app.clock).await,
+        Err(error) => dialect.refusal(StatusCode::BAD_GATEWAY, &error),
     }
-    let answer = app
-        .conductor
-        .answer(
-            TurnRequest {
-                text: request.messages[0].content.clone(),
-                model: request.model.clone(),
-            },
-            hold,
-        )
-        .await
-        .map_err(|message| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error":{"type":"api_error","message":message}})),
-            )
-        })?;
-    let _hold = app.clock.hold(HoldKind::TurnEvent);
-    let mut random = [0u8; 16];
-    getrandom::fill(&mut random).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":{"type":"api_error","message":e.to_string()}})),
-        )
-    })?;
-    let id = format!(
-        "msg_{}",
-        random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
-    Ok(Json(
-        json!({"id":id,"type":"message","role":"assistant","model":request.model,"content":[{"type":"text","text":answer.text}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":answer.input_tokens,"output_tokens":answer.output_tokens}}),
-    ))
 }
 
 async fn mcp(

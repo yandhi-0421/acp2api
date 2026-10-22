@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod agent_lines;
 use crate::*;
 use agent_client_protocol_schema::v1::{ContentBlock, SessionNotification, SessionUpdate};
 use serde_json::{Value, json};
@@ -5,7 +7,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 pub(crate) struct Runtime {
     input: ProcessWrite,
-    lines: mpsc::Receiver<(Value, Hold)>,
+    lines: mpsc::Receiver<(Line, Hold)>,
+    prompt_id: Option<u64>,
     tree: Box<dyn ProcessTree>,
     clock: Arc<dyn Clock>,
     next_id: u64,
@@ -39,28 +42,34 @@ impl Runtime {
             })
             .map_err(|e| format!("runtime launch: {e:?}"))?;
         let (tx, lines) = mpsc::channel(128);
-        let clock = ports.clock.clone();
+        let (stdout_tx, clock) = (tx.clone(), ports.clock.clone());
         tokio::spawn(async move {
-            let mut input = BufReader::new(child.stdout).lines();
-            while let Ok(Some(line)) = input.next_line().await {
+            let mut stdout = BufReader::new(child.stdout);
+            while let Some(line) = read_line(&mut stdout).await {
                 let hold = clock.hold(HoldKind::RuntimeLine);
-                if let Ok(value) = serde_json::from_str(&line)
-                    && tx.send((value, hold)).await.is_err()
-                {
-                    break;
+                let line = serde_json::from_slice(&line).map_err(|e| format!("ACP JSON: {e}"));
+                if stdout_tx.send((Line::Stdout(line), hold)).await.is_err() {
+                    return;
                 }
             }
+            let _ = stdout_tx
+                .send((Line::Closed, clock.hold(HoldKind::TurnEvent)))
+                .await;
         });
         let clock = ports.clock.clone();
         tokio::spawn(async move {
-            let mut input = BufReader::new(child.stderr).lines();
-            while let Ok(Some(_line)) = input.next_line().await {
-                let _hold = clock.hold(HoldKind::RuntimeLine);
+            let mut stderr = BufReader::new(child.stderr);
+            while read_line(&mut stderr).await.is_some() {
+                let hold = clock.hold(HoldKind::RuntimeLine);
+                if tx.send((Line::Stderr, hold)).await.is_err() {
+                    return;
+                }
             }
         });
         let mut runtime = Self {
             input: child.stdin,
             lines,
+            prompt_id: None,
             tree: child.tree,
             clock: ports.clock.clone(),
             next_id: 0,
@@ -77,20 +86,38 @@ impl Runtime {
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
         let id = self.next_id;
-        let mut bytes =
-            serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
-                .map_err(|e| e.to_string())?;
+        self.write(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
+            .await?;
+        Ok(id)
+    }
+    async fn write(&mut self, value: Value) -> Result<(), String> {
+        let mut bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
         self.input
             .write_all(&bytes)
             .await
             .map_err(|e| e.to_string())?;
-        self.input.flush().await.map_err(|e| e.to_string())?;
-        Ok(id)
+        self.input.flush().await.map_err(|e| e.to_string())
+    }
+    /// Answers an agent request whose method acp2api does not handle.
+    async fn refuse(&mut self, request: &Value) -> Result<(), String> {
+        self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
+            .await
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.send(method, params).await?;
-        while let Some((value, _hold)) = self.lines.recv().await {
+        while let Some((line, _hold)) = self.lines.recv().await {
+            let value = match line {
+                Line::Stdout(value) => value?,
+                Line::Stderr => continue,
+                Line::Closed => return Err("runtime stdout closed".into()),
+            };
+            if value.get("method").is_some() {
+                if value.get("id").is_some() {
+                    self.refuse(&value).await?;
+                }
+                continue;
+            }
             if value["id"] == id {
                 return value
                     .get("result")
@@ -100,46 +127,100 @@ impl Runtime {
         }
         Err("runtime stdout closed".into())
     }
-    pub(crate) async fn prompt(
+    pub(crate) async fn start_prompt(
         &mut self,
         prompt: String,
         _model: &str,
-    ) -> Result<(String, u64), String> {
+    ) -> Result<(), String> {
         let id = self
             .send(
                 "session/prompt",
                 json!({"sessionId":self.session,"prompt":[{"type":"text","text":prompt}]}),
             )
             .await?;
-        let mut text = String::new();
-        let mut used = 0;
-        while let Some((value, _hold)) = self.lines.recv().await {
-            if value["id"] == id {
-                if value.get("error").is_some() {
-                    return Err(value["error"].to_string());
-                }
-                return Ok((text, used));
+        self.prompt_id = Some(id);
+        Ok(())
+    }
+    pub(crate) async fn next(&mut self) -> (RuntimeEvent, Hold) {
+        let Some((line, hold)) = self.lines.recv().await else {
+            return (RuntimeEvent::Closed, self.clock.hold(HoldKind::TurnEvent));
+        };
+        let event = match line {
+            Line::Closed => RuntimeEvent::Closed,
+            Line::Stderr => RuntimeEvent::Stderr,
+            Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
+            Line::Stdout(Ok(value)) => self.decode(value).await,
+        };
+        (event, hold)
+    }
+    async fn decode(&mut self, value: Value) -> RuntimeEvent {
+        if value.get("method").is_none() && self.prompt_id.is_some_and(|id| value["id"] == id) {
+            self.prompt_id = None;
+            if let Some(error) = value.get("error") {
+                return RuntimeEvent::Failed(error.to_string());
             }
-            if value["method"] == "session/update" {
-                let notification: SessionNotification =
-                    serde_json::from_value(value["params"].clone())
-                        .map_err(|e| format!("ACP session/update: {e}"))?;
-                match notification.update {
-                    SessionUpdate::AgentMessageChunk(chunk) => {
-                        if let ContentBlock::Text(content) = chunk.content {
-                            text.push_str(&content.text);
-                        }
-                    }
-                    SessionUpdate::UsageUpdate(usage) => used = usage.used,
-                    _ => {}
-                }
-            }
+            return RuntimeEvent::PromptEnded;
         }
-        Err("runtime stdout closed".into())
+        if value["method"] == "session/update" {
+            let notification: SessionNotification =
+                match serde_json::from_value(value["params"].clone()) {
+                    Ok(notification) => notification,
+                    Err(_) => {
+                        let kind = &value["params"]["update"]["sessionUpdate"];
+                        eprintln!("acp2api: skipped an ACP session/update of kind {kind}");
+                        return RuntimeEvent::Other;
+                    }
+                };
+            if notification.session_id.to_string() != self.session {
+                return RuntimeEvent::Other;
+            }
+            match notification.update {
+                SessionUpdate::AgentMessageChunk(chunk) => {
+                    if let ContentBlock::Text(content) = chunk.content {
+                        RuntimeEvent::Text(content.text)
+                    } else {
+                        RuntimeEvent::Other
+                    }
+                }
+                SessionUpdate::UsageUpdate(usage) => RuntimeEvent::Usage(usage.used),
+                _ => RuntimeEvent::Other,
+            }
+        } else if value.get("method").is_some() && value.get("id").is_some() {
+            match self.refuse(&value).await {
+                Ok(()) => RuntimeEvent::Other,
+                Err(error) => RuntimeEvent::Failed(error),
+            }
+        } else {
+            RuntimeEvent::Other
+        }
     }
     pub(crate) async fn stop(mut self) {
         let _ = self.input.shutdown().await;
         drop(self.input);
         self.tree.stop(self.clock).await;
     }
+}
+
+/// The next line in bytes, so that one non-UTF-8 line does not end the stream.
+/// A read error ends the stream like its end.
+async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
+    let mut line = Vec::new();
+    match input.read_until(b'\n', &mut line).await {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line),
+    }
+}
+enum Line {
+    Stdout(Result<Value, String>),
+    Stderr,
+    Closed,
+}
+pub(crate) enum RuntimeEvent {
+    Text(String),
+    Usage(u64),
+    PromptEnded,
+    Failed(String),
+    Stderr,
+    Other,
+    Closed,
 }

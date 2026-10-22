@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 mod conductor;
 mod conversation;
+mod dialect;
 mod front;
 pub mod os;
 mod runtime_driver;
