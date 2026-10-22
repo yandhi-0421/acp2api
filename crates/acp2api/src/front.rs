@@ -20,12 +20,14 @@ struct App {
     conductor: Conductor,
     clock: Arc<dyn Clock>,
     key: String,
+    journal: crate::journal::Journal,
 }
 pub(crate) fn router(
     conductor: Conductor,
     clock: Arc<dyn Clock>,
     key: String,
     tools: crate::runtime_driver::mcp::ToolSets,
+    journal: crate::journal::Journal,
 ) -> Router {
     Router::new()
         .route("/v1/messages", post(messages))
@@ -36,6 +38,7 @@ pub(crate) fn router(
             conductor,
             clock: clock.clone(),
             key,
+            journal,
         })
         .merge(tools.router())
         .layer(axum::middleware::from_fn_with_state(
@@ -49,7 +52,15 @@ async fn messages(
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
     body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
-    serve(app, headers, lease, body, dialect::MESSAGES).await
+    serve(
+        app,
+        headers,
+        lease,
+        body,
+        dialect::MESSAGES,
+        crate::journal::Api::Messages,
+    )
+    .await
 }
 async fn responses(
     State(app): State<App>,
@@ -57,7 +68,15 @@ async fn responses(
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
     body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
-    serve(app, headers, lease, body, dialect::RESPONSES).await
+    serve(
+        app,
+        headers,
+        lease,
+        body,
+        dialect::RESPONSES,
+        crate::journal::Api::Responses,
+    )
+    .await
 }
 async fn chat(
     State(app): State<App>,
@@ -65,7 +84,15 @@ async fn chat(
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
     body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
-    serve(app, headers, lease, body, dialect::CHAT).await
+    serve(
+        app,
+        headers,
+        lease,
+        body,
+        dialect::CHAT,
+        crate::journal::Api::Chat,
+    )
+    .await
 }
 async fn serve(
     app: App,
@@ -73,8 +100,26 @@ async fn serve(
     lease: RequestHold,
     body: Result<Bytes, BytesRejection>,
     dialect: &'static dyn Dialect,
+    api: crate::journal::Api,
 ) -> axum::response::Response {
     let hold = lease.0.lock().unwrap().take().expect("request hold");
+    let request = app.journal.begin(api, app.clock.now());
+    let id = request.id.clone();
+    let mut response = dispatch(app, headers, hold, body, dialect, request).await;
+    response.headers_mut().insert(
+        "x-request-id",
+        id.parse().expect("generated request identifier"),
+    );
+    response
+}
+async fn dispatch(
+    app: App,
+    headers: HeaderMap,
+    hold: crate::Hold,
+    body: Result<Bytes, BytesRejection>,
+    dialect: &'static dyn Dialect,
+    mut request: crate::journal::Request,
+) -> axum::response::Response {
     let authorized = headers.get("x-api-key").and_then(|v| v.to_str().ok()) == Some(&app.key)
         || headers
             .get("authorization")
@@ -82,22 +127,28 @@ async fn serve(
             .and_then(|v| v.strip_prefix("Bearer "))
             == Some(&app.key);
     if !authorized {
-        return dialect.refusal(&Message::Key.into());
+        return refuse(&app, request, dialect, Message::Key.into());
     }
     let body = match body {
         Ok(body) => body,
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            return dialect.refusal(&Message::TooLarge.into());
+            return refuse(&app, request, dialect, Message::TooLarge.into());
         }
         Err(rejection) => return rejection.into_response(),
     };
     let parsed = match dialect.parse(&body) {
         Ok(parsed) => parsed,
-        Err(error) => return dialect.refusal(&error),
+        Err(error) => return refuse(&app, request, dialect, error),
     };
-    match app.conductor.admit(parsed.turn, hold).await {
+    request.model = Some(parsed.turn.model.clone());
+    request.unknown_fields = parsed.unknown_fields;
+    match app
+        .conductor
+        .admit(parsed.turn, hold, request.clone())
+        .await
+    {
         Ok(ticket) => dialect.respond(parsed.form, ticket, app.clock).await,
-        Err(error) => dialect.refusal(&Message::Upstream(error).into()),
+        Err(error) => refuse(&app, request, dialect, Message::Upstream(error).into()),
     }
 }
 
@@ -116,4 +167,19 @@ async fn input_hold(
     let response = next.run(request).await;
     drop(lease);
     response
+}
+
+fn refuse(
+    app: &App,
+    request: crate::journal::Request,
+    dialect: &dyn Dialect,
+    error: crate::messages::Refusal,
+) -> axum::response::Response {
+    let completion = crate::journal::Completion {
+        request,
+        session: None,
+        outcome: crate::journal::Outcome::Refused(dialect::refusal_code(&error)),
+    };
+    app.journal.complete(completion, app.clock.as_ref());
+    dialect.refusal(&error)
 }

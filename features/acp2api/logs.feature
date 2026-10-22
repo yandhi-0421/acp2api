@@ -8,7 +8,7 @@ Feature: Logs
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-056 @issue-42 @wip
+  @FR-056 @issue-42
   Scenario: A request gives one log line with its metadata
     When an API client sends a valid request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and the unknown field "example_field"
     Then the log has one line for the request with these fields:
@@ -89,14 +89,14 @@ Feature: Logs
       | Key AbCdEfGhIjKlMnOpQrStUvWxYz012345 bad | Key <REDACTED> bad                       |
       | Key AbCdEfGhIjKlMnOpQrStUvWxYz01234 bad  | Key AbCdEfGhIjKlMnOpQrStUvWxYz01234 bad  |
 
-  @FR-057 @issue-42 @wip
+  @FR-057 @issue-42
   Scenario: The logs keep a total size cap of 50 MB and delete the oldest log file first
     When acp2api writes 60 MB of log lines
     Then the logs take no more than 50 MB
     And no log file is larger than 10 MB
     And the log file that acp2api deleted is the oldest log file
 
-  @FR-057 @issue-42 @wip
+  @FR-057 @issue-42
   Scenario Outline: A start deletes each log file that is older than 30 days
     Given the log folder has a log file whose modification time is <age> ago
     When the owner restarts acp2api

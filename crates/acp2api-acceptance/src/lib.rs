@@ -22,3 +22,5 @@ pub mod content_check;
 pub mod tool_check;
 
 pub mod system_check;
+
+pub mod journal_check;
