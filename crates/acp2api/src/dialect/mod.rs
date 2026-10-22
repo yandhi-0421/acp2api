@@ -206,21 +206,6 @@ fn named(name: &str, value: Value) -> Event {
 fn data(value: Value) -> Event {
     Event::default().data(value.to_string())
 }
-fn parsed(model: String, conversation: crate::conversation::Conversation, stream: bool) -> Parsed {
-    Parsed {
-        unknown_fields: Vec::new(),
-        turn: TurnRequest {
-            model: model.clone(),
-            conversation,
-            tools: Vec::new(),
-            tool_choice: crate::conversation::ToolChoice::Auto,
-        },
-        form: ReplyForm {
-            stream,
-            model_name: model,
-        },
-    }
-}
 
 fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
     use axum::http::StatusCode;

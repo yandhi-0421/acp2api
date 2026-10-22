@@ -1,6 +1,8 @@
-use super::{Parsed, fields, parsed};
+use super::{Parsed, fields};
 use crate::{
-    conversation::{Conversation, Item, Part, Role, SystemPart},
+    conversation::{
+        Conversation, Item, Part, ReplyForm, Role, SystemPart, ToolChoice, TurnRequest,
+    },
     messages::{Message, Refusal},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -108,30 +110,34 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     ) {
         return Err(Message::Prefill.into());
     }
-    let mut parsed = parsed(
-        model,
-        Conversation {
-            system,
-            earlier: items,
-            last,
+    let tool_choice = if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
+        ToolChoice::Off
+    } else {
+        ToolChoice::Auto
+    };
+    Ok(Parsed {
+        turn: TurnRequest {
+            conversation: Conversation {
+                system,
+                earlier: items,
+                last,
+            },
+            model: model.clone(),
+            tools: client_tools,
+            tool_choice,
         },
-        value["stream"].as_bool().unwrap_or(false),
-    );
-    parsed.turn.tools = client_tools;
-    parsed.turn.tool_choice =
-        if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
-            crate::conversation::ToolChoice::Off
-        } else {
-            crate::conversation::ToolChoice::Auto
-        };
-    parsed.unknown_fields = value
-        .as_object()
-        .into_iter()
-        .flat_map(|o| o.keys())
-        .filter(|name| !known_field(api, name))
-        .cloned()
-        .collect();
-    Ok(parsed)
+        form: ReplyForm {
+            stream: value["stream"].as_bool().unwrap_or(false),
+            model_name: model,
+        },
+        unknown_fields: value
+            .as_object()
+            .into_iter()
+            .flat_map(|o| o.keys())
+            .filter(|name| !known_field(api, name))
+            .cloned()
+            .collect(),
+    })
 }
 fn known_field(api: Api, name: &str) -> bool {
     matches!(
