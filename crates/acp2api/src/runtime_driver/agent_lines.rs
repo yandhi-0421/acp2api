@@ -1,4 +1,5 @@
 use super::*;
+use crate::conversation::PromptBlock;
 use std::{
     io,
     sync::Mutex,
@@ -158,7 +159,10 @@ async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runt
     agent.stderr.write_all(b"next stderr line\n").await.unwrap();
     assert_eq!(next(&mut runtime).await, "stderr");
     assert_eq!(next(&mut runtime).await, "stderr");
-    runtime.start_prompt("Hi".into(), "m").await.unwrap();
+    runtime
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .await
+        .unwrap();
     agent.stdout(chunk("Hello")).await;
     agent
         .stdout(result(3, json!({"stopReason":"end_turn"})))
@@ -171,7 +175,10 @@ async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runt
 #[tokio::test]
 async fn an_unparsable_session_update_is_skipped() {
     let (mut runtime, mut agent, _root) = start(Vec::new()).await;
-    runtime.start_prompt("Hi".into(), "m").await.unwrap();
+    runtime
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .await
+        .unwrap();
     agent
         .stdout(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"a_later_kind"}}}))
         .await;
@@ -190,7 +197,10 @@ async fn an_agent_request_with_an_unknown_method_gets_32601_and_is_no_reply() {
         agent.stdin().await,
         json!({"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found"}})
     );
-    runtime.start_prompt("Hi".into(), "m").await.unwrap();
+    runtime
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .await
+        .unwrap();
     assert_eq!(agent.stdin().await["method"], "session/prompt");
     agent.stdout(request(3)).await;
     agent.stdout(chunk("Hello")).await;

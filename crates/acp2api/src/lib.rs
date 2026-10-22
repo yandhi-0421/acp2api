@@ -15,6 +15,7 @@ mod conductor;
 mod conversation;
 mod dialect;
 mod front;
+mod messages;
 pub mod os;
 mod runtime_driver;
 mod startup;

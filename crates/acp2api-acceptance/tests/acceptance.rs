@@ -8,6 +8,7 @@ struct World {
     scenario: Scenario,
     startup: acp2api_acceptance::startup_check::Startup,
     endpoint: endpoints_and_streams::EndpointState,
+    content: request_content::ContentState,
 }
 #[path = "steps/common.rs"]
 mod common;
@@ -15,6 +16,8 @@ mod common;
 mod endpoints_and_streams;
 #[path = "steps/harness_regression.rs"]
 mod harness_regression;
+#[path = "steps/request_content.rs"]
+mod request_content;
 #[path = "steps/startup.rs"]
 mod startup;
 #[path = "steps/system_prompt_and_role_labels.rs"]

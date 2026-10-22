@@ -1,6 +1,7 @@
 use crate::{
     BoxFuture, Clock, Hold,
     conversation::{Answer, ReplyForm, Ticket, TurnEvent, TurnRequest},
+    messages::{Message, Refusal, Row},
 };
 use axum::{
     Json,
@@ -10,6 +11,7 @@ use futures_util::stream;
 use serde_json::{Value, json};
 use std::{collections::VecDeque, convert::Infallible, sync::Arc};
 mod chat;
+mod content;
 mod messages;
 mod responses;
 pub(crate) static MESSAGES: &dyn Dialect = &messages::Messages;
@@ -21,8 +23,8 @@ pub(crate) struct Parsed {
     pub form: ReplyForm,
 }
 pub(crate) trait Dialect: Sync {
-    fn parse(&self, body: &[u8]) -> Result<Parsed, String>;
-    fn refusal(&self, status: axum::http::StatusCode, message: &str) -> Response;
+    fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
+    fn refusal(&self, refusal: &Refusal) -> Response;
     fn respond(
         &'static self,
         form: ReplyForm,
@@ -31,7 +33,22 @@ pub(crate) trait Dialect: Sync {
     ) -> BoxFuture<'static, Response>;
 }
 trait WireDialect: Sync {
-    fn parse(&self, body: &[u8]) -> Result<Parsed, String>;
+    fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
+    fn refusal_body(&self, refusal: &Refusal) -> Value {
+        let code = match refusal.message {
+            Message::Field(_) => "unsupported_parameter",
+            Message::Content(_) => "unsupported_content_type",
+            Message::Media(_) => "unsupported_media_type",
+            Message::Url(_) => "unsupported_url",
+            Message::Pdf(_) => "unsupported_pdf",
+            Message::Prefill => "unsupported_prefill",
+            Message::Invalid(_) => "invalid_request_error",
+            Message::Key => "invalid_api_key",
+            Message::TooLarge => "request_too_large",
+            Message::Upstream(_) => "upstream_error",
+        };
+        json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
+    }
     fn prefix(&self) -> &'static str;
     fn body(&self, wire: &Encoding, answer: &Answer) -> Value;
     fn start(&self, wire: &mut Encoding) -> Vec<Event>;
@@ -39,15 +56,11 @@ trait WireDialect: Sync {
     fn end(&self, wire: &mut Encoding, answer: &Answer) -> Vec<Event>;
 }
 impl<T: WireDialect + 'static> Dialect for T {
-    fn parse(&self, body: &[u8]) -> Result<Parsed, String> {
+    fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         WireDialect::parse(self, body)
     }
-    fn refusal(&self, status: axum::http::StatusCode, message: &str) -> Response {
-        (
-            status,
-            Json(json!({"error":{"type":if status==axum::http::StatusCode::UNAUTHORIZED {"authentication_error"} else {"api_error"},"message":message}})),
-        )
-            .into_response()
+    fn refusal(&self, refusal: &Refusal) -> Response {
+        (refusal_status(refusal), Json(self.refusal_body(refusal))).into_response()
     }
     fn respond(
         &'static self,
@@ -59,7 +72,7 @@ impl<T: WireDialect + 'static> Dialect for T {
             let mut wire = match Encoding::new(self.prefix(), form.model_name, clock.wall()) {
                 Ok(wire) => wire,
                 Err(error) => {
-                    return self.refusal(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &error);
+                    return self.refusal(&Message::Upstream(error).into());
                 }
             };
             if form.stream {
@@ -120,11 +133,11 @@ impl<T: WireDialect + 'static> Dialect for T {
                             .into_response();
                         }
                         TurnEvent::End(Err(error)) => {
-                            return self.refusal(axum::http::StatusCode::BAD_GATEWAY, &error);
+                            return self.refusal(&Message::Upstream(error).into());
                         }
                     }
                 }
-                self.refusal(axum::http::StatusCode::BAD_GATEWAY, "conductor stopped")
+                self.refusal(&Message::Upstream("conductor stopped".into()).into())
             }
         })
     }
@@ -182,15 +195,25 @@ fn named(name: &str, value: Value) -> Event {
 fn data(value: Value) -> Event {
     Event::default().data(value.to_string())
 }
-fn parsed(model: String, text: String, stream: bool) -> Parsed {
+fn parsed(model: String, conversation: crate::conversation::Conversation, stream: bool) -> Parsed {
     Parsed {
         turn: TurnRequest {
             model: model.clone(),
-            text,
+            conversation,
         },
         form: ReplyForm {
             stream,
             model_name: model,
         },
+    }
+}
+
+fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
+    use axum::http::StatusCode;
+    match refusal.row() {
+        Row::Key => StatusCode::UNAUTHORIZED,
+        Row::Rejected => StatusCode::BAD_REQUEST,
+        Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        Row::Other502 => StatusCode::BAD_GATEWAY,
     }
 }

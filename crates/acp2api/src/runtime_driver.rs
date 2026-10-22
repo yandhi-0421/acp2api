@@ -129,13 +129,28 @@ impl Runtime {
     }
     pub(crate) async fn start_prompt(
         &mut self,
-        prompt: String,
+        prompt: Vec<crate::conversation::PromptBlock>,
         _model: &str,
     ) -> Result<(), String> {
+        let blocks: Vec<agent_client_protocol_schema::v1::ContentBlock> = prompt
+            .into_iter()
+            .map(|block| match block {
+                crate::conversation::PromptBlock::Text(text) => {
+                    agent_client_protocol_schema::v1::ContentBlock::Text(
+                        agent_client_protocol_schema::v1::TextContent::new(text),
+                    )
+                }
+                crate::conversation::PromptBlock::Image { media_type, base64 } => {
+                    agent_client_protocol_schema::v1::ContentBlock::Image(
+                        agent_client_protocol_schema::v1::ImageContent::new(base64, media_type),
+                    )
+                }
+            })
+            .collect();
         let id = self
             .send(
                 "session/prompt",
-                json!({"sessionId":self.session,"prompt":[{"type":"text","text":prompt}]}),
+                json!({"sessionId":self.session,"prompt":blocks}),
             )
             .await?;
         self.prompt_id = Some(id);
