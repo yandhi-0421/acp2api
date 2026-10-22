@@ -117,7 +117,6 @@ mod tests {
             )
             .await;
         });
-        // Four bounded requests exercise the production HTTP handler.
         let path = |url: &str| {
             url.strip_prefix(&format!("http://{address}"))
                 .unwrap()

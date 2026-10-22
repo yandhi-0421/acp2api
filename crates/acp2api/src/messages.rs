@@ -15,11 +15,13 @@ pub(crate) enum Message {
     ToolName(String),
     Invalid(String),
     Key,
+    TooLarge,
     Upstream(String),
 }
 pub(crate) enum Row {
     Key,
     Rejected,
+    TooLarge,
     Other502,
 }
 pub(crate) struct Refusal {
@@ -37,6 +39,7 @@ impl Refusal {
     pub fn row(&self) -> Row {
         match self.message {
             Message::Key => Row::Key,
+            Message::TooLarge => Row::TooLarge,
             Message::Upstream(_) => Row::Other502,
             Message::Model { .. }
             | Message::Field(_)
@@ -87,6 +90,7 @@ impl fmt::Display for Message {
             ),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
+            Self::TooLarge => f.write_str("acp2api: the request body is larger than 32 MB."),
         }
     }
 }

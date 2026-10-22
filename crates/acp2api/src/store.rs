@@ -17,9 +17,18 @@ pub(crate) struct Settings {
 pub(crate) struct Opened {
     pub settings: Settings,
     pub first_start: bool,
+    pub needs_save: bool,
     pub new_key: Option<String>,
     pub new_password: Option<String>,
 }
+// A start saves each absent key of the first four, because each of them always has a value.
+const KEYS: [&str; 5] = [
+    "port",
+    "concurrency_limit",
+    "local_api_key",
+    "management_password_hash",
+    "agy_acp_server_path",
+];
 fn invalid(path: &Path, key: &str) -> String {
     format!(
         "the setting {key} in {} has a value that acp2api cannot use.",
@@ -53,13 +62,15 @@ fn syntax_location(text: &str, offset: usize) -> String {
     }
     format!("at line {line}")
 }
-pub(crate) fn read(
-    path: &Path,
-    highest: u8,
-    deliver: impl FnOnce(&Opened) -> Result<(), String>,
-) -> Result<Opened, String> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => Some(text),
+pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
+    let text = match fs::read(path) {
+        Ok(bytes) => Some(String::from_utf8(bytes).map_err(|e| {
+            let offset = e.utf8_error().valid_up_to();
+            invalid(
+                path,
+                &syntax_location(&String::from_utf8_lossy(e.as_bytes()), offset),
+            )
+        })?),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
@@ -73,14 +84,7 @@ pub(crate) fn read(
         None => toml::Table::new(),
     };
     for key in table.keys() {
-        if !matches!(
-            key.as_str(),
-            "port"
-                | "concurrency_limit"
-                | "local_api_key"
-                | "management_password_hash"
-                | "agy_acp_server_path"
-        ) {
+        if !KEYS.contains(&key.as_str()) {
             return Err(invalid(path, key));
         }
     }
@@ -155,26 +159,13 @@ pub(crate) fn read(
         management_password_hash,
         agy_acp_server_path,
     };
-    let opened = Opened {
+    Ok(Opened {
         settings,
         first_start: text.is_none(),
+        needs_save: KEYS[..4].iter().any(|key| !table.contains_key(*key)),
         new_key,
         new_password,
-    };
-    deliver(&opened)?;
-    if text.is_none()
-        || [
-            "port",
-            "concurrency_limit",
-            "local_api_key",
-            "management_password_hash",
-        ]
-        .iter()
-        .any(|key| !table.contains_key(*key))
-    {
-        save(path, &opened.settings)?;
-    }
-    Ok(opened)
+    })
 }
 fn valid_password_hash(value: &str) -> bool {
     let Ok(hash) = PasswordHash::new(value) else {
@@ -227,7 +218,7 @@ fn base64url(bytes: &[u8]) -> String {
     }
     result
 }
-fn save(path: &Path, settings: &Settings) -> Result<(), String> {
+pub(crate) fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     let parent = path.parent().ok_or("configuration path has no parent")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut suffix = [0u8; 16];
@@ -245,4 +236,27 @@ fn save(path: &Path, settings: &Settings) -> Result<(), String> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn non_utf8_configuration_gives_m26() {
+        let folder = crate::os::environment()
+            .temp
+            .join(format!("acp2api-store-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("config.toml");
+        for (bytes, place) in [
+            (
+                &b"port = 8329\nlocal_api_key = \"\xff\"\n"[..],
+                "local_api_key",
+            ),
+            (&b"port = 8329\n\xff\n"[..], "at line 2"),
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            let error = super::read(&path, 3).err().unwrap();
+            assert_eq!(error, super::invalid(&path, place));
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 }
