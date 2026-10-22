@@ -261,13 +261,18 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
             } else {
                 "parameters"
             }];
-            if !schema.is_object() {
-                return Err(Refusal::invalid("tool schema must be an object"));
-            }
+            // OpenAI defines an absent or null `parameters` as an empty parameter list.
+            let schema = match schema {
+                Value::Null if !matches!(api, Api::Messages) => {
+                    r#"{"type":"object","properties":{}}"#.into()
+                }
+                Value::Object(_) => schema.to_string(),
+                _ => return Err(Refusal::invalid("tool schema must be an object")),
+            };
             Ok(crate::conversation::ClientTool {
                 name: name.into(),
                 description: function["description"].as_str().unwrap_or("").into(),
-                schema: schema.to_string(),
+                schema,
             })
         })
         .collect()
@@ -301,5 +306,18 @@ mod tests {
             document(Api::Responses, &pdf, "input_file").map_err(|r| r.message),
             Err(Message::Pdf(_))
         ));
+    }
+    #[test]
+    fn a_function_tool_without_parameters_gets_an_empty_object_schema() {
+        let schema = |api, tools_value| match tools(api, &tools_value) {
+            Ok(tools) => tools[0].schema.clone(),
+            Err(refusal) => panic!("refused: {}", refusal.message),
+        };
+        let empty = r#"{"type":"object","properties":{}}"#;
+        let chat = json!([{"type":"function","function":{"name":"now"}}]);
+        assert_eq!(schema(Api::Chat, chat), empty);
+        let responses = json!([{"type":"function","name":"now","parameters":null}]);
+        assert_eq!(schema(Api::Responses, responses), empty);
+        assert!(tools(Api::Messages, &json!([{"name":"now"}])).is_err());
     }
 }
