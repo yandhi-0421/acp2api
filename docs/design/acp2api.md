@@ -484,6 +484,7 @@ The core has these parts. Each part is a private module with a pure interface.
   - On success, its result fills the catalog. A first model-list request creates no further ACP session.
   - A request that arrives before this check completes waits for its result. It does not start another check.
   - Each later new ACP session refreshes the catalog from its result.
+  - The catalog has the suffix of a thinking level only for a model ID `<value>-<level>` in `models.availableModels` of the result.
   - The check uses the signal rules of FR-034. During a lockout, it sends nothing.
 - **`turns`.** One machine for each prompt turn:
   - the held reply text chunk and the 200 ms window (FR-028); usage and thought updates do not release the chunk;
