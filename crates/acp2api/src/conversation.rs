@@ -90,10 +90,6 @@ pub(crate) struct Answer {
     pub output_tokens: u64,
 }
 pub(crate) const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
-pub(crate) enum PromptFor<'a> {
-    Continue { new_items: &'a [&'a Item] },
-    Rebuild { conversation: &'a Conversation },
-}
 impl Conversation {
     pub(crate) fn items(&self) -> Vec<&Item> {
         self.earlier
@@ -102,22 +98,17 @@ impl Conversation {
             .collect()
     }
 }
-pub(crate) fn prompt(input: PromptFor<'_>) -> Vec<PromptBlock> {
-    let (items, rebuild) = match input {
-        PromptFor::Continue { new_items } => (new_items.to_vec(), false),
-        PromptFor::Rebuild { conversation } => {
-            (conversation.items(), !conversation.earlier.is_empty())
-        }
-    };
-    let unnamed_user = !rebuild
-        && matches!(
-            items.as_slice(),
-            [Item::Message {
-                role: Role::User,
-                name: None,
-                ..
-            }]
-        );
+/// `items` are the new items for `Continue`, else all items. A rebuild starts with the neutral line.
+pub(crate) fn prompt(kind: crate::journal::SessionUse, items: &[&Item]) -> Vec<PromptBlock> {
+    let rebuild = matches!(kind, crate::journal::SessionUse::Rebuild);
+    let unnamed_user = matches!(
+        items,
+        [Item::Message {
+            role: Role::User,
+            name: None,
+            ..
+        }]
+    );
     let mut blocks = Vec::new();
     for (index, item) in items.iter().enumerate() {
         let Item::Message { role, name, parts } = item;

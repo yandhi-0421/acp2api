@@ -277,19 +277,14 @@ impl Core {
             let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
             let items = request.turn.conversation.items();
             let matched = records::select(&self.records, &hashes, tools_hash, &items);
-            let kind = if matched.is_some() {
-                crate::journal::SessionUse::Continue
-            } else if request.turn.conversation.earlier.is_empty() {
-                crate::journal::SessionUse::New
-            } else {
-                crate::journal::SessionUse::Rebuild
+            let (kind, prompt_items) = match matched {
+                Some((_, new_items)) => (crate::journal::SessionUse::Continue, new_items),
+                None if request.turn.conversation.earlier.is_empty() => {
+                    (crate::journal::SessionUse::New, &items[..])
+                }
+                None => (crate::journal::SessionUse::Rebuild, &items[..]),
             };
-            let text = crate::conversation::prompt(match matched {
-                Some((_, new_items)) => crate::conversation::PromptFor::Continue { new_items },
-                None => crate::conversation::PromptFor::Rebuild {
-                    conversation: &request.turn.conversation,
-                },
-            });
+            let text = crate::conversation::prompt(kind, prompt_items);
             let prompt = PendingPrompt {
                 text,
                 model: request.turn.model,
