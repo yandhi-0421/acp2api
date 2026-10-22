@@ -8,7 +8,7 @@ use axum::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 
@@ -28,13 +28,14 @@ impl ToolSets {
     }
     pub(crate) fn insert(&self, tools: &[ClientTool]) -> Result<String, String> {
         let secret = crate::random_hex::<32>().map_err(|e| e.to_string())?;
-        let tools:Result<Vec<_>,_>=tools.iter().zip(tool_names(tools)).map(|(tool,name)|serde_json::from_str::<Value>(&tool.schema).map(|schema|json!({"name":name,"description":tool.description,"inputSchema":schema}))).collect();
-        match self.sets.write().unwrap().entry(secret.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert(tools.map_err(|e| e.to_string())?);
-            }
-            Entry::Occupied(_) => return Err("MCP path collision".into()),
-        }
+        let tools = tools
+            .iter()
+            .zip(tool_names(tools))
+            .map(|(tool, name)| {
+                json!({"name":name,"description":tool.description,"inputSchema":tool.schema})
+            })
+            .collect();
+        self.sets.write().unwrap().insert(secret.clone(), tools);
         Ok(format!("http://127.0.0.1:{}/mcp/{secret}", self.port))
     }
     pub(crate) fn remove(&self, url: &str) {
@@ -154,7 +155,7 @@ mod tests {
                 kind: crate::conversation::ToolKind::Function,
                 namespace: None,
                 description: "First immutable tool".into(),
-                schema: r#"{"type":"object"}"#.into(),
+                schema: json!({"type":"object"}),
             }])
             .unwrap();
         let second = sets.insert(&[]).unwrap();

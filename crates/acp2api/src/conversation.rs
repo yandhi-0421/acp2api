@@ -58,7 +58,7 @@ pub(crate) enum ToolKind {
 pub(crate) struct ClientTool {
     pub name: String,
     pub description: String,
-    pub schema: String,
+    pub schema: serde_json::Value,
     pub kind: ToolKind,
     pub namespace: Option<String>,
 }
@@ -254,7 +254,7 @@ pub(crate) fn tool_set_hash(tools: &[ClientTool]) -> ToolSetHash {
             hash.name(tool.namespace.as_deref());
             hash.text(&tool.name);
             hash.text(&tool.description);
-            hash.text(&tool.schema);
+            hash.text(&tool.schema.to_string());
             hash.finish()
         })
         .collect::<Vec<_>>();

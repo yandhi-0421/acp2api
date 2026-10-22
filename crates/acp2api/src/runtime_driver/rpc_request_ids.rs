@@ -135,7 +135,7 @@ async fn exercise(creation_pending: bool) {
     let tool = ClientTool {
         name: "beta_lookup".into(),
         description: "A tool only in beta".into(),
-        schema: "{\"type\":\"object\"}".into(),
+        schema: json!({"type":"object"}),
         kind: ToolKind::Function,
         namespace: None,
     };

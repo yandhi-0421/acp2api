@@ -486,7 +486,7 @@ fn client_tool(
                 None | Some("text") => {}
                 Some(_) => return Err(Refusal::invalid("unsupported custom tool format")),
             }
-            serde_json::json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}).to_string()
+            serde_json::json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false})
         }
         ToolKind::Function => {
             let schema = &function[if matches!(api, Api::Messages) {
@@ -496,9 +496,9 @@ fn client_tool(
             }];
             match schema {
                 Value::Null if !matches!(api, Api::Messages) => {
-                    r#"{"type":"object","properties":{}}"#.into()
+                    serde_json::json!({"type":"object","properties":{}})
                 }
-                Value::Object(_) => schema.to_string(),
+                Value::Object(_) => schema.clone(),
                 _ => return Err(Refusal::invalid("tool schema must be an object")),
             }
         }
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn a_function_tool_without_parameters_gets_an_empty_object_schema() {
         let schema = |api, tools_value| match tools(api, &tools_value) {
-            Ok(tools) => tools[0].schema.clone(),
+            Ok(tools) => tools[0].schema.to_string(),
             Err(refusal) => panic!("refused: {}", refusal.message),
         };
         let empty = r#"{"type":"object","properties":{}}"#;
