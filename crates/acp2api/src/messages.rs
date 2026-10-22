@@ -1,10 +1,9 @@
 use std::fmt;
 
 pub(crate) enum Message {
-    Field(String),
-    FieldValue {
+    Field {
         path: String,
-        value: serde_json::Value,
+        value: Option<serde_json::Value>,
     },
     Model {
         requested: String,
@@ -51,14 +50,20 @@ impl Refusal {
     pub fn invalid(message: impl Into<String>) -> Self {
         Message::Invalid(message.into()).into()
     }
+    pub fn field(path: impl Into<String>, value: Option<&serde_json::Value>) -> Self {
+        Message::Field {
+            path: path.into(),
+            value: value.cloned(),
+        }
+        .into()
+    }
     pub fn row(&self) -> Row {
         match self.message {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
             Message::Upstream(_) => Row::Other502,
             Message::Model { .. }
-            | Message::FieldValue { .. }
-            | Message::Field(_)
+            | Message::Field { .. }
             | Message::Content(_)
             | Message::Media(_)
             | Message::Url(_)
@@ -76,8 +81,7 @@ impl Refusal {
     }
     pub fn param(&self) -> Option<&str> {
         match &self.message {
-            Message::Field(field) => Some(field),
-            Message::FieldValue { path, .. } => Some(path),
+            Message::Field { path, .. } => Some(path),
             Message::Model { .. } => Some("model"),
             _ => None,
         }
@@ -91,8 +95,8 @@ impl fmt::Display for Message {
                 "acp2api: the model name {requested} is not available. The model names are: {}.",
                 names.join(", ")
             ),
-            Self::Field(field) => write!(f, "acp2api: the request field {field} is not supported."),
-            Self::FieldValue { path, value } => write!(f, "acp2api: the request field {path} = {value} is not supported."),
+            Self::Field { path, value: None } => write!(f, "acp2api: the request field {path} is not supported."),
+            Self::Field { path, value: Some(value) } => write!(f, "acp2api: the request field {path} = {value} is not supported."),
             Self::Content(kind) => write!(f, "acp2api: the content type {kind} is not supported."),
             Self::Media(media) => write!(f, "acp2api: the media type {media} is not supported."),
             Self::Url(kind) => write!(

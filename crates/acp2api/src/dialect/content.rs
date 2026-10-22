@@ -283,7 +283,7 @@ fn part(api: Api, v: &Value) -> Result<Part, Refusal> {
 }
 fn reject_id(value: &Value) -> Result<(), Refusal> {
     if !value["file_id"].is_null() {
-        return Err(Message::Field("file_id".into()).into());
+        return Err(Refusal::field("file_id", None));
     }
     Ok(())
 }
