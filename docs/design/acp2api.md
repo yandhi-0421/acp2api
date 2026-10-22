@@ -353,7 +353,7 @@ pub enum Item {
 }
 /// The dialect rejects a final assistant item with M-27 before it constructs Last.
 pub enum Last { Messages(NonEmpty<Item>), ToolResult { result: Item, then: Vec<Item> } }
-pub struct SystemPart { pub name: Option<String>, pub text: String }
+pub struct SystemPart { pub role: Role, pub name: Option<String>, pub text: String }
 pub struct Conversation { pub system: Vec<SystemPart>, pub earlier: Vec<Item>, pub last: Last }
 pub struct ClientTool { pub name: String, pub description: String, pub schema: String, pub kind: ToolKind }
 pub enum ToolKind { Function, Custom, InNamespace(String) }
@@ -375,6 +375,7 @@ pub fn input_tokens(turn: &TurnRequest) -> u64;                        // FR-025
 ```
 
 - `dialect::messages` removes the attribution block of Claude Code before it builds `system` (section "Decided values"). The block changes with each request, so the hash of the system prompt must never hold it.
+- Each system part keeps its original `System` or `Developer` role. A named part uses that role in its label.
 - An ignored field or block never enters a domain type. Thus it is never part of a hash (ADR-0003).
 
 Each answer that is not a success is one value of one type. `messages` owns the map from a case to a row of FR-033 (make-illegal-states-unrepresentable):
@@ -1447,6 +1448,12 @@ Reason: when the port was in use, startup ended after it saved the password hash
 This order implements FR-004 and FR-005 with no plaintext password and no change of the configuration format.
 It affects #37 and the later credential and startup work in #55 and #64.
 The browser remains at the successful first-start point. Terminal delivery proves successful writes and a flush, not that the owner read them.
+
+### 2026-10-19: keep the role of each system part
+
+`SystemPart` keeps its original `System` or `Developer` role, because FR-019 starts a named part with its role label.
+The system parts come from the Messages `system` field, the Responses `instructions` field, and the system and developer messages before the first message of another role.
+This change affects no external behavior, field, or stored format.
 
 ## Open questions
 
