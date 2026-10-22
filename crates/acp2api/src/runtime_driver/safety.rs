@@ -4,8 +4,8 @@ impl ToolName {
     pub(crate) fn from_fields(name: Option<&str>, title: Option<&str>) -> Self {
         let candidate = name.or(title).unwrap_or("unknown");
         let candidate = candidate
-            .strip_prefix("Run ")
-            .and_then(|name| name.strip_suffix('?'))
+            .strip_prefix("Running ")
+            .or_else(|| candidate.strip_prefix("Run ")?.strip_suffix('?'))
             .unwrap_or(candidate);
         if candidate.is_empty()
             || candidate.len() > 128
@@ -64,5 +64,17 @@ impl ToolCalls {
             }
             Observation::PermissionAsked | Observation::Reported => None,
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::ToolName;
+    #[test]
+    fn a_tool_name_comes_from_the_captured_runtime_titles() {
+        let name = |title| ToolName::from_fields(None, Some(title)).as_str().to_owned();
+        assert_eq!(name("Running view_file"), "view_file");
+        assert_eq!(name("view_file"), "view_file");
+        assert_eq!(name("Run view_file?"), "view_file");
+        assert_eq!(name("echo agy-bridge-probe"), "unknown");
     }
 }
