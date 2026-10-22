@@ -1,0 +1,169 @@
+use super::*;
+use std::{
+    io,
+    sync::Mutex,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::io::{AsyncRead, AsyncReadExt, DuplexStream, ReadBuf};
+
+// Only the official-runtime side is fake. Each test writes at most 8 lines per stream
+// into a 64 KiB pipe, each wait has a 10 s deadline, and no log is kept.
+const DEADLINE: Duration = Duration::from_secs(10);
+
+struct Agent {
+    stdout: DuplexStream,
+    stderr: DuplexStream,
+    stdin: BufReader<DuplexStream>,
+}
+impl Agent {
+    async fn stdout(&mut self, line: Value) {
+        self.stdout
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+    async fn stdin(&mut self) -> Value {
+        let mut line = String::new();
+        tokio::time::timeout(DEADLINE, self.stdin.read_line(&mut line))
+            .await
+            .expect("a line on stdin")
+            .unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+}
+/// A stdout pipe that fails to read after its written lines.
+struct Broken;
+impl AsyncRead for Broken {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+        _: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Poll::Ready(Err(io::Error::other("broken stdout")))
+    }
+}
+struct OneChild(Mutex<Option<Launched>>);
+impl ProcessLauncher for OneChild {
+    fn launch(&self, _: LaunchSpec) -> Result<Launched, LaunchError> {
+        Ok(self.0.lock().unwrap().take().expect("one fake ACP process"))
+    }
+}
+struct NoTree;
+impl ProcessTree for NoTree {
+    fn pid(&self) -> u32 {
+        0
+    }
+    fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
+        Box::pin(std::future::pending())
+    }
+    fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+        Box::pin(async {})
+    }
+}
+struct Root(PathBuf);
+impl Drop for Root {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+fn result(id: u64, result: Value) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"result":result})
+}
+fn chunk(text: &str) -> Value {
+    json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}})
+}
+/// Starts a runtime. The `before_session` lines come after the `initialize` reply (id 1)
+/// and before the `session/new` reply (id 2).
+async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
+    let mut random = [0_u8; 8];
+    getrandom::fill(&mut random).unwrap();
+    let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let root = Root(
+        Environment::from_process()
+            .temp
+            .join(format!("acp2api-agent-lines-{suffix}")),
+    );
+    let (stdout, stdout_agent) = tokio::io::duplex(64 * 1024);
+    let (stderr, stderr_agent) = tokio::io::duplex(64 * 1024);
+    let (stdin, stdin_agent) = tokio::io::duplex(64 * 1024);
+    let mut agent = Agent {
+        stdout: stdout_agent,
+        stderr: stderr_agent,
+        stdin: BufReader::new(stdin_agent),
+    };
+    agent.stdout(result(1, json!({"protocolVersion":1}))).await;
+    for line in before_session {
+        agent.stdout(line).await;
+    }
+    agent.stdout(result(2, json!({"sessionId":"s1"}))).await;
+    let mut ports = Ports::production();
+    ports.launcher = Arc::new(OneChild(Mutex::new(Some(Launched {
+        stdin: Box::pin(stdin),
+        stdout: Box::pin(stdout.chain(Broken)),
+        stderr: Box::pin(stderr),
+        tree: Box::new(NoTree),
+    }))));
+    let runtime = tokio::time::timeout(
+        DEADLINE,
+        Runtime::start(
+            &ports,
+            &root.0,
+            root.0.join("cwd"),
+            "http://127.0.0.1:1/mcp",
+        ),
+    )
+    .await
+    .expect("runtime start")
+    .unwrap();
+    assert_eq!(agent.stdin().await["method"], "initialize");
+    assert_eq!(agent.stdin().await["method"], "session/new");
+    (runtime, agent, root)
+}
+async fn next(runtime: &mut Runtime) -> String {
+    let (event, _hold) = tokio::time::timeout(DEADLINE, runtime.next())
+        .await
+        .expect("a runtime event");
+    match event {
+        RuntimeEvent::Text(text) => format!("text {text}"),
+        RuntimeEvent::Usage(used) => format!("usage {used}"),
+        RuntimeEvent::PromptEnded => "prompt ended".into(),
+        RuntimeEvent::Failed(error) => format!("failed {error}"),
+        RuntimeEvent::Stderr => "stderr".into(),
+        RuntimeEvent::Other => "other".into(),
+        RuntimeEvent::Closed => "closed".into(),
+    }
+}
+/// The events up to and including the end of the prompt, without `Other`.
+async fn turn(runtime: &mut Runtime) -> Vec<String> {
+    let mut events = Vec::new();
+    while events.last().is_none_or(|last| last != "prompt ended") {
+        assert!(events.len() < 8, "fake ACP event cap: {events:?}");
+        let event = next(runtime).await;
+        if event != "other" {
+            events.push(event);
+        }
+    }
+    events
+}
+
+#[tokio::test]
+async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runtime() {
+    let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+    agent
+        .stderr
+        .write_all(b"\xff\xfe code page 936\n")
+        .await
+        .unwrap();
+    agent.stderr.write_all(b"next stderr line\n").await.unwrap();
+    assert_eq!(next(&mut runtime).await, "stderr");
+    assert_eq!(next(&mut runtime).await, "stderr");
+    runtime.start_prompt("Hi".into(), "m").await.unwrap();
+    agent.stdout(chunk("Hello")).await;
+    agent
+        .stdout(result(3, json!({"stopReason":"end_turn"})))
+        .await;
+    assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+    drop(agent.stdout);
+    assert_eq!(next(&mut runtime).await, "closed");
+}
