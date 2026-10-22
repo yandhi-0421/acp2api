@@ -93,10 +93,7 @@ impl Writer {
         writer.retain()?;
         Ok(writer)
     }
-    pub fn write(&mut self, record: &RequestRecord) -> io::Result<usize> {
-        self.record(record)
-    }
-    fn record(&mut self, record: &impl Serialize) -> io::Result<usize> {
+    pub fn write(&mut self, record: &impl Serialize) -> io::Result<usize> {
         let mut line = serde_json::to_vec(record)?;
         line.push(b'\n');
         if line.len() as u64 > FILE_CAP {
@@ -300,17 +297,21 @@ impl Journal {
             "event":report.kind,
             "tool":report.tool,
         });
-        self.0
+        self.emit(&record)
+    }
+    /// Writes one line to the log file and to stdout, in the same order for both.
+    fn emit(&self, record: &impl Serialize) -> io::Result<()> {
+        let mut writer = self
+            .0
             .writer
             .lock()
-            .map_err(|_| io::Error::other("journal writer failed"))?
-            .record(&record)?;
+            .map_err(|_| io::Error::other("journal writer failed"))?;
+        writer.write(record)?;
         use std::io::Write;
         let mut terminal = std::io::stdout().lock();
-        writeln!(terminal, "acp2api: {record}")?;
+        writeln!(terminal, "acp2api: {}", serde_json::to_string(record)?)?;
         terminal.flush()
     }
-
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
         let mut random = [0; 8];
         getrandom::fill(&mut random).map_err(io::Error::other)?;
@@ -377,16 +378,7 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
-        let mut writer = self
-            .0
-            .writer
-            .lock()
-            .map_err(|_| io::Error::other("journal writer failed"))?;
-        writer.write(&record)?;
-        use std::io::Write;
-        let mut terminal = std::io::stdout().lock();
-        writeln!(terminal, "acp2api: {}", serde_json::to_string(&record)?)?;
-        terminal.flush()
+        self.emit(&record)
     }
 }
 #[cfg(test)]
