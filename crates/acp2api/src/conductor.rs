@@ -405,16 +405,8 @@ impl Conductor {
                 admission,
             })))
             .await
-            .map_err(|_| {
-                crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                    "conductor stopped".into(),
-                ))
-            })?;
-        reply.await.map_err(|_| {
-            crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                "conductor stopped".into(),
-            ))
-        })?
+            .map_err(stopped)?;
+        reply.await.map_err(stopped)?
     }
     pub(crate) async fn model_names(
         &self,
@@ -424,17 +416,12 @@ impl Conductor {
         self.0
             .send(Work::Models { reply, hold })
             .await
-            .map_err(|_| {
-                crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                    "conductor stopped".into(),
-                ))
-            })?;
-        result.await.map_err(|_| {
-            crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                "conductor stopped".into(),
-            ))
-        })?
+            .map_err(stopped)?;
+        result.await.map_err(stopped)?
     }
+}
+fn stopped<T>(_: T) -> crate::messages::Refusal {
+    crate::messages::Message::Upstream("conductor stopped".into()).into()
 }
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
