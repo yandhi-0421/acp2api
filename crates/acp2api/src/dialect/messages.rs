@@ -41,7 +41,16 @@ impl WireDialect for Messages {
         if let Some(call) = &w.tool_call {
             content.push(json!({"type":"tool_use","id":w.call_id,"name":call.name,"input":serde_json::from_str::<Value>(&call.arguments).expect("validated tool arguments")}));
         }
-        json!({"id":w.id,"type":"message","role":"assistant","model":w.model,"content":content,"stop_reason":if w.tool_call.is_some(){"tool_use"}else{"end_turn"},"stop_sequence":null,"usage":{"input_tokens":u.input_tokens,"output_tokens":u.output_tokens}})
+        json!({
+            "id": w.id,
+            "type": "message",
+            "role": "assistant",
+            "model": w.model,
+            "content": content,
+            "stop_reason": stop_reason(w),
+            "stop_sequence": null,
+            "usage": {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
+        })
     }
     fn start(&self, w: &mut Encoding) -> Vec<Event> {
         vec![named(
@@ -81,8 +90,22 @@ impl WireDialect for Messages {
                 json!({"type":"content_block_stop","index":index}),
             ));
         }
-        events.push(named("message_delta",json!({"type":"message_delta","delta":{"stop_reason":if w.tool_call.is_some(){"tool_use"}else{"end_turn"},"stop_sequence":null},"usage":{"input_tokens":u.input_tokens,"output_tokens":u.output_tokens}})));
+        events.push(named(
+            "message_delta",
+            json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason(w), "stop_sequence": null},
+                "usage": {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
+            }),
+        ));
         events.push(named("message_stop", json!({"type":"message_stop"})));
         events
+    }
+}
+fn stop_reason(w: &Encoding) -> &'static str {
+    if w.tool_call.is_some() {
+        "tool_use"
+    } else {
+        "end_turn"
     }
 }

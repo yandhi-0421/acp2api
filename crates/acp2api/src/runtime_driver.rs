@@ -94,7 +94,17 @@ impl Runtime {
             tools: std::collections::HashMap::new(),
             tool_calls: safety::ToolCalls::default(),
         };
-        runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
+        let client = json!({
+            "name": "acp2api",
+            "title": "acp2api",
+            "version": ports.release.version()
+        });
+        runtime
+            .call(
+                "initialize",
+                json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}}),
+            )
+            .await?;
         let catalog = runtime.new_session(&[], None).await?;
         Ok((runtime, catalog))
     }
@@ -121,7 +131,19 @@ impl Runtime {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
-        let mut params = json!({"cwd":cwd,"mcpServers":[{"type":"http","name":mcp::SERVER_NAME,"url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":[mcp::SERVER_NAME]}}});
+        let mut params = json!({
+            "cwd": cwd,
+            "mcpServers": [{
+                "type": "http",
+                "name": mcp::SERVER_NAME,
+                "url": mcp_url,
+                "headers": []
+            }],
+            "_meta": {"antigravity": {
+                "enabledTools": [],
+                "eagerMcpServers": [mcp::SERVER_NAME]
+            }}
+        });
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }

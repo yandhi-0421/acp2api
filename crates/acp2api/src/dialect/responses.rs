@@ -35,7 +35,46 @@ impl Responses {
         vec![w.event("response.output_item.added",json!({"output_index":0,"item":self.item(w,None)})),w.event("response.content_part.added",json!({"output_index":0,"content_index":0,"item_id":w.item_id,"part":self.part("")}))]
     }
     fn response(&self, w: &Encoding, usage: Option<&Usage>) -> Value {
-        json!({"id":w.id,"object":"response","created_at":w.created,"status":if usage.is_some(){"completed"}else{"in_progress"},"error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"model":w.model,"output":usage.map(|_|self.output(w)).unwrap_or_default(),"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":false,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":usage.map(|u|json!({"input_tokens":u.input_tokens,"input_tokens_details":{"cached_tokens":0},"output_tokens":u.output_tokens,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":u.input_tokens+u.output_tokens})),"user":null,"metadata":{}})
+        let status = if usage.is_some() {
+            "completed"
+        } else {
+            "in_progress"
+        };
+        let output = usage.map(|_| self.output(w)).unwrap_or_default();
+        let usage = usage.map(|u| {
+            json!({
+                "input_tokens": u.input_tokens,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": u.output_tokens,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": u.input_tokens + u.output_tokens
+            })
+        });
+        json!({
+            "id": w.id,
+            "object": "response",
+            "created_at": w.created,
+            "status": status,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": null,
+            "model": w.model,
+            "output": output,
+            "parallel_tool_calls": true,
+            "previous_response_id": null,
+            "reasoning": {"effort": null, "summary": null},
+            "store": false,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "usage": usage,
+            "user": null,
+            "metadata": {}
+        })
     }
 }
 impl WireDialect for Responses {

@@ -37,8 +37,17 @@ pub(crate) trait Dialect: Sync {
 trait WireDialect: Sync {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
     fn refusal_body(&self, refusal: &Refusal) -> Value {
-        let code = refusal_code(refusal);
-        json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
+        let kind = if refusal_status(refusal).is_server_error() {
+            "server_error"
+        } else {
+            "invalid_request_error"
+        };
+        json!({"error": {
+            "message": refusal.message.to_string(),
+            "type": kind,
+            "param": refusal.param(),
+            "code": refusal_code(refusal)
+        }})
     }
     fn built_in_tool_ran_events(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
         vec![data(

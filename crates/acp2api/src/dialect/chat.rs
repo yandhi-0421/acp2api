@@ -15,11 +15,41 @@ impl WireDialect for Chat {
         "chatcmpl-"
     }
     fn body(&self, w: &Encoding, u: &Usage) -> Value {
-        let mut message = json!({"role":"assistant","content":if w.text.is_empty() && w.tool_call.is_some(){Value::Null}else{json!(w.text)},"refusal":null});
+        let content = if w.text.is_empty() && w.tool_call.is_some() {
+            Value::Null
+        } else {
+            json!(w.text)
+        };
+        let mut message = json!({"role": "assistant", "content": content, "refusal": null});
         if let Some(call) = &w.tool_call {
-            message["tool_calls"] = json!([{"id":w.call_id,"type":"function","function":{"name":call.name,"arguments":call.arguments}}]);
+            message["tool_calls"] = json!([{
+                "id": w.call_id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments}
+            }]);
         }
-        json!({"id":w.id,"object":"chat.completion","created":w.created,"model":w.model,"choices":[{"index":0,"message":message,"logprobs":null,"finish_reason":if w.tool_call.is_some(){"tool_calls"}else{"stop"}}],"usage":{"prompt_tokens":u.input_tokens,"completion_tokens":u.output_tokens,"total_tokens":u.input_tokens+u.output_tokens}})
+        let finish_reason = if w.tool_call.is_some() {
+            "tool_calls"
+        } else {
+            "stop"
+        };
+        json!({
+            "id": w.id,
+            "object": "chat.completion",
+            "created": w.created,
+            "model": w.model,
+            "choices": [{
+                "index": 0,
+                "message": message,
+                "logprobs": null,
+                "finish_reason": finish_reason
+            }],
+            "usage": {
+                "prompt_tokens": u.input_tokens,
+                "completion_tokens": u.output_tokens,
+                "total_tokens": u.input_tokens + u.output_tokens
+            }
+        })
     }
     fn start(&self, _: &mut Encoding) -> Vec<Event> {
         Vec::new()
