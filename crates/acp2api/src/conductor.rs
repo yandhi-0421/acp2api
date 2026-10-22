@@ -367,6 +367,7 @@ impl Conductor {
     }
 }
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     #[tokio::test]

@@ -344,6 +344,7 @@ impl Journal {
     }
 }
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -408,7 +409,7 @@ mod tests {
         let path = log(&folder, "acp2api-2026-01-01-1.log", 10, old);
         let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
         assert_eq!(
-            unsafe { libc::chflags(c_path.as_ptr(), libc::UF_IMMUTABLE.into()) },
+            unsafe { libc::chflags(c_path.as_ptr(), libc::UF_IMMUTABLE) },
             0
         );
         let opened = Writer::open(&folder, SystemTime::now());
