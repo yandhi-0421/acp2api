@@ -181,3 +181,25 @@ async fn an_unparsable_session_update_is_skipped() {
         .await;
     assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
 }
+
+#[tokio::test]
+async fn an_agent_request_with_an_unknown_method_gets_32601_and_is_no_reply() {
+    let request = |id: u64| json!({"jsonrpc":"2.0","id":id,"method":"x/unknown","params":{}});
+    let (mut runtime, mut agent, _root) = start(vec![request(2)]).await;
+    assert_eq!(
+        agent.stdin().await,
+        json!({"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found"}})
+    );
+    runtime.start_prompt("Hi".into(), "m").await.unwrap();
+    assert_eq!(agent.stdin().await["method"], "session/prompt");
+    agent.stdout(request(3)).await;
+    agent.stdout(chunk("Hello")).await;
+    agent
+        .stdout(result(3, json!({"stopReason":"end_turn"})))
+        .await;
+    assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+    assert_eq!(
+        agent.stdin().await,
+        json!({"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Method not found"}})
+    );
+}

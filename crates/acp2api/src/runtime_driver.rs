@@ -86,16 +86,23 @@ impl Runtime {
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
         let id = self.next_id;
-        let mut bytes =
-            serde_json::to_vec(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
-                .map_err(|e| e.to_string())?;
+        self.write(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
+            .await?;
+        Ok(id)
+    }
+    async fn write(&mut self, value: Value) -> Result<(), String> {
+        let mut bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
         self.input
             .write_all(&bytes)
             .await
             .map_err(|e| e.to_string())?;
-        self.input.flush().await.map_err(|e| e.to_string())?;
-        Ok(id)
+        self.input.flush().await.map_err(|e| e.to_string())
+    }
+    /// Answers an agent request whose method acp2api does not handle.
+    async fn refuse(&mut self, request: &Value) -> Result<(), String> {
+        self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
+            .await
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.send(method, params).await?;
@@ -105,6 +112,12 @@ impl Runtime {
                 Line::Stderr => continue,
                 Line::Closed => return Err("runtime stdout closed".into()),
             };
+            if value.get("method").is_some() {
+                if value.get("id").is_some() {
+                    self.refuse(&value).await?;
+                }
+                continue;
+            }
             if value["id"] == id {
                 return value
                     .get("result")
@@ -136,12 +149,12 @@ impl Runtime {
             Line::Closed => RuntimeEvent::Closed,
             Line::Stderr => RuntimeEvent::Stderr,
             Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
-            Line::Stdout(Ok(value)) => self.decode(value),
+            Line::Stdout(Ok(value)) => self.decode(value).await,
         };
         (event, hold)
     }
-    fn decode(&mut self, value: Value) -> RuntimeEvent {
-        if self.prompt_id.is_some_and(|id| value["id"] == id) {
+    async fn decode(&mut self, value: Value) -> RuntimeEvent {
+        if value.get("method").is_none() && self.prompt_id.is_some_and(|id| value["id"] == id) {
             self.prompt_id = None;
             if let Some(error) = value.get("error") {
                 return RuntimeEvent::Failed(error.to_string());
@@ -171,6 +184,11 @@ impl Runtime {
                 }
                 SessionUpdate::UsageUpdate(usage) => RuntimeEvent::Usage(usage.used),
                 _ => RuntimeEvent::Other,
+            }
+        } else if value.get("method").is_some() && value.get("id").is_some() {
+            match self.refuse(&value).await {
+                Ok(()) => RuntimeEvent::Other,
+                Err(error) => RuntimeEvent::Failed(error),
             }
         } else {
             RuntimeEvent::Other
