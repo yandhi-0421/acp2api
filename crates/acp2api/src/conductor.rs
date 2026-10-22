@@ -99,7 +99,7 @@ enum Event {
     Disconnected(String),
     Limit(u8),
     DismissNotice(String),
-    PreparationFailed(String, String),
+    StartFailed(String, String),
 }
 enum Command {
     Complete(crate::journal::Completion),
@@ -217,7 +217,7 @@ impl Core {
                     active.disconnected = true;
                 }
             }
-            Event::PreparationFailed(work, error) => {
+            Event::StartFailed(work, error) => {
                 if let Some(index) = self
                     .active
                     .iter()
@@ -671,9 +671,7 @@ impl Conductor {
                         Err(error) => Err(error),
                     };
                     if let Err(error) = result {
-                        commands.extend(
-                            core.handle(Event::PreparationFailed(work, error), clock.now()),
-                        );
+                        commands.extend(core.handle(Event::StartFailed(work, error), clock.now()));
                     }
                 }
                 Command::Prompt {
@@ -686,9 +684,7 @@ impl Conductor {
                         Err(error) => Err(error),
                     };
                     if let Err(error) = result {
-                        commands.extend(
-                            core.handle(Event::PreparationFailed(work, error), clock.now()),
-                        );
+                        commands.extend(core.handle(Event::StartFailed(work, error), clock.now()));
                     }
                 }
                 Command::Permission { request, cancel } => {
