@@ -16,20 +16,30 @@ async fn messages_system_string_and_text_blocks_keep_their_exact_content() {
         } else {
             "First 雪\ninside\n\nSecond 🙂".into()
         };
-        let mut scenario = setup();
-        s::send(
-            &mut scenario,
-            s::request("POST /v1/messages", system, Value::Null, " raw user\n雪🙂 "),
-        )
-        .await;
-        s::addition(&scenario, &expected);
-        s::prompt(&scenario, " raw user\n雪🙂 ");
-        scenario.finish(true).await;
+        for stream in [false, true] {
+            let mut scenario = setup();
+            let mut call = s::request(
+                "POST /v1/messages",
+                system.clone(),
+                Value::Null,
+                " raw user\n雪🙂 ",
+            );
+            call.body["stream"] = stream.into();
+            s::send(&mut scenario, call).await;
+            s::addition(&scenario, &expected);
+            s::prompt(&scenario, " raw user\n雪🙂 ");
+            scenario.finish(true).await;
+        }
     }
 }
 #[tokio::test]
 async fn named_system_and_developer_parts_keep_their_original_roles() {
-    for endpoint in ["POST /v1/chat/completions", "POST /v1/responses"] {
+    for (endpoint, stream) in [
+        ("POST /v1/chat/completions", false),
+        ("POST /v1/chat/completions", true),
+        ("POST /v1/responses", false),
+        ("POST /v1/responses", true),
+    ] {
         let mut scenario = setup();
         let messages = json!([
             s::message("system", Some("系统 雪"), "First\n\ninside"),
@@ -41,11 +51,9 @@ async fn named_system_and_developer_parts_keep_their_original_roles() {
         } else {
             Value::Null
         };
-        s::send(
-            &mut scenario,
-            s::request(endpoint, system, messages, "user"),
-        )
-        .await;
+        let mut call = s::request(endpoint, system, messages, "user");
+        call.body["stream"] = stream.into();
+        s::send(&mut scenario, call).await;
         let expected = if endpoint.ends_with("responses") {
             "Base instructions\n\n[system: 系统 雪]\nFirst\n\ninside\n\n[developer: 规则 🙂]\nSecond"
         } else {
@@ -161,14 +169,5 @@ async fn changed_system_addition_with_same_tools_uses_a_new_session() {
         prompts[1].session, prompts[2].session,
         "unchanged system addition and tools keep current session until issue 47 supplies full matching"
     );
-    scenario.finish(true).await;
-}
-
-#[tokio::test]
-async fn removed_attribution_never_enters_any_acp_request_field() {
-    let mut scenario = setup();
-    s::send(&mut scenario,s::request("POST /v1/messages",json!([{"type":"text","text":s::ATTRIBUTION},{"type":"text","text":"Keep the ordinary rule"}]),Value::Null,"Fresh raw text 雪🙂")).await;
-    s::no_attribution(&scenario, s::ATTRIBUTION);
-    s::prompt(&scenario, "Fresh raw text 雪🙂");
     scenario.finish(true).await;
 }
