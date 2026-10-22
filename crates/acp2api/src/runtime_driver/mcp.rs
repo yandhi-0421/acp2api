@@ -37,6 +37,12 @@ impl ToolSets {
         }
         Ok(format!("http://127.0.0.1:{}/mcp/{secret}", self.port))
     }
+    /// Removes the tool set of a URL from `insert`.
+    pub(crate) fn remove(&self, url: &str) {
+        if let Some((_, secret)) = url.rsplit_once('/') {
+            self.sets.write().unwrap().remove(secret);
+        }
+    }
     pub(crate) fn router(self) -> Router {
         Router::new()
             .route("/mcp/{secret}", post(serve))
@@ -136,6 +142,13 @@ mod tests {
             let split=bytes.windows(4).position(|p|p==b"\r\n\r\n").unwrap();let status=std::str::from_utf8(&bytes[..split]).unwrap().split_whitespace().nth(1).unwrap().parse().unwrap();
             (status,serde_json::from_slice(&bytes[split+4..]).unwrap())
         }).await.expect("MCP test request cap: 2 s")
+    }
+    #[test]
+    fn a_removed_tool_set_is_gone() {
+        let sets = ToolSets::new(1);
+        let url = sets.insert(&[]).unwrap();
+        sets.remove(&url);
+        assert!(sets.sets.read().unwrap().is_empty());
     }
     #[tokio::test]
     async fn mcp_paths_keep_their_tool_set_and_calls_finish_with_an_error() {

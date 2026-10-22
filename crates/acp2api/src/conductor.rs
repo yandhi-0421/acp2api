@@ -103,6 +103,8 @@ enum Command {
         request: crate::runtime_driver::PermissionId,
         cancel: bool,
     },
+    /// The ACP session leaves for good; its client tools go too.
+    Forget(String),
 }
 impl Core {
     fn next_deadline(&self) -> Moment {
@@ -121,7 +123,8 @@ impl Core {
             Event::Accepted(request) => self.waiting.push_back(request),
             Event::Limit(limit) => {
                 self.limit = limit;
-                self.idle.truncate(usize::from(limit));
+                let kept = self.idle.len().min(usize::from(limit));
+                self.forget_idle(kept, &mut commands);
             }
             Event::Disconnected(work) => {
                 if let Some(active) = self
@@ -184,13 +187,13 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Failed(error)) => {
-                self.idle.clear();
+                self.forget_idle(0, &mut commands);
                 while !self.active.is_empty() {
                     self.finish(0, Err(error.clone()), &mut commands);
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
-                self.idle.clear();
+                self.forget_idle(0, &mut commands);
                 while !self.active.is_empty() {
                     self.finish(0, Err("runtime stdout closed".into()), &mut commands);
                 }
@@ -304,18 +307,24 @@ impl Core {
             }
         }
     }
+    /// Keeps the first `kept` idle sessions and forgets the others.
+    fn forget_idle(&mut self, kept: usize, commands: &mut Vec<Command>) {
+        commands.extend(self.idle.drain(kept..).map(|idle| Command::Forget(idle.id)));
+    }
     fn finish(&mut self, index: usize, result: Result<(), String>, commands: &mut Vec<Command>) {
         let mut active = self.active.remove(index);
-        if result.is_ok()
-            && !active.disconnected
-            && let Some(session) = &active.session
-        {
-            self.idle.push(Idle {
-                id: session.id.clone(),
-                settings: active.settings,
-            });
-            if self.idle.len() > usize::from(self.limit) {
-                self.idle.remove(0);
+        if let Some(session) = &active.session {
+            if result.is_ok() && !active.disconnected {
+                self.idle.push(Idle {
+                    id: session.id.clone(),
+                    settings: active.settings,
+                });
+                if self.idle.len() > usize::from(self.limit) {
+                    let oldest = self.idle.remove(0);
+                    commands.push(Command::Forget(oldest.id));
+                }
+            } else {
+                commands.push(Command::Forget(session.id.clone()));
             }
         }
         let end = result.map(|()| {
@@ -523,6 +532,11 @@ impl Conductor {
                         );
                     }
                 }
+                Command::Forget(session) => {
+                    if let Some(runtime) = runtime.as_mut() {
+                        runtime.forget(&session);
+                    }
+                }
                 Command::Emit(output, event) => {
                     let _ = output.send((event, clock.hold(HoldKind::TurnEvent)));
                 }
@@ -594,7 +608,85 @@ mod tests {
             agy_acp_server_path: None,
         };
         let configuration = folder.join("config.toml");
-        Conductor::start(None, clock.clone(), journal.clone(), settings, configuration, 3)
+        Conductor::start(
+            None,
+            clock.clone(),
+            journal.clone(),
+            settings,
+            configuration,
+            3,
+        )
+    }
+    #[test]
+    fn a_session_that_leaves_for_good_is_forgotten() {
+        let folder = std::env::temp_dir().join(format!("acp2api-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            idle: Vec::new(),
+            limit: 1,
+        };
+        let mut outputs = Vec::new();
+        let mut forgotten = Vec::new();
+        // One turn on its own new session; `ends` is the update that ends the prompt.
+        let mut turn = |core: &mut Core, system: &str, session: &str, ends: TurnUpdate| {
+            let body = format!(
+                r#"{{"model":"m","messages":[{{"role":"system","content":"{system}"}},{{"role":"user","content":"Hi"}}]}}"#
+            );
+            let turn = crate::dialect::CHAT
+                .parse(body.as_bytes())
+                .ok()
+                .unwrap()
+                .turn;
+            let request = journal.begin(crate::journal::Api::Chat, 0);
+            let work = request.id.clone();
+            let (output, ticket) = mpsc::unbounded_channel();
+            outputs.push(ticket);
+            let mut commands = core.handle(
+                Event::Accepted(Accepted {
+                    turn,
+                    request,
+                    output,
+                }),
+                0,
+            );
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let catalog = crate::catalog::Catalog::decode(&options, clock.wall()).unwrap();
+            let prepared = Ok((session.to_owned(), catalog));
+            commands.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work,
+                    result: prepared,
+                }),
+                0,
+            ));
+            let session = session.to_owned();
+            commands.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session,
+                    update: ends,
+                }),
+                0,
+            ));
+            commands.extend(core.handle(Event::Deadline, 1000));
+            forgotten.extend(commands.into_iter().filter_map(|command| match command {
+                Command::Forget(session) => Some(session),
+                _ => None,
+            }));
+        };
+        turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
+        turn(&mut core, "B", "s2", TurnUpdate::PromptEnded);
+        turn(&mut core, "C", "s3", TurnUpdate::PromptEnded);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            forgotten,
+            ["s1", "s2"],
+            "a failed session and an idle session over the limit"
+        );
     }
     #[tokio::test]
     async fn without_a_runtime_a_request_gets_no_model_name_error() {

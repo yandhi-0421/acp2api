@@ -17,14 +17,14 @@ pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
     prompts: std::collections::HashMap<u64, String>,
-    creating: std::collections::HashMap<u64, (String, Vec<crate::conversation::ClientTool>)>,
+    creating: std::collections::HashMap<u64, (String, SessionTools)>,
     tree: Box<dyn ProcessTree>,
     clock: Arc<dyn Clock>,
     next_id: u64,
     session: String,
     cwd: PathBuf,
     tool_sets: mcp::ToolSets,
-    tools: std::collections::HashMap<String, Vec<crate::conversation::ClientTool>>,
+    tools: std::collections::HashMap<String, SessionTools>,
     permissions: std::collections::HashMap<PermissionId, (Value, String)>,
     next_permission: u64,
 }
@@ -104,21 +104,21 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
     ) -> Result<crate::catalog::Catalog, String> {
-        let params = self.session_parameters(tools, system)?;
+        let (params, tools) = self.session_parameters(tools, system)?;
         let session = self.call("session/new", params).await?;
         let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
         self.session = session["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?
             .to_owned();
-        self.tools.insert(self.session.clone(), tools.to_vec());
+        self.tools.insert(self.session.clone(), tools);
         Ok(catalog)
     }
     fn session_parameters(
         &self,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> Result<(Value, SessionTools), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
@@ -126,7 +126,11 @@ impl Runtime {
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }
-        Ok(params)
+        let tools = SessionTools {
+            mcp_url,
+            tools: tools.to_vec(),
+        };
+        Ok((params, tools))
     }
     pub(crate) async fn request_session(
         &mut self,
@@ -134,10 +138,16 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
     ) -> Result<(), String> {
-        let params = self.session_parameters(tools, system)?;
+        let (params, tools) = self.session_parameters(tools, system)?;
         let id = self.send("session/new", params).await?;
-        self.creating.insert(id, (work, tools.to_vec()));
+        self.creating.insert(id, (work, tools));
         Ok(())
+    }
+    /// Drops the client tools of a session that acp2api does not use again.
+    pub(crate) fn forget(&mut self, session: &str) {
+        if let Some(tools) = self.tools.remove(session) {
+            self.tool_sets.remove(&tools.mcp_url);
+        }
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
@@ -257,9 +267,14 @@ impl Runtime {
                         .ok_or("missing sessionId")?
                         .to_owned();
                     let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
-                    self.tools.insert(session.clone(), tools);
                     Ok((session, catalog))
                 })();
+                match &result {
+                    Ok((session, _)) => {
+                        self.tools.insert(session.clone(), tools);
+                    }
+                    Err(_) => self.tool_sets.remove(&tools.mcp_url),
+                }
                 return RuntimeEvent::Prepared { work, result };
             }
             if let Some(session) = self.prompts.remove(&id) {
@@ -288,7 +303,7 @@ impl Runtime {
             let call = (|| {
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
-                let tools = self.tools.get(&session)?;
+                let tools = &self.tools.get(&session)?.tools;
                 let tool = mcp::tool_names(tools)
                     .into_iter()
                     .zip(tools)
@@ -367,6 +382,10 @@ async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
         Ok(0) | Err(_) => None,
         Ok(_) => Some(line),
     }
+}
+struct SessionTools {
+    mcp_url: String,
+    tools: Vec<crate::conversation::ClientTool>,
 }
 enum Line {
     Stdout(Result<Value, String>),
