@@ -7,7 +7,7 @@ use crate::{
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, State, rejection::BytesRejection},
+    extract::{DefaultBodyLimit, Extension, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -38,16 +38,28 @@ pub(crate) fn router(
         journal,
         port,
     };
+    use crate::journal::Api;
+    let guard = |api: Api, dialect: &'static dyn Dialect| {
+        axum::middleware::from_fn_with_state((app.clone(), api, dialect), access_guard)
+    };
     Router::new()
-        .route("/v1/models", get(models))
-        .route("/v1/messages", post(messages))
-        .route("/v1/responses", post(responses))
-        .route("/v1/chat/completions", post(chat))
+        .route(
+            "/v1/models",
+            get(models).layer(guard(Api::Models, dialect::CHAT)),
+        )
+        .route(
+            "/v1/messages",
+            post(turn).layer(guard(Api::Messages, dialect::MESSAGES)),
+        )
+        .route(
+            "/v1/responses",
+            post(turn).layer(guard(Api::Responses, dialect::RESPONSES)),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(turn).layer(guard(Api::Chat, dialect::CHAT)),
+        )
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
-        .layer(axum::middleware::from_fn_with_state(
-            app.clone(),
-            access_guard,
-        ))
         .with_state(app)
         .merge(tools.router())
         .layer(axum::middleware::from_fn_with_state(
@@ -56,24 +68,17 @@ pub(crate) fn router(
         ))
 }
 async fn access_guard(
-    State(app): State<App>,
+    State((app, api, dialect)): State<(App, crate::journal::Api, &'static dyn Dialect)>,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    use crate::journal::Api;
-    let (api, dialect) = match request.uri().path() {
-        "/v1/models" => (Api::Models, dialect::CHAT),
-        "/v1/messages" => (Api::Messages, dialect::MESSAGES),
-        "/v1/responses" => (Api::Responses, dialect::RESPONSES),
-        "/v1/chat/completions" => (Api::Chat, dialect::CHAT),
-        _ => return next.run(request).await,
-    };
     let record = app.journal.begin(api, app.clock.now());
     let id = record.id.clone();
     let mut response = if let Some(error) = access_error(request.headers(), &app) {
         refuse(&app, record, dialect, error)
     } else {
         request.extensions_mut().insert(record);
+        request.extensions_mut().insert(dialect);
         next.run(request).await
     };
     response.headers_mut().insert(
@@ -101,47 +106,14 @@ fn access_error(headers: &HeaderMap, app: &App) -> Option<crate::messages::Refus
     }
     None
 }
-async fn messages(
+async fn turn(
     State(app): State<App>,
-    axum::extract::Extension(request): axum::extract::Extension<crate::journal::Request>,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
+    Extension(mut request): Extension<crate::journal::Request>,
+    Extension(dialect): Extension<&'static dyn Dialect>,
+    Extension(lease): Extension<RequestHold>,
     body: Result<Bytes, BytesRejection>,
-) -> axum::response::Response {
-    serve(app, request, lease, body, dialect::MESSAGES).await
-}
-async fn responses(
-    State(app): State<App>,
-    axum::extract::Extension(request): axum::extract::Extension<crate::journal::Request>,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: Result<Bytes, BytesRejection>,
-) -> axum::response::Response {
-    serve(app, request, lease, body, dialect::RESPONSES).await
-}
-async fn chat(
-    State(app): State<App>,
-    axum::extract::Extension(request): axum::extract::Extension<crate::journal::Request>,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: Result<Bytes, BytesRejection>,
-) -> axum::response::Response {
-    serve(app, request, lease, body, dialect::CHAT).await
-}
-async fn serve(
-    app: App,
-    request: crate::journal::Request,
-    lease: RequestHold,
-    body: Result<Bytes, BytesRejection>,
-    dialect: &'static dyn Dialect,
 ) -> axum::response::Response {
     let hold = lease.0.lock().unwrap().take().expect("request hold");
-    dispatch(app, hold, body, dialect, request).await
-}
-async fn dispatch(
-    app: App,
-    hold: crate::Hold,
-    body: Result<Bytes, BytesRejection>,
-    dialect: &'static dyn Dialect,
-    mut request: crate::journal::Request,
-) -> axum::response::Response {
     let body = match body {
         Ok(body) => body,
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
@@ -174,8 +146,8 @@ fn authorized(headers: &HeaderMap, key: &str) -> bool {
 }
 async fn models(
     State(app): State<App>,
-    axum::extract::Extension(request): axum::extract::Extension<crate::journal::Request>,
-    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
+    Extension(request): Extension<crate::journal::Request>,
+    Extension(lease): Extension<RequestHold>,
 ) -> axum::response::Response {
     let hold = lease.0.lock().unwrap().take().expect("request hold");
     match app.conductor.model_names(hold).await {
