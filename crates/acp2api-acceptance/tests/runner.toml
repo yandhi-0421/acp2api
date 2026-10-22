@@ -1,0 +1,3 @@
+default_tags = "not @wip"
+concurrent_scenarios = 4
+step_timeout_seconds = 20

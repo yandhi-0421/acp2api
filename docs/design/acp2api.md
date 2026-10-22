@@ -287,7 +287,7 @@ pub struct Ports {
 pub trait Clock: Send + Sync {
     fn now(&self) -> Moment;                                   // monotonic milliseconds
     fn wall(&self) -> SystemTime;                              // log dates, lockout start, reset times
-    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, ()>;
+    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold>;
     fn hold(&self, kind: HoldKind) -> Hold;                    // virtual time does not pass while a Hold lives
 }
 pub enum HoldKind { HttpRequest, RuntimeLine, McpRequest, TurnEvent }
@@ -333,7 +333,9 @@ Invariants and error modes:
 - `ProcessTree::stop` on macOS closes stdin, waits 5 s on the clock, and kills the process group. On Windows, it closes the Job Object at once (ADR-0004).
 - `LaunchError::Refused` and `LaunchError::Io` are both a failed start of the runtime process (FR-041).
 - A `ConcurrencyLimit` is 1 to 3. The parse of the configuration file also compares it with `highest_concurrency_limit` (FR-049).
-- In production, `hold` returns an empty `Hold`, and `sleep_until` is a tokio sleep to the deadline.
+- In production, `hold` returns an empty `Hold`. `sleep_until` waits to the deadline and returns an empty `Hold`.
+- A successful timer returns a `Hold` for the work that its wake starts. The owner keeps it until that work finishes.
+- A loop registers its next wait before it releases the earlier `Hold`. Cancellation releases a pending sleep.
 
 ### Domain types
 
@@ -722,7 +724,7 @@ impl Scenario {
 - Its children are `account/`, `home/`, `local-app-data/`, `temp/`, `path/`, `exe/`, `data/`, and `builds/`.
 - The run file gives these folders to the test host as its `Environment`. Thus each scenario has its own platform folders, folders of Zed and JetBrains, account lock, and `~/.gemini`. Parallel scenarios do not block each other (FR-006).
 - A port number in a step text, for example 8329, is an alias of a free port of the scenario. A step that needs one real fixed port takes one lease for the whole test run. Thus the scenarios with that port run one at a time.
-- The harness deletes each test root after a passed scenario. At the start of a run, it deletes each earlier run folder.
+- The harness deletes each test root after a passed scenario. At startup, it removes owned output of earlier runs that have ended. It preserves active runs and unknown paths.
 
 #### `Setup::normal()`
 
@@ -792,6 +794,8 @@ pub enum TurnEndPlan { Stop(StopReason), RpcError { code: i64, message: String }
 
 The record holds each line in both directions, each `Hello`, each MCP request and its answer, and each end of a process. Each entry has its virtual time. Steps read it through typed queries, for example `prompts()`, `cancels()`, `client_info()`, `session_meta()`, `offered_tools()`, `usage_queries()`, and `processes_alive()`.
 
+The fake tracks active prompt turns and cancellation state by ACP session. A cancellation affects only its named session and cannot complete another session's turn. A completed turn leaves no pending cancellation state.
+
 #### The fake API client and the fake browser
 
 - `ApiClient` sends raw HTTP/1.1 through hyper, so a step can set each header, also a wrong `Host` or an `Origin`.
@@ -810,7 +814,7 @@ The hub owns the virtual time `now`. The wall time is a fixed epoch of the scena
 ```text
 settle():                                   # fails after 10 s of real time and names the open channel
   repeat:
-    wait until the test host reports: no live Hold, and each woken sleeper waits again
+    wait until the test host reports: no live Hold, and each awakened owner has finished or waits again
     s = snapshot of the counts
     if s is balanced and s == previous: return
     previous = s; send a drain tick with the same now   # drain mailboxes; do not wake product timers
@@ -834,6 +838,9 @@ advance_to(target):
 - The design uses no `tokio::time::pause`, no time scale, and no real sleep.
 - A self-test of the harness in #36 checks the settle against bursts of lines.
 - At one virtual instant, scheduled external inputs arrive before product deadline callbacks. Thus the 200 ms boundary of FR-028 is deterministic.
+- Delivery transfers ownership from the sleep future to its returned `Hold`. The hub keeps that work pending until the `Hold` drops, also while another owner registers a timer. Section "Ports" gives the rule for the owner.
+- `ProcessTree::stop` keeps the timer's `Hold` until the forced stop and process wait finish.
+- A one-shot timer and a process-stop timer can finish without another sleep registration. Self-tests cover these terminal owners and work still executing after a wake.
 
 #### Runner and step files
 
@@ -1417,6 +1424,18 @@ The disk had about 9.5 GiB free at the review. The first-build measurement, not 
 The owner also approved every recommendation of the final review. FR-006 and M-28 close the account questions below.
 FR-011, FR-020, FR-025 to FR-028, FR-033, FR-036 to FR-040, FR-049, and FR-054 hold the revised product contracts.
 The feature files cover the clarified arguments, preconditions, and exact time boundaries. The admission revision above carries the changed contracts into the conductor.
+
+### 2026-10-19: repair the shared test harness
+
+The owner approved the four repair groups found during the independent verification of #36, then requested continued local implementation.
+
+- Cause: the wake counter cleared only when another sleep registered. Thus, a terminal owner blocked the settle after its work ended.
+- Port change: `Clock::sleep_until` returns `Hold` instead of `()`. The two product call sites retain or release that ownership at the end of their work.
+- Other repairs: per-session state in the fake, owned cleanup of old runs, captured wire shapes, and the default step limit in the execution path. These repairs change test infrastructure, not PRD behavior or the expected results of existing scenarios.
+- Scope: issue #36 owns the repair and the replacement freeze record. History keeps the original freeze and the failing evidence. The change affects each later slice that uses the shared harness, for example streaming, cancellation, runtime recovery, and quota deadlines.
+
+The production clock returns an empty `Hold`; the harness clock reports delivery and completion separately.
+This removes the dependency on another timer registration and keeps the five-port structure unchanged.
 
 ## Open questions
 

@@ -19,7 +19,7 @@ Feature: Token usage
       | POST /v1/responses        | input_tokens  |
       | POST /v1/chat/completions | prompt_tokens |
 
-  @FR-025 @issue-36 @wip
+  @FR-025 @issue-36
   Scenario Outline: The output tokens are the ASCII characters divided by 4 and rounded up, plus 1 for each other character
     Given the official runtime replies "<reply>" to the next prompt
     When an API client sends a valid request to "POST /v1/messages"

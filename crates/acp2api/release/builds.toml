@@ -1,0 +1,5 @@
+[highest_concurrency_limit]
+macos-arm64 = 3
+macos-x64 = 3
+windows-x64 = 3
+windows-arm64 = 3
