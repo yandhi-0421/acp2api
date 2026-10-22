@@ -89,7 +89,7 @@ pub(crate) struct Answer {
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
-pub(crate) const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
+const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
 impl Conversation {
     pub(crate) fn items(&self) -> Vec<&Item> {
         self.earlier
@@ -156,7 +156,7 @@ pub(crate) fn prompt(kind: crate::journal::SessionUse, items: &[&Item]) -> Vec<P
     }
     blocks
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItemHash([u8; 32]);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ToolSetHash([u8; 32]);

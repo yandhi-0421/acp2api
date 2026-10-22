@@ -293,7 +293,7 @@ impl Core {
                 None if settings.system.is_none() && settings.tools.is_empty() => self.fresh.take(),
                 None => None,
             };
-            self.use_sequence = self.use_sequence.saturating_add(1);
+            self.use_sequence += 1;
             let work = request.request.id.clone();
             let (session, phase) = match ready {
                 Some(id) => {
