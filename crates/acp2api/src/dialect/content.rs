@@ -14,7 +14,18 @@ pub(super) enum Api {
 }
 pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let value: Value = serde_json::from_slice(body).map_err(|e| Refusal::invalid(e.to_string()))?;
+    if matches!(api, Api::Messages)
+        && let Some(kind) = value["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| tool["type"].as_str())
+            .find(|kind| kind.starts_with("advisor_"))
+    {
+        return Err(Message::AdvisorTool(kind.into()).into());
+    }
     let model = required(&value, "model")?.to_owned();
+    let client_tools = tools(api, &value["tools"])?;
     let input = &value[if matches!(api, Api::Responses) {
         "input"
     } else {
@@ -74,7 +85,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 )?);
             } else {
                 at_start = false;
-                let parts = parts(api, &item["content"])?;
+                let parts = parts(api, &item["content"], &client_tools)?;
                 items.push(Item::Message { role, parts });
             }
         }
@@ -100,7 +111,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         },
         value["stream"].as_bool().unwrap_or(false),
     );
-    parsed.turn.tools = tools(api, &value["tools"])?;
+    parsed.turn.tools = client_tools;
     parsed.turn.tool_choice =
         if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
             crate::conversation::ToolChoice::Off
@@ -208,16 +219,33 @@ fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
         .as_str()
         .ok_or_else(|| Refusal::invalid(format!("string field {key} required")))
 }
-fn parts(api: Api, value: &Value) -> Result<Vec<Part>, Refusal> {
+fn parts(
+    api: Api,
+    value: &Value,
+    tools: &[crate::conversation::ClientTool],
+) -> Result<Vec<Part>, Refusal> {
     if let Some(text) = value.as_str() {
         return Ok(vec![Part::Text(text.into())]);
     }
-    value
+    let mut parts = Vec::new();
+    for block in value
         .as_array()
         .ok_or_else(|| Refusal::invalid("content must be text or blocks"))?
-        .iter()
-        .map(|v| part(api, v))
-        .collect()
+    {
+        if matches!(api, Api::Messages) && block["type"] == "tool_addition" {
+            let tool = &block["tool"];
+            if tool["type"] != "tool_reference"
+                || !tool["name"]
+                    .as_str()
+                    .is_some_and(|name| tools.iter().any(|tool| tool.name == name))
+            {
+                return Err(Message::Content("tool_addition".into()).into());
+            }
+        } else {
+            parts.push(part(api, block)?);
+        }
+    }
+    Ok(parts)
 }
 fn part(api: Api, v: &Value) -> Result<Part, Refusal> {
     let kind = required(v, "type")?;
@@ -394,13 +422,42 @@ fn client_tool(
 ) -> Result<crate::conversation::ClientTool, Refusal> {
     use crate::conversation::{ClientTool, ToolKind};
     let kind = tool["type"].as_str().unwrap_or("function");
+    if matches!(api, Api::Messages) && server_tool(kind) {
+        return Err(Message::ServerTool {
+            kind: kind.into(),
+            name: required(
+                tool,
+                if kind == "mcp_toolset" {
+                    "mcp_server_name"
+                } else {
+                    "name"
+                },
+            )?
+            .into(),
+        }
+        .into());
+    }
+    if matches!(api, Api::Responses) && kind == "web_search" {
+        return Err(Message::CodexWebSearch.into());
+    }
     if kind == "tool_search" {
         return Err(Message::ToolSearch.into());
     }
     let kind = match kind {
         "function" => ToolKind::Function,
+        "custom" if matches!(api, Api::Messages) => ToolKind::Function,
         "custom" if matches!(api, Api::Responses) => ToolKind::Custom,
-        _ => return Err(Refusal::invalid("unsupported client tool type")),
+        other => {
+            return Err(Message::ToolType {
+                kind: other.into(),
+                name: tool["name"]
+                    .as_str()
+                    .or_else(|| tool["function"]["name"].as_str())
+                    .unwrap_or("")
+                    .into(),
+            }
+            .into());
+        }
     };
     let function = if matches!(api, Api::Chat) {
         &tool["function"]
@@ -449,6 +506,23 @@ fn client_tool(
         namespace: namespace.map(str::to_owned),
     })
 }
+fn server_tool(kind: &str) -> bool {
+    matches!(
+        kind,
+        "tool_search_tool_regex" | "tool_search_tool_bm25" | "mcp_toolset"
+    ) || [
+        "web_search_",
+        "web_fetch_",
+        "code_execution_",
+        "tool_search_tool_regex_",
+        "tool_search_tool_bm25_",
+    ]
+    .iter()
+    .any(|prefix| {
+        kind.strip_prefix(prefix)
+            .is_some_and(|date| date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,5 +565,26 @@ mod tests {
         let responses = json!([{"type":"function","name":"now","parameters":null}]);
         assert_eq!(schema(Api::Responses, responses), empty);
         assert!(tools(Api::Messages, &json!([{"name":"now"}])).is_err());
+    }
+    #[test]
+    fn an_advisor_tool_is_an_unknown_tool_type_outside_the_messages_api() {
+        let message = |api, tools: Value| {
+            let body = json!({"model":"m","tools":tools,"input":"Hi","messages":[]});
+            match parse(api, body.to_string().as_bytes()) {
+                Err(refusal) => refusal.message,
+                Ok(_) => panic!("accepted"),
+            }
+        };
+        let advisor = json!([{"type":"advisor_20260301","name":"advisor"}]);
+        assert!(matches!(
+            message(Api::Messages, advisor.clone()),
+            Message::AdvisorTool(kind) if kind == "advisor_20260301"
+        ));
+        for api in [Api::Chat, Api::Responses] {
+            assert!(matches!(
+                message(api, advisor.clone()),
+                Message::ToolType { kind, name } if kind == "advisor_20260301" && name == "advisor"
+            ));
+        }
     }
 }

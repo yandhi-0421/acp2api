@@ -176,6 +176,13 @@ fn names(w: &mut World) {
     regex = r"^acp2api refuses the request with HTTP 400 in the error envelope of the (Anthropic Messages API|OpenAI Responses API|OpenAI Chat Completions API)$"
 )]
 fn envelope(w: &mut World, _api: String) {
+    if w.server_tools.endpoint.is_some() {
+        let answer = w.scenario.answer.as_ref().unwrap();
+        assert_eq!(answer.status, 400);
+        assert_eq!(answer.json()["type"], "error");
+        assert_eq!(answer.json()["error"]["type"], "invalid_request_error");
+        return;
+    }
     let a = w.scenario.answer.as_ref().unwrap();
     assert_eq!(a.status, 400);
     check::refusal(
