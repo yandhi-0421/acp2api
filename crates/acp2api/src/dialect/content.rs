@@ -23,7 +23,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let mut items = Vec::new();
     let mut system = Vec::new();
     if matches!(api, Api::Messages) && !value["system"].is_null() {
-        system = system_parts(Role::System, None, &value["system"], "text")?;
+        system = system_parts(api, Role::System, None, &value["system"])?;
         if value["system"].is_array()
             && system
                 .first()
@@ -67,14 +67,10 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 && matches!(role, Role::System | Role::Developer)
             {
                 system.extend(system_parts(
+                    api,
                     role,
                     item["name"].as_str(),
                     &item["content"],
-                    if matches!(api, Api::Responses) {
-                        "input_text"
-                    } else {
-                        "text"
-                    },
                 )?);
             } else {
                 at_start = false;
@@ -114,10 +110,10 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     Ok(parsed)
 }
 fn system_parts(
+    api: Api,
     role: Role,
     name: Option<&str>,
     value: &Value,
-    text_kind: &str,
 ) -> Result<Vec<SystemPart>, Refusal> {
     let make = |text: &str| SystemPart {
         role,
@@ -133,7 +129,10 @@ fn system_parts(
         .iter()
         .map(|part| {
             let kind = required(part, "type")?;
-            if kind != text_kind {
+            if !matches!(
+                (api, kind),
+                (Api::Messages | Api::Chat, "text") | (Api::Responses, "input_text")
+            ) {
                 return Err(Message::Content(kind.into()).into());
             }
             Ok(make(required(part, "text")?))
