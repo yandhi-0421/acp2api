@@ -61,27 +61,17 @@ async fn access_guard(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use crate::journal::Api;
-    use axum::http::{Method, StatusCode};
-    let (api, dialect, method) = match request.uri().path() {
-        "/v1/models" => (Api::Models, dialect::CHAT, Method::GET),
-        "/v1/messages" => (Api::Messages, dialect::MESSAGES, Method::POST),
-        "/v1/responses" => (Api::Responses, dialect::RESPONSES, Method::POST),
-        "/v1/chat/completions" => (Api::Chat, dialect::CHAT, Method::POST),
+    let (api, dialect) = match request.uri().path() {
+        "/v1/models" => (Api::Models, dialect::CHAT),
+        "/v1/messages" => (Api::Messages, dialect::MESSAGES),
+        "/v1/responses" => (Api::Responses, dialect::RESPONSES),
+        "/v1/chat/completions" => (Api::Chat, dialect::CHAT),
         _ => return next.run(request).await,
     };
     let record = app.journal.begin(api, app.clock.now());
     let id = record.id.clone();
     let mut response = if let Some(error) = access_error(request.headers(), &app) {
         refuse(&app, record, dialect, error)
-    } else if request.method() != method {
-        let mut response = refuse(
-            &app,
-            record,
-            dialect,
-            crate::messages::Refusal::invalid("acp2api: the HTTP method is not supported."),
-        );
-        *response.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
-        response
     } else {
         request.extensions_mut().insert(record);
         next.run(request).await
