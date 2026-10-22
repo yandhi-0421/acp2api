@@ -6,8 +6,10 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::State,
+    body::Bytes,
+    extract::{DefaultBodyLimit, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::post,
 };
 use serde_json::{Value, json};
@@ -31,6 +33,7 @@ pub(crate) fn router(
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(chat))
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .route("/mcp/{secret}", post(mcp))
         .layer(axum::middleware::from_fn_with_state(
             clock.clone(),
@@ -47,7 +50,7 @@ async fn messages(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(app, headers, lease, body, dialect::MESSAGES).await
 }
@@ -55,7 +58,7 @@ async fn responses(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(app, headers, lease, body, dialect::RESPONSES).await
 }
@@ -63,7 +66,7 @@ async fn chat(
     State(app): State<App>,
     headers: HeaderMap,
     axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
     serve(app, headers, lease, body, dialect::CHAT).await
 }
@@ -71,7 +74,7 @@ async fn serve(
     app: App,
     headers: HeaderMap,
     lease: RequestHold,
-    body: axum::body::Bytes,
+    body: Result<Bytes, BytesRejection>,
     dialect: &'static dyn Dialect,
 ) -> axum::response::Response {
     let hold = lease.0.lock().unwrap().take().expect("request hold");
@@ -84,6 +87,13 @@ async fn serve(
     if !authorized {
         return dialect.refusal(&Message::Key.into());
     }
+    let body = match body {
+        Ok(body) => body,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return dialect.refusal(&Message::TooLarge.into());
+        }
+        Err(rejection) => return rejection.into_response(),
+    };
     let parsed = match dialect.parse(&body) {
         Ok(parsed) => parsed,
         Err(error) => return dialect.refusal(&error),

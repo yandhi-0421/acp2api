@@ -8,6 +8,7 @@ impl WireDialect for Messages {
         let kind = match refusal.row() {
             Row::Key => "authentication_error",
             Row::Rejected => "invalid_request_error",
+            Row::TooLarge => "request_too_large",
             Row::Other502 => "api_error",
         };
         json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}})
