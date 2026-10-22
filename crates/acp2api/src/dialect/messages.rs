@@ -13,6 +13,20 @@ impl WireDialect for Messages {
         };
         json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}})
     }
+    fn built_in_error(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+        let mut events = Vec::new();
+        if !wire.text.is_empty() {
+            events.push(named(
+                "content_block_stop",
+                json!({"type":"content_block_stop","index":0}),
+            ));
+        }
+        events.push(named(
+            "error",
+            json!({"type":"error","error":{"type":"invalid_request_error","message":message}}),
+        ));
+        events
+    }
     fn prefix(&self) -> &'static str {
         "msg_"
     }
