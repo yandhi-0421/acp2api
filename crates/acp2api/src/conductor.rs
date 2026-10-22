@@ -487,7 +487,7 @@ impl Conductor {
                 notices: Vec::new(),
             };
             let mut read_open = runtime.is_some();
-            'events: loop {
+            loop {
                 let disconnected: Vec<_> = core
                     .active
                     .iter()
@@ -521,7 +521,7 @@ impl Conductor {
                                 let success=result.is_ok();
                                 publish_notices.send_replace(Arc::new(core.notices.clone()));
                                 let _=reply.send(result);
-                                if success && !Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await {break 'events;}
+                                if success {Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await;}
                                 drop(hold);continue;
                             }
                             Work::Turn(work)=>*work,
@@ -544,7 +544,7 @@ impl Conductor {
                 };
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
                 publish_notices.send_replace(Arc::new(core.notices.clone()));
-                if !Self::commands(
+                Self::commands(
                     &mut core,
                     &mut runtime,
                     &mut read_open,
@@ -552,10 +552,7 @@ impl Conductor {
                     &journal,
                     &mut commands,
                 )
-                .await
-                {
-                    break 'events;
-                }
+                .await;
                 drop(hold);
             }
             if let Some(runtime) = runtime {
@@ -579,7 +576,7 @@ impl Conductor {
         clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
         commands: &mut VecDeque<Command>,
-    ) -> bool {
+    ) {
         while let Some(command) = commands.pop_front() {
             match command {
                 Command::Cancel(session) => {
@@ -591,12 +588,7 @@ impl Conductor {
                         );
                     }
                 }
-                Command::Safety(report) => {
-                    if journal.safety(report, clock.as_ref()).is_err() {
-                        eprintln!("acp2api: cannot write runtime safety event");
-                        return false;
-                    }
-                }
+                Command::Safety(report) => journal.safety(report, clock.as_ref()),
                 Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
                 Command::Prepare { work, settings } => {
                     let result = match runtime.as_mut().filter(|_| *read_open) {
@@ -655,7 +647,6 @@ impl Conductor {
                 }
             }
         }
-        true
     }
     pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
         self.notices.borrow().clone()
