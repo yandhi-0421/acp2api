@@ -107,12 +107,7 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     }))));
     let runtime = tokio::time::timeout(
         DEADLINE,
-        Runtime::start(
-            &ports,
-            &root.0,
-            root.0.join("cwd"),
-            "http://127.0.0.1:1/mcp",
-        ),
+        Runtime::start(&ports, &root.0, root.0.join("cwd"), mcp::ToolSets::new(1)),
     )
     .await
     .expect("runtime start")
@@ -128,6 +123,7 @@ async fn next(runtime: &mut Runtime) -> String {
     match event {
         RuntimeEvent::Text(text) => format!("text {text}"),
         RuntimeEvent::Usage(used) => format!("usage {used}"),
+        RuntimeEvent::Permission { title, .. } => format!("permission {title}"),
         RuntimeEvent::PromptEnded => "prompt ended".into(),
         RuntimeEvent::Failed(error) => format!("failed {error}"),
         RuntimeEvent::Stderr => "stderr".into(),
@@ -211,5 +207,25 @@ async fn an_agent_request_with_an_unknown_method_gets_32601_and_is_no_reply() {
     assert_eq!(
         agent.stdin().await,
         json!({"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Method not found"}})
+    );
+}
+
+#[tokio::test]
+async fn a_permission_request_is_a_permission_event_and_not_refused() {
+    let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+    runtime
+        .start_prompt(vec![PromptBlock::Text("Hi".into())], "m")
+        .await
+        .unwrap();
+    assert_eq!(agent.stdin().await["method"], "session/prompt");
+    agent
+        .stdout(json!({"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"c1","title":"Run lookup?","rawInput":{"a":1}},"options":[]}}))
+        .await;
+    agent
+        .stdout(result(3, json!({"stopReason":"end_turn"})))
+        .await;
+    assert_eq!(
+        turn(&mut runtime).await,
+        ["permission Run lookup?", "prompt ended"]
     );
 }

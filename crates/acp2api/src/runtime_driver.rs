@@ -1,10 +1,16 @@
 #[cfg(test)]
 mod agent_lines;
+pub(crate) mod mcp;
 use crate::*;
-use agent_client_protocol_schema::v1::{ContentBlock, SessionNotification, SessionUpdate};
+use agent_client_protocol_schema::v1::{
+    ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SessionNotification, SessionUpdate,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PermissionId(u64);
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
@@ -13,13 +19,17 @@ pub(crate) struct Runtime {
     clock: Arc<dyn Clock>,
     next_id: u64,
     session: String,
+    cwd: PathBuf,
+    tool_sets: mcp::ToolSets,
+    permissions: std::collections::HashMap<PermissionId, Value>,
+    next_permission: u64,
 }
 impl Runtime {
     pub(crate) async fn start(
         ports: &Ports,
         data: &std::path::Path,
         cwd: PathBuf,
-        mcp_url: &str,
+        tool_sets: mcp::ToolSets,
     ) -> Result<Self, String> {
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
         let program = data.join("official-runtime").join(if cfg!(windows) {
@@ -74,14 +84,28 @@ impl Runtime {
             clock: ports.clock.clone(),
             next_id: 0,
             session: String::new(),
+            cwd: cwd.clone(),
+            tool_sets,
+            permissions: std::collections::HashMap::new(),
+            next_permission: 0,
         };
         runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
-        let session = runtime.call("session/new", json!({"cwd": cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}})).await?;
-        runtime.session = session["sessionId"]
+        runtime.new_session(&[]).await?;
+        Ok(runtime)
+    }
+    pub(crate) async fn new_session(
+        &mut self,
+        tools: &[crate::conversation::ClientTool],
+    ) -> Result<(), String> {
+        let mcp_url = self.tool_sets.insert(tools)?;
+        let cwd = self.cwd.join(format!("session-{}", self.next_id));
+        std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
+        let session = self.call("session/new", json!({"cwd":cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}})).await?;
+        self.session = session["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?
             .to_owned();
-        Ok(runtime)
+        Ok(())
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
@@ -98,6 +122,21 @@ impl Runtime {
             .await
             .map_err(|e| e.to_string())?;
         self.input.flush().await.map_err(|e| e.to_string())
+    }
+    pub(crate) async fn permission(
+        &mut self,
+        request: PermissionId,
+        cancel: bool,
+    ) -> Result<(), String> {
+        if cancel {
+            self.write(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.session}})).await?;
+        }
+        if let Some(id) = self.permissions.remove(&request) {
+            let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+            self.write(json!({"jsonrpc":"2.0","id":id,"result":outcome}))
+                .await?;
+        }
+        Ok(())
     }
     /// Answers an agent request whose method acp2api does not handle.
     async fn refuse(&mut self, request: &Value) -> Result<(), String> {
@@ -169,6 +208,34 @@ impl Runtime {
         (event, hold)
     }
     async fn decode(&mut self, value: Value) -> RuntimeEvent {
+        if value["method"] == "session/request_permission" {
+            let request: RequestPermissionRequest =
+                match serde_json::from_value(value["params"].clone()) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return RuntimeEvent::Failed(format!(
+                            "ACP session/request_permission: {error}"
+                        ));
+                    }
+                };
+            self.next_permission += 1;
+            let permission = PermissionId(self.next_permission);
+            self.permissions.insert(permission, value["id"].clone());
+            return RuntimeEvent::Permission {
+                request: permission,
+                title: if request.session_id.to_string() == self.session {
+                    request.tool_call.fields.title.unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                arguments: request
+                    .tool_call
+                    .fields
+                    .raw_input
+                    .filter(Value::is_object)
+                    .map(|v| v.to_string()),
+            };
+        }
         if value.get("method").is_none() && self.prompt_id.is_some_and(|id| value["id"] == id) {
             self.prompt_id = None;
             if let Some(error) = value.get("error") {
@@ -233,6 +300,11 @@ enum Line {
 pub(crate) enum RuntimeEvent {
     Text(String),
     Usage(u64),
+    Permission {
+        request: PermissionId,
+        title: String,
+        arguments: Option<String>,
+    },
     PromptEnded,
     Failed(String),
     Stderr,

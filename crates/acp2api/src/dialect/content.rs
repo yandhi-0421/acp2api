@@ -59,14 +59,22 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     ) {
         return Err(Message::Prefill.into());
     }
-    Ok(parsed(
+    let mut parsed = parsed(
         model,
         Conversation {
             earlier: items,
             last,
         },
         value["stream"].as_bool().unwrap_or(false),
-    ))
+    );
+    parsed.turn.tools = tools(api, &value["tools"])?;
+    parsed.turn.tool_choice =
+        if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
+            crate::conversation::ToolChoice::Off
+        } else {
+            crate::conversation::ToolChoice::Auto
+        };
+    Ok(parsed)
 }
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
     v[key]
@@ -222,6 +230,53 @@ fn validate_media(media: &str, kind: &str) -> Result<(), Refusal> {
         _ => Err(Message::Media(media.into()).into()),
     }
 }
+
+fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>, Refusal> {
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    value
+        .as_array()
+        .ok_or_else(|| Refusal::invalid("tools must be an array"))?
+        .iter()
+        .map(|tool| {
+            let kind = tool["type"].as_str().unwrap_or("function");
+            if kind == "tool_search" {
+                return Err(Message::ToolSearch.into());
+            }
+            if kind != "function" {
+                return Err(Refusal::invalid("unsupported client tool type"));
+            }
+            let function = if matches!(api, Api::Chat) {
+                &tool["function"]
+            } else {
+                tool
+            };
+            let name = required(function, "name")?;
+            if matches!(name, "list_resources" | "read_resource") {
+                return Err(Message::ToolName(name.into()).into());
+            }
+            let schema = &function[if matches!(api, Api::Messages) {
+                "input_schema"
+            } else {
+                "parameters"
+            }];
+            // OpenAI defines an absent or null `parameters` as an empty parameter list.
+            let schema = match schema {
+                Value::Null if !matches!(api, Api::Messages) => {
+                    r#"{"type":"object","properties":{}}"#.into()
+                }
+                Value::Object(_) => schema.to_string(),
+                _ => return Err(Refusal::invalid("tool schema must be an object")),
+            };
+            Ok(crate::conversation::ClientTool {
+                name: name.into(),
+                description: function["description"].as_str().unwrap_or("").into(),
+                schema,
+            })
+        })
+        .collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +306,18 @@ mod tests {
             document(Api::Responses, &pdf, "input_file").map_err(|r| r.message),
             Err(Message::Pdf(_))
         ));
+    }
+    #[test]
+    fn a_function_tool_without_parameters_gets_an_empty_object_schema() {
+        let schema = |api, tools_value| match tools(api, &tools_value) {
+            Ok(tools) => tools[0].schema.clone(),
+            Err(refusal) => panic!("refused: {}", refusal.message),
+        };
+        let empty = r#"{"type":"object","properties":{}}"#;
+        let chat = json!([{"type":"function","function":{"name":"now"}}]);
+        assert_eq!(schema(Api::Chat, chat), empty);
+        let responses = json!([{"type":"function","name":"now","parameters":null}]);
+        assert_eq!(schema(Api::Responses, responses), empty);
+        assert!(tools(Api::Messages, &json!([{"name":"now"}])).is_err());
     }
 }

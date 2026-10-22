@@ -9,7 +9,10 @@ struct World {
     startup: acp2api_acceptance::startup_check::Startup,
     endpoint: endpoints_and_streams::EndpointState,
     content: request_content::ContentState,
+    tools: client_tools::ToolState,
 }
+#[path = "steps/client_tools.rs"]
+mod client_tools;
 #[path = "steps/common.rs"]
 mod common;
 #[path = "steps/endpoints_and_streams.rs"]

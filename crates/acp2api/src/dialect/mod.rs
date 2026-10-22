@@ -42,6 +42,8 @@ trait WireDialect: Sync {
             Message::Url(_) => "unsupported_url",
             Message::Pdf(_) => "unsupported_pdf",
             Message::Prefill => "unsupported_prefill",
+            Message::ToolSearch => "unsupported_tool",
+            Message::ToolName(_) => "unsupported_tool_name",
             Message::Invalid(_) => "invalid_request_error",
             Message::Key => "invalid_api_key",
             Message::TooLarge => "request_too_large",
@@ -50,6 +52,9 @@ trait WireDialect: Sync {
         json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
     }
     fn prefix(&self) -> &'static str;
+    fn call_prefix(&self) -> &'static str {
+        "call_"
+    }
     fn body(&self, wire: &Encoding, answer: &Answer) -> Value;
     fn start(&self, wire: &mut Encoding) -> Vec<Event>;
     fn text(&self, wire: &mut Encoding, text: &str) -> Vec<Event>;
@@ -69,7 +74,12 @@ impl<T: WireDialect + 'static> Dialect for T {
         clock: Arc<dyn Clock>,
     ) -> BoxFuture<'static, Response> {
         Box::pin(async move {
-            let mut wire = match Encoding::new(self.prefix(), form.model_name, clock.wall()) {
+            let mut wire = match Encoding::new(
+                self.prefix(),
+                self.call_prefix(),
+                form.model_name,
+                clock.wall(),
+            ) {
                 Ok(wire) => wire,
                 Err(error) => {
                     return self.refusal(&Message::Upstream(error).into());
@@ -99,9 +109,11 @@ impl<T: WireDialect + 'static> Dialect for T {
                             TurnEvent::Text(text) => {
                                 state.pending.extend(self.text(&mut state.wire, &text))
                             }
+                            TurnEvent::ToolCall(call) => state.wire.tool_call = Some(call),
                             TurnEvent::End(Ok(usage)) => {
                                 let answer = Answer {
                                     text: state.wire.text.clone(),
+                                    tool_call: state.wire.tool_call.clone(),
                                     input_tokens: usage.input_tokens,
                                     output_tokens: usage.output_tokens,
                                 };
@@ -121,11 +133,13 @@ impl<T: WireDialect + 'static> Dialect for T {
                 while let Some((event, _hold)) = ticket.recv().await {
                     match event {
                         TurnEvent::Text(chunk) => text.push_str(&chunk),
+                        TurnEvent::ToolCall(call) => wire.tool_call = Some(call),
                         TurnEvent::End(Ok(usage)) => {
                             return Json(self.body(
                                 &wire,
                                 &Answer {
                                     text,
+                                    tool_call: wire.tool_call.clone(),
                                     input_tokens: usage.input_tokens,
                                     output_tokens: usage.output_tokens,
                                 },
@@ -156,9 +170,17 @@ struct Encoding {
     created: u64,
     sequence: u64,
     text: String,
+    tool_call: Option<crate::conversation::ToolCall>,
+    call_id: String,
+    call_item_id: String,
 }
 impl Encoding {
-    fn new(prefix: &str, model: String, wall: std::time::SystemTime) -> Result<Self, String> {
+    fn new(
+        prefix: &str,
+        call_prefix: &str,
+        model: String,
+        wall: std::time::SystemTime,
+    ) -> Result<Self, String> {
         Ok(Self {
             id: identifier(prefix)?,
             item_id: identifier("msg_")?,
@@ -169,6 +191,9 @@ impl Encoding {
                 .as_secs(),
             sequence: 0,
             text: String::new(),
+            tool_call: None,
+            call_id: identifier(call_prefix)?,
+            call_item_id: identifier("fc_")?,
         })
     }
     fn event(&mut self, kind: &str, mut value: Value) -> Event {
@@ -200,6 +225,8 @@ fn parsed(model: String, conversation: crate::conversation::Conversation, stream
         turn: TurnRequest {
             model: model.clone(),
             conversation,
+            tools: Vec::new(),
+            tool_choice: crate::conversation::ToolChoice::Auto,
         },
         form: ReplyForm {
             stream,

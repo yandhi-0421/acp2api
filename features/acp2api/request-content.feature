@@ -56,7 +56,7 @@ Feature: Request content
     And the last chunk of the stream before "data: [DONE]" carries the usage
     And the stream has one choice
 
-  @FR-014 @issue-40 @wip
+  @FR-014 @issue-40
   Scenario: acp2api uses tool_choice auto
     Given the request has the client tool "read_file"
     When an API client sends a valid request to "POST /v1/chat/completions" with "tool_choice" set to "auto"
