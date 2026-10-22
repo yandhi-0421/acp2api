@@ -27,9 +27,7 @@ impl ToolSets {
         }
     }
     pub(crate) fn insert(&self, tools: &[ClientTool]) -> Result<String, String> {
-        let mut random = [0; 32];
-        getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-        let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
+        let secret = crate::random_hex::<32>().map_err(|e| e.to_string())?;
         let tools:Result<Vec<_>,_>=tools.iter().zip(tool_names(tools)).map(|(tool,name)|serde_json::from_str::<Value>(&tool.schema).map(|schema|json!({"name":name,"description":tool.description,"inputSchema":schema}))).collect();
         match self.sets.write().unwrap().entry(secret.clone()) {
             Entry::Vacant(entry) => {
@@ -79,7 +77,7 @@ pub(crate) fn tool_names(tools: &[ClientTool]) -> Vec<String> {
                         .chain_update(&tool.name)
                         .chain_update(attempt.to_le_bytes())
                         .finalize();
-                    let suffix: String = hash[..4].iter().map(|b| format!("{b:02x}")).collect();
+                    let suffix = crate::hex(&hash[..4]);
                     format!("{}_{suffix}", &readable[..end])
                 })
                 .find(|name| used.insert(name.clone()))

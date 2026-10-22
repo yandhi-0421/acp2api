@@ -72,9 +72,7 @@ fn chunk(text: &str) -> Value {
     json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}})
 }
 async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
-    let mut random = [0_u8; 8];
-    getrandom::fill(&mut random).unwrap();
-    let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let suffix = crate::random_hex::<8>().unwrap();
     let root = Root(
         Environment::from_process()
             .temp

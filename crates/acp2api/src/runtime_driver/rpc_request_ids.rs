@@ -69,9 +69,7 @@ impl ProcessTree for AgentTree {
 struct Root(PathBuf);
 impl Root {
     fn new() -> Self {
-        let mut random = [0_u8; 16];
-        getrandom::fill(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let suffix = crate::random_hex::<16>().unwrap();
         Self(
             Environment::from_process()
                 .temp

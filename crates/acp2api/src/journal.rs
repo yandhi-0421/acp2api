@@ -308,11 +308,10 @@ impl Journal {
         terminal.flush()
     }
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
-        let mut random = [0; 8];
-        getrandom::fill(&mut random).map_err(io::Error::other)?;
+        let prefix = crate::random_hex::<8>().map_err(io::Error::other)?;
         Ok(Self(std::sync::Arc::new(JournalState {
             writer: std::sync::Mutex::new(Writer::open(folder, wall)?),
-            prefix: random.iter().map(|b| format!("{b:02x}")).collect(),
+            prefix,
             sequence: std::sync::atomic::AtomicU64::new(1),
         })))
     }

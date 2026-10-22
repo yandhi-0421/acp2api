@@ -133,6 +133,14 @@ impl Ports {
         os::ports()
     }
 }
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+pub(crate) fn random_hex<const BYTES: usize>() -> Result<String, getrandom::Error> {
+    let mut random = [0; BYTES];
+    getrandom::fill(&mut random)?;
+    Ok(hex(&random))
+}
 pub fn run(ports: Ports, args: impl IntoIterator<Item = OsString>, env: Environment) -> ExitCode {
     let args = args.into_iter().collect();
     match tokio::runtime::Builder::new_multi_thread()

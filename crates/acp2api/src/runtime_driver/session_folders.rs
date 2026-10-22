@@ -6,22 +6,14 @@ use std::{
 };
 
 pub(crate) fn root(environment: &Environment) -> Result<PathBuf, String> {
-    let account = Sha256::digest(environment.account_root.as_os_str().as_encoded_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let account = crate::hex(&Sha256::digest(
+        environment.account_root.as_os_str().as_encoded_bytes(),
+    ));
     let container = environment.temp.join("acp2api");
     shared_folder(&container)?;
     let account = container.join(account);
     shared_folder(&account)?;
-    let mut random = [0; 16];
-    getrandom::fill(&mut random).map_err(|error| error.to_string())?;
-    let run = account.join(
-        random
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
-    );
+    let run = account.join(crate::random_hex::<16>().map_err(|error| error.to_string())?);
     new_folder(&run).map_err(|error| error.to_string())?;
     let sessions = run.join("sessions");
     new_folder(&sessions).map_err(|error| error.to_string())?;

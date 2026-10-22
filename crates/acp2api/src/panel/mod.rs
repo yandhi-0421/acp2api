@@ -179,18 +179,13 @@ async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Respon
         )
             .into_response();
     }
-    let mut random = [0u8; 32];
-    if getrandom::fill(&mut random).is_err() {
+    let Ok(token) = crate::random_hex::<32>() else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             "A panel session could not be created.",
         )
             .into_response();
-    }
-    let token = random
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    };
     panel.sessions.lock().unwrap().insert(
         token.clone(),
         Session {

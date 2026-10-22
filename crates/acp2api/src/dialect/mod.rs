@@ -213,15 +213,8 @@ impl Encoding {
     }
 }
 fn identifier(prefix: &str) -> Result<String, String> {
-    let mut random = [0; 16];
-    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-    Ok(format!(
-        "{prefix}{}",
-        random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    ))
+    let random = crate::random_hex::<16>().map_err(|e| e.to_string())?;
+    Ok(format!("{prefix}{random}"))
 }
 fn named(name: &str, value: Value) -> Event {
     Event::default().event(name).data(value.to_string())
