@@ -1449,15 +1449,11 @@ This order implements FR-004 and FR-005 with no plaintext password and no change
 It affects #37 and the later credential and startup work in #55 and #64.
 The browser remains at the successful first-start point. Terminal delivery proves successful writes and a flush, not that the owner read them.
 
-### 2026-10-19: retain the role of each system part
+### 2026-10-19: keep the role of each system part
 
-The implementation review for #41 found that the domain sketch kept each system part's name and text, but omitted its role.
-FR-019 requires the original role label for a named part. A named developer part must therefore retain `Developer` during normalization.
-The revised sketch carries that role with the part. The dialect admits only initial system and developer messages into this collection.
-
-This is an internal representation correction. It changes no PRD behavior, external field, stored format, or module owner.
-It affects system prompt normalization in #41 and the later conversation hashes in #47.
-Later system and developer messages remain in the conversation, as the glossary and ADR-0003 already require.
+`SystemPart` keeps its original `System` or `Developer` role, because FR-019 starts a named part with its role label.
+The system parts come from the Messages `system` field, the Responses `instructions` field, and the system and developer messages before the first message of another role.
+This change affects no external behavior, field, or stored format.
 
 ## Open questions
 
