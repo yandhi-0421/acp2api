@@ -21,7 +21,6 @@ pub(crate) struct Opened {
     pub new_key: Option<String>,
     pub new_password: Option<String>,
 }
-// A start saves each absent key of the first four, because each of them always has a value.
 const KEYS: [&str; 5] = [
     "port",
     "concurrency_limit",

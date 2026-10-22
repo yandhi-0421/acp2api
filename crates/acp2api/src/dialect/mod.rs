@@ -40,7 +40,6 @@ trait WireDialect: Sync {
         let code = refusal_code(refusal);
         json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
     }
-    /// The stream events that end a turn after a built-in tool ran with no permission request.
     fn built_in_error(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
         vec![data(
             json!({"error":{"message":message,"type":"server_error","param":null,"code":"built_in_tool_ran"}}),

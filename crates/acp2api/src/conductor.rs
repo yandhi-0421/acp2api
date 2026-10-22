@@ -15,7 +15,6 @@ pub(crate) struct Conductor {
 }
 pub(crate) enum OwnerAction {
     NewLocalApiKey,
-    /// Sets the Argon2id hash of a new management password.
     ChangePassword(String),
     SetConcurrencyLimit(u8),
     DismissNotice(String),
@@ -88,16 +87,13 @@ struct Active {
     tool_call: Option<crate::conversation::ToolCall>,
 }
 struct Core {
-    /// `None` while acp2api has no runtime process.
     catalog: Option<crate::catalog::Catalog>,
     active: Vec<Active>,
     waiting: VecDeque<Accepted>,
     records: Vec<records::Record>,
-    /// The ACP session from the start of the runtime: no system prompt addition, no client tools.
     fresh: Option<String>,
     use_sequence: u64,
     limit: u8,
-    /// The notices of the panel, published to it at each change.
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
@@ -127,7 +123,6 @@ enum Command {
         request: crate::runtime_driver::PermissionId,
         cancel: bool,
     },
-    /// The ACP session leaves for good; its client tools go too.
     Forget(String),
 }
 impl Core {
@@ -442,7 +437,6 @@ impl Core {
                     used: active.used,
                 });
             } else {
-                // No record matches this ACP session again.
                 commands.push(Command::Forget(session.clone()));
             }
         }
@@ -749,7 +743,6 @@ mod tests {
         };
         let mut outputs = Vec::new();
         let mut forgotten = Vec::new();
-        // One turn on its own new session; `ends` is the update that ends the prompt.
         let mut turn = |core: &mut Core, system: &str, session: &str, ends: TurnUpdate| {
             let body = format!(
                 r#"{{"model":"m","messages":[{{"role":"system","content":"{system}"}},{{"role":"user","content":"Hi"}}]}}"#
@@ -886,7 +879,6 @@ mod tests {
         std::fs::remove_dir_all(&folder).unwrap();
         let unavailable = Some("official runtime is not available".to_owned());
         assert_eq!(end, unavailable, "answer to a request");
-        // The frozen #55 steps check a new local API key with GET /v1/models and no runtime.
         assert_eq!(listed, Some(0), "GET /v1/models lists no model");
     }
     #[tokio::test]

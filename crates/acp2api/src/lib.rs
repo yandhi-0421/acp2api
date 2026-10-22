@@ -54,7 +54,6 @@ impl Drop for Hold {
 pub trait Clock: Send + Sync {
     fn now(&self) -> Moment;
     fn wall(&self) -> SystemTime;
-    /// Keep the returned hold until work caused by the wake finishes or waits again.
     fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold>;
     fn hold(&self, kind: HoldKind) -> Hold;
 }

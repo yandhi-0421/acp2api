@@ -494,7 +494,6 @@ fn client_tool(
             } else {
                 "parameters"
             }];
-            // OpenAI defines an absent or null `parameters` as an empty parameter list.
             match schema {
                 Value::Null if !matches!(api, Api::Messages) => {
                     r#"{"type":"object","properties":{}}"#.into()

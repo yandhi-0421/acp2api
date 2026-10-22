@@ -98,7 +98,6 @@ impl Conversation {
             .collect()
     }
 }
-/// `items` are the new items for `Continue`, else all items. A rebuild starts with the neutral line.
 pub(crate) fn prompt(kind: crate::journal::SessionUse, items: &[&Item]) -> Vec<PromptBlock> {
     let rebuild = matches!(kind, crate::journal::SessionUse::Rebuild);
     let unnamed_user = matches!(

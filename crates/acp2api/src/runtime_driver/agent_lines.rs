@@ -8,8 +8,6 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, DuplexStream, ReadBuf};
 
-// Only the official-runtime side is fake. Each test writes at most 8 lines per stream
-// into a 64 KiB pipe, each wait has a 10 s deadline, and no log is kept.
 const DEADLINE: Duration = Duration::from_secs(10);
 
 struct Agent {
@@ -33,7 +31,6 @@ impl Agent {
         serde_json::from_str(&line).unwrap()
     }
 }
-/// A stdout pipe that fails to read after its written lines.
 struct Broken;
 impl AsyncRead for Broken {
     fn poll_read(
@@ -74,8 +71,6 @@ fn result(id: u64, result: Value) -> Value {
 fn chunk(text: &str) -> Value {
     json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}})
 }
-/// Starts a runtime. The `before_session` lines come after the `initialize` reply (id 1)
-/// and before the `session/new` reply (id 2).
 async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     let mut random = [0_u8; 8];
     getrandom::fill(&mut random).unwrap();
@@ -143,7 +138,6 @@ async fn next(runtime: &mut Runtime) -> String {
         RuntimeEvent::Closed => "closed".into(),
     }
 }
-/// The events up to and including the end of the prompt, without `Other`.
 async fn turn(runtime: &mut Runtime) -> Vec<String> {
     let mut events = Vec::new();
     while events.last().is_none_or(|last| last != "prompt ended") {

@@ -33,7 +33,6 @@ pub(super) fn parse_json(body: &[u8]) -> Result<Value, Refusal> {
         }
     }
     let mut deserializer = serde_json::Deserializer::from_slice(body);
-    // serde_json stops at 127 levels by default; the scan above already limits the depth to 128.
     deserializer.disable_recursion_limit();
     let value = Value::deserialize(&mut deserializer).map_err(|_| Message::InvalidJson)?;
     deserializer.end().map_err(|_| Message::InvalidJson)?;

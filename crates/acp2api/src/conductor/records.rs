@@ -1,12 +1,10 @@
 use crate::conversation::{self, Item, ItemHash, ToolSetHash};
-/// The record of an idle ACP session. `hashes` starts with the system hash.
 pub(super) struct Record {
     pub session: String,
     pub hashes: Vec<ItemHash>,
     pub tools: ToolSetHash,
     pub used: u64,
 }
-/// The index of the record that the request continues, and the new items.
 pub(super) fn select<'a>(
     records: &[Record],
     hashes: &[ItemHash],

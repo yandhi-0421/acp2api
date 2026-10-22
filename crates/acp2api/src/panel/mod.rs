@@ -27,8 +27,6 @@ struct Panel {
     clock: Arc<dyn Clock>,
     port: u16,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
-    /// One login at a time runs its Argon2 check, so that logins without a session cannot use more
-    /// than one thread and its 19 MiB.
     logins: Arc<tokio::sync::Semaphore>,
 }
 pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> Router {
@@ -82,7 +80,6 @@ impl Panel {
             "The settings could not be saved. Try again.",
         )
     }
-    /// The settings page of a panel session, with a notice.
     fn page(&self, status: StatusCode, notice: &str) -> Response {
         let page = page::settings(
             &self.conductor.settings(),
@@ -294,7 +291,6 @@ mod tests {
             management_password_hash: String::new(),
             agy_acp_server_path: None,
         };
-        // A folder in the place of the file makes each save fail.
         let configuration = folder.join("config.toml");
         std::fs::create_dir(&configuration).unwrap();
         let (conductor, _task) =

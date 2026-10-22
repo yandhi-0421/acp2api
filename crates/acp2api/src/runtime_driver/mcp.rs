@@ -37,7 +37,6 @@ impl ToolSets {
         }
         Ok(format!("http://127.0.0.1:{}/mcp/{secret}", self.port))
     }
-    /// Removes the tool set of a URL from `insert`.
     pub(crate) fn remove(&self, url: &str) {
         if let Some((_, secret)) = url.rsplit_once('/') {
             self.sets.write().unwrap().remove(secret);
@@ -49,13 +48,7 @@ impl ToolSets {
             .with_state(self)
     }
 }
-/// Gives each tool its MCP name, in the order of `tools`. A plain tool keeps its name. A namespace
-/// member gets `<namespace>__<name>`. If that name is too long or is already in use, the member gets
-/// a cut name with a hash suffix.
 pub(crate) fn tool_names(tools: &[ClientTool]) -> Vec<String> {
-    // The runtime shows a tool of the MCP server "client-tools" to the model as
-    // `mcp_client-tools_<name>` (docs/research/2026-10-18-earlier-cli-bridge-findings.md, RT-3).
-    // Model function names have at most 64 characters.
     const LIMIT: usize = 64 - "mcp_client-tools_".len();
     let mut used: HashSet<String> = tools
         .iter()

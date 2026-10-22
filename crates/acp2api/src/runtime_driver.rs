@@ -148,7 +148,6 @@ impl Runtime {
         self.creating.insert(id, (work, tools));
         Ok(())
     }
-    /// Drops the client tools of a session that acp2api does not use again.
     pub(crate) fn forget(&mut self, session: &str) {
         if let Some(tools) = self.tools.remove(session) {
             self.tool_sets.remove(&tools.mcp_url);
@@ -194,7 +193,6 @@ impl Runtime {
         )
         .await
     }
-    /// Answers an agent request whose method acp2api does not handle.
     async fn refuse(&mut self, request: &Value) -> Result<(), String> {
         self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
             .await
@@ -420,8 +418,6 @@ impl Runtime {
     }
 }
 
-/// The next line in bytes, so that one non-UTF-8 line does not end the stream.
-/// A read error ends the stream like its end.
 async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
     let mut line = Vec::new();
     match input.read_until(b'\n', &mut line).await {

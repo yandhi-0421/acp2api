@@ -3,8 +3,6 @@ use crate::conversation::{ClientTool, PromptBlock, ToolKind};
 use std::{sync::Mutex, time::Duration};
 use tokio::io::{DuplexStream, ReadHalf, WriteHalf};
 
-// Only the official-runtime side is fake. Each run has a 10 s deadline,
-// 32 lines per direction, 4 KiB per line, and a 64 KiB pipe. No log is kept.
 struct Agent {
     input: BufReader<ReadHalf<DuplexStream>>,
     output: WriteHalf<DuplexStream>,
