@@ -24,7 +24,7 @@ enum Work {
     },
     Turn(Box<TurnWork>),
     Models {
-        reply: oneshot::Sender<Vec<crate::catalog::ModelEntry>>,
+        reply: oneshot::Sender<Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal>>,
         hold: Hold,
     },
 }
@@ -34,6 +34,7 @@ struct TurnWork {
     hold: Hold,
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
 }
+const UNAVAILABLE: &str = "official runtime is not available";
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
@@ -71,7 +72,8 @@ struct Active {
     tool_call: Option<crate::conversation::ToolCall>,
 }
 struct Core {
-    catalog: crate::catalog::Catalog,
+    /// `None` while acp2api has no runtime process.
+    catalog: Option<crate::catalog::Catalog>,
     active: Vec<Active>,
     waiting: VecDeque<Accepted>,
     idle: Vec<Idle>,
@@ -147,7 +149,7 @@ impl Core {
                 {
                     match result {
                         Ok((session, catalog)) => {
-                            self.catalog = catalog;
+                            self.catalog = Some(catalog);
                             let active = &mut self.active[index];
                             active.session = Some(crate::journal::Session {
                                 id: session.clone(),
@@ -373,9 +375,9 @@ impl Conductor {
                             system: None,
                         },
                     }];
-                    (Some(runtime), catalog, idle)
+                    (Some(runtime), Some(catalog), idle)
                 }
-                None => (None, crate::catalog::Catalog::default(), Vec::new()),
+                None => (None, None, Vec::new()),
             };
             let mut core = Core {
                 catalog,
@@ -385,7 +387,7 @@ impl Conductor {
                 waiting: VecDeque::new(),
             };
             let mut read_open = runtime.is_some();
-            'events: loop {
+            loop {
                 let disconnected: Vec<_> = core
                     .active
                     .iter()
@@ -402,7 +404,7 @@ impl Conductor {
                     work=recv.recv()=>{
                         let Some(work)=work else {break;};
                         let work=match work {
-                            Work::Models {reply,hold}=>{let _=reply.send(core.catalog.entries());drop(hold);continue;}
+                            Work::Models {reply,hold}=>{let _=reply.send(core.catalog.as_ref().map(crate::catalog::Catalog::entries).ok_or_else(|| crate::messages::Message::Upstream(UNAVAILABLE.into()).into()));drop(hold);continue;}
                             Work::Owner {action,reply,hold}=>{
                                 let mut settings=(**publish.borrow()).clone();
                                 let result=(|| {
@@ -416,14 +418,20 @@ impl Conductor {
                                 let success=result.is_ok();let _=reply.send(result);
                                 if success {
                                     let mut commands:VecDeque<_>=core.handle(Event::Limit(settings.concurrency_limit),clock.now()).into();
-                                    if !Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await {break 'events;}
+                                    Self::commands(&mut core,&mut runtime,&mut read_open,&clock,&journal,&mut commands).await;
                                 }
                                 drop(hold);continue;
                             }
                             Work::Turn(work)=>*work,
                         };
-                        if let Err(error)=core.catalog.check(&work.turn.model) {let _=work.admission.send(Err(error));continue;}
-                        let (output,ticket)=mpsc::unbounded_channel();if work.admission.send(Ok(ticket)).is_err() {continue;}
+                        let (output,ticket)=mpsc::unbounded_channel();
+                        let admitted = core.catalog.as_ref().map_or(Ok(()), |catalog| catalog.check(&work.turn.model)).map(|()| ticket);
+                        let refused = admitted.is_err();
+                        if work.admission.send(admitted).is_err() {
+                            journal.complete(crate::journal::Completion {request:work.request,session:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
+                            continue;
+                        }
+                        if refused {continue;}
                         (Event::Accepted(Accepted {turn:work.turn,request:work.request,output}),work.hold)
                     }
                     (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=>{
@@ -433,7 +441,7 @@ impl Conductor {
                     hold=timer=>(Event::Deadline,hold),
                 };
                 let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
-                if !Self::commands(
+                Self::commands(
                     &mut core,
                     &mut runtime,
                     &mut read_open,
@@ -441,10 +449,7 @@ impl Conductor {
                     &journal,
                     &mut commands,
                 )
-                .await
-                {
-                    break 'events;
-                }
+                .await;
                 drop(hold);
             }
             if let Some(runtime) = runtime {
@@ -467,15 +472,10 @@ impl Conductor {
         clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
         commands: &mut VecDeque<Command>,
-    ) -> bool {
+    ) {
         while let Some(command) = commands.pop_front() {
             match command {
-                Command::Complete(completion) => {
-                    if journal.complete(completion, clock.as_ref()).is_err() {
-                        eprintln!("acp2api: cannot write request metadata");
-                        return false;
-                    }
-                }
+                Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
                 Command::Prepare { work, settings } => {
                     let result = match runtime.as_mut().filter(|_| *read_open) {
                         Some(runtime) => {
@@ -487,7 +487,7 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        None => Err("official runtime is not available".into()),
+                        None => Err(UNAVAILABLE.into()),
                     };
                     if let Err(error) = result {
                         commands.extend(
@@ -506,7 +506,7 @@ impl Conductor {
                                 .start_prompt(prompt.text, &prompt.model, &session)
                                 .await
                         }
-                        None => Err("official runtime is not available".into()),
+                        None => Err(UNAVAILABLE.into()),
                     };
                     if let Err(error) = result {
                         commands.extend(
@@ -528,7 +528,6 @@ impl Conductor {
                 }
             }
         }
-        true
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
@@ -560,16 +559,8 @@ impl Conductor {
                 admission,
             })))
             .await
-            .map_err(|_| {
-                crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                    "conductor stopped".into(),
-                ))
-            })?;
-        reply.await.map_err(|_| {
-            crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                "conductor stopped".into(),
-            ))
-        })?
+            .map_err(stopped)?;
+        reply.await.map_err(stopped)?
     }
     pub(crate) async fn model_names(
         &self,
@@ -579,15 +570,97 @@ impl Conductor {
         self.send
             .send(Work::Models { reply, hold })
             .await
-            .map_err(|_| {
-                crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                    "conductor stopped".into(),
-                ))
-            })?;
-        result.await.map_err(|_| {
-            crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                "conductor stopped".into(),
-            ))
-        })
+            .map_err(stopped)?;
+        result.await.map_err(stopped)?
+    }
+}
+fn stopped<T>(_: T) -> crate::messages::Refusal {
+    crate::messages::Message::Upstream("conductor stopped".into()).into()
+}
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    fn start_without_runtime(
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        folder: &std::path::Path,
+    ) -> (Conductor, tokio::task::JoinHandle<()>) {
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: String::new(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let configuration = folder.join("config.toml");
+        Conductor::start(None, clock.clone(), journal.clone(), settings, configuration, 3)
+    }
+    #[tokio::test]
+    async fn without_a_runtime_a_request_gets_no_model_name_error() {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-no-runtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
+        let body = br#"{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = journal.begin(crate::journal::Api::Chat, clock.now());
+        let admitted = conductor
+            .admit(turn, clock.hold(HoldKind::HttpRequest), request)
+            .await;
+        let end = match admitted {
+            Ok(mut ticket) => loop {
+                if let (TurnEvent::End(end), _) = ticket.recv().await.unwrap() {
+                    break end.err();
+                }
+            },
+            Err(refusal) => Some(refusal.message.to_string()),
+        };
+        let listed = conductor
+            .model_names(clock.hold(HoldKind::HttpRequest))
+            .await
+            .err()
+            .map(|refusal| refusal.message.to_string());
+        std::fs::remove_dir_all(&folder).unwrap();
+        let unavailable = Some("official runtime is not available".to_owned());
+        assert_eq!(end, unavailable, "answer to a request");
+        assert_eq!(listed, unavailable, "answer to GET /v1/models");
+    }
+    #[tokio::test]
+    async fn a_client_gone_before_admission_still_has_its_request_line() {
+        let folder = std::env::temp_dir().join(format!("acp2api-conductor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = || crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = || journal.begin(crate::journal::Api::Chat, clock.now());
+        let (admission, reply) = oneshot::channel();
+        drop(reply);
+        conductor
+            .send
+            .send(Work::Turn(Box::new(TurnWork {
+                turn: turn(),
+                request: request(),
+                hold: clock.hold(HoldKind::HttpRequest),
+                admission,
+            })))
+            .await
+            .ok()
+            .unwrap();
+        let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request());
+        assert!(next.await.is_ok(), "the conductor serves the next request");
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(
+            lines.contains(r#""result":"disconnected""#),
+            "request line of the gone client: {lines}"
+        );
     }
 }
