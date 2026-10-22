@@ -485,6 +485,7 @@ The core has these parts. Each part is a private module with a pure interface.
   - On success, its result fills the catalog. A first model-list request creates no further ACP session.
   - A request that arrives before this check completes waits for its result. It does not start another check.
   - Each later new ACP session refreshes the catalog from its result.
+  - The catalog has the suffix of a thinking level only for a model ID `<value>-<level>` in `models.availableModels` of the result.
   - The check uses the signal rules of FR-034. During a lockout, it sends nothing.
 - **`turns`.** One machine for each prompt turn:
   - the held reply text chunk and the 200 ms window (FR-028); usage and thought updates do not release the chunk;
@@ -552,6 +553,8 @@ A disconnect during a prompt uses the existing cancel path. A disconnect during 
 No work entry, unresolved admission, or external wait owns a `Hold`. The shell registers continuations and deadlines before it releases the incoming hold.
 A completion or disconnect carries a new short hold through the next core transition. An occupied place can therefore wait while virtual time advances.
 Only an accepted stream has a keep-alive timer. Its first deadline starts at acceptance (FR-011).
+
+Transitional state (#55): the conductor keeps a list of active requests and a pool of idle ACP sessions. The pool has at most as many sessions as the concurrency limit. #60 replaces this state with the work table above.
 
 ### The runtime driver
 
@@ -630,13 +633,13 @@ Some rules cross the state, the places, the records, and the runtime process (FR
 
 1. Parse the four options (FR-002). `--help` and `--version` end here.
 2. Claim the account as section "Account ownership" defines. A duplicate gets M-24 with the first instance's panel address.
-3. Open the data folder. Read and validate `config.toml` (FR-003 to FR-005). A wrong value, unknown key, or syntax error ends with M-26. Generate each absent credential. Write each new credential to the terminal and flush it before atomic configuration persistence. If terminal delivery fails, end without persistence.
+3. Open the data folder. Read and validate `config.toml` (FR-003 to FR-005). A wrong value, unknown key, or syntax error ends with M-26. Generate, deliver, and save each absent credential as section "Stored data" defines.
 4. Bind `127.0.0.1:<port>`. A port in use ends with M-25. Install the panel handlers, publish its actual address, and release the startup gate.
 5. Open the logs. Delete each log file older than 30 days (FR-057).
 6. Read `state.json` (FR-035, FR-044).
 7. After their process trees end, delete the owned session files and temporary folders (ADR-0004, ADR-0005). Section "Account ownership" limits cleanup.
 8. Start the conductor. It starts the runtime process from an accepted copy. With no accepted copy, it searches first (FR-042, FR-043). During a lockout, it starts none. After `initialize`, the sign-in check supplies the initial model names (FR-012, FR-038).
-9. Write the panel address to the terminal (section "Decided values"). Step 3 already delivered each new credential. At a first start, open the panel through the `Browser` port.
+9. Write the panel address to the terminal (section "Decided values"). At a first start, open the panel through the `Browser` port.
 10. Serve until `StopSignal::stopped`. Then do the exit of FR-045:
     - the core ends each prompt turn and each request in the queue with M-15;
     - the runtime process stops with its tree.
@@ -840,8 +843,7 @@ advance_to(target):
 - The design uses no `tokio::time::pause`, no time scale, and no real sleep.
 - A self-test of the harness in #36 checks the settle against bursts of lines.
 - At one virtual instant, scheduled external inputs arrive before product deadline callbacks. Thus the 200 ms boundary of FR-028 is deterministic.
-- Delivery transfers ownership from the sleep future to its returned `Hold`. The hub keeps that work pending until the `Hold` drops.
-- Timer delivery does not prove completion. An owner with unfinished callback work retains its `Hold`, including while another owner registers a timer.
+- Delivery transfers ownership from the sleep future to its returned `Hold`. The hub keeps that work pending until the `Hold` drops, also while another owner registers a timer. Section "Ports" gives the rule for the owner.
 - `ProcessTree::stop` keeps the timer's `Hold` until the forced stop and process wait finish.
 - A one-shot timer and a process-stop timer can finish without another sleep registration. Self-tests cover these terminal owners and work still executing after a wake.
 
@@ -995,6 +997,8 @@ The release workflow writes this file from the result of the acceptance test (SC
 | M-10 | 400 | `unsupported_tool_name` |
 | M-11 | 400 | `unsupported_server_tool` |
 | FR-024, a tool type that acp2api does not know | 400 | `unsupported_tool_type` |
+| FR-024, the advisor tool | 400 | `unsupported_advisor_tool` |
+| FR-024, another server tool of the Anthropic Messages API | 400 | `unsupported_server_tool` |
 | M-12 | 400 | `lockout` |
 | M-13 | 400 | `sign_in_required` |
 | M-14 | 400 | `runtime_unavailable` |
@@ -1030,6 +1034,7 @@ The release workflow writes this file from the result of the acceptance test (SC
 - The address of the sign-in entry is `http://127.0.0.1:<port>/#sign-in`. The page puts the sign-in entry in the element with the ID `sign-in`. After the entry of the password, the page goes back to the same fragment.
 - The management endpoints are `POST /manage/<action>`, one for each action of FR-053.
 - The server writes the page as HTML, with forms. A small script on the page only updates the time left of a sign-in wait.
+- Residual risk, accepted: a browser does not isolate a cookie by port. Thus, the browser also sends the panel session cookie to other services on `127.0.0.1`. Such a service can then use the panel, and it can read the local API key. A local process can already connect to each loopback port, so this risk adds little. On an HTTP loopback address, each fix changes FR-009 or the page design.
 - The MCP path of each ACP session is `/mcp/<32 random bytes as hex>`.
 
 **Attribution block of Claude Code (FR-019).** When the first `system` block is a text block whose text starts with `x-anthropic-billing-header:`, `dialect::messages` removes it.
@@ -1050,6 +1055,8 @@ The release workflow writes this file from the result of the acceptance test (SC
   - the result, the error code, and the names of the unknown fields.
 - Each change of state, also the first state after a start: `acp2api: <time> state <state>`. `<state>` is the English name of the panel text, for example `Running` or `Quota wait`. A lockout line adds `: ` and the notice M-12.
 - A step that checks the state of acp2api reads the last state line.
+
+**Request ID header (FR-056).** Each response of an API endpoint has the header `x-request-id`. Its value is the request ID of the request line.
 
 **Times.** Each time in a message, a log line, the terminal, and `state.json` is RFC 3339 in UTC, to the second.
 
@@ -1433,59 +1440,46 @@ The feature files cover the clarified arguments, preconditions, and exact time b
 ### 2026-10-19: repair the shared test harness
 
 The owner approved the four repair groups found during the independent verification of #36, then requested continued local implementation.
-The review found that the wake counter cleared only when another sleep registered. Terminal owners therefore prevented settlement after their work ended.
-The virtual-time section now includes owner completion and requires proof that callback work has finished.
 
-The same review found global cancellation state in the fake, missing cleanup of old runs, and a step-timeout setting outside the execution path.
-The harness must implement the per-session state, owned cleanup, captured wire shapes, and default step limit specified above.
-These repairs change test infrastructure, not PRD behavior or the expected results of existing scenarios.
+- Cause: the wake counter cleared only when another sleep registered. Thus, a terminal owner blocked the settle after its work ended.
+- Port change: `Clock::sleep_until` returns `Hold` instead of `()`. The two product call sites retain or release that ownership at the end of their work.
+- Other repairs: per-session state in the fake, owned cleanup of old runs, captured wire shapes, and the default step limit in the execution path. These repairs change test infrastructure, not PRD behavior or the expected results of existing scenarios.
+- Scope: issue #36 owns the repair and the replacement freeze record. History keeps the original freeze and the failing evidence. The change affects each later slice that uses the shared harness, for example streaming, cancellation, runtime recovery, and quota deadlines.
 
-Issue #36 owns the repair and the replacement freeze record. Preserve the original freeze and failing evidence in history.
-The change affects every later slice that uses the shared harness, especially streaming, cancellation, runtime recovery, and quota deadlines.
-Independent review confirmed the concrete port revision: `Clock::sleep_until` returns `Hold` instead of `()`.
-The two product call sites retain or release that ownership at the end of their work.
 The production clock returns an empty `Hold`; the harness clock reports delivery and completion separately.
 This removes the dependency on another timer registration and keeps the five-port structure unchanged.
 
 ### 2026-10-19: preserve credential delivery across a failed first start
 
-The independent review of #37 found a failure window between configuration persistence and terminal delivery.
-An occupied port ended startup after the password hash was saved. A retry then showed no password because the saved field existed.
-The repair first validates settings and generates absent credentials. It delivers and flushes them before atomic persistence and other fallible startup work.
-A terminal write or flush error ends the start without persistence. Valid saved credentials remain unchanged on a retry.
+Decision: startup validates the settings and generates each absent credential first. It writes and flushes the new credentials to the terminal before atomic persistence and the other startup work that can fail. A terminal error ends the start without persistence.
+Reason: when the port was in use, startup ended after it saved the password hash. A retry then showed no password, because the saved field existed.
 
-Two regressions use the real test host, isolated files, and real OS failures.
-One occupies the chosen port, then retries with the same configuration. The other closes the terminal reader before startup.
-Both failed at their assertions before their repairs. Independent verification passed both with the final code.
-
-This technical order implements FR-004 and FR-005 without plaintext password storage or a configuration format change.
+This order implements FR-004 and FR-005 with no plaintext password and no change of the configuration format.
 It affects #37 and the later credential and startup work in #55 and #64.
 The browser remains at the successful first-start point. Terminal delivery proves successful writes and a flush, not that the owner read them.
 
-### 2026-10-19: retain the role of each system part
+### 2026-10-19: keep the role of each system part
 
-The implementation review for #41 found that the domain sketch kept each system part's name and text, but omitted its role.
-FR-019 requires the original role label for a named part. A named developer part must therefore retain `Developer` during normalization.
-The revised sketch carries that role with the part. The dialect admits only initial system and developer messages into this collection.
-
-This is an internal representation correction. It changes no PRD behavior, external field, stored format, or module owner.
-It affects system prompt normalization in #41 and the later conversation hashes in #47.
-Later system and developer messages remain in the conversation, as the glossary and ADR-0003 already require.
+`SystemPart` keeps its original `System` or `Developer` role, because FR-019 starts a named part with its role label.
+The system parts come from the Messages `system` field, the Responses `instructions` field, and the system and developer messages before the first message of another role.
+This change affects no external behavior, field, or stored format.
 
 ### 2026-10-19: retain tool kind and namespace independently
 
-The implementation review for #46 found that a namespace can contain function and custom tools.
-The original `InNamespace` variant could not represent the member kind at the same time.
-The domain sketch now keeps `ToolKind` and the optional namespace in separate fields.
-Each returned call retains both values and its original member name.
+A namespace can contain function tools and custom tools.
+The `InNamespace` variant could not also keep the member kind, so `ToolKind` and the optional namespace are separate fields.
+Each returned call keeps its kind, its namespace, and its original member name.
+Normalization puts the namespace name and description before the description and grammar of each member.
 
-Normalization includes the namespace name and description in each member description, before the original member text and any grammar.
-The MCP adapter assigns distinct internal names to namespace members and ordinary tools, including ordinary names that use its reserved prefix.
-The adapter resolves permission requests through the immutable tool set. The API returns the original identity.
+The MCP adapter gives each tool its MCP name, so that the model sees the name of each tool (FR-022):
 
-This representation correction implements FR-022 without a new port, external dependency, or stored format.
-It affects #46 and the later tool-set identity and history work in #47 and #54.
-The parent selected this correction during slice acceptance. The existing PRD behavior and module owners remain unchanged.
+- A plain tool keeps its name.
+- A namespace member gets `<namespace>__<name>`.
+- If that name is too long or is already in use, the adapter cuts it and adds a hash suffix.
+
+With the runtime prefix `mcp_client-tools_`, each member name has at most 64 characters.
+The runtime driver keeps the tools of its session, and maps the title of a permission request back to one of them with these MCP names.
+This correction adds no port, external dependency, or stored format.
 
 ## Open questions
 

@@ -277,6 +277,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
     match refusal.row() {
         Row::Key => StatusCode::UNAUTHORIZED,
         Row::Rejected => StatusCode::BAD_REQUEST,
+        Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
     }
 }
@@ -284,7 +285,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
 pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
     match refusal.message {
         Message::Model { .. } => "model_not_found",
-        Message::Field(_) | Message::FieldValue { .. } => "unsupported_parameter",
+        Message::Field { .. } => "unsupported_parameter",
         Message::Content(_) => "unsupported_content_type",
         Message::Media(_) => "unsupported_media_type",
         Message::Url(_) => "unsupported_url",
@@ -298,6 +299,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::InvalidJson => "invalid_json",
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
+        Message::TooLarge => "request_too_large",
         Message::Upstream(_) => "upstream_error",
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
     }

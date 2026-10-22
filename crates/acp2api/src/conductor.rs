@@ -14,6 +14,7 @@ pub(crate) struct Conductor {
 }
 pub(crate) enum OwnerAction {
     NewLocalApiKey,
+    /// Sets the Argon2id hash of a new management password.
     ChangePassword(String),
     SetConcurrencyLimit(u8),
     DismissNotice(String),
@@ -39,7 +40,7 @@ enum Work {
     },
     Turn(Box<TurnWork>),
     Models {
-        reply: oneshot::Sender<Vec<crate::catalog::ModelEntry>>,
+        reply: oneshot::Sender<Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal>>,
         hold: Hold,
     },
 }
@@ -49,6 +50,7 @@ struct TurnWork {
     hold: Hold,
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
 }
+const UNAVAILABLE: &str = "official runtime is not available";
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
@@ -86,7 +88,8 @@ struct Active {
     tool_call: Option<crate::conversation::ToolCall>,
 }
 struct Core {
-    catalog: crate::catalog::Catalog,
+    /// `None` while acp2api has no runtime process.
+    catalog: Option<crate::catalog::Catalog>,
     active: Vec<Active>,
     waiting: VecDeque<Accepted>,
     idle: Vec<Idle>,
@@ -120,6 +123,8 @@ enum Command {
         request: crate::runtime_driver::PermissionId,
         cancel: bool,
     },
+    /// The ACP session leaves for good; its client tools go too.
+    Forget(String),
 }
 impl Core {
     fn next_deadline(&self) -> Moment {
@@ -139,7 +144,8 @@ impl Core {
             Event::DismissNotice(id) => self.notices.retain(|notice| notice.id != id),
             Event::Limit(limit) => {
                 self.limit = limit;
-                self.idle.truncate(usize::from(limit));
+                let kept = self.idle.len().min(usize::from(limit));
+                self.forget_idle(kept, &mut commands);
             }
             Event::Disconnected(work) => {
                 if let Some(active) = self
@@ -171,7 +177,7 @@ impl Core {
                 {
                     match result {
                         Ok((session, catalog)) => {
-                            self.catalog = catalog;
+                            self.catalog = Some(catalog);
                             let active = &mut self.active[index];
                             active.session = Some(crate::journal::Session {
                                 id: session.clone(),
@@ -212,7 +218,7 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Failed(error)) => {
-                self.idle.clear();
+                self.forget_idle(0, &mut commands);
                 while !self.active.is_empty() {
                     self.finish(
                         0,
@@ -222,7 +228,7 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
-                self.idle.clear();
+                self.forget_idle(0, &mut commands);
                 while !self.active.is_empty() {
                     self.finish(
                         0,
@@ -382,6 +388,10 @@ impl Core {
             }
         }
     }
+    /// Keeps the first `kept` idle sessions and forgets the others.
+    fn forget_idle(&mut self, kept: usize, commands: &mut Vec<Command>) {
+        commands.extend(self.idle.drain(kept..).map(|idle| Command::Forget(idle.id)));
+    }
     fn finish(
         &mut self,
         index: usize,
@@ -389,16 +399,18 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let mut active = self.active.remove(index);
-        if result.is_ok()
-            && !active.disconnected
-            && let Some(session) = &active.session
-        {
-            self.idle.push(Idle {
-                id: session.id.clone(),
-                settings: active.settings,
-            });
-            if self.idle.len() > usize::from(self.limit) {
-                self.idle.remove(0);
+        if let Some(session) = &active.session {
+            if result.is_ok() && !active.disconnected {
+                self.idle.push(Idle {
+                    id: session.id.clone(),
+                    settings: active.settings,
+                });
+                if self.idle.len() > usize::from(self.limit) {
+                    let oldest = self.idle.remove(0);
+                    commands.push(Command::Forget(oldest.id));
+                }
+            } else {
+                commands.push(Command::Forget(session.id.clone()));
             }
         }
         let end = result.map(|()| {
@@ -462,9 +474,9 @@ impl Conductor {
                             system: None,
                         },
                     }];
-                    (Some(runtime), catalog, idle)
+                    (Some(runtime), Some(catalog), idle)
                 }
-                None => (None, crate::catalog::Catalog::default(), Vec::new()),
+                None => (None, None, Vec::new()),
             };
             let mut core = Core {
                 catalog,
@@ -492,14 +504,14 @@ impl Conductor {
                     work=recv.recv()=>{
                         let Some(work)=work else {break;};
                         let work=match work {
-                            Work::Models {reply,hold}=>{let _=reply.send(core.catalog.entries());drop(hold);continue;}
+                            Work::Models {reply,hold}=>{let _=reply.send(Ok(core.catalog.as_ref().map(crate::catalog::Catalog::entries).unwrap_or_default()));drop(hold);continue;}
                             Work::Owner {action,reply,hold}=>{
                                 let mut settings=(**publish.borrow()).clone();
                                 let mut commands = VecDeque::new();
                                 let result=(|| {
                                     match action {
                                         OwnerAction::NewLocalApiKey=>settings.local_api_key=crate::store::random_key()?,
-                                        OwnerAction::ChangePassword(password)=>settings.management_password_hash=crate::store::hash_password(&password)?,
+                                        OwnerAction::ChangePassword(hash)=>settings.management_password_hash=hash,
                                         OwnerAction::SetConcurrencyLimit(limit)=>settings.concurrency_limit=limit,
                                         OwnerAction::DismissNotice(id)=>{commands.extend(core.handle(Event::DismissNotice(id),clock.now()));return Ok(());},
                                     }
@@ -514,8 +526,14 @@ impl Conductor {
                             }
                             Work::Turn(work)=>*work,
                         };
-                        if let Err(error)=core.catalog.check(&work.turn.model) {let _=work.admission.send(Err(error));continue;}
-                        let (output,ticket)=mpsc::unbounded_channel();if work.admission.send(Ok(ticket)).is_err() {continue;}
+                        let (output,ticket)=mpsc::unbounded_channel();
+                        let admitted = core.catalog.as_ref().map_or(Ok(()), |catalog| catalog.check(&work.turn.model)).map(|()| ticket);
+                        let refused = admitted.is_err();
+                        if work.admission.send(admitted).is_err() {
+                            journal.complete(crate::journal::Completion {request:work.request,session:None,outcome:crate::journal::Outcome::Disconnected},clock.as_ref());
+                            continue;
+                        }
+                        if refused {continue;}
                         (Event::Accepted(Accepted {turn:work.turn,request:work.request,output}),work.hold)
                     }
                     (event,hold)=async {runtime.as_mut().expect("readable runtime").next().await},if read_open=>{
@@ -579,12 +597,7 @@ impl Conductor {
                         return false;
                     }
                 }
-                Command::Complete(completion) => {
-                    if journal.complete(completion, clock.as_ref()).is_err() {
-                        eprintln!("acp2api: cannot write request metadata");
-                        return false;
-                    }
-                }
+                Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
                 Command::Prepare { work, settings } => {
                     let result = match runtime.as_mut().filter(|_| *read_open) {
                         Some(runtime) => {
@@ -596,7 +609,7 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        None => Err("official runtime is not available".into()),
+                        None => Err(UNAVAILABLE.into()),
                     };
                     if let Err(error) = result {
                         commands.extend(
@@ -615,7 +628,7 @@ impl Conductor {
                                 .start_prompt(prompt.text, &prompt.model, &session)
                                 .await
                         }
-                        None => Err("official runtime is not available".into()),
+                        None => Err(UNAVAILABLE.into()),
                     };
                     if let Err(error) = result {
                         commands.extend(
@@ -630,6 +643,11 @@ impl Conductor {
                         commands.extend(
                             core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
                         );
+                    }
+                }
+                Command::Forget(session) => {
+                    if let Some(runtime) = runtime.as_mut() {
+                        runtime.forget(&session);
                     }
                 }
                 Command::Emit(output, event) => {
@@ -672,16 +690,8 @@ impl Conductor {
                 admission,
             })))
             .await
-            .map_err(|_| {
-                crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                    "conductor stopped".into(),
-                ))
-            })?;
-        reply.await.map_err(|_| {
-            crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                "conductor stopped".into(),
-            ))
-        })?
+            .map_err(stopped)?;
+        reply.await.map_err(stopped)?
     }
     pub(crate) async fn model_names(
         &self,
@@ -691,15 +701,177 @@ impl Conductor {
         self.send
             .send(Work::Models { reply, hold })
             .await
-            .map_err(|_| {
-                crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                    "conductor stopped".into(),
-                ))
-            })?;
-        result.await.map_err(|_| {
-            crate::messages::Refusal::from(crate::messages::Message::Upstream(
-                "conductor stopped".into(),
-            ))
-        })
+            .map_err(stopped)?;
+        result.await.map_err(stopped)?
+    }
+}
+fn stopped<T>(_: T) -> crate::messages::Refusal {
+    crate::messages::Message::Upstream("conductor stopped".into()).into()
+}
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    fn start_without_runtime(
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        folder: &std::path::Path,
+    ) -> (Conductor, tokio::task::JoinHandle<()>) {
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: String::new(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let configuration = folder.join("config.toml");
+        Conductor::start(
+            None,
+            clock.clone(),
+            journal.clone(),
+            settings,
+            configuration,
+            3,
+        )
+    }
+    #[test]
+    fn a_session_that_leaves_for_good_is_forgotten() {
+        let folder = std::env::temp_dir().join(format!("acp2api-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            idle: Vec::new(),
+            limit: 1,
+            notices: Vec::new(),
+        };
+        let mut outputs = Vec::new();
+        let mut forgotten = Vec::new();
+        // One turn on its own new session; `ends` is the update that ends the prompt.
+        let mut turn = |core: &mut Core, system: &str, session: &str, ends: TurnUpdate| {
+            let body = format!(
+                r#"{{"model":"m","messages":[{{"role":"system","content":"{system}"}},{{"role":"user","content":"Hi"}}]}}"#
+            );
+            let turn = crate::dialect::CHAT
+                .parse(body.as_bytes())
+                .ok()
+                .unwrap()
+                .turn;
+            let request = journal.begin(crate::journal::Api::Chat, 0);
+            let work = request.id.clone();
+            let (output, ticket) = mpsc::unbounded_channel();
+            outputs.push(ticket);
+            let mut commands = core.handle(
+                Event::Accepted(Accepted {
+                    turn,
+                    request,
+                    output,
+                }),
+                0,
+            );
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let catalog = crate::catalog::Catalog::decode(&options, clock.wall()).unwrap();
+            let prepared = Ok((session.to_owned(), catalog));
+            commands.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work,
+                    result: prepared,
+                }),
+                0,
+            ));
+            let session = session.to_owned();
+            commands.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session,
+                    update: ends,
+                }),
+                0,
+            ));
+            commands.extend(core.handle(Event::Deadline, 1000));
+            forgotten.extend(commands.into_iter().filter_map(|command| match command {
+                Command::Forget(session) => Some(session),
+                _ => None,
+            }));
+        };
+        turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
+        turn(&mut core, "B", "s2", TurnUpdate::PromptEnded);
+        turn(&mut core, "C", "s3", TurnUpdate::PromptEnded);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            forgotten,
+            ["s1", "s2"],
+            "a failed session and an idle session over the limit"
+        );
+    }
+    #[tokio::test]
+    async fn without_a_runtime_a_request_gets_no_model_name_error() {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-no-runtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
+        let body = br#"{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = journal.begin(crate::journal::Api::Chat, clock.now());
+        let admitted = conductor
+            .admit(turn, clock.hold(HoldKind::HttpRequest), request)
+            .await;
+        let end = match admitted {
+            Ok(mut ticket) => loop {
+                if let (TurnEvent::End(end), _) = ticket.recv().await.unwrap() {
+                    break end.err().map(|message| message.to_string());
+                }
+            },
+            Err(refusal) => Some(refusal.message.to_string()),
+        };
+        let listed = conductor
+            .model_names(clock.hold(HoldKind::HttpRequest))
+            .await
+            .ok()
+            .map(|entries| entries.len());
+        std::fs::remove_dir_all(&folder).unwrap();
+        let unavailable = Some("official runtime is not available".to_owned());
+        assert_eq!(end, unavailable, "answer to a request");
+        // The frozen #55 steps check a new local API key with GET /v1/models and no runtime.
+        assert_eq!(listed, Some(0), "GET /v1/models lists no model");
+    }
+    #[tokio::test]
+    async fn a_client_gone_before_admission_still_has_its_request_line() {
+        let folder = std::env::temp_dir().join(format!("acp2api-conductor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = || crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let request = || journal.begin(crate::journal::Api::Chat, clock.now());
+        let (admission, reply) = oneshot::channel();
+        drop(reply);
+        conductor
+            .send
+            .send(Work::Turn(Box::new(TurnWork {
+                turn: turn(),
+                request: request(),
+                hold: clock.hold(HoldKind::HttpRequest),
+                admission,
+            })))
+            .await
+            .ok()
+            .unwrap();
+        let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request());
+        assert!(next.await.is_ok(), "the conductor serves the next request");
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(
+            lines.contains(r#""result":"disconnected""#),
+            "request line of the gone client: {lines}"
+        );
     }
 }
