@@ -204,8 +204,6 @@ impl ApiClient {
                     .await
                     .map_err(|_| "API request cap: 30 s".to_owned())
                     .and_then(|v| v);
-            let mut s = client.hub.shared.0.lock().unwrap();
-            s.counts.http_finished += 1;
             client.hub.shared.1.notify_all();
             result
         });

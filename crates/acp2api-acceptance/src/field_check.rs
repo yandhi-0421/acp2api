@@ -255,7 +255,6 @@ pub async fn raw(s: &mut Scenario, endpoint: &str, bytes: Vec<u8>) -> Answer {
         result = request => result.expect("field raw HTTP cap: 10 s"),
         _ = driver => unreachable!(),
     };
-    s.hub.shared.0.lock().unwrap().counts.http_finished += 1;
     s.hub.shared.1.notify_all();
     answer
 }
