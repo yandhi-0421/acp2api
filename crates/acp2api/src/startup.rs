@@ -97,12 +97,10 @@ pub(crate) async fn start(
     let journal = crate::journal::Journal::open(&data.join("logs"), ports.clock.wall())
         .map_err(|e| e.to_string())?;
     let tools = crate::runtime_driver::mcp::ToolSets::new(port);
-    let program = data.join("official-runtime").join(if cfg!(windows) {
-        "agy_acp_server.exe"
-    } else {
-        "agy_acp_server.par"
-    });
-    let runtime = if program.try_exists().map_err(|e| e.to_string())? {
+    let runtime = if crate::runtime_driver::program(&data)
+        .try_exists()
+        .map_err(|e| e.to_string())?
+    {
         Some(
             crate::runtime_driver::Runtime::start(
                 &ports,

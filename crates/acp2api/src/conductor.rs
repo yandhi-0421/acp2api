@@ -116,7 +116,7 @@ enum Command {
     },
     Emit(Output, TurnEvent),
     Permission {
-        request: crate::runtime_driver::PermissionId,
+        request: crate::runtime_driver::PermissionRequest,
         cancel: bool,
     },
     Forget(String),
