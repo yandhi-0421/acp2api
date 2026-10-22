@@ -58,24 +58,6 @@ pub(crate) struct ClientTool {
     pub kind: ToolKind,
     pub namespace: Option<String>,
 }
-impl ClientTool {
-    // Reserve the prefix and escape plain names too, so no namespace member can alias one.
-    pub(crate) fn mcp_name(&self) -> String {
-        fn hex(text: &str) -> String {
-            text.as_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect()
-        }
-        match &self.namespace {
-            Some(namespace) => format!("__acp2api_n_{}_{}", hex(namespace), hex(&self.name)),
-            None if self.name.starts_with("__acp2api_") => {
-                format!("__acp2api_p_{}", hex(&self.name))
-            }
-            None => self.name.clone(),
-        }
-    }
-}
 pub(crate) enum ToolChoice {
     Auto,
     Off,

@@ -239,7 +239,10 @@ impl Runtime {
                 }
                 let title = request.tool_call.fields.title.as_deref()?;
                 let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
-                let tool = self.tools.iter().find(|tool| tool.mcp_name() == name)?;
+                let tool = mcp::tool_names(&self.tools)
+                    .into_iter()
+                    .zip(&self.tools)
+                    .find_map(|(mcp_name, tool)| (mcp_name == name).then_some(tool))?;
                 let input = request
                     .tool_call
                     .fields
