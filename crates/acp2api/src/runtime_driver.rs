@@ -21,6 +21,7 @@ pub(crate) struct Runtime {
     session: String,
     cwd: PathBuf,
     tool_sets: mcp::ToolSets,
+    tools: Vec<crate::conversation::ClientTool>,
     permissions: std::collections::HashMap<PermissionId, Value>,
     next_permission: u64,
 }
@@ -86,6 +87,7 @@ impl Runtime {
             session: String::new(),
             cwd: cwd.clone(),
             tool_sets,
+            tools: Vec::new(),
             permissions: std::collections::HashMap::new(),
             next_permission: 0,
         };
@@ -111,6 +113,7 @@ impl Runtime {
             .as_str()
             .ok_or("missing sessionId")?
             .to_owned();
+        self.tools = tools.to_vec();
         Ok(catalog)
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
@@ -230,19 +233,38 @@ impl Runtime {
             self.next_permission += 1;
             let permission = PermissionId(self.next_permission);
             self.permissions.insert(permission, value["id"].clone());
-            return RuntimeEvent::Permission {
-                request: permission,
-                title: if request.session_id.to_string() == self.session {
-                    request.tool_call.fields.title.unwrap_or_default()
-                } else {
-                    String::new()
-                },
-                arguments: request
+            let call = (|| {
+                if request.session_id.to_string() != self.session {
+                    return None;
+                }
+                let title = request.tool_call.fields.title.as_deref()?;
+                let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
+                let tool = mcp::tool_names(&self.tools)
+                    .into_iter()
+                    .zip(&self.tools)
+                    .find_map(|(mcp_name, tool)| (mcp_name == name).then_some(tool))?;
+                let input = request
                     .tool_call
                     .fields
                     .raw_input
-                    .filter(Value::is_object)
-                    .map(|v| v.to_string()),
+                    .as_ref()
+                    .filter(|v| v.is_object())?;
+                let arguments = match tool.kind {
+                    crate::conversation::ToolKind::Function => input.to_string(),
+                    crate::conversation::ToolKind::Custom => {
+                        input.get("input")?.as_str()?.to_owned()
+                    }
+                };
+                Some(crate::conversation::ToolCall {
+                    name: tool.name.clone(),
+                    kind: tool.kind,
+                    namespace: tool.namespace.clone(),
+                    arguments,
+                })
+            })();
+            return RuntimeEvent::Permission {
+                request: permission,
+                call,
             };
         }
         if value.get("method").is_none() && self.prompt_id.is_some_and(|id| value["id"] == id) {
@@ -311,8 +333,7 @@ pub(crate) enum RuntimeEvent {
     Usage(u64),
     Permission {
         request: PermissionId,
-        title: String,
-        arguments: Option<String>,
+        call: Option<crate::conversation::ToolCall>,
     },
     PromptEnded,
     Failed(String),

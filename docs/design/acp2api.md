@@ -355,8 +355,9 @@ pub enum Item {
 pub enum Last { Messages(NonEmpty<Item>), ToolResult { result: Item, then: Vec<Item> } }
 pub struct SystemPart { pub role: Role, pub name: Option<String>, pub text: String }
 pub struct Conversation { pub system: Vec<SystemPart>, pub earlier: Vec<Item>, pub last: Last }
-pub struct ClientTool { pub name: String, pub description: String, pub schema: String, pub kind: ToolKind }
-pub enum ToolKind { Function, Custom, InNamespace(String) }
+pub struct ClientTool { pub name: String, pub description: String, pub schema: String,
+                        pub kind: ToolKind, pub namespace: Option<String> }
+pub enum ToolKind { Function, Custom }
 
 pub struct TurnRequest { pub model: ModelAsk, pub conversation: Conversation, pub tools: ClientTools,
                          pub tool_choice: ToolChoice, pub stop: Vec<String>, pub unknown_fields: Vec<String> }
@@ -1457,6 +1458,23 @@ The browser remains at the successful first-start point. Terminal delivery prove
 `SystemPart` keeps its original `System` or `Developer` role, because FR-019 starts a named part with its role label.
 The system parts come from the Messages `system` field, the Responses `instructions` field, and the system and developer messages before the first message of another role.
 This change affects no external behavior, field, or stored format.
+
+### 2026-10-19: retain tool kind and namespace independently
+
+A namespace can contain function tools and custom tools.
+The `InNamespace` variant could not also keep the member kind, so `ToolKind` and the optional namespace are separate fields.
+Each returned call keeps its kind, its namespace, and its original member name.
+Normalization puts the namespace name and description before the description and grammar of each member.
+
+The MCP adapter gives each tool its MCP name, so that the model sees the name of each tool (FR-022):
+
+- A plain tool keeps its name.
+- A namespace member gets `<namespace>__<name>`.
+- If that name is too long or is already in use, the adapter cuts it and adds a hash suffix.
+
+With the runtime prefix `mcp_client-tools_`, each member name has at most 64 characters.
+The runtime driver keeps the tools of its session, and maps the title of a permission request back to one of them with these MCP names.
+This correction adds no port, external dependency, or stored format.
 
 ## Open questions
 

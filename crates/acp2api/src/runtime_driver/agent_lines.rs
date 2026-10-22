@@ -129,7 +129,7 @@ async fn next(runtime: &mut Runtime) -> String {
     match event {
         RuntimeEvent::Text(text) => format!("text {text}"),
         RuntimeEvent::Usage(used) => format!("usage {used}"),
-        RuntimeEvent::Permission { title, .. } => format!("permission {title}"),
+        RuntimeEvent::Permission { call, .. } => format!("permission {call:?}"),
         RuntimeEvent::PromptEnded => "prompt ended".into(),
         RuntimeEvent::Failed(error) => format!("failed {error}"),
         RuntimeEvent::Stderr => "stderr".into(),
@@ -232,6 +232,6 @@ async fn a_permission_request_is_a_permission_event_and_not_refused() {
         .await;
     assert_eq!(
         turn(&mut runtime).await,
-        ["permission Run lookup?", "prompt ended"]
+        ["permission None", "prompt ended"]
     );
 }
