@@ -91,7 +91,15 @@ struct ActiveTurn {
     ignore_cancel: bool,
 }
 #[derive(Debug)]
+enum SessionResult {
+    Immediate,
+    Held,
+    Pending { label: String, response: Value },
+}
+#[derive(Debug)]
 pub(crate) struct FakeState {
+    session_result: SessionResult,
+    catalog: Option<Vec<ModelSpec>>,
     plans: VecDeque<TurnPlan>,
     next_session: u64,
     pub model: String,
@@ -107,6 +115,8 @@ impl Default for FakeState {
     fn default() -> Self {
         Self {
             plans: VecDeque::new(),
+            catalog: None,
+            session_result: SessionResult::Immediate,
             next_session: 0,
             model: "gemini-3.8-flash".into(),
             signed_in: true,
@@ -123,7 +133,47 @@ impl Default for FakeState {
 pub struct FakeRuntime {
     hub: Hub,
 }
+#[derive(Clone, Debug)]
+pub struct ModelSpec {
+    pub value: String,
+    pub name: String,
+    pub levels: Vec<String>,
+}
 impl FakeRuntime {
+    pub fn hold_next_session_result(&self) {
+        let mut state = self.hub.shared.0.lock().unwrap();
+        assert!(matches!(
+            state.fake.session_result,
+            SessionResult::Immediate
+        ));
+        state.fake.session_result = SessionResult::Held;
+    }
+    pub fn release_session_result(&self) {
+        let mut state = self.hub.shared.0.lock().unwrap();
+        let result = std::mem::replace(&mut state.fake.session_result, SessionResult::Immediate);
+        let SessionResult::Pending { label, response } = result else {
+            panic!("pending session result required")
+        };
+        let now = state.now;
+        emit(&mut state, &label, now, response);
+        self.hub.shared.1.notify_all();
+    }
+    pub fn catalog(&self, models: &[ModelSpec]) {
+        assert!(
+            !models.is_empty() && models.len() <= 32,
+            "fake catalog cap: 1 to 32 models"
+        );
+        assert!(
+            models.iter().all(|m| m.value.len() <= 128
+                && m.name.len() <= 128
+                && m.levels.len() <= 3
+                && m.levels
+                    .iter()
+                    .all(|v| ["low", "medium", "high"].contains(&v.as_str()))),
+            "fake model input caps: names 128 bytes, 3 known thinking levels"
+        );
+        self.hub.shared.0.lock().unwrap().fake.catalog = Some(models.to_vec());
+    }
     pub fn new(hub: Hub) -> Self {
         Self { hub }
     }
@@ -224,6 +274,36 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                     .cloned()
                     .unwrap_or_default(),
             );
+            if let Some(catalog) = &s.fake.catalog {
+                let options: Vec<_> = catalog
+                    .iter()
+                    .map(|m| json!({"value":m.value,"name":m.name}))
+                    .collect();
+                let available: Vec<_> = catalog.iter().flat_map(|m| m.levels.iter().map(|level| json!({"modelId":format!("{}-{level}",m.value),"name":format!("{} ({level})",m.name)}))).collect();
+                let first = catalog.first().expect("non-empty fake model catalog");
+                let level = first.levels.last().map(String::as_str).unwrap_or("high");
+                let levels: Vec<_> = first
+                    .levels
+                    .iter()
+                    .map(|v| json!({"value":v,"name":v}))
+                    .collect();
+                let current = if first.levels.is_empty() {
+                    first.value.clone()
+                } else {
+                    format!("{}-{level}", first.value)
+                };
+                let metadata = json!({"sessionId":session,"models":{"currentModelId":current,"availableModels":available},"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":first.value,"options":options},{"id":"thinking_level","name":"Thinking Level","type":"select","currentValue":level,"options":levels}]});
+                if matches!(s.fake.session_result, SessionResult::Held) {
+                    s.fake.session_result = SessionResult::Pending {
+                        label: label.into(),
+                        response: result(id, metadata),
+                    };
+                    s.record(json!({"kind":"session-result-held"}));
+                    return;
+                }
+                emit(s, label, s.now, result(id, metadata));
+                return;
+            }
             emit(
                 s,
                 label,

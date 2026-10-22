@@ -10,7 +10,7 @@ use axum::{
     extract::{DefaultBodyLimit, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
 };
 use std::sync::{Arc, Mutex};
 #[derive(Clone)]
@@ -30,6 +30,7 @@ pub(crate) fn router(
     journal: crate::journal::Journal,
 ) -> Router {
     Router::new()
+        .route("/v1/models", get(models))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(chat))
@@ -120,12 +121,7 @@ async fn dispatch(
     dialect: &'static dyn Dialect,
     mut request: crate::journal::Request,
 ) -> axum::response::Response {
-    let authorized = headers.get("x-api-key").and_then(|v| v.to_str().ok()) == Some(&app.key)
-        || headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            == Some(&app.key);
+    let authorized = authorized(&headers, &app.key);
     if !authorized {
         return refuse(&app, request, dialect, Message::Key.into());
     }
@@ -148,8 +144,48 @@ async fn dispatch(
         .await
     {
         Ok(ticket) => dialect.respond(parsed.form, ticket, app.clock).await,
-        Err(error) => refuse(&app, request, dialect, Message::Upstream(error).into()),
+        Err(error) => refuse(&app, request, dialect, error),
     }
+}
+fn authorized(headers: &HeaderMap, key: &str) -> bool {
+    headers.get("x-api-key").and_then(|v| v.to_str().ok()) == Some(key)
+        || headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            == Some(key)
+}
+async fn models(
+    State(app): State<App>,
+    headers: HeaderMap,
+    axum::extract::Extension(lease): axum::extract::Extension<RequestHold>,
+) -> axum::response::Response {
+    let hold = lease.0.lock().unwrap().take().expect("request hold");
+    let request = app
+        .journal
+        .begin(crate::journal::Api::Models, app.clock.now());
+    let id = request.id.clone();
+    let mut response = if !authorized(&headers, &app.key) {
+        refuse(&app, request, dialect::CHAT, Message::Key.into())
+    } else {
+        match app.conductor.model_names(hold).await {
+            Ok(entries) => {
+                let completion = crate::journal::Completion {
+                    request,
+                    session: None,
+                    outcome: crate::journal::Outcome::ModelList,
+                };
+                app.journal.complete(completion, app.clock.as_ref());
+                axum::Json(serde_json::json!({"object":"list","data":entries})).into_response()
+            }
+            Err(error) => refuse(&app, request, dialect::CHAT, error),
+        }
+    };
+    response.headers_mut().insert(
+        "x-request-id",
+        id.parse().expect("generated request identifier"),
+    );
+    response
 }
 
 async fn input_hold(

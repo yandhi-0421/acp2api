@@ -97,7 +97,12 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     for line in before_session {
         agent.stdout(line).await;
     }
-    agent.stdout(result(2, json!({"sessionId":"s1"}))).await;
+    agent
+        .stdout(result(
+            2,
+            json!({"sessionId":"s1","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}),
+        ))
+        .await;
     let mut ports = Ports::production();
     ports.launcher = Arc::new(OneChild(Mutex::new(Some(Launched {
         stdin: Box::pin(stdin),
@@ -111,7 +116,8 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     )
     .await
     .expect("runtime start")
-    .unwrap();
+    .unwrap()
+    .0;
     assert_eq!(agent.stdin().await["method"], "initialize");
     assert_eq!(agent.stdin().await["method"], "session/new");
     (runtime, agent, root)

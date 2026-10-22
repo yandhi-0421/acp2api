@@ -9,7 +9,7 @@ Feature: Model names and thinking levels
     And the config option "model" of the official runtime has one value "gemini-3.8-flash" with the name "Gemini 3.8 Flash"
     And the model "gemini-3.8-flash" has the thinking levels "low", "medium", and "high"
 
-  @FR-012 @issue-43 @wip
+  @FR-012 @issue-43
   Scenario: The list of model names holds each value with each thinking level suffix
     When an API client sends "GET /v1/models"
     Then the list holds exactly these model names:
@@ -19,7 +19,7 @@ Feature: Model names and thinking levels
       | gemini-3.8-flash-medium |
       | gemini-3.8-flash-high   |
 
-  @FR-012 @issue-43 @wip
+  @FR-012 @issue-43
   Scenario: Each entry of the list has the fields of the OpenAI APIs and of the Anthropic Messages API
     When an API client sends "GET /v1/models"
     Then the answer has "object" with the value "list"
@@ -27,7 +27,7 @@ Feature: Model names and thinking levels
     And each entry has "object" with the value "model" and "type" with the value "model"
     And the entry with the "id" "gemini-3.8-flash" has the "display_name" "Gemini 3.8 Flash"
 
-  @FR-012 @issue-43 @wip
+  @FR-012 @issue-43
   Scenario: The startup sign-in check supplies the model names
     Given acp2api started and got no request
     Then the official runtime has one ACP session from the sign-in check
@@ -36,7 +36,7 @@ Feature: Model names and thinking levels
     Then the list holds "gemini-3.8-flash" and its three thinking level suffixes
     And the official runtime still has only that ACP session
 
-  @FR-012 @issue-43 @wip
+  @FR-012 @issue-43
   Scenario: The list holds a new model after the next new ACP session
     Given an API client read the list of model names
     And the official runtime then adds the value "gemini-3.9-pro" with the thinking level "high" to the config option "model"
@@ -44,7 +44,7 @@ Feature: Model names and thinking levels
     And an API client sends "GET /v1/models"
     Then the list holds the model names "gemini-3.9-pro" and "gemini-3.9-pro-high"
 
-  @FR-012 @issue-43 @wip
+  @FR-012 @issue-43
   Scenario Outline: A request with a model that is not a model name gets HTTP 400
     When an API client sends a request to "POST /v1/messages" with the model "<model>"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the model name <model> is not available. The model names are: <names>."
@@ -52,10 +52,10 @@ Feature: Model names and thinking levels
     And the official runtime gets no prompt
 
     Examples:
-      | model                 |
-      | claude-opus-5-5       |
-      | gpt-5.5               |
-      | gemini-3.8-flash-xhigh |
+      | model                 | names   |
+      | claude-opus-5-5       | <names> |
+      | gpt-5.5               | <names> |
+      | gemini-3.8-flash-xhigh | <names> |
 
   @FR-012 @issue-71 @wip
   Scenario Outline: The list of model names gives the error of a state that stops requests
