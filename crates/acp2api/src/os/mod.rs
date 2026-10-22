@@ -97,8 +97,7 @@ impl ProcessTree for OsTree {
                 let pid = self.pid();
                 tokio::select! { _ = self.child.wait() => {}, work = clock.sleep_until(clock.now().saturating_add(5000)) => {
                     let _work = work;
-                    #[cfg(unix)] if pid > 0 { unsafe { libc::killpg(pid as i32, libc::SIGKILL); } }
-                    let _ = self.child.kill().await;
+                    if pid > 0 { unsafe { libc::killpg(pid as i32, libc::SIGKILL); } }
                     let _ = self.child.wait().await;
                 } }
                 if pid > 0 {

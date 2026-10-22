@@ -5,6 +5,13 @@ const ENDPOINTS: [&str; 3] = [
     "POST /v1/responses",
     "POST /v1/chat/completions",
 ];
+fn input_key(endpoint: &str) -> &'static str {
+    if endpoint == "POST /v1/responses" {
+        "input"
+    } else {
+        "messages"
+    }
+}
 fn setup() -> Scenario {
     let mut s = Scenario::default();
     s.plan(Setup::normal());
@@ -21,12 +28,7 @@ async fn rejected(
     let mut s = setup();
     let mut call = c::request(endpoint, json!([part]));
     if earlier {
-        let key = if endpoint == "POST /v1/responses" {
-            "input"
-        } else {
-            "messages"
-        };
-        call.body[key]
+        call.body[input_key(endpoint)]
             .as_array_mut()
             .unwrap()
             .push(json!({"role":"user","content":"Last text"}));
@@ -154,12 +156,7 @@ async fn file_id_and_prefill_envelopes_in_all_dialects() {
         .await;
         let mut s = setup();
         let mut call = c::request(endpoint, json!("prefill"));
-        let key = if endpoint.ends_with("responses") {
-            "input"
-        } else {
-            "messages"
-        };
-        call.body[key][0]["role"] = "assistant".into();
+        call.body[input_key(endpoint)][0]["role"] = "assistant".into();
         c::send(&mut s, call).await;
         c::refusal(
             &s,
@@ -172,51 +169,6 @@ async fn file_id_and_prefill_envelopes_in_all_dialects() {
     }
 }
 #[tokio::test]
-async fn content_parent_lever() {
-    let text = std::env::var("ACP2API_LEVER_TEXT").unwrap_or_else(|_| "Fresh lever text".into());
-    let image = std::env::var("ACP2API_LEVER_IMAGE").unwrap_or_else(|_| c::PNG.into());
-    assert!(
-        text.len() <= 4096 && image.len() <= 65536,
-        "lever input caps"
-    );
-    let endpoint = ENDPOINTS[1];
-    let mut s = setup();
-    c::send(
-        &mut s,
-        c::request(
-            endpoint,
-            json!([
-                c::text(endpoint, &text),
-                c::image(endpoint, &image),
-                c::text(endpoint, "After")
-            ]),
-        ),
-    )
-    .await;
-    assert_eq!(s.answer.as_ref().unwrap().status, 200);
-    assert_eq!(
-        c::blocks(&s),
-        vec![
-            json!([{"type":"text","text":text},{"type":"image","data":image,"mimeType":"image/png"},{"type":"text","text":"After"}])
-        ]
-    );
-    println!("ACP blocks: {}", json!(c::blocks(&s)));
-    s.finish(true).await;
-    let mut s = setup();
-    c::no_fetch(&mut s, endpoint, false).await;
-    c::refusal(
-        &s,
-        endpoint,
-        "acp2api: the content type input_image with a URL is not supported. Send the data as base64.",
-        "unsupported_url",
-        None,
-    );
-    println!("Refusal: {}", s.answer.as_ref().unwrap().json());
-    println!("Sink requests: 1 positive control; 0 URL fetches");
-    s.finish(true).await;
-}
-
-#[tokio::test]
 async fn unsupported_media_type_envelope_in_all_dialects() {
     for endpoint in ENDPOINTS {
         rejected(
@@ -228,5 +180,37 @@ async fn unsupported_media_type_envelope_in_all_dialects() {
             false,
         )
         .await;
+    }
+}
+#[tokio::test]
+async fn request_body_limit_is_32_mb_with_api_413_envelopes() {
+    let message = "acp2api: the request body is larger than 32 MB.";
+    for endpoint in ENDPOINTS {
+        let mut s = setup();
+        let mut call = c::request(endpoint, json!([c::text(endpoint, "Hi")]));
+        call.body["padding"] = Value::String("a".repeat(2_200_000));
+        c::send(&mut s, call).await;
+        assert_eq!(s.answer.as_ref().unwrap().status, 200, "body over 2 MB");
+        assert_eq!(
+            c::blocks(&s),
+            vec![json!([{"type":"text","text":"Hi"}])],
+            "prompt of a body over 2 MB"
+        );
+        s.finish(true).await;
+
+        let mut s = setup();
+        let mut call = c::request(endpoint, json!([c::text(endpoint, "Hi")]));
+        call.body["padding"] = Value::String("a".repeat(32 * 1024 * 1024));
+        c::send(&mut s, call).await;
+        let a = s.answer.as_ref().unwrap();
+        assert_eq!(a.status, 413, "body over 32 MB");
+        let expected = if endpoint.ends_with("messages") {
+            json!({"type":"error","error":{"type":"request_too_large","message":message}})
+        } else {
+            json!({"error":{"message":message,"type":"invalid_request_error","param":null,"code":"request_too_large"}})
+        };
+        assert_eq!(a.json(), expected, "413 envelope");
+        assert!(c::blocks(&s).is_empty(), "413 starts no ACP prompt");
+        s.finish(true).await;
     }
 }

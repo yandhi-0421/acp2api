@@ -21,19 +21,20 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         "messages"
     }];
     let mut items = Vec::new();
-    if matches!(api, Api::Responses) && input.is_string() {
+    if let (Api::Responses, Some(text)) = (api, input.as_str()) {
         items.push(Item::Message {
             role: Role::User,
-            parts: vec![Part::Text(input.as_str().unwrap().into())],
+            parts: vec![Part::Text(text.into())],
         });
     } else {
         for item in input
             .as_array()
             .ok_or_else(|| Refusal::invalid("message array required"))?
         {
-            let kind = item["type"].as_str();
-            if matches!(api, Api::Responses) && kind.is_some_and(|k| k != "message") {
-                return Err(Message::Content(kind.unwrap().into()).into());
+            if let (Api::Responses, Some(kind)) = (api, item["type"].as_str())
+                && kind != "message"
+            {
+                return Err(Message::Content(kind.into()).into());
             }
             let role = match required(item, "role")? {
                 "user" => Role::User,
@@ -177,15 +178,15 @@ fn document(api: Api, v: &Value, kind: &str) -> Result<Part, Refusal> {
         .or_else(|| file["title"].as_str())
         .or_else(|| file["filename"].as_str())
         .map(str::to_owned);
-    let (media, text) = if matches!(api, Api::Messages) {
+    let text = if matches!(api, Api::Messages) {
         match source["type"].as_str() {
-            Some("text") => ("text/plain", required(source, "data")?.to_owned()),
+            Some("text") => required(source, "data")?.to_owned(),
             Some("content") => {
                 let content = &source["content"];
-                let text = if let Some(t) = content.as_str() {
+                if let Some(t) = content.as_str() {
                     t.to_owned()
                 } else {
-                    let mut text = String::new();
+                    let mut lines = Vec::new();
                     for part in content
                         .as_array()
                         .ok_or_else(|| Refusal::invalid("document content required"))?
@@ -196,32 +197,34 @@ fn document(api: Api, v: &Value, kind: &str) -> Result<Part, Refusal> {
                             )
                             .into());
                         }
-                        text.push_str(required(part, "text")?);
+                        lines.push(required(part, "text")?);
                     }
-                    text
-                };
-                ("text/plain", text)
+                    lines.join("\n")
+                }
             }
             Some("base64") => {
                 let media = required(source, "media_type")?;
                 validate_media(media, kind)?;
-                (media, decode_text(required(source, "data")?)?)
+                decode_text(required(source, "data")?)?
             }
             _ => return Err(Message::Content(kind.into()).into()),
         }
     } else {
         let (media, data) = data_url(required(file, "file_data")?, kind)?;
         validate_media(media, kind)?;
-        (media, decode_text(data)?)
+        decode_text(data)?
     };
-    validate_media(media, kind)?;
     Ok(Part::Document { title, text })
 }
 fn decode_text(data: &str) -> Result<String, Refusal> {
     String::from_utf8(bytes(data)?).map_err(|_| Refusal::invalid("text document must be UTF-8"))
 }
 fn validate_media(media: &str, kind: &str) -> Result<(), Refusal> {
-    match media {
+    let essence = media
+        .split_once(';')
+        .map_or(media, |(essence, _)| essence)
+        .trim();
+    match essence.to_ascii_lowercase().as_str() {
         "application/pdf" => Err(Message::Pdf(kind.into()).into()),
         "text/plain" => Ok(()),
         _ => Err(Message::Media(media.into()).into()),
@@ -268,4 +271,35 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
             })
         })
         .collect()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn text_of(api: Api, v: Value) -> String {
+        match document(api, &v, "document") {
+            Ok(Part::Document { text, .. }) => text,
+            Ok(_) => panic!("not a document"),
+            Err(refusal) => panic!("refused: {}", refusal.message),
+        }
+    }
+    #[test]
+    fn content_document_puts_a_line_break_between_text_blocks() {
+        let doc = json!({"type":"document","source":{"type":"content","content":[
+            {"type":"text","text":"Line one."},{"type":"text","text":"Line two."}
+        ]}});
+        assert_eq!(text_of(Api::Messages, doc), "Line one.\nLine two.");
+    }
+    #[test]
+    fn media_type_compares_its_lowercase_essence() {
+        let chat = json!({"type":"file","file":{"file_data":"data:text/plain;charset=utf-8;base64,TGluZSBvbmUu"}});
+        assert_eq!(text_of(Api::Chat, chat), "Line one.");
+        let messages = json!({"type":"document","source":{"type":"base64","media_type":"Text/Plain; charset=utf-8","data":"TGluZSBvbmUu"}});
+        assert_eq!(text_of(Api::Messages, messages), "Line one.");
+        let pdf = json!({"type":"input_file","file_data":"data:Application/PDF;name=a.pdf;base64,TGluZSBvbmUu"});
+        assert!(matches!(
+            document(Api::Responses, &pdf, "input_file").map_err(|r| r.message),
+            Err(Message::Pdf(_))
+        ));
+    }
 }
