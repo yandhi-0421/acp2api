@@ -123,13 +123,7 @@ pub(crate) async fn start(
         data.join("config.toml"),
         ports.release.highest_concurrency_limit(),
     );
-    let router = crate::front::router(
-        conductor,
-        ports.clock.clone(),
-        tools,
-        journal,
-        port,
-    );
+    let router = crate::front::router(conductor, ports.clock.clone(), tools, journal, port);
     if opened.first_start {
         ports.browser.open(&panel);
     }
