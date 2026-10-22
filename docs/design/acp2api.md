@@ -1461,18 +1461,20 @@ This change affects no external behavior, field, or stored format.
 
 ### 2026-10-19: retain tool kind and namespace independently
 
-The implementation review for #46 found that a namespace can contain function and custom tools.
-The original `InNamespace` variant could not represent the member kind at the same time.
-The domain sketch now keeps `ToolKind` and the optional namespace in separate fields.
-Each returned call retains both values and its original member name.
+A namespace can contain function tools and custom tools.
+The `InNamespace` variant could not also keep the member kind, so `ToolKind` and the optional namespace are separate fields.
+Each returned call keeps its kind, its namespace, and its original member name.
+Normalization puts the namespace name and description before the description and grammar of each member.
 
-Normalization includes the namespace name and description in each member description, before the original member text and any grammar.
-The MCP adapter assigns distinct internal names to namespace members and ordinary tools, including ordinary names that use its reserved prefix.
-The adapter resolves permission requests through the immutable tool set. The API returns the original identity.
+The MCP adapter gives each tool its MCP name, so that the model sees the name of each tool (FR-022):
 
-This representation correction implements FR-022 without a new port, external dependency, or stored format.
-It affects #46 and the later tool-set identity and history work in #47 and #54.
-The parent selected this correction during slice acceptance. The existing PRD behavior and module owners remain unchanged.
+- A plain tool keeps its name.
+- A namespace member gets `<namespace>__<name>`.
+- If that name is too long or is already in use, the adapter cuts it and adds a hash suffix.
+
+With the runtime prefix `mcp_client-tools_`, each member name has at most 64 characters.
+The runtime driver keeps the tools of its session, and maps the title of a permission request back to one of them with these MCP names.
+This correction adds no port, external dependency, or stored format.
 
 ## Open questions
 
