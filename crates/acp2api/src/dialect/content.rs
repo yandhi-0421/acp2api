@@ -177,7 +177,7 @@ fn document(api: Api, v: &Value, kind: &str) -> Result<Part, Refusal> {
                 let text = if let Some(t) = content.as_str() {
                     t.to_owned()
                 } else {
-                    let mut text = String::new();
+                    let mut lines = Vec::new();
                     for part in content
                         .as_array()
                         .ok_or_else(|| Refusal::invalid("document content required"))?
@@ -188,9 +188,9 @@ fn document(api: Api, v: &Value, kind: &str) -> Result<Part, Refusal> {
                             )
                             .into());
                         }
-                        text.push_str(required(part, "text")?);
+                        lines.push(required(part, "text")?);
                     }
-                    text
+                    lines.join("\n")
                 };
                 ("text/plain", text)
             }
@@ -213,9 +213,41 @@ fn decode_text(data: &str) -> Result<String, Refusal> {
     String::from_utf8(bytes(data)?).map_err(|_| Refusal::invalid("text document must be UTF-8"))
 }
 fn validate_media(media: &str, kind: &str) -> Result<(), Refusal> {
-    match media {
+    let essence = media.split(';').next().unwrap_or("").trim();
+    match essence.to_ascii_lowercase().as_str() {
         "application/pdf" => Err(Message::Pdf(kind.into()).into()),
         "text/plain" => Ok(()),
         _ => Err(Message::Media(media.into()).into()),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    fn text_of(api: Api, v: Value) -> String {
+        match document(api, &v, "document") {
+            Ok(Part::Document { text, .. }) => text,
+            Ok(_) => panic!("not a document"),
+            Err(refusal) => panic!("refused: {}", refusal.message),
+        }
+    }
+    #[test]
+    fn content_document_puts_a_line_break_between_text_blocks() {
+        let doc = json!({"type":"document","source":{"type":"content","content":[
+            {"type":"text","text":"Line one."},{"type":"text","text":"Line two."}
+        ]}});
+        assert_eq!(text_of(Api::Messages, doc), "Line one.\nLine two.");
+    }
+    #[test]
+    fn media_type_compares_its_lowercase_essence() {
+        let chat = json!({"type":"file","file":{"file_data":"data:text/plain;charset=utf-8;base64,TGluZSBvbmUu"}});
+        assert_eq!(text_of(Api::Chat, chat), "Line one.");
+        let messages = json!({"type":"document","source":{"type":"base64","media_type":"Text/Plain; charset=utf-8","data":"TGluZSBvbmUu"}});
+        assert_eq!(text_of(Api::Messages, messages), "Line one.");
+        let pdf = json!({"type":"input_file","file_data":"data:Application/PDF;name=a.pdf;base64,TGluZSBvbmUu"});
+        assert!(matches!(
+            document(Api::Responses, &pdf, "input_file").map_err(|r| r.message),
+            Err(Message::Pdf(_))
+        ));
     }
 }
