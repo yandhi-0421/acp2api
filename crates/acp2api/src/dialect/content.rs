@@ -169,12 +169,12 @@ fn document(api: Api, v: &Value, kind: &str) -> Result<Part, Refusal> {
         .or_else(|| file["title"].as_str())
         .or_else(|| file["filename"].as_str())
         .map(str::to_owned);
-    let (media, text) = if matches!(api, Api::Messages) {
+    let text = if matches!(api, Api::Messages) {
         match source["type"].as_str() {
-            Some("text") => ("text/plain", required(source, "data")?.to_owned()),
+            Some("text") => required(source, "data")?.to_owned(),
             Some("content") => {
                 let content = &source["content"];
-                let text = if let Some(t) = content.as_str() {
+                if let Some(t) = content.as_str() {
                     t.to_owned()
                 } else {
                     let mut lines = Vec::new();
@@ -191,29 +191,30 @@ fn document(api: Api, v: &Value, kind: &str) -> Result<Part, Refusal> {
                         lines.push(required(part, "text")?);
                     }
                     lines.join("\n")
-                };
-                ("text/plain", text)
+                }
             }
             Some("base64") => {
                 let media = required(source, "media_type")?;
                 validate_media(media, kind)?;
-                (media, decode_text(required(source, "data")?)?)
+                decode_text(required(source, "data")?)?
             }
             _ => return Err(Message::Content(kind.into()).into()),
         }
     } else {
         let (media, data) = data_url(required(file, "file_data")?, kind)?;
         validate_media(media, kind)?;
-        (media, decode_text(data)?)
+        decode_text(data)?
     };
-    validate_media(media, kind)?;
     Ok(Part::Document { title, text })
 }
 fn decode_text(data: &str) -> Result<String, Refusal> {
     String::from_utf8(bytes(data)?).map_err(|_| Refusal::invalid("text document must be UTF-8"))
 }
 fn validate_media(media: &str, kind: &str) -> Result<(), Refusal> {
-    let essence = media.split(';').next().unwrap_or("").trim();
+    let essence = media
+        .split_once(';')
+        .map_or(media, |(essence, _)| essence)
+        .trim();
     match essence.to_ascii_lowercase().as_str() {
         "application/pdf" => Err(Message::Pdf(kind.into()).into()),
         "text/plain" => Ok(()),
