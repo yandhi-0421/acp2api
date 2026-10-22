@@ -154,11 +154,7 @@ async fn exercise(creation_pending: bool) {
     let mut prompts = Vec::new();
     for session in ["alpha", "beta"] {
         runtime
-            .start_prompt(
-                vec![PromptBlock::Text(session.into())],
-                "test-model",
-                session,
-            )
+            .start_prompt(vec![PromptBlock::Text(session.into())], session)
             .await
             .unwrap();
         let prompt = agent.receive("session/prompt").await;
@@ -211,11 +207,7 @@ async fn exercise(creation_pending: bool) {
             "the real outgoing session response must still complete its pending work"
         );
         runtime
-            .start_prompt(
-                vec![PromptBlock::Text("gamma".into())],
-                "test-model",
-                "gamma",
-            )
+            .start_prompt(vec![PromptBlock::Text("gamma".into())], "gamma")
             .await
             .unwrap();
         let gamma = agent.receive("session/prompt").await;

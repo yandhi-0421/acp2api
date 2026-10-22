@@ -62,12 +62,8 @@ struct Session {
     tools: Vec<crate::conversation::ClientTool>,
     system: Option<String>,
 }
-struct PendingPrompt {
-    text: Vec<crate::conversation::PromptBlock>,
-    model: String,
-}
 enum Phase {
-    Preparing(PendingPrompt),
+    Preparing(Vec<crate::conversation::PromptBlock>),
     Prompt,
     Settling { at: Moment, end_turn: bool },
 }
@@ -116,7 +112,7 @@ enum Command {
     Prompt {
         work: String,
         session: String,
-        prompt: PendingPrompt,
+        prompt: Vec<crate::conversation::PromptBlock>,
     },
     Emit(Output, TurnEvent),
     Permission {
@@ -275,11 +271,7 @@ impl Core {
                 }
                 None => (crate::journal::SessionUse::Rebuild, &items[..]),
             };
-            let text = crate::conversation::prompt(kind, prompt_items);
-            let prompt = PendingPrompt {
-                text,
-                model: request.turn.model,
-            };
+            let prompt = crate::conversation::prompt(kind, prompt_items);
             let ready = match matched {
                 Some((index, _)) => Some(self.records.remove(index).session),
                 None if settings.system.is_none() && settings.tools.is_empty() => {
@@ -617,11 +609,7 @@ impl Conductor {
                     prompt,
                 } => {
                     let result = match runtime.as_mut().filter(|_| *read_open) {
-                        Some(runtime) => {
-                            runtime
-                                .start_prompt(prompt.text, &prompt.model, &session)
-                                .await
-                        }
+                        Some(runtime) => runtime.start_prompt(prompt, &session).await,
                         None => Err(UNAVAILABLE.into()),
                     };
                     if let Err(error) = result {

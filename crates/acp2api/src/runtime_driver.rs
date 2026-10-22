@@ -223,7 +223,6 @@ impl Runtime {
     pub(crate) async fn start_prompt(
         &mut self,
         prompt: Vec<crate::conversation::PromptBlock>,
-        _model: &str,
         session: &str,
     ) -> Result<(), String> {
         self.tool_calls.begin_prompt(session);
