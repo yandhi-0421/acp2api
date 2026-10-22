@@ -1,5 +1,5 @@
 use crate::{
-    client::{Answer, ApiClient, Owner},
+    client::{Answer, ApiClient},
     fake::FakeRuntime,
     hub::Hub,
     setup::{Setup, TestRoot, binary, random_hex},
@@ -18,7 +18,6 @@ pub struct Scenario {
     pub time: TimeLine,
     host: Option<Child>,
     client: Option<ApiClient>,
-    owner: Option<Owner>,
     plan: Option<Setup>,
     pub answer: Option<Answer>,
 }
@@ -31,7 +30,6 @@ impl Default for Scenario {
             hub,
             host: None,
             client: None,
-            owner: None,
             plan: None,
             answer: None,
         }
@@ -144,13 +142,6 @@ impl Scenario {
     pub async fn client(&mut self) -> &mut ApiClient {
         self.start().await;
         self.client.as_mut().unwrap()
-    }
-    pub async fn owner(&mut self) -> &mut Owner {
-        self.start().await;
-        if self.owner.is_none() {
-            self.owner = Some(Owner::new(self.client.as_ref().unwrap().clone()));
-        }
-        self.owner.as_mut().unwrap()
     }
     pub async fn stop(&mut self) {
         if let Some(mut host) = self.host.take() {
