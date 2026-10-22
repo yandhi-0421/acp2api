@@ -14,12 +14,12 @@ impl WireDialect for Chat {
     fn prefix(&self) -> &'static str {
         "chatcmpl-"
     }
-    fn body(&self, w: &Encoding, a: &Answer) -> Value {
-        let mut message = json!({"role":"assistant","content":if a.text.is_empty() && a.tool_call.is_some(){Value::Null}else{json!(a.text)},"refusal":null});
-        if let Some(call) = &a.tool_call {
+    fn body(&self, w: &Encoding, u: &Usage) -> Value {
+        let mut message = json!({"role":"assistant","content":if w.text.is_empty() && w.tool_call.is_some(){Value::Null}else{json!(w.text)},"refusal":null});
+        if let Some(call) = &w.tool_call {
             message["tool_calls"] = json!([{"id":w.call_id,"type":"function","function":{"name":call.name,"arguments":call.arguments}}]);
         }
-        json!({"id":w.id,"object":"chat.completion","created":w.created,"model":w.model,"choices":[{"index":0,"message":message,"logprobs":null,"finish_reason":if a.tool_call.is_some(){"tool_calls"}else{"stop"}}],"usage":{"prompt_tokens":a.input_tokens,"completion_tokens":a.output_tokens,"total_tokens":a.input_tokens+a.output_tokens}})
+        json!({"id":w.id,"object":"chat.completion","created":w.created,"model":w.model,"choices":[{"index":0,"message":message,"logprobs":null,"finish_reason":if w.tool_call.is_some(){"tool_calls"}else{"stop"}}],"usage":{"prompt_tokens":u.input_tokens,"completion_tokens":u.output_tokens,"total_tokens":u.input_tokens+u.output_tokens}})
     }
     fn start(&self, _: &mut Encoding) -> Vec<Event> {
         Vec::new()
@@ -36,9 +36,9 @@ impl WireDialect for Chat {
         w.text.push_str(text);
         vec![self.chunk(w, delta, Value::Null)]
     }
-    fn end(&self, w: &mut Encoding, a: &Answer) -> Vec<Event> {
+    fn end(&self, w: &mut Encoding, _: &Usage) -> Vec<Event> {
         let mut events = Vec::new();
-        if let Some(call) = &a.tool_call {
+        if let Some(call) = &w.tool_call {
             let mut header = json!({"tool_calls":[{"index":0,"id":w.call_id,"type":"function","function":{"name":call.name,"arguments":""}}]});
             if w.text.is_empty() {
                 header["role"] = "assistant".into();
@@ -56,7 +56,7 @@ impl WireDialect for Chat {
             self.chunk(
                 w,
                 json!({}),
-                if a.tool_call.is_some() {
+                if w.tool_call.is_some() {
                     "tool_calls"
                 } else {
                     "stop"

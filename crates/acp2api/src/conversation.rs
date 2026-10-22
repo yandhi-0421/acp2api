@@ -83,12 +83,6 @@ pub(crate) enum PromptBlock {
     Text(String),
     Image { media_type: String, base64: String },
 }
-pub(crate) struct Answer {
-    pub text: String,
-    pub tool_call: Option<ToolCall>,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-}
 const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
 impl Conversation {
     pub(crate) fn items(&self) -> Vec<&Item> {

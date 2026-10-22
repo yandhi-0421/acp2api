@@ -1,6 +1,6 @@
 use crate::{
     BoxFuture, Clock, Hold,
-    conversation::{Answer, ReplyForm, Ticket, TurnEvent, TurnRequest},
+    conversation::{ReplyForm, Ticket, TurnEvent, TurnRequest, Usage},
     messages::{Message, Refusal, Row},
 };
 use axum::{
@@ -49,10 +49,10 @@ trait WireDialect: Sync {
     fn call_prefix(&self) -> &'static str {
         "call_"
     }
-    fn body(&self, wire: &Encoding, answer: &Answer) -> Value;
+    fn body(&self, wire: &Encoding, usage: &Usage) -> Value;
     fn start(&self, wire: &mut Encoding) -> Vec<Event>;
     fn text(&self, wire: &mut Encoding, text: &str) -> Vec<Event>;
-    fn end(&self, wire: &mut Encoding, answer: &Answer) -> Vec<Event>;
+    fn end(&self, wire: &mut Encoding, usage: &Usage) -> Vec<Event>;
 }
 impl<T: WireDialect + 'static> Dialect for T {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
@@ -113,13 +113,7 @@ impl<T: WireDialect + 'static> Dialect for T {
                             }
                             TurnEvent::ToolCall(call) => state.wire.tool_call = Some(call),
                             TurnEvent::End(Ok(usage)) => {
-                                let answer = Answer {
-                                    text: state.wire.text.clone(),
-                                    tool_call: state.wire.tool_call.clone(),
-                                    input_tokens: usage.input_tokens,
-                                    output_tokens: usage.output_tokens,
-                                };
-                                state.pending.extend(self.end(&mut state.wire, &answer));
+                                state.pending.extend(self.end(&mut state.wire, &usage));
                                 state.ended = true;
                             }
                             TurnEvent::End(Err(error)) => {
@@ -138,22 +132,12 @@ impl<T: WireDialect + 'static> Dialect for T {
                 });
                 Sse::new(events).into_response()
             } else {
-                let mut text = String::new();
                 while let Some((event, _hold)) = ticket.recv().await {
                     match event {
-                        TurnEvent::Text(chunk) => text.push_str(&chunk),
+                        TurnEvent::Text(chunk) => wire.text.push_str(&chunk),
                         TurnEvent::ToolCall(call) => wire.tool_call = Some(call),
                         TurnEvent::End(Ok(usage)) => {
-                            return Json(self.body(
-                                &wire,
-                                &Answer {
-                                    text,
-                                    tool_call: wire.tool_call.clone(),
-                                    input_tokens: usage.input_tokens,
-                                    output_tokens: usage.output_tokens,
-                                },
-                            ))
-                            .into_response();
+                            return Json(self.body(&wire, &usage)).into_response();
                         }
                         TurnEvent::End(Err(error)) => {
                             return self.refusal(&error.into());

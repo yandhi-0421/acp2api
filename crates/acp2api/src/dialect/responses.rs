@@ -21,12 +21,12 @@ impl Responses {
         }
         item
     }
-    fn output(&self, w: &Encoding, a: &Answer) -> Vec<Value> {
+    fn output(&self, w: &Encoding) -> Vec<Value> {
         let mut output = Vec::new();
-        if !a.text.is_empty() || a.tool_call.is_none() {
-            output.push(self.item(w, Some(&a.text)));
+        if !w.text.is_empty() || w.tool_call.is_none() {
+            output.push(self.item(w, Some(&w.text)));
         }
-        if let Some(call) = &a.tool_call {
+        if let Some(call) = &w.tool_call {
             output.push(self.call(w, call, true));
         }
         output
@@ -34,8 +34,8 @@ impl Responses {
     fn open_text(&self, w: &mut Encoding) -> Vec<Event> {
         vec![w.event("response.output_item.added",json!({"output_index":0,"item":self.item(w,None)})),w.event("response.content_part.added",json!({"output_index":0,"content_index":0,"item_id":w.item_id,"part":self.part("")}))]
     }
-    fn response(&self, w: &Encoding, answer: Option<&Answer>) -> Value {
-        json!({"id":w.id,"object":"response","created_at":w.created,"status":if answer.is_some(){"completed"}else{"in_progress"},"error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"model":w.model,"output":answer.map(|a|self.output(w,a)).unwrap_or_default(),"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":false,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":answer.map(|a|json!({"input_tokens":a.input_tokens,"input_tokens_details":{"cached_tokens":0},"output_tokens":a.output_tokens,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":a.input_tokens+a.output_tokens})),"user":null,"metadata":{}})
+    fn response(&self, w: &Encoding, usage: Option<&Usage>) -> Value {
+        json!({"id":w.id,"object":"response","created_at":w.created,"status":if usage.is_some(){"completed"}else{"in_progress"},"error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"model":w.model,"output":usage.map(|_|self.output(w)).unwrap_or_default(),"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":false,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":usage.map(|u|json!({"input_tokens":u.input_tokens,"input_tokens_details":{"cached_tokens":0},"output_tokens":u.output_tokens,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":u.input_tokens+u.output_tokens})),"user":null,"metadata":{}})
     }
 }
 impl WireDialect for Responses {
@@ -45,9 +45,7 @@ impl WireDialect for Responses {
     fn built_in_tool_ran_events(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
         let mut response = self.body(
             wire,
-            &Answer {
-                text: wire.text.clone(),
-                tool_call: None,
+            &Usage {
                 input_tokens: 0,
                 output_tokens: 0,
             },
@@ -60,8 +58,8 @@ impl WireDialect for Responses {
     fn prefix(&self) -> &'static str {
         "resp_"
     }
-    fn body(&self, w: &Encoding, a: &Answer) -> Value {
-        self.response(w, Some(a))
+    fn body(&self, w: &Encoding, usage: &Usage) -> Value {
+        self.response(w, Some(usage))
     }
     fn start(&self, w: &mut Encoding) -> Vec<Event> {
         vec![
@@ -88,24 +86,24 @@ impl WireDialect for Responses {
         events.push(w.event("response.output_text.delta",json!({"item_id":w.item_id,"output_index":0,"content_index":0,"delta":text,"logprobs":[]})));
         events
     }
-    fn end(&self, w: &mut Encoding, a: &Answer) -> Vec<Event> {
+    fn end(&self, w: &mut Encoding, usage: &Usage) -> Vec<Event> {
         let mut events = Vec::new();
-        if a.text.is_empty() && a.tool_call.is_none() {
+        if w.text.is_empty() && w.tool_call.is_none() {
             events.extend(self.open_text(w));
         }
-        if !a.text.is_empty() || a.tool_call.is_none() {
-            events.push(w.event("response.output_text.done",json!({"item_id":w.item_id,"output_index":0,"content_index":0,"text":a.text,"logprobs":[]})));
-            events.push(w.event("response.content_part.done",json!({"item_id":w.item_id,"output_index":0,"content_index":0,"part":self.part(&a.text)})));
+        if !w.text.is_empty() || w.tool_call.is_none() {
+            events.push(w.event("response.output_text.done",json!({"item_id":w.item_id,"output_index":0,"content_index":0,"text":w.text,"logprobs":[]})));
+            events.push(w.event("response.content_part.done",json!({"item_id":w.item_id,"output_index":0,"content_index":0,"part":self.part(&w.text)})));
             events.push(w.event(
                 "response.output_item.done",
-                json!({"output_index":0,"item":self.item(w,Some(&a.text))}),
+                json!({"output_index":0,"item":self.item(w,Some(&w.text))}),
             ));
         }
-        if let Some(call) = &a.tool_call {
-            let index = usize::from(!a.text.is_empty());
+        if let Some(call) = w.tool_call.clone() {
+            let index = usize::from(!w.text.is_empty());
             events.push(w.event(
                 "response.output_item.added",
-                json!({"output_index":index,"item":self.call(w,call,false)}),
+                json!({"output_index":index,"item":self.call(w,&call,false)}),
             ));
             let (delta, done, field) = match call.kind {
                 crate::conversation::ToolKind::Function => (
@@ -128,12 +126,12 @@ impl WireDialect for Responses {
             events.push(w.event(done, payload));
             events.push(w.event(
                 "response.output_item.done",
-                json!({"output_index":index,"item":self.call(w,call,true)}),
+                json!({"output_index":index,"item":self.call(w,&call,true)}),
             ));
         }
         events.push(w.event(
             "response.completed",
-            json!({"response":self.response(w,Some(a))}),
+            json!({"response":self.response(w,Some(usage))}),
         ));
         events
     }
