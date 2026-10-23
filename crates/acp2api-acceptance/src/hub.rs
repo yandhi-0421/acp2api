@@ -74,6 +74,8 @@ pub(crate) struct State {
     pub external: BTreeMap<u64, Vec<Value>>,
     pub servers: HashMap<String, Arc<Mutex<TcpStream>>>,
     pub connections: Vec<TcpStream>,
+    #[cfg(windows)]
+    pub process_root: Option<std::path::PathBuf>,
     pub fake: FakeState,
     pub stop: bool,
     pub ready: bool,
@@ -150,6 +152,8 @@ impl Hub {
                 external: BTreeMap::new(),
                 servers: HashMap::new(),
                 connections: Vec::new(),
+                #[cfg(windows)]
+                process_root: None,
                 fake: FakeState::default(),
                 stop: false,
                 ready: false,
@@ -195,6 +199,8 @@ impl Hub {
         let mut reader = BufReader::new(stream);
         let mut role = String::new();
         let mut label = String::new();
+        #[cfg(windows)]
+        let mut process_recorded = false;
         loop {
             let mut line = String::new();
             let n =
@@ -231,6 +237,31 @@ impl Hub {
             let mut state = self.shared.0.lock().unwrap();
             let result = match message["op"].as_str().unwrap_or("") {
                 "Hello" => {
+                    #[cfg(windows)]
+                    if !process_recorded && (role == "server" || role == "harness") {
+                        let pid = message["pid"]
+                            .as_u64()
+                            .and_then(|pid| u32::try_from(pid).ok())
+                            .filter(|pid| *pid > 0)
+                            .expect("fake Hello PID");
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(
+                                state
+                                    .process_root
+                                    .as_ref()
+                                    .expect("fake process root")
+                                    .join(".acp2api-pids"),
+                            )
+                            .expect("open fake PID record");
+                        assert!(
+                            file.metadata().unwrap().len() + 11 <= (EVENT_CAP * 11) as u64,
+                            "fake PID record cap: 220000 bytes"
+                        );
+                        writeln!(file, "{pid}").expect("record fake PID");
+                        process_recorded = true;
+                    }
                     if role == "server" {
                         state.servers.insert(label.clone(), writer.clone());
                     }
