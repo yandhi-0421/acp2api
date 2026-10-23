@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use acp2api_acceptance::{
     Scenario, TurnPlan, client::ApiCall, runtime_safety_check as safety, tool_check,
 };
@@ -15,7 +17,6 @@ fn failure_lines(s: &Scenario) -> usize {
         .count()
 }
 
-#[cfg(unix)]
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn a_failed_safety_log_write_keeps_serving() {
