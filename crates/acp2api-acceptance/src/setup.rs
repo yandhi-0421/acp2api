@@ -357,7 +357,7 @@ pub(crate) fn open_fake_process(pid: u32) -> Option<(std::os::windows::io::Owned
         );
         if raw.is_null() {
             let error = io::Error::last_os_error();
-            // Fakes retain the test user's default DACL; denied access is a departed fake or a reused PID.
+            // Fakes retain the test user's default DACL; denied access means a reused PID.
             if matches!(error.raw_os_error(), Some(code) if code == ERROR_INVALID_PARAMETER as i32 || code == ERROR_ACCESS_DENIED as i32)
             {
                 return None;
