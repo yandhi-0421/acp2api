@@ -9,17 +9,38 @@ use std::{
 use tokio::io::{AsyncRead, AsyncReadExt, DuplexStream, ReadBuf};
 
 const DEADLINE: Duration = Duration::from_secs(10);
+const RUN_CAP: Duration = Duration::from_secs(30);
+const WRITE_CAP: usize = 16;
 
 struct Agent {
     stdout: DuplexStream,
     stderr: DuplexStream,
     stdin: BufReader<DuplexStream>,
+    writes: usize,
 }
 impl Agent {
+    fn count_write(&mut self) {
+        self.writes += 1;
+        assert!(
+            self.writes <= WRITE_CAP,
+            "fake ACP write cap: {WRITE_CAP} lines"
+        );
+    }
     async fn stdout(&mut self, line: Value) {
-        self.stdout
-            .write_all(format!("{line}\n").as_bytes())
+        self.count_write();
+        tokio::time::timeout(
+            DEADLINE,
+            self.stdout.write_all(format!("{line}\n").as_bytes()),
+        )
+        .await
+        .expect("a stdout write")
+        .unwrap();
+    }
+    async fn stderr(&mut self, bytes: &[u8]) {
+        self.count_write();
+        tokio::time::timeout(DEADLINE, self.stderr.write_all(bytes))
             .await
+            .expect("a stderr write")
             .unwrap();
     }
     async fn stdin(&mut self) -> Value {
@@ -85,6 +106,7 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
         stdout: stdout_agent,
         stderr: stderr_agent,
         stdin: BufReader::new(stdin_agent),
+        writes: 0,
     };
     agent.stdout(result(1, json!({"protocolVersion":1}))).await;
     for line in before_session {
@@ -147,89 +169,102 @@ async fn turn(runtime: &mut Runtime) -> Vec<String> {
     }
     events
 }
+async fn capped(test: impl std::future::Future<Output = ()>) {
+    tokio::time::timeout(RUN_CAP, test)
+        .await
+        .expect("fake ACP run cap: 30 s");
+}
 
 #[tokio::test]
 async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runtime() {
-    let (mut runtime, mut agent, _root) = start(Vec::new()).await;
-    agent
-        .stderr
-        .write_all(b"\xff\xfe code page 936\n")
-        .await
-        .unwrap();
-    agent.stderr.write_all(b"next stderr line\n").await.unwrap();
-    assert_eq!(next(&mut runtime).await, "stderr");
-    assert_eq!(next(&mut runtime).await, "stderr");
-    runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
-        .await
-        .unwrap();
-    agent.stdout(chunk("Hello")).await;
-    agent
-        .stdout(result(3, json!({"stopReason":"end_turn"})))
-        .await;
-    assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
-    drop(agent.stdout);
-    assert_eq!(next(&mut runtime).await, "closed");
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        agent.stderr(b"\xff\xfe code page 936\n").await;
+        agent.stderr(b"next stderr line\n").await;
+        assert_eq!(next(&mut runtime).await, "stderr");
+        assert_eq!(next(&mut runtime).await, "stderr");
+        runtime
+            .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
+            .await
+            .unwrap();
+        agent.stdout(chunk("Hello")).await;
+        agent
+            .stdout(result(3, json!({"stopReason":"end_turn"})))
+            .await;
+        assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+        drop(agent.stdout);
+        assert_eq!(next(&mut runtime).await, "closed");
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn an_unparsable_session_update_is_skipped() {
-    let (mut runtime, mut agent, _root) = start(Vec::new()).await;
-    runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
-        .await
-        .unwrap();
-    agent
-        .stdout(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"a_later_kind"}}}))
-        .await;
-    agent.stdout(chunk("Hello")).await;
-    agent
-        .stdout(result(3, json!({"stopReason":"end_turn"})))
-        .await;
-    assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime
+            .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
+            .await
+            .unwrap();
+        agent
+            .stdout(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"a_later_kind"}}}))
+            .await;
+        agent.stdout(chunk("Hello")).await;
+        agent
+            .stdout(result(3, json!({"stopReason":"end_turn"})))
+            .await;
+        assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn an_agent_request_with_an_unknown_method_gets_32601_and_is_no_reply() {
-    let request = |id: u64| json!({"jsonrpc":"2.0","id":id,"method":"x/unknown","params":{}});
-    let (mut runtime, mut agent, _root) = start(vec![request(2)]).await;
-    assert_eq!(
-        agent.stdin().await,
-        json!({"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found"}})
-    );
-    runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
-        .await
-        .unwrap();
-    assert_eq!(agent.stdin().await["method"], "session/prompt");
-    agent.stdout(request(3)).await;
-    agent.stdout(chunk("Hello")).await;
-    agent
-        .stdout(result(3, json!({"stopReason":"end_turn"})))
-        .await;
-    assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
-    assert_eq!(
-        agent.stdin().await,
-        json!({"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Method not found"}})
-    );
+    capped(async {
+        let request = |id: u64| json!({"jsonrpc":"2.0","id":id,"method":"x/unknown","params":{}});
+        let (mut runtime, mut agent, _root) = start(vec![request(2)]).await;
+        assert_eq!(
+            agent.stdin().await,
+            json!({"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found"}})
+        );
+        runtime
+            .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
+            .await
+            .unwrap();
+        assert_eq!(agent.stdin().await["method"], "session/prompt");
+        agent.stdout(request(3)).await;
+        agent.stdout(chunk("Hello")).await;
+        agent
+            .stdout(result(3, json!({"stopReason":"end_turn"})))
+            .await;
+        assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+        assert_eq!(
+            agent.stdin().await,
+            json!({"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Method not found"}})
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn a_permission_request_is_a_permission_event_and_not_refused() {
-    let (mut runtime, mut agent, _root) = start(Vec::new()).await;
-    runtime
-        .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
-        .await
-        .unwrap();
-    assert_eq!(agent.stdin().await["method"], "session/prompt");
-    agent
-        .stdout(json!({"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"c1","title":"Run lookup?","rawInput":{"a":1}},"options":[]}}))
-        .await;
-    agent
-        .stdout(result(3, json!({"stopReason":"end_turn"})))
-        .await;
-    assert_eq!(
-        turn(&mut runtime).await,
-        ["permission of lookup", "prompt ended"]
-    );
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime
+            .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
+            .await
+            .unwrap();
+        assert_eq!(agent.stdin().await["method"], "session/prompt");
+        agent
+            .stdout(json!({"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"c1","title":"Run lookup?","rawInput":{"a":1}},"options":[]}}))
+            .await;
+        agent
+            .stdout(result(3, json!({"stopReason":"end_turn"})))
+            .await;
+        assert_eq!(
+            turn(&mut runtime).await,
+            ["permission of lookup", "prompt ended"]
+        );
+    })
+    .await;
 }
