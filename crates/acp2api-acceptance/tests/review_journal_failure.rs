@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use acp2api_acceptance::{Scenario, Setup, TurnPlan, client::ApiCall};
 use std::time::{Duration, Instant};
 
@@ -13,7 +15,6 @@ fn failure_lines(s: &Scenario) -> usize {
         .count()
 }
 
-#[cfg(unix)]
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn a_failed_log_write_keeps_serving_with_the_original_status() {
