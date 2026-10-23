@@ -86,8 +86,11 @@ impl Scenario {
         self.spawn_host(&[], format!("127.0.0.1:{port}"), key).await;
     }
     async fn spawn_host(&mut self, env: &[(&str, PathBuf)], address: String, key: String) {
-        let mut host = Command::new(binary("acp2api-test-host"))
-            .env_clear()
+        let mut command = Command::new(binary("acp2api-test-host"));
+        command.env_clear();
+        #[cfg(windows)]
+        command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+        let mut host = command
             .env("ACP2API_TEST_RUN", self.root.path.join("run.toml"))
             .envs(env.iter().map(|(name, value)| (name, value)))
             .args(["--data-dir", self.root.path.join("data").to_str().unwrap()])

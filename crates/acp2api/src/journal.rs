@@ -180,7 +180,7 @@ fn log_files(folder: &Path) -> io::Result<Vec<LogFile>> {
         let Some(sequence) = sequence.parse::<u64>().ok().filter(|n| *n > 0) else {
             continue;
         };
-        let meta = entry.metadata()?;
+        let meta = std::fs::symlink_metadata(entry.path())?;
         files.push(LogFile {
             path: entry.path(),
             modified: meta.modified()?,

@@ -54,8 +54,16 @@ mod startup;
 mod system_prompt_and_role_labels;
 #[path = "steps/token_usage.rs"]
 mod token_usage;
+fn main() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(run)
+        .unwrap()
+        .join()
+        .unwrap();
+}
 #[tokio::main]
-async fn main() {
+async fn run() {
     let config: toml::Value = toml::from_str(include_str!("runner.toml")).unwrap();
     let feature_root = std::env::var("ACP2API_ACCEPTANCE_FEATURES")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../features/acp2api").into());

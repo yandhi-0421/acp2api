@@ -95,8 +95,11 @@ impl Startup {
         std::fs::write(&path, toml::to_string(self.run.as_ref().unwrap()).unwrap()).unwrap();
         self.capture = Arc::new(Mutex::new(Vec::new()));
         self.exited = None;
-        let mut child = Command::new(binary("acp2api-test-host"))
-            .env_clear()
+        let mut command = Command::new(binary("acp2api-test-host"));
+        command.env_clear();
+        #[cfg(windows)]
+        command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+        let mut child = command
             .env("ACP2API_TEST_RUN", path)
             .current_dir(&self.root().path)
             .args(args)
