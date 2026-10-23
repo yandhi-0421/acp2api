@@ -8,6 +8,7 @@ pub enum Credential {
     Wrong,
     Key,
     Bearer,
+    WrongBearer,
 }
 pub async fn send(
     s: &mut Scenario,
@@ -30,6 +31,10 @@ pub async fn send(
         Credential::Bearer => call
             .headers
             .push(("authorization".into(), format!("Bearer {}", s.root.key))),
+        Credential::WrongBearer => call.headers.push((
+            "authorization".into(),
+            format!("Bearer {}", crate::setup::random_hex(24)),
+        )),
         _ => {}
     }
     call.headers.extend(headers);
@@ -63,7 +68,7 @@ pub fn key_refusal(answer: &Answer, endpoint: &str) {
 pub fn refusal(answer: &Answer, endpoint: &str) {
     assert!(
         (400..500).contains(&answer.status),
-        "FR-008 browser/Host refusal: {}",
+        "refusal status: {}",
         answer.status
     );
     assert!(answer.events.is_empty(), "no SSE before refusal");
@@ -71,18 +76,20 @@ pub fn refusal(answer: &Answer, endpoint: &str) {
         answer.headers["content-type"].starts_with("application/json"),
         "JSON refusal, including streamed input"
     );
+    let body = answer.json();
     assert!(
-        answer.json()["error"]["message"]
+        body["error"]["message"]
             .as_str()
             .is_some_and(|v| !v.is_empty()),
         "error envelope has a message"
     );
     if endpoint == "POST /v1/messages" {
-        assert_eq!(answer.json()["type"], "error");
-    } else {
-        assert!(answer.json().get("error").is_some());
+        assert_eq!(body["type"], "error");
     }
     no_cors(answer);
+}
+pub fn other_port(port: u16) -> u16 {
+    if port == 65535 { 65534 } else { port + 1 }
 }
 pub fn prompt_count(s: &Scenario) -> usize {
     s.fake().record().prompts().len()
