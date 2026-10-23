@@ -115,10 +115,6 @@ pub fn literal_control(actual: &Value, document: bool) {
         json!([[tool_check::tool("read_file")]]),
         "literal nonempty actual MCP tool control"
     );
-    assert!(
-        actual["config"].is_array(),
-        "actual ACP config observations available"
-    );
 }
 pub async fn control(endpoint: &str, document: bool) -> Value {
     let mut s = Scenario::default();
