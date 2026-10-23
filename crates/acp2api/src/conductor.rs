@@ -286,6 +286,7 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Closed) => {
+                self.catalog = None;
                 self.forget_idle(&mut commands);
                 while !self.active.is_empty() {
                     self.finish(
@@ -804,6 +805,26 @@ mod tests {
             configuration,
             3,
         )
+    }
+    #[test]
+    fn models_are_empty_after_a_runtime_closes() {
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        let mut core = Core {
+            catalog: Some(catalog),
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            records: Vec::new(),
+            startup_session: None,
+            use_sequence: 0,
+            limit: 1,
+            notices: watch::channel(Arc::new(Vec::new())).0,
+        };
+        assert_eq!(core.model_entries().len(), 1);
+        assert!(core.check_model("missing").is_err());
+        core.handle(Event::Runtime(RuntimeEvent::Closed), 0);
+        assert_eq!(core.model_entries().len(), 0, "GET /v1/models");
+        assert!(core.check_model("missing").is_ok());
     }
     #[test]
     fn a_session_that_leaves_for_good_is_forgotten() {
