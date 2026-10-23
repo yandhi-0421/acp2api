@@ -242,24 +242,27 @@ impl Hub {
                         let pid = message["pid"]
                             .as_u64()
                             .and_then(|pid| u32::try_from(pid).ok())
-                            .filter(|pid| *pid > 0)
                             .expect("fake Hello PID");
-                        let mut file = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(
-                                state
-                                    .process_root
-                                    .as_ref()
-                                    .expect("fake process root")
-                                    .join(".acp2api-pids"),
-                            )
-                            .expect("open fake PID record");
-                        assert!(
-                            file.metadata().unwrap().len() + 11 <= (EVENT_CAP * 11) as u64,
-                            "fake PID record cap: 220000 bytes"
-                        );
-                        writeln!(file, "{pid}").expect("record fake PID");
+                        if let Some((_process, created)) = crate::setup::open_fake_process(pid) {
+                            let record = format!("{pid} {created}\n");
+                            let cap = (EVENT_CAP * 32) as u64; // u32 + space + u64 + newline.
+                            let mut file = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(
+                                    state
+                                        .process_root
+                                        .as_ref()
+                                        .expect("fake process root")
+                                        .join(".acp2api-pids"),
+                                )
+                                .expect("open fake PID record");
+                            assert!(
+                                file.metadata().unwrap().len() + record.len() as u64 <= cap,
+                                "fake PID record cap: {cap} bytes"
+                            );
+                            file.write_all(record.as_bytes()).expect("record fake PID");
+                        }
                         process_recorded = true;
                     }
                     if role == "server" {

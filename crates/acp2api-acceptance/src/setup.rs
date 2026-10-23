@@ -338,14 +338,56 @@ fn cleanup_stale_runs(root: &Path) {
     }
 }
 #[cfg(windows)]
+pub(crate) fn open_fake_process(pid: u32) -> Option<(std::os::windows::io::OwnedHandle, u64)> {
+    use std::{
+        io,
+        os::windows::io::{FromRawHandle, OwnedHandle},
+    };
+    use windows_sys::Win32::{
+        Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, FILETIME},
+        System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        },
+    };
+    unsafe {
+        let raw = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        );
+        if raw.is_null() {
+            let error = io::Error::last_os_error();
+            // Fakes retain the test user's default DACL; denied access is a departed fake or a reused PID.
+            if matches!(error.raw_os_error(), Some(code) if code == ERROR_INVALID_PARAMETER as i32 || code == ERROR_ACCESS_DENIED as i32)
+            {
+                return None;
+            }
+            panic!("open fake PID {pid}: {error}");
+        }
+        let process = OwnedHandle::from_raw_handle(raw);
+        let [mut created, mut exited, mut kernel, mut user] = [FILETIME::default(); 4];
+        assert_ne!(
+            GetProcessTimes(raw, &mut created, &mut exited, &mut kernel, &mut user),
+            0,
+            "creation time for fake PID {pid}: {}",
+            io::Error::last_os_error()
+        );
+        Some((
+            process,
+            (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime),
+        ))
+    }
+}
+#[cfg(windows)]
 fn wait_for_fake_processes(root: &Path) -> std::io::Result<()> {
     use std::{
         io,
+        os::windows::io::AsRawHandle,
         time::{Duration, Instant},
     };
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT},
-        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+        Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+        System::Threading::WaitForSingleObject,
     };
     let text = match fs::read_to_string(root.join(".acp2api-pids")) {
         Ok(text) => text,
@@ -355,36 +397,24 @@ fn wait_for_fake_processes(root: &Path) -> std::io::Result<()> {
     // Windows locks a running process's current directory inside the test root.
     let deadline = Instant::now() + Duration::from_secs(10);
     for line in text.lines() {
-        let pid = line
-            .parse::<u32>()
-            .ok()
-            .filter(|pid| *pid > 0)
-            .expect("recorded fake PID");
-        unsafe {
-            let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-            if process.is_null() {
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
-                    continue;
-                }
-                panic!("open fake PID {pid}: {error}");
-            }
-            let millis = deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis() as u32;
-            let result = WaitForSingleObject(process, millis);
-            let error = io::Error::last_os_error();
-            assert_ne!(
-                CloseHandle(process),
-                0,
-                "close fake PID {pid}: {}",
-                io::Error::last_os_error()
-            );
-            match result {
-                WAIT_OBJECT_0 => {}
-                WAIT_TIMEOUT => panic!("fake PID {pid}: process exit cap: 10 s"),
-                _ => panic!("wait for fake PID {pid}: {error}"),
-            }
+        let (pid, created) = line
+            .split_once(' ')
+            .expect("recorded fake process identity");
+        let pid = pid.parse::<u32>().expect("recorded fake PID");
+        let created = created.parse::<u64>().expect("recorded fake creation time");
+        let Some((process, actual_created)) = open_fake_process(pid) else {
+            continue;
+        };
+        if actual_created != created {
+            continue;
+        }
+        let millis = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u32;
+        match unsafe { WaitForSingleObject(process.as_raw_handle(), millis) } {
+            WAIT_OBJECT_0 => {}
+            WAIT_TIMEOUT => panic!("fake PID {pid}: process exit cap: 10 s"),
+            _ => panic!("wait for fake PID {pid}: {}", io::Error::last_os_error()),
         }
     }
     Ok(())
