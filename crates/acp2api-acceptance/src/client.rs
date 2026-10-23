@@ -204,8 +204,6 @@ impl ApiClient {
                     .await
                     .map_err(|_| "API request cap: 30 s".to_owned())
                     .and_then(|v| v);
-            let mut s = client.hub.shared.0.lock().unwrap();
-            s.counts.http_finished += 1;
             client.hub.shared.1.notify_all();
             result
         });
@@ -374,46 +372,36 @@ impl Owner {
             language: "en".into(),
         }
     }
-    pub fn request(&self, method: &str, path: &str, body: Value) -> Call {
+    pub fn page(&self) -> Call {
+        self.send("GET", "/", Value::Null, Vec::new())
+    }
+    pub fn submit(&self, path: &str, fields: Value) -> Call {
+        let form = (
+            "content-type".into(),
+            "application/x-www-form-urlencoded".into(),
+        );
+        self.send("POST", path, fields, vec![form])
+    }
+    fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: Value,
+        mut headers: Vec<(String, String)>,
+    ) -> Call {
         let cookie = self
             .cookies
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect::<Vec<_>>()
             .join("; ");
+        headers.push(("accept-language".into(), self.language.clone()));
+        headers.push(("cookie".into(), cookie));
         self.client.send(ApiCall {
             method: method.into(),
             path: path.into(),
             body,
-            headers: vec![
-                ("accept-language".into(), self.language.clone()),
-                ("cookie".into(), cookie),
-            ],
-        })
-    }
-    pub fn page(&self) -> Call {
-        self.request("GET", "/", Value::Null)
-    }
-    pub fn submit(&self, path: &str, fields: Value) -> Call {
-        self.client.send(ApiCall {
-            method: "POST".into(),
-            path: path.into(),
-            body: fields,
-            headers: vec![
-                (
-                    "content-type".into(),
-                    "application/x-www-form-urlencoded".into(),
-                ),
-                ("accept-language".into(), self.language.clone()),
-                (
-                    "cookie".into(),
-                    self.cookies
-                        .iter()
-                        .map(|(k, v)| format!("{k}={v}"))
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                ),
-            ],
+            headers,
         })
     }
     pub fn remember(&mut self, answer: &Answer) {

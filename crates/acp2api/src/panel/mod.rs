@@ -17,6 +17,7 @@ use std::{
 mod page;
 const LIFETIME: u64 = 12 * 60 * 60 * 1000;
 const COOKIE: &str = "acp2api_session";
+const ARGON2_CHECKS_AT_ONCE: usize = 1;
 struct Session {
     since: u64,
     password_hash: String,
@@ -27,8 +28,6 @@ struct Panel {
     clock: Arc<dyn Clock>,
     port: u16,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
-    /// One login at a time runs its Argon2 check, so that logins without a session cannot use more
-    /// than one thread and its 19 MiB.
     logins: Arc<tokio::sync::Semaphore>,
 }
 pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> Router {
@@ -51,7 +50,7 @@ impl Panel {
             clock,
             port,
             sessions: Arc::default(),
-            logins: Arc::new(tokio::sync::Semaphore::new(1)),
+            logins: Arc::new(tokio::sync::Semaphore::new(ARGON2_CHECKS_AT_ONCE)),
         }
     }
     fn session(&self, headers: &HeaderMap) -> bool {
@@ -82,7 +81,6 @@ impl Panel {
             "The settings could not be saved. Try again.",
         )
     }
-    /// The settings page of a panel session, with a notice.
     fn page(&self, status: StatusCode, notice: &str) -> Response {
         let page = page::settings(
             &self.conductor.settings(),
@@ -181,18 +179,13 @@ async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Respon
         )
             .into_response();
     }
-    let mut random = [0u8; 32];
-    if getrandom::fill(&mut random).is_err() {
+    let Ok(token) = crate::random_hex::<32>() else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             "A panel session could not be created.",
         )
             .into_response();
-    }
-    let token = random
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    };
     panel.sessions.lock().unwrap().insert(
         token.clone(),
         Session {
@@ -226,7 +219,7 @@ async fn password(State(panel): State<Panel>, Form(form): Form<Password>) -> Res
     else {
         return panel.failed();
     };
-    match panel.act(OwnerAction::ChangePassword(hash)).await {
+    match panel.act(OwnerAction::SetPasswordHash(hash)).await {
         Ok(()) => Redirect::to("/").into_response(),
         Err(response) => response,
     }
@@ -294,11 +287,16 @@ mod tests {
             management_password_hash: String::new(),
             agy_acp_server_path: None,
         };
-        // A folder in the place of the file makes each save fail.
-        let configuration = folder.join("config.toml");
-        std::fs::create_dir(&configuration).unwrap();
-        let (conductor, _task) =
-            Conductor::start(None, clock.clone(), journal, settings, configuration, 1);
+        let unsaveable_configuration = folder.join("config.toml");
+        std::fs::create_dir(&unsaveable_configuration).unwrap();
+        let (conductor, _task) = Conductor::start(
+            None,
+            clock.clone(),
+            journal,
+            settings,
+            unsaveable_configuration,
+            1,
+        );
         let panel = Panel::new(conductor, clock, 8329);
         let empty = Password {
             password: String::new(),

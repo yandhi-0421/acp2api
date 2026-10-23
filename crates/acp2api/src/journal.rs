@@ -280,7 +280,6 @@ pub(crate) struct SafetyReport {
     pub tool: String,
 }
 impl Journal {
-    /// Like `complete`, a failed write drops the line and reports it on stderr.
     pub(crate) fn safety(&self, report: SafetyReport, clock: &dyn crate::Clock) {
         if let Err(error) = self.safety_line(report, clock) {
             eprintln!("acp2api: cannot write runtime safety event: {error}");
@@ -296,7 +295,6 @@ impl Journal {
         });
         self.emit(&record)
     }
-    /// Writes one line to the log file and to stdout, in the same order for both.
     fn emit(&self, record: &impl Serialize) -> io::Result<()> {
         let mut writer = self
             .0
@@ -310,11 +308,10 @@ impl Journal {
         terminal.flush()
     }
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
-        let mut random = [0; 8];
-        getrandom::fill(&mut random).map_err(io::Error::other)?;
+        let prefix = crate::random_hex::<8>().map_err(io::Error::other)?;
         Ok(Self(std::sync::Arc::new(JournalState {
             writer: std::sync::Mutex::new(Writer::open(folder, wall)?),
-            prefix: random.iter().map(|b| format!("{b:02x}")).collect(),
+            prefix,
             sequence: std::sync::atomic::AtomicU64::new(1),
         })))
     }
@@ -331,7 +328,6 @@ impl Journal {
             started,
         }
     }
-    /// A failed write drops the line and reports it on stderr, so a full disk never stops a request.
     pub(crate) fn complete(&self, completion: Completion, clock: &dyn crate::Clock) {
         if let Err(error) = self.write_line(completion, clock) {
             eprintln!("acp2api: cannot write request metadata: {error}");

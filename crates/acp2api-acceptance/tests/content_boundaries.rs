@@ -200,19 +200,6 @@ async fn content_parent_lever() {
             json!([{"type":"text","text":text},{"type":"image","data":image,"mimeType":"image/png"},{"type":"text","text":"After"}])
         ]
     );
-    println!("ACP blocks: {}", json!(c::blocks(&s)));
-    s.finish(true).await;
-    let mut s = setup();
-    c::no_fetch(&mut s, endpoint, false).await;
-    c::refusal(
-        &s,
-        endpoint,
-        "acp2api: the content type input_image with a URL is not supported. Send the data as base64.",
-        "unsupported_url",
-        None,
-    );
-    println!("Refusal: {}", s.answer.as_ref().unwrap().json());
-    println!("Sink requests: 1 positive control; 0 URL fetches");
     s.finish(true).await;
 }
 

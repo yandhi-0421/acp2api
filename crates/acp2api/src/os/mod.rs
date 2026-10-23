@@ -28,9 +28,6 @@ impl Clock for SystemClock {
         SystemTime::now()
     }
     fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
-        if at == u64::MAX {
-            return Box::pin(std::future::pending());
-        }
         let remaining = at.saturating_sub(self.now());
         Box::pin(async move {
             tokio::time::sleep(Duration::from_millis(remaining)).await;
@@ -95,11 +92,19 @@ impl ProcessTree for OsTree {
             #[cfg(unix)]
             {
                 let pid = self.pid();
-                tokio::select! { _ = self.child.wait() => {}, work = clock.sleep_until(clock.now().saturating_add(5000)) => {
-                    let _work = work;
-                    if pid > 0 { unsafe { libc::killpg(pid as i32, libc::SIGKILL); } }
-                    let _ = self.child.wait().await;
-                } }
+                let grace = clock.sleep_until(clock.now().saturating_add(5000));
+                tokio::select! {
+                    _ = self.child.wait() => {}
+                    work = grace => {
+                        let _work = work;
+                        if pid > 0 {
+                            unsafe {
+                                libc::killpg(pid as i32, libc::SIGKILL);
+                            }
+                        }
+                        let _ = self.child.wait().await;
+                    }
+                }
                 if pid > 0 {
                     unsafe {
                         libc::killpg(pid as i32, libc::SIGKILL);

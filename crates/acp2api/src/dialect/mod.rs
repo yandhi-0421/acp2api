@@ -1,6 +1,6 @@
 use crate::{
     BoxFuture, Clock, Hold,
-    conversation::{Answer, ReplyForm, Ticket, TurnEvent, TurnRequest},
+    conversation::{ReplyForm, Ticket, TurnEvent, TurnRequest, Usage},
     messages::{Message, Refusal, Row},
 };
 use axum::{
@@ -37,11 +37,19 @@ pub(crate) trait Dialect: Sync {
 trait WireDialect: Sync {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
     fn refusal_body(&self, refusal: &Refusal) -> Value {
-        let code = refusal_code(refusal);
-        json!({"error":{"message":refusal.message.to_string(),"type":if refusal_status(refusal).is_server_error(){"server_error"}else{"invalid_request_error"},"param":refusal.param(),"code":code}})
+        let kind = if refusal_status(refusal).is_server_error() {
+            "server_error"
+        } else {
+            "invalid_request_error"
+        };
+        json!({"error": {
+            "message": refusal.message.to_string(),
+            "type": kind,
+            "param": refusal.param(),
+            "code": refusal_code(refusal)
+        }})
     }
-    /// The stream events that end a turn after a built-in tool ran with no permission request.
-    fn built_in_error(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn built_in_tool_ran_events(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
         vec![data(
             json!({"error":{"message":message,"type":"server_error","param":null,"code":"built_in_tool_ran"}}),
         )]
@@ -50,10 +58,10 @@ trait WireDialect: Sync {
     fn call_prefix(&self) -> &'static str {
         "call_"
     }
-    fn body(&self, wire: &Encoding, answer: &Answer) -> Value;
+    fn body(&self, wire: &Encoding, usage: &Usage) -> Value;
     fn start(&self, wire: &mut Encoding) -> Vec<Event>;
     fn text(&self, wire: &mut Encoding, text: &str) -> Vec<Event>;
-    fn end(&self, wire: &mut Encoding, answer: &Answer) -> Vec<Event>;
+    fn end(&self, wire: &mut Encoding, usage: &Usage) -> Vec<Event>;
 }
 impl<T: WireDialect + 'static> Dialect for T {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
@@ -114,20 +122,15 @@ impl<T: WireDialect + 'static> Dialect for T {
                             }
                             TurnEvent::ToolCall(call) => state.wire.tool_call = Some(call),
                             TurnEvent::End(Ok(usage)) => {
-                                let answer = Answer {
-                                    text: state.wire.text.clone(),
-                                    tool_call: state.wire.tool_call.clone(),
-                                    input_tokens: usage.input_tokens,
-                                    output_tokens: usage.output_tokens,
-                                };
-                                state.pending.extend(self.end(&mut state.wire, &answer));
+                                state.pending.extend(self.end(&mut state.wire, &usage));
                                 state.ended = true;
                             }
                             TurnEvent::End(Err(error)) => {
                                 if matches!(error, Message::BuiltInToolRan(_)) {
-                                    state.pending.extend(
-                                        self.built_in_error(&mut state.wire, error.to_string()),
-                                    );
+                                    state.pending.extend(self.built_in_tool_ran_events(
+                                        &mut state.wire,
+                                        error.to_string(),
+                                    ));
                                 } else {
                                     state.pending.push_back(named("error",json!({"type":"error","error":{"type":"api_error","message":error.to_string()}})));
                                 }
@@ -138,22 +141,12 @@ impl<T: WireDialect + 'static> Dialect for T {
                 });
                 Sse::new(events).into_response()
             } else {
-                let mut text = String::new();
                 while let Some((event, _hold)) = ticket.recv().await {
                     match event {
-                        TurnEvent::Text(chunk) => text.push_str(&chunk),
+                        TurnEvent::Text(chunk) => wire.text.push_str(&chunk),
                         TurnEvent::ToolCall(call) => wire.tool_call = Some(call),
                         TurnEvent::End(Ok(usage)) => {
-                            return Json(self.body(
-                                &wire,
-                                &Answer {
-                                    text,
-                                    tool_call: wire.tool_call.clone(),
-                                    input_tokens: usage.input_tokens,
-                                    output_tokens: usage.output_tokens,
-                                },
-                            ))
-                            .into_response();
+                            return Json(self.body(&wire, &usage)).into_response();
                         }
                         TurnEvent::End(Err(error)) => {
                             return self.refusal(&error.into());
@@ -213,36 +206,14 @@ impl Encoding {
     }
 }
 fn identifier(prefix: &str) -> Result<String, String> {
-    let mut random = [0; 16];
-    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-    Ok(format!(
-        "{prefix}{}",
-        random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    ))
+    let random = crate::random_hex::<16>().map_err(|e| e.to_string())?;
+    Ok(format!("{prefix}{random}"))
 }
 fn named(name: &str, value: Value) -> Event {
     Event::default().event(name).data(value.to_string())
 }
 fn data(value: Value) -> Event {
     Event::default().data(value.to_string())
-}
-fn parsed(model: String, conversation: crate::conversation::Conversation, stream: bool) -> Parsed {
-    Parsed {
-        unknown_fields: Vec::new(),
-        turn: TurnRequest {
-            model: model.clone(),
-            conversation,
-            tools: Vec::new(),
-            tool_choice: crate::conversation::ToolChoice::Auto,
-        },
-        form: ReplyForm {
-            stream,
-            model_name: model,
-        },
-    }
 }
 
 fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {

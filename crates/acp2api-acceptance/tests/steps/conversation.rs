@@ -177,25 +177,19 @@ async fn fresh(w: &mut World, text: String) {
     w.conversation.system = None;
     send(w, json!([c::message("user", None, &text)])).await;
 }
+fn rebuild_lines(w: &World) -> usize {
+    journal_check::records(&w.scenario)
+        .iter()
+        .filter(|v| v["session_use"] == "rebuild")
+        .count()
+}
 #[then("the log has no rebuild line")]
 fn no_rebuild(w: &mut World) {
-    assert_eq!(
-        journal_check::records(&w.scenario)
-            .iter()
-            .filter(|v| v["session_use"] == "rebuild")
-            .count(),
-        0
-    );
+    assert_eq!(rebuild_lines(w), 0);
 }
 #[then("the log has one rebuild line")]
 fn one_rebuild(w: &mut World) {
-    assert_eq!(
-        journal_check::records(&w.scenario)
-            .iter()
-            .filter(|v| v["session_use"] == "rebuild")
-            .count(),
-        1
-    );
+    assert_eq!(rebuild_lines(w), 1);
 }
 #[given("the owner restarted acp2api")]
 async fn restart(w: &mut World) {

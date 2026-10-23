@@ -58,7 +58,7 @@ pub(crate) enum ToolKind {
 pub(crate) struct ClientTool {
     pub name: String,
     pub description: String,
-    pub schema: String,
+    pub schema: serde_json::Value,
     pub kind: ToolKind,
     pub namespace: Option<String>,
 }
@@ -83,12 +83,6 @@ pub(crate) enum PromptBlock {
     Text(String),
     Image { media_type: String, base64: String },
 }
-pub(crate) struct Answer {
-    pub text: String,
-    pub tool_call: Option<ToolCall>,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-}
 const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
 impl Conversation {
     pub(crate) fn items(&self) -> Vec<&Item> {
@@ -98,7 +92,6 @@ impl Conversation {
             .collect()
     }
 }
-/// `items` are the new items for `Continue`, else all items. A rebuild starts with the neutral line.
 pub(crate) fn prompt(kind: crate::journal::SessionUse, items: &[&Item]) -> Vec<PromptBlock> {
     let rebuild = matches!(kind, crate::journal::SessionUse::Rebuild);
     let unnamed_user = matches!(
@@ -255,7 +248,7 @@ pub(crate) fn tool_set_hash(tools: &[ClientTool]) -> ToolSetHash {
             hash.name(tool.namespace.as_deref());
             hash.text(&tool.name);
             hash.text(&tool.description);
-            hash.text(&tool.schema);
+            hash.text(&tool.schema.to_string());
             hash.finish()
         })
         .collect::<Vec<_>>();

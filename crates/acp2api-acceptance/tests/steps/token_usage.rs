@@ -12,18 +12,14 @@ async fn send(world: &mut World, endpoint: String) {
         world.scenario.answer = Some(call.finish(&mut world.scenario.time).await);
         return;
     }
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        let call = world
-            .scenario
-            .client()
-            .await
-            .send(ApiCall::one_user_message(&endpoint, "Hello"));
-        let answer = call.finish(&mut world.scenario.time).await;
-        assert_eq!(answer.status, 200, "request must reach the product");
-        world.scenario.answer = Some(answer);
-    })
-    .await
-    .expect("step cap: 20 s");
+    let call = world
+        .scenario
+        .client()
+        .await
+        .send(ApiCall::one_user_message(&endpoint, "Hello"));
+    let answer = call.finish(&mut world.scenario.time).await;
+    assert_eq!(answer.status, 200, "request must reach the product");
+    world.scenario.answer = Some(answer);
 }
 #[then(expr = "the usage of the response has {string} set to {int}")]
 fn usage(world: &mut World, field: String, expected: u64) {

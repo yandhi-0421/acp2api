@@ -21,14 +21,13 @@ pub(crate) struct Opened {
     pub new_key: Option<String>,
     pub new_password: Option<String>,
 }
-// A start saves each absent key of the first four, because each of them always has a value.
-const KEYS: [&str; 5] = [
+const SAVED_KEYS: [&str; 4] = [
     "port",
     "concurrency_limit",
     "local_api_key",
     "management_password_hash",
-    "agy_acp_server_path",
 ];
+const OPTIONAL_KEY: &str = "agy_acp_server_path";
 fn invalid(path: &Path, key: &str) -> String {
     format!(
         "the setting {key} in {} has a value that acp2api cannot use.",
@@ -84,7 +83,7 @@ pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
         None => toml::Table::new(),
     };
     for key in table.keys() {
-        if !KEYS.contains(&key.as_str()) {
+        if !SAVED_KEYS.contains(&key.as_str()) && key != OPTIONAL_KEY {
             return Err(invalid(path, key));
         }
     }
@@ -104,14 +103,14 @@ pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
             .filter(|n| (1..=highest).contains(n))
             .ok_or_else(|| invalid(path, "concurrency_limit"))?,
     };
-    let agy_acp_server_path = match table.get("agy_acp_server_path") {
+    let agy_acp_server_path = match table.get(OPTIONAL_KEY) {
         None => None,
         Some(value) => Some(
             value
                 .as_str()
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute())
-                .ok_or_else(|| invalid(path, "agy_acp_server_path"))?,
+                .ok_or_else(|| invalid(path, OPTIONAL_KEY))?,
         ),
     };
     let mut new_key = None;
@@ -155,7 +154,7 @@ pub(crate) fn read(path: &Path, highest: u8) -> Result<Opened, String> {
     Ok(Opened {
         settings,
         first_start: text.is_none(),
-        needs_save: KEYS[..4].iter().any(|key| !table.contains_key(*key)),
+        needs_save: SAVED_KEYS.iter().any(|key| !table.contains_key(*key)),
         new_key,
         new_password,
     })

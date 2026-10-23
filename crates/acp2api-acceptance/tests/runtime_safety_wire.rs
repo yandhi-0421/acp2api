@@ -81,7 +81,7 @@ async fn m22(endpoint: &str, stream: bool) {
             }
         }
     }
-    unpermitted_cancelled(&s);
+    safety::unpermitted_cancelled(&s);
     safety::event_log(&s, "built_in_tool_ran", name);
     s.finish(true).await;
 }
@@ -166,7 +166,7 @@ async fn permission_identity_controls_shared_client_and_builtin_names() {
     )
     .await;
     safety::error(&answer, name);
-    unpermitted_cancelled(&builtin);
+    safety::unpermitted_cancelled(&builtin);
     tool_check::offers(&builtin, &tools);
     safety::event_log(&builtin, "built_in_tool_ran", name);
     builtin.finish(true).await;
@@ -228,27 +228,4 @@ async fn builtin_error_cancels_only_its_active_session_while_another_prompt_comp
         1
     );
     s.finish(true).await;
-}
-
-fn unpermitted_cancelled(s: &Scenario) {
-    let prompts = s.fake().record().prompts();
-    let cancels = s.fake().record().cancels();
-    assert_eq!(prompts.len(), 1, "actual prompt delivered");
-    assert_eq!(cancels.len(), 1, "actual cancellation delivered");
-    assert_eq!(cancels[0]["params"]["sessionId"], prompts[0].session);
-    assert!(cancels[0].get("id").is_none(), "cancel is a notification");
-    assert!(
-        tool_check::permission_requests(s).is_empty(),
-        "execution had no permission request"
-    );
-    assert!(
-        !s.fake().record().offered_tools().is_empty(),
-        "actual MCP tools/list observed"
-    );
-    assert!(
-        s.hub
-            .entries()
-            .iter()
-            .all(|entry| entry.event["request"]["method"] != "tools/call")
-    );
 }

@@ -101,8 +101,6 @@ fn access_error(headers: &HeaderMap, app: &App) -> Option<crate::messages::Refus
     }
     None
 }
-/// The `Host` header of a request to the local listener (FR-008): one header with the value
-/// `127.0.0.1:<port>` or `localhost:<port>`.
 pub(crate) fn local_host(headers: &HeaderMap, port: u16) -> Option<&str> {
     let mut hosts = headers.get_all(axum::http::header::HOST).iter();
     let host = hosts.next()?.to_str().ok()?;

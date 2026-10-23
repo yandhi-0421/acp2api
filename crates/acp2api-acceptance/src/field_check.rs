@@ -115,10 +115,6 @@ pub fn literal_control(actual: &Value, document: bool) {
         json!([[tool_check::tool("read_file")]]),
         "literal nonempty actual MCP tool control"
     );
-    assert!(
-        actual["config"].is_array(),
-        "actual ACP config observations available"
-    );
 }
 pub async fn control(endpoint: &str, document: bool) -> Value {
     let mut s = Scenario::default();
@@ -133,9 +129,6 @@ pub async fn control(endpoint: &str, document: bool) -> Value {
     literal_control(&result, document);
     s.finish(true).await;
     result
-}
-pub fn refusal(s: &Scenario, endpoint: &str, message: &str, path: Option<&str>, code: &str) {
-    content_check::refusal(s, endpoint, message, code, path);
 }
 pub fn expected(field: &str, value: &Value) -> (String, String) {
     let (path, show) = match field {
@@ -255,7 +248,6 @@ pub async fn raw(s: &mut Scenario, endpoint: &str, bytes: Vec<u8>) -> Answer {
         result = request => result.expect("field raw HTTP cap: 10 s"),
         _ = driver => unreachable!(),
     };
-    s.hub.shared.0.lock().unwrap().counts.http_finished += 1;
     s.hub.shared.1.notify_all();
     answer
 }

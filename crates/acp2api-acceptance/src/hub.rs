@@ -28,7 +28,6 @@ pub struct Counts {
     pub processed: u64,
     pub http_sent: u64,
     pub http_started: u64,
-    pub http_finished: u64,
     pub mcp_started: u64,
     pub mcp_finished: u64,
     pub fake_mcp_inflight: u64,

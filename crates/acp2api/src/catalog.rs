@@ -115,7 +115,6 @@ impl Catalog {
         }
     }
 }
-/// Reads only the `model` option, so that an option of a later kind does not stop the decode.
 fn model_options(config: &[serde_json::Value]) -> Result<Vec<SessionConfigSelectOption>, String> {
     let option = config
         .iter()

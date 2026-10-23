@@ -1,9 +1,7 @@
 use crate::{Scenario, TurnPlan, client::ApiCall, content_check, journal_check, system_check};
 use serde_json::{Value, json};
 pub const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
-pub fn message(role: &str, name: Option<&str>, text: &str) -> Value {
-    system_check::message(role, name, text)
-}
+pub use crate::system_check::message;
 pub fn call(messages: Value, system: Option<&str>, tools: Value) -> ApiCall {
     let mut call = ApiCall::one_user_message("POST /v1/chat/completions", "");
     let mut items = Vec::new();

@@ -59,23 +59,13 @@ fn unchanged(w: &mut World) {
     );
 }
 pub fn refusal(w: &World, message: &str) {
-    let expected = w.fields.expected.as_ref();
-    let path = if message == f::JSON_MESSAGE {
-        None
+    let (path, code) = if message == f::JSON_MESSAGE {
+        (None, "invalid_json")
     } else {
-        Some(expected.unwrap().0.as_str())
+        let path = w.fields.expected.as_ref().unwrap().0.as_str();
+        (Some(path), "unsupported_parameter")
     };
-    f::refusal(
-        &w.scenario,
-        &w.fields.endpoint,
-        message,
-        path,
-        if message == f::JSON_MESSAGE {
-            "invalid_json"
-        } else {
-            "unsupported_parameter"
-        },
-    );
+    content_check::refusal(&w.scenario, &w.fields.endpoint, message, code, path);
 }
 pub fn expected_refusal(w: &World) {
     refusal(w, &w.fields.expected.as_ref().unwrap().1);
@@ -178,11 +168,5 @@ fn documented(w: &mut World, #[step] step: &cucumber::gherkin::Step) {
     regex = r#"^acp2api refuses the request with HTTP 400 and the message "(acp2api: the request field .+ = ".+" is not supported\.)"$"#
 )]
 fn quoted_refusal(w: &mut World, message: String) {
-    refusal(w, &message);
-}
-
-#[then(regex = r"^the field policy probe gets this error message: (.+)$")]
-fn probe_refusal(w: &mut World, encoded: String) {
-    let message: String = serde_json::from_str(&encoded).unwrap();
     refusal(w, &message);
 }

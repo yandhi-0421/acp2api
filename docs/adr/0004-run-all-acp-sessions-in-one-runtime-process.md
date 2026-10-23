@@ -54,8 +54,7 @@ acp2api runs all ACP sessions in one runtime process. It starts the runtime proc
 - After each replacement, each conversation that continues loads its ACP session with `session/load` (ADR-0003). That took 8.3 to 8.5 s on macOS, and 7.6 s and 16.2 s in the Windows VM.
 - The acceptance test of a version must check these facts:
   - concurrent prompt turns in one runtime process at the platform maximum of FR-049, on macOS and on Windows;
-  - the memory of the runtime process and of each harness process, and if a harness process exits by itself;
+  - the memory of the runtime process and of each harness process, which decides N, and if a harness process exits by itself;
   - on macOS, if the harness processes stop after a crash of acp2api.
-- The measurement of the memory decides N.
 
 Evidence: the grilling of [How many prompt turns run at the same time, and what does a queued request get?](https://github.com/yandhi-0421/acp2api/issues/14) and [How does acp2api start, keep, and stop the processes of the official runtime?](https://github.com/yandhi-0421/acp2api/issues/30); F8, F11, and F12 of [Probe the official runtime on macOS with a test MCP server and an empty `cwd`](https://github.com/yandhi-0421/acp2api/issues/8); W2, W3, and W4 of [Probe the official runtime on Windows 11 ARM in a VM](https://github.com/yandhi-0421/acp2api/issues/16); the answer of [What does the official runtime support over ACP on Windows and macOS?](https://github.com/yandhi-0421/acp2api/issues/2); and sections 3.3 and 9.9 of `docs/research/2026-10-15-official-runtime-acp-probe.md`.

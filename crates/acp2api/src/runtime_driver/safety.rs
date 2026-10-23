@@ -1,5 +1,4 @@
 use agent_client_protocol_schema::v1::ToolCallStatus;
-/// The name of a tool call for messages and logs, or "unknown" when it is not a plain tool name.
 pub(super) fn tool_name(name: Option<&str>, title: Option<&str>) -> String {
     let candidate = name.or(title).unwrap_or("unknown");
     let candidate = candidate

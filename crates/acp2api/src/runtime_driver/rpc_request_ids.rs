@@ -3,8 +3,6 @@ use crate::conversation::{ClientTool, PromptBlock, ToolKind};
 use std::{sync::Mutex, time::Duration};
 use tokio::io::{DuplexStream, ReadHalf, WriteHalf};
 
-// Only the official-runtime side is fake. Each run has a 10 s deadline,
-// 32 lines per direction, 4 KiB per line, and a 64 KiB pipe. No log is kept.
 struct Agent {
     input: BufReader<ReadHalf<DuplexStream>>,
     output: WriteHalf<DuplexStream>,
@@ -71,9 +69,7 @@ impl ProcessTree for AgentTree {
 struct Root(PathBuf);
 impl Root {
     fn new() -> Self {
-        let mut random = [0_u8; 16];
-        getrandom::fill(&mut random).unwrap();
-        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let suffix = crate::random_hex::<16>().unwrap();
         Self(
             Environment::from_process()
                 .temp
@@ -139,7 +135,7 @@ async fn exercise(creation_pending: bool) {
     let tool = ClientTool {
         name: "beta_lookup".into(),
         description: "A tool only in beta".into(),
-        schema: "{\"type\":\"object\"}".into(),
+        schema: json!({"type":"object"}),
         kind: ToolKind::Function,
         namespace: None,
     };
@@ -156,11 +152,7 @@ async fn exercise(creation_pending: bool) {
     let mut prompts = Vec::new();
     for session in ["alpha", "beta"] {
         runtime
-            .start_prompt(
-                vec![PromptBlock::Text(session.into())],
-                "test-model",
-                session,
-            )
+            .start_prompt(vec![PromptBlock::Text(session.into())], session)
             .await
             .unwrap();
         let prompt = agent.receive("session/prompt").await;
@@ -213,11 +205,7 @@ async fn exercise(creation_pending: bool) {
             "the real outgoing session response must still complete its pending work"
         );
         runtime
-            .start_prompt(
-                vec![PromptBlock::Text("gamma".into())],
-                "test-model",
-                "gamma",
-            )
+            .start_prompt(vec![PromptBlock::Text("gamma".into())], "gamma")
             .await
             .unwrap();
         let gamma = agent.receive("session/prompt").await;

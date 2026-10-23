@@ -61,14 +61,7 @@ async fn custom_header(w: &mut World, endpoint: String, header: String) {
         .replace(":8329", &format!(":{}", w.scenario.root.port))
         .replace(
             ":8330",
-            &format!(
-                ":{}",
-                if w.scenario.root.port == 65535 {
-                    65534
-                } else {
-                    w.scenario.root.port + 1
-                }
-            ),
+            &format!(":{}", check::other_port(w.scenario.root.port)),
         );
     send(w, endpoint, Credential::Key, vec![(name.into(), value)]).await;
 }

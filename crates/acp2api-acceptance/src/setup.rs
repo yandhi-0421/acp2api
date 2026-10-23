@@ -309,7 +309,7 @@ fn cleanup_stale_runs(root: &Path) {
         let owned = fs::symlink_metadata(&marker)
             .is_ok_and(|meta| meta.is_file() && !meta.is_symlink() && meta.len() == 24)
             && fs::read_to_string(marker).is_ok_and(|text| text == "acp2api-scenario-run-v1\n");
-        if (owned || legacy_run(&path)) && definitely_exited(pid) {
+        if owned && definitely_exited(pid) {
             // remove_dir_all does not follow links inside an owned run.
             match fs::remove_dir_all(path) {
                 Ok(()) => {}
@@ -318,47 +318,6 @@ fn cleanup_stale_runs(root: &Path) {
             }
         }
     }
-}
-fn legacy_run(path: &Path) -> bool {
-    let Ok(entries) = fs::read_dir(path) else {
-        return false;
-    };
-    let mut found = false;
-    for entry in entries {
-        let Ok(entry) = entry else {
-            return false;
-        };
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            return false;
-        };
-        if name.len() != 24
-            || !name.bytes().all(|c| c.is_ascii_hexdigit())
-            || !entry
-                .file_type()
-                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
-        {
-            return false;
-        }
-        for child in [
-            "account",
-            "home",
-            "local-app-data",
-            "temp",
-            "path",
-            "exe",
-            "data",
-            "builds",
-        ] {
-            if !fs::symlink_metadata(entry.path().join(child))
-                .is_ok_and(|meta| meta.is_dir() && !meta.is_symlink())
-            {
-                return false;
-            }
-        }
-        found = true;
-    }
-    found
 }
 #[cfg(unix)]
 fn definitely_exited(pid: u32) -> bool {

@@ -8,14 +8,16 @@ pub(crate) use session_folders::root as session_root;
 mod rpc_request_ids;
 use crate::*;
 use agent_client_protocol_schema::v1::{
-    ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, SessionUpdate,
+    ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SessionNotification, SessionUpdate, TextContent,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct PermissionId(u64);
+pub(crate) struct PermissionRequest {
+    id: Value,
+    session: String,
+}
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
@@ -28,8 +30,6 @@ pub(crate) struct Runtime {
     cwd: PathBuf,
     tool_sets: mcp::ToolSets,
     tools: std::collections::HashMap<String, SessionTools>,
-    permissions: std::collections::HashMap<PermissionId, (Value, String)>,
-    next_permission: u64,
     tool_calls: safety::ToolCalls,
 }
 impl Runtime {
@@ -40,11 +40,7 @@ impl Runtime {
         tool_sets: mcp::ToolSets,
     ) -> Result<(Self, crate::catalog::Catalog), String> {
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
-        let program = data.join("official-runtime").join(if cfg!(windows) {
-            "agy_acp_server.exe"
-        } else {
-            "agy_acp_server.par"
-        });
+        let program = program(data);
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
         let child = ports
             .launcher
@@ -96,11 +92,19 @@ impl Runtime {
             cwd: cwd.clone(),
             tool_sets,
             tools: std::collections::HashMap::new(),
-            permissions: std::collections::HashMap::new(),
-            next_permission: 0,
             tool_calls: safety::ToolCalls::default(),
         };
-        runtime.call("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"acp2api","title":"acp2api","version":ports.release.version()},"clientCapabilities":{}})).await?;
+        let client = json!({
+            "name": "acp2api",
+            "title": "acp2api",
+            "version": ports.release.version()
+        });
+        runtime
+            .call(
+                "initialize",
+                json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}}),
+            )
+            .await?;
         let catalog = runtime.new_session(&[], None).await?;
         Ok((runtime, catalog))
     }
@@ -127,7 +131,19 @@ impl Runtime {
         let mcp_url = self.tool_sets.insert(tools)?;
         let cwd = self.cwd.join(format!("session-{}", self.next_id));
         std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
-        let mut params = json!({"cwd":cwd,"mcpServers":[{"type":"http","name":"client-tools","url":mcp_url,"headers":[]}],"_meta":{"antigravity":{"enabledTools":[],"eagerMcpServers":["client-tools"]}}});
+        let mut params = json!({
+            "cwd": cwd,
+            "mcpServers": [{
+                "type": "http",
+                "name": mcp::SERVER_NAME,
+                "url": mcp_url,
+                "headers": []
+            }],
+            "_meta": {"antigravity": {
+                "enabledTools": [],
+                "eagerMcpServers": [mcp::SERVER_NAME]
+            }}
+        });
         if let Some(system) = system {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }
@@ -148,7 +164,6 @@ impl Runtime {
         self.creating.insert(id, (work, tools));
         Ok(())
     }
-    /// Drops the client tools of a session that acp2api does not use again.
     pub(crate) fn forget(&mut self, session: &str) {
         if let Some(tools) = self.tools.remove(session) {
             self.tool_sets.remove(&tools.mcp_url);
@@ -175,18 +190,15 @@ impl Runtime {
     }
     pub(crate) async fn permission(
         &mut self,
-        request: PermissionId,
+        request: PermissionRequest,
         cancel: bool,
     ) -> Result<(), String> {
-        if let Some((id, session)) = self.permissions.remove(&request) {
-            if cancel {
-                self.cancel(&session).await?;
-            }
-            let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
-            self.write(json!({"jsonrpc":"2.0","id":id,"result":outcome}))
-                .await?;
+        if cancel {
+            self.cancel(&request.session).await?;
         }
-        Ok(())
+        let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
+        self.write(json!({"jsonrpc":"2.0","id":request.id,"result":outcome}))
+            .await
     }
     pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), String> {
         self.write(
@@ -194,7 +206,6 @@ impl Runtime {
         )
         .await
     }
-    /// Answers an agent request whose method acp2api does not handle.
     async fn refuse(&mut self, request: &Value) -> Result<(), String> {
         self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
             .await
@@ -225,22 +236,17 @@ impl Runtime {
     pub(crate) async fn start_prompt(
         &mut self,
         prompt: Vec<crate::conversation::PromptBlock>,
-        _model: &str,
         session: &str,
     ) -> Result<(), String> {
         self.tool_calls.begin_prompt(session);
-        let blocks: Vec<agent_client_protocol_schema::v1::ContentBlock> = prompt
+        let blocks: Vec<ContentBlock> = prompt
             .into_iter()
             .map(|block| match block {
                 crate::conversation::PromptBlock::Text(text) => {
-                    agent_client_protocol_schema::v1::ContentBlock::Text(
-                        agent_client_protocol_schema::v1::TextContent::new(text),
-                    )
+                    ContentBlock::Text(TextContent::new(text))
                 }
                 crate::conversation::PromptBlock::Image { media_type, base64 } => {
-                    agent_client_protocol_schema::v1::ContentBlock::Image(
-                        agent_client_protocol_schema::v1::ImageContent::new(base64, media_type),
-                    )
+                    ContentBlock::Image(ImageContent::new(base64, media_type))
                 }
             })
             .collect();
@@ -270,17 +276,7 @@ impl Runtime {
             && let Some(id) = value["id"].as_u64()
         {
             if let Some((work, tools)) = self.creating.remove(&id) {
-                let result = (|| {
-                    let response = value
-                        .get("result")
-                        .ok_or_else(|| value["error"].to_string())?;
-                    let session = response["sessionId"]
-                        .as_str()
-                        .ok_or("missing sessionId")?
-                        .to_owned();
-                    let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
-                    Ok((session, catalog))
-                })();
+                let result = self.created_session(&value);
                 match &result {
                     Ok((session, _)) => {
                         self.tools.insert(session.clone(), tools);
@@ -312,38 +308,11 @@ impl Runtime {
             let session = request.session_id.to_string();
             self.tool_calls
                 .permission(&session, &request.tool_call.tool_call_id.to_string());
-            self.next_permission += 1;
-            let permission = PermissionId(self.next_permission);
-            self.permissions
-                .insert(permission, (value["id"].clone(), session.clone()));
-            let call = (|| {
-                let title = request.tool_call.fields.title.as_deref()?;
-                let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
-                let tools = &self.tools.get(&session)?.tools;
-                let tool = mcp::tool_names(tools)
-                    .into_iter()
-                    .zip(tools)
-                    .find_map(|(mcp_name, tool)| (mcp_name == name).then_some(tool))?;
-                let input = request
-                    .tool_call
-                    .fields
-                    .raw_input
-                    .as_ref()
-                    .filter(|value| value.is_object())?;
-                let arguments = match tool.kind {
-                    crate::conversation::ToolKind::Function => input.to_string(),
-                    crate::conversation::ToolKind::Custom => {
-                        input.get("input")?.as_str()?.to_owned()
-                    }
-                };
-                Some(crate::conversation::ToolCall {
-                    name: tool.name.clone(),
-                    kind: tool.kind,
-                    namespace: tool.namespace.clone(),
-                    arguments,
-                })
-            })();
-            let update = match call {
+            let permission = PermissionRequest {
+                id: value["id"].clone(),
+                session: session.clone(),
+            };
+            let update = match self.client_tool_call(&session, &request) {
                 Some(call) => TurnUpdate::Permission {
                     request: permission,
                     call,
@@ -413,6 +382,46 @@ impl Runtime {
             RuntimeEvent::Other
         }
     }
+    fn created_session(&self, value: &Value) -> Result<(String, crate::catalog::Catalog), String> {
+        let response = value
+            .get("result")
+            .ok_or_else(|| value["error"].to_string())?;
+        let session = response["sessionId"]
+            .as_str()
+            .ok_or("missing sessionId")?
+            .to_owned();
+        let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
+        Ok((session, catalog))
+    }
+    fn client_tool_call(
+        &self,
+        session: &str,
+        request: &RequestPermissionRequest,
+    ) -> Option<crate::conversation::ToolCall> {
+        let title = request.tool_call.fields.title.as_deref()?;
+        let name = title.strip_prefix("Run ")?.strip_suffix('?')?;
+        let tools = &self.tools.get(session)?.tools;
+        let tool = mcp::tool_names(tools)
+            .into_iter()
+            .zip(tools)
+            .find_map(|(mcp_name, tool)| (mcp_name == name).then_some(tool))?;
+        let input = request
+            .tool_call
+            .fields
+            .raw_input
+            .as_ref()
+            .filter(|value| value.is_object())?;
+        let arguments = match tool.kind {
+            crate::conversation::ToolKind::Function => input.to_string(),
+            crate::conversation::ToolKind::Custom => input.get("input")?.as_str()?.to_owned(),
+        };
+        Some(crate::conversation::ToolCall {
+            name: tool.name.clone(),
+            kind: tool.kind,
+            namespace: tool.namespace.clone(),
+            arguments,
+        })
+    }
     pub(crate) async fn stop(mut self) {
         let _ = self.input.shutdown().await;
         drop(self.input);
@@ -420,8 +429,13 @@ impl Runtime {
     }
 }
 
-/// The next line in bytes, so that one non-UTF-8 line does not end the stream.
-/// A read error ends the stream like its end.
+pub(crate) fn program(data: &std::path::Path) -> PathBuf {
+    data.join("official-runtime").join(if cfg!(windows) {
+        "agy_acp_server.exe"
+    } else {
+        "agy_acp_server.par"
+    })
+}
 async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
     let mut line = Vec::new();
     match input.read_until(b'\n', &mut line).await {
@@ -456,11 +470,11 @@ pub(crate) enum TurnUpdate {
     Text(String),
     Usage(u64),
     Permission {
-        request: PermissionId,
+        request: PermissionRequest,
         call: crate::conversation::ToolCall,
     },
     RefusedPermission {
-        request: PermissionId,
+        request: PermissionRequest,
         name: String,
     },
     UnpermittedTool(String),

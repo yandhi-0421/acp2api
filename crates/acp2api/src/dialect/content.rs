@@ -1,6 +1,8 @@
-use super::{Parsed, fields, parsed};
+use super::{Parsed, fields};
 use crate::{
-    conversation::{Conversation, Item, Part, Role, SystemPart},
+    conversation::{
+        Conversation, Item, Part, ReplyForm, Role, SystemPart, ToolChoice, TurnRequest,
+    },
     messages::{Message, Refusal},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -108,30 +110,34 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     ) {
         return Err(Message::Prefill.into());
     }
-    let mut parsed = parsed(
-        model,
-        Conversation {
-            system,
-            earlier: items,
-            last,
+    let tool_choice = if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
+        ToolChoice::Off
+    } else {
+        ToolChoice::Auto
+    };
+    Ok(Parsed {
+        turn: TurnRequest {
+            conversation: Conversation {
+                system,
+                earlier: items,
+                last,
+            },
+            model: model.clone(),
+            tools: client_tools,
+            tool_choice,
         },
-        value["stream"].as_bool().unwrap_or(false),
-    );
-    parsed.turn.tools = client_tools;
-    parsed.turn.tool_choice =
-        if value["tool_choice"] == "none" || value["tool_choice"]["type"] == "none" {
-            crate::conversation::ToolChoice::Off
-        } else {
-            crate::conversation::ToolChoice::Auto
-        };
-    parsed.unknown_fields = value
-        .as_object()
-        .into_iter()
-        .flat_map(|o| o.keys())
-        .filter(|name| !known_field(api, name))
-        .cloned()
-        .collect();
-    Ok(parsed)
+        form: ReplyForm {
+            stream: value["stream"].as_bool().unwrap_or(false),
+            model_name: model,
+        },
+        unknown_fields: value
+            .as_object()
+            .into_iter()
+            .flat_map(|o| o.keys())
+            .filter(|name| !known_field(api, name))
+            .cloned()
+            .collect(),
+    })
 }
 fn known_field(api: Api, name: &str) -> bool {
     matches!(
@@ -486,7 +492,7 @@ fn client_tool(
                 None | Some("text") => {}
                 Some(_) => return Err(Refusal::invalid("unsupported custom tool format")),
             }
-            serde_json::json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}).to_string()
+            serde_json::json!({"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false})
         }
         ToolKind::Function => {
             let schema = &function[if matches!(api, Api::Messages) {
@@ -494,12 +500,11 @@ fn client_tool(
             } else {
                 "parameters"
             }];
-            // OpenAI defines an absent or null `parameters` as an empty parameter list.
             match schema {
                 Value::Null if !matches!(api, Api::Messages) => {
-                    r#"{"type":"object","properties":{}}"#.into()
+                    serde_json::json!({"type":"object","properties":{}})
                 }
-                Value::Object(_) => schema.to_string(),
+                Value::Object(_) => schema.clone(),
                 _ => return Err(Refusal::invalid("tool schema must be an object")),
             }
         }
@@ -562,7 +567,7 @@ mod tests {
     #[test]
     fn a_function_tool_without_parameters_gets_an_empty_object_schema() {
         let schema = |api, tools_value| match tools(api, &tools_value) {
-            Ok(tools) => tools[0].schema.clone(),
+            Ok(tools) => tools[0].schema.to_string(),
             Err(refusal) => panic!("refused: {}", refusal.message),
         };
         let empty = r#"{"type":"object","properties":{}}"#;

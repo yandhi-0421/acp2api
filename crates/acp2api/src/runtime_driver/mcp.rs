@@ -8,10 +8,12 @@ use axum::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 
+pub(crate) const SERVER_NAME: &str = "client-tools";
+const FUNCTION_NAME_LIMIT: usize = 64;
 #[derive(Clone)]
 pub(crate) struct ToolSets {
     port: u16,
@@ -25,19 +27,17 @@ impl ToolSets {
         }
     }
     pub(crate) fn insert(&self, tools: &[ClientTool]) -> Result<String, String> {
-        let mut random = [0; 32];
-        getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-        let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
-        let tools:Result<Vec<_>,_>=tools.iter().zip(tool_names(tools)).map(|(tool,name)|serde_json::from_str::<Value>(&tool.schema).map(|schema|json!({"name":name,"description":tool.description,"inputSchema":schema}))).collect();
-        match self.sets.write().unwrap().entry(secret.clone()) {
-            Entry::Vacant(entry) => {
-                entry.insert(tools.map_err(|e| e.to_string())?);
-            }
-            Entry::Occupied(_) => return Err("MCP path collision".into()),
-        }
+        let secret = crate::random_hex::<32>().map_err(|e| e.to_string())?;
+        let tools = tools
+            .iter()
+            .zip(tool_names(tools))
+            .map(|(tool, name)| {
+                json!({"name":name,"description":tool.description,"inputSchema":tool.schema})
+            })
+            .collect();
+        self.sets.write().unwrap().insert(secret.clone(), tools);
         Ok(format!("http://127.0.0.1:{}/mcp/{secret}", self.port))
     }
-    /// Removes the tool set of a URL from `insert`.
     pub(crate) fn remove(&self, url: &str) {
         if let Some((_, secret)) = url.rsplit_once('/') {
             self.sets.write().unwrap().remove(secret);
@@ -49,14 +49,8 @@ impl ToolSets {
             .with_state(self)
     }
 }
-/// Gives each tool its MCP name, in the order of `tools`. A plain tool keeps its name. A namespace
-/// member gets `<namespace>__<name>`. If that name is too long or is already in use, the member gets
-/// a cut name with a hash suffix.
 pub(crate) fn tool_names(tools: &[ClientTool]) -> Vec<String> {
-    // The runtime shows a tool of the MCP server "client-tools" to the model as
-    // `mcp_client-tools_<name>` (docs/research/2026-10-18-earlier-cli-bridge-findings.md, RT-3).
-    // Model function names have at most 64 characters.
-    const LIMIT: usize = 64 - "mcp_client-tools_".len();
+    const LIMIT: usize = FUNCTION_NAME_LIMIT - "mcp_".len() - SERVER_NAME.len() - "_".len();
     let mut used: HashSet<String> = tools
         .iter()
         .filter(|tool| tool.namespace.is_none())
@@ -84,7 +78,7 @@ pub(crate) fn tool_names(tools: &[ClientTool]) -> Vec<String> {
                         .chain_update(&tool.name)
                         .chain_update(attempt.to_le_bytes())
                         .finalize();
-                    let suffix: String = hash[..4].iter().map(|b| format!("{b:02x}")).collect();
+                    let suffix = crate::hex(&hash[..4]);
                     format!("{}_{suffix}", &readable[..end])
                 })
                 .find(|name| used.insert(name.clone()))
@@ -161,7 +155,7 @@ mod tests {
                 kind: crate::conversation::ToolKind::Function,
                 namespace: None,
                 description: "First immutable tool".into(),
-                schema: r#"{"type":"object"}"#.into(),
+                schema: json!({"type":"object"}),
             }])
             .unwrap();
         let second = sets.insert(&[]).unwrap();
