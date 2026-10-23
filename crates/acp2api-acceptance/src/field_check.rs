@@ -130,9 +130,6 @@ pub async fn control(endpoint: &str, document: bool) -> Value {
     s.finish(true).await;
     result
 }
-pub fn refusal(s: &Scenario, endpoint: &str, message: &str, path: Option<&str>, code: &str) {
-    content_check::refusal(s, endpoint, message, code, path);
-}
 pub fn expected(field: &str, value: &Value) -> (String, String) {
     let (path, show) = match field {
         "web_search_options" | "previous_response_id" | "conversation" | "output_config.format" => {

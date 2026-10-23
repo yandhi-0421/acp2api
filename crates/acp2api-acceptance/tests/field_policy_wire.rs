@@ -59,12 +59,12 @@ async fn forced_named_choices_and_mixed_include_keep_exact_m02_paths_and_values(
     ] {
         let mut s = candidate(endpoint, field, value).await;
         eprintln!("reject {label} on {endpoint}");
-        f::refusal(
+        c::refusal(
             &s,
             endpoint,
             &format!("acp2api: the request field {label} is not supported."),
-            Some(path),
             "unsupported_parameter",
+            Some(path),
         );
         s.finish(true).await;
     }
@@ -139,7 +139,7 @@ async fn raw_json_grammar_depth_and_shape_remain_distinct_on_each_api() {
             let mut s = Scenario::default();
             s.plan(Setup::normal());
             s.answer = Some(f::raw(&mut s, endpoint, bytes).await);
-            f::refusal(&s, endpoint, f::JSON_MESSAGE, None, "invalid_json");
+            c::refusal(&s, endpoint, f::JSON_MESSAGE, "invalid_json", None);
             s.finish(true).await;
         }
         for bytes in [
