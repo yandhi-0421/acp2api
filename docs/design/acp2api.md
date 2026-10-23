@@ -1194,35 +1194,7 @@ The merge keeps L-B's common call. It takes the separate account value from L-A 
 It takes L-C's process creation identity to reject stale publication without PID-based lock ownership.
 The ownership records preserve cleanup across temporary-root changes. Their format and permissions need design approval as stored-data decisions.
 
-**L-A score.**
-
-| Design red flag | Principle | Result | Evidence | Cost |
-|---|---|---|---|---|
-| shallow module | deep-modules | absent | One lifecycle hides admission, publication, and cleanup. |  |
-| information leakage | deep-modules | absent | Only environment values cross the caller boundary. |  |
-| temporal decomposition | deep-modules | absent | One private owner contains the sequence. |  |
-| pass-through method | deep-modules | absent | No public lock wrapper. |  |
-| importable internals | deep-modules | absent | No public lock handles or cleanup permits. |  |
-| split ownership | separate-before-serializing-shared-state | absent | The lifecycle owns both locks and publication. |  |
-| two ways to do one task | migrate-callers-then-delete-legacy-apis | absent | Production and tests call the same run. |  |
-| hand-synced list | make-illegal-states-unrepresentable | absent | One versioned publication record. |  |
-| depth | deep-modules | deep | The caller has one start operation. |  |
-
-**L-B score.**
-
-| Design red flag | Principle | Result | Evidence | Cost |
-|---|---|---|---|---|
-| shallow module | deep-modules | absent | One lifecycle hides admission, publication, and cleanup. |  |
-| information leakage | deep-modules | absent | Only environment values cross the caller boundary. |  |
-| temporal decomposition | deep-modules | absent | One private owner contains the sequence. |  |
-| pass-through method | deep-modules | absent | No public lock wrapper. |  |
-| importable internals | deep-modules | absent | No public lock handles or cleanup permits. |  |
-| split ownership | separate-before-serializing-shared-state | absent | The lifecycle owns both locks and publication. |  |
-| two ways to do one task | migrate-callers-then-delete-legacy-apis | absent | Production and tests call the same run. |  |
-| hand-synced list | make-illegal-states-unrepresentable | absent | One versioned publication record. |  |
-| depth | deep-modules | deep | The caller has one start operation. |  |
-
-**L-C score.**
+**L-A, L-B, L-C, and merged account design score.** The four designs have the same score in each row.
 
 | Design red flag | Principle | Result | Evidence | Cost |
 |---|---|---|---|---|
@@ -1249,20 +1221,6 @@ The ownership records preserve cleanup across temporary-root changes. Their form
 | two ways to do one task | migrate-callers-then-delete-legacy-apis | absent | Production and tests call the same run. |  |
 | hand-synced list | make-illegal-states-unrepresentable | absent | One in-memory publication state. |  |
 | depth | deep-modules | deep | One query hides the protocol; macOS recovery remains incomplete. |  |
-
-**Merged account design score.**
-
-| Design red flag | Principle | Result | Evidence | Cost |
-|---|---|---|---|---|
-| shallow module | deep-modules | absent | One lifecycle hides admission, publication, and cleanup. |  |
-| information leakage | deep-modules | absent | Only environment values cross the caller boundary. |  |
-| temporal decomposition | deep-modules | absent | One private owner contains the sequence. |  |
-| pass-through method | deep-modules | absent | No public lock wrapper. |  |
-| importable internals | deep-modules | absent | No public lock handles or cleanup permits. |  |
-| split ownership | separate-before-serializing-shared-state | absent | The lifecycle owns both locks and publication. |  |
-| two ways to do one task | migrate-callers-then-delete-legacy-apis | absent | Production and tests call the same run. |  |
-| hand-synced list | make-illegal-states-unrepresentable | absent | One versioned publication record. |  |
-| depth | deep-modules | deep | The caller has one start operation. |  |
 
 ### Admission revision: three independent designs
 
@@ -1431,7 +1389,7 @@ The owner accepted these ten choices on 2026-10-18. Their definitions are in the
 | Reset-time forms | "Quota reset time" under "Decided values"; unknown forms follow FR-036 |
 | Final independent review | One `prd-review` round with a cold reader and an attacker, after revision |
 
-The disk had about 9.5 GiB free at the review. The first-build measurement, not an estimate, decides the next storage action.
+The first-build measurement, not an estimate, decides the next storage action. Section "Problem" gives the free disk at the review.
 
 The owner also approved every recommendation of the final review. FR-006 and M-28 close the account questions below.
 FR-011, FR-020, FR-025 to FR-028, FR-033, FR-036 to FR-040, FR-049, and FR-054 hold the revised product contracts.
