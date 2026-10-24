@@ -1,3 +1,4 @@
+use crate::real_limit;
 use crate::{Scenario, client::Answer, endpoint_check, journal_check};
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -181,7 +182,7 @@ pub fn network_address() -> Option<IpAddr> {
 pub async fn connect(address: IpAddr, port: u16) -> bool {
     matches!(
         tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+            real_limit(std::time::Duration::from_secs(2)),
             tokio::net::TcpStream::connect((address, port))
         )
         .await,
@@ -191,6 +192,7 @@ pub async fn connect(address: IpAddr, port: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::real_limit;
     use crate::{
         client::{ApiCall, ApiClient},
         hub::Hub,
@@ -205,7 +207,7 @@ mod tests {
             let address = listener.local_addr().unwrap().to_string();
             let observed_hub = hub.clone();
             let receiver = tokio::spawn(async move {
-                tokio::time::timeout(std::time::Duration::from_secs(3),async move {
+                tokio::time::timeout(real_limit(std::time::Duration::from_secs(3)),async move {
                     let (mut socket,_)=listener.accept().await.unwrap();
                     let mut bytes=Vec::new();
                     while !bytes.ends_with(b"\r\n\r\n") {

@@ -3,6 +3,7 @@
     reason = "Real-time safety caps must work while virtual time is blocked"
 )]
 use acp2api::Clock;
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{
     adapters::HarnessClock,
     hub::{Hub, HubLink},
@@ -66,10 +67,13 @@ async fn executing_callback_remains_visible_across_unrelated_timer_registration(
     let mut advancing = tokio::spawn(async move {
         time.advance_to(50).await;
     });
-    tokio::time::timeout(std::time::Duration::from_secs(3), callback_started)
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(
+        real_limit(std::time::Duration::from_secs(3)),
+        callback_started,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(hub.counts().wake_pending, 1);
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(100), &mut advancing)
@@ -99,7 +103,7 @@ async fn aborting_awakened_owner_releases_its_work() {
     let advance = tokio::spawn(async move {
         time.advance_to(50).await;
     });
-    tokio::time::timeout(std::time::Duration::from_secs(3), recv)
+    tokio::time::timeout(real_limit(std::time::Duration::from_secs(3)), recv)
         .await
         .unwrap()
         .unwrap();
@@ -136,7 +140,7 @@ async fn os_process_stop_timer_finishes_without_followup_timer() {
     let stopping = tokio::spawn(async move {
         child.tree.stop(clock).await;
     });
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + real_limit(Duration::from_secs(3));
     while s.time.next_deadline() != Some(5000) {
         assert!(Instant::now() < deadline, "stop timer registration cap");
         let hub = s.hub.clone();
@@ -162,7 +166,7 @@ async fn cancelling_a_delivered_but_unpolled_timer_releases_its_wake() {
     let advancing = tokio::spawn(async move {
         time.advance_to(50).await;
     });
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + real_limit(Duration::from_secs(3));
     while hub.counts().wake_pending != 1 {
         assert!(Instant::now() < deadline, "timer delivery cap: 3 s");
         let hub = hub.clone();

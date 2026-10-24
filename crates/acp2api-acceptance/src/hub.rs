@@ -1,4 +1,5 @@
 use crate::fake::FakeState;
+use crate::real_limit;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -192,7 +193,7 @@ impl Hub {
     fn connection(&self, stream: TcpStream) {
         stream.set_nonblocking(false).unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(300)))
+            .set_read_timeout(Some(real_limit(Duration::from_secs(300))))
             .unwrap();
         let writer = Arc::new(Mutex::new(stream.try_clone().unwrap()));
 
@@ -505,8 +506,8 @@ impl HubLink {
     }
     pub fn connect(&self, mut message: Value) -> std::io::Result<BufReader<TcpStream>> {
         let mut stream = TcpStream::connect(&self.address)?;
-        stream.set_read_timeout(Some(Duration::from_secs(300)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+        stream.set_read_timeout(Some(real_limit(Duration::from_secs(300))))?;
+        stream.set_write_timeout(Some(real_limit(Duration::from_secs(10))))?;
         message["token"] = json!(self.token);
         message["role"] = json!("rpc");
         send(&mut stream, &message)?;
@@ -544,7 +545,7 @@ impl std::fmt::Debug for HubLink {
 
 impl Hub {
     pub async fn prepare_restart(&self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(10));
         while crate::fake::FakeRuntime::new(self.clone())
             .record()
             .processes_alive()

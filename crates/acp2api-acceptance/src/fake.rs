@@ -1,4 +1,5 @@
 use crate::hub::{Hub, State};
+use crate::real_limit;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -414,10 +415,10 @@ pub(crate) fn mcp_exchange(url: &str, body: &Value) -> Result<Value, String> {
     let (host, path) = address.split_once('/').ok_or("MCP URL path")?;
     let mut stream = std::net::TcpStream::connect(host).map_err(|e| e.to_string())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
+        .set_read_timeout(Some(real_limit(Duration::from_secs(30))))
         .map_err(|e| e.to_string())?;
     stream
-        .set_write_timeout(Some(Duration::from_secs(30)))
+        .set_write_timeout(Some(real_limit(Duration::from_secs(30))))
         .map_err(|e| e.to_string())?;
     let body = body.to_string();
     write!(stream,"POST /{path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).map_err(|e|e.to_string())?;

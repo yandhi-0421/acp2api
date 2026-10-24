@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{
     Scenario, TurnPlan, client::ApiCall, runtime_safety_check as safety, tool_check,
 };
@@ -33,7 +34,7 @@ async fn a_failed_safety_log_write_keeps_serving() {
         .next_prompt(TurnPlan::new().chunk("ok").end("end_turn"));
     let answer = tool_check::send(&mut s, call()).await;
     safety::reply(&answer, "ok");
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + real_limit(Duration::from_secs(5));
     while failure_lines(&s) < 1 && Instant::now() < end {
         let hub = s.hub.clone();
         tokio::task::spawn_blocking(move || hub.wait_change(end))

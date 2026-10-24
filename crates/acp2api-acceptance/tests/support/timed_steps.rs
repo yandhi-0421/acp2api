@@ -1,3 +1,4 @@
+use acp2api_acceptance::real_limit;
 use cucumber::{
     World,
     codegen::{StepConstructor, WorldInventory, inventory},
@@ -10,13 +11,13 @@ fn limit() -> Duration {
     static LIMIT: OnceLock<Duration> = OnceLock::new();
     *LIMIT.get_or_init(|| {
         let config: toml::Value = toml::from_str(include_str!("../runner.toml")).unwrap();
-        Duration::from_secs(
+        real_limit(Duration::from_secs(
             config["step_timeout_seconds"]
                 .as_integer()
                 .unwrap()
                 .try_into()
                 .unwrap(),
-        )
+        ))
     })
 }
 fn execute<W: World + WorldInventory + Debug>(

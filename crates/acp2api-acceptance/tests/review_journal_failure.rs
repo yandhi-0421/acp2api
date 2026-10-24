@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{Scenario, Setup, TurnPlan, client::ApiCall};
 use std::time::{Duration, Instant};
 
@@ -39,7 +40,7 @@ async fn a_failed_log_write_keeps_serving_with_the_original_status() {
         .push(("x-api-key".into(), "deliberately-wrong".into()));
     let a = s.client().await.send(wrong).finish(&mut s.time).await;
     assert_eq!(a.status, 401, "refusal after a failed log write");
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + real_limit(Duration::from_secs(5));
     while failure_lines(&s) < 3 && Instant::now() < end {
         let hub = s.hub.clone();
         tokio::task::spawn_blocking(move || hub.wait_change(end))

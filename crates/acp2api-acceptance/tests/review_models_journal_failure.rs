@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{Scenario, Setup, model_check};
 use std::time::{Duration, Instant};
 
@@ -34,7 +35,7 @@ async fn a_failed_log_write_keeps_the_model_list() {
         "model names: {}",
         a.json()
     );
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + real_limit(Duration::from_secs(5));
     while failure_lines(&s) < 1 && Instant::now() < end {
         let hub = s.hub.clone();
         tokio::task::spawn_blocking(move || hub.wait_change(end))

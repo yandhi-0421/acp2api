@@ -1,4 +1,5 @@
 #![allow(clippy::disallowed_methods)]
+use acp2api_acceptance::real_limit;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -41,8 +42,9 @@ fn main() -> ExitCode {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(300_000)
         .min(300_000);
+    let run_limit = real_limit(Duration::from_millis(run_ms));
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(run_ms));
+        thread::sleep(run_limit);
         std::process::exit(71);
     });
     let stream = TcpStream::connect(&fields["hub"]).expect("hub");
