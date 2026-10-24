@@ -293,9 +293,12 @@ impl Journal {
             "event":report.kind,
             "tool":report.tool,
         });
-        self.emit(&record)
+        self.emit_to_file_then_stdout_under_writer_lock(&record)
     }
-    fn emit(&self, record: &impl Serialize) -> io::Result<()> {
+    fn emit_to_file_then_stdout_under_writer_lock(
+        &self,
+        record: &impl Serialize,
+    ) -> io::Result<()> {
         let mut writer = self
             .0
             .writer
@@ -370,7 +373,7 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
-        self.emit(&record)
+        self.emit_to_file_then_stdout_under_writer_lock(&record)
     }
 }
 #[cfg(test)]
