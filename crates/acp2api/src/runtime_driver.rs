@@ -168,6 +168,7 @@ impl Runtime {
             params["_meta"]["antigravity"]["systemPrompt"] = json!({"append":system});
         }
         let tools = SessionTools {
+            cwd,
             mcp_url,
             tools: tools.to_vec(),
         };
@@ -302,7 +303,12 @@ impl Runtime {
                     Ok((session, _)) => {
                         self.tools.insert(session.clone(), tools);
                     }
-                    Err(_) => self.tool_sets.remove(&tools.mcp_url),
+                    Err(_) => {
+                        self.tool_sets.remove(&tools.mcp_url);
+                        if value.get("error").is_some() {
+                            let _ = std::fs::remove_dir(&tools.cwd);
+                        }
+                    }
                 }
                 return RuntimeEvent::Prepared { work, result };
             }
@@ -465,6 +471,7 @@ async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
     }
 }
 struct SessionTools {
+    cwd: PathBuf,
     mcp_url: String,
     tools: Vec<crate::conversation::ClientTool>,
 }
