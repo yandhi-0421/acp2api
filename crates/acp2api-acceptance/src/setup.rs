@@ -289,8 +289,11 @@ fn scenario_roots() -> PathBuf {
         .join("scenario-roots")
 }
 fn cleanup_stale_runs(root: &Path) {
+    // On Windows, a second remover gets Access is denied for delete-pending entries.
     static CLEANUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _cleanup = CLEANUP.lock().unwrap();
+    let _cleanup = CLEANUP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !fs::symlink_metadata(root).is_ok_and(|meta| meta.is_dir() && !meta.is_symlink()) {
         return;
     }
@@ -652,7 +655,7 @@ mod cleanup_tests {
                 })
             })
             .collect();
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let cleanup_deadline = Instant::now() + Duration::from_secs(30);
         for _ in 0..ROUNDS {
             fs::create_dir(&stale).unwrap();
             for part in 0..32 {
@@ -664,10 +667,13 @@ mod cleanup_tests {
                 }
             }
             fs::write(stale.join(".acp2api-run"), "acp2api-scenario-run-v1\n").unwrap();
-            assert!(Instant::now() < deadline, "concurrent cleanup cap: 30 s");
+            assert!(
+                Instant::now() < cleanup_deadline,
+                "concurrent cleanup cap: 30 s"
+            );
             barrier.wait();
             for _ in 0..CLEANERS {
-                recv.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                recv.recv_timeout(cleanup_deadline.saturating_duration_since(Instant::now()))
                     .expect("concurrent cleanup cap: 30 s")
                     .unwrap();
             }
