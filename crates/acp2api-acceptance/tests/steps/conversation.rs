@@ -4,6 +4,8 @@ use cucumber::{given, then, when};
 use serde_json::{Value, json};
 #[derive(Default)]
 pub struct ConversationState {
+    record_folder: Option<std::path::PathBuf>,
+    session_files: Vec<std::path::PathBuf>,
     system: Option<String>,
     initial: Vec<Value>,
     initial_headers: Vec<(String, String)>,
@@ -368,5 +370,112 @@ fn log_kind(w: &mut World, kind: String) {
         c::kind(&w.scenario),
         kind,
         "FR-056 actual last request session use"
+    );
+}
+
+#[given(expr = "the official runtime kept a session file for the ACP session {string}")]
+fn persisted_session(w: &mut World, label: String) {
+    assert_eq!(label, "S1");
+    let session = w.conversation.session.as_ref().unwrap();
+    let requests = system_check::requests(&w.scenario);
+    let created = requests
+        .iter()
+        .rfind(|v| v["method"] == "session/new")
+        .unwrap();
+    let folder = std::path::PathBuf::from(created["params"]["cwd"].as_str().unwrap());
+    assert!(
+        folder.is_dir(),
+        "the actual ACP session folder exists before expiry"
+    );
+    w.conversation.record_folder = Some(folder);
+    let home = w.scenario.root.path.join("data/runtime-home");
+    // Captured layout: docs/research/captures/2026-10-15-probe-p/session-files/summary.json.
+    let files = home.join("antigravity-acp/conversations");
+    std::fs::create_dir_all(&files).unwrap();
+    w.conversation.session_files = ["db", "db-wal", "db-shm", "meta"]
+        .map(|suffix| {
+            let file = files.join(format!("{session}.{suffix}"));
+            std::fs::write(&file, b"synthetic ACP session file").unwrap();
+            assert!(file.is_file(), "the session file exists before expiry");
+            file
+        })
+        .into();
+    for name in ["settings.json", "acp_token.json"] {
+        std::fs::write(home.join(name), b"synthetic sign-in marker").unwrap();
+    }
+}
+
+#[when(expr = "{int} hours pass since the last request of the ACP session {string}")]
+async fn idle_hours(w: &mut World, hours: u64, label: String) {
+    assert_eq!(label, "S1");
+    let session = w.conversation.session.as_ref().unwrap();
+    let last = w
+        .scenario
+        .hub
+        .entries()
+        .into_iter()
+        .rfind(|entry| {
+            entry.event["kind"] == "got"
+                && entry.event["line"].as_str().is_some_and(|line| {
+                    let frame: Value = serde_json::from_str(line).unwrap();
+                    frame["method"] == "session/prompt" && frame["params"]["sessionId"] == *session
+                })
+        })
+        .unwrap()
+        .at;
+    w.scenario
+        .time
+        .advance_to(last + hours * 60 * 60 * 1000)
+        .await;
+}
+
+#[when("the API client sends this conversation:")]
+async fn explicit_history(w: &mut World, #[step] step: &cucumber::gherkin::Step) {
+    send(
+        w,
+        serde_json::from_str(step.docstring.as_ref().unwrap()).unwrap(),
+    )
+    .await;
+}
+
+#[then(expr = "the ACP session {string} has no session folder")]
+fn expired_folder(w: &mut World, label: String) {
+    assert_eq!(label, "S1");
+    assert!(
+        !w.conversation.record_folder.as_ref().unwrap().exists(),
+        "ADR-0003: a record idle for 24 hours releases its ACP session folder"
+    );
+}
+
+#[when("the owner restarts acp2api after the idle interval")]
+async fn restart_after_expiry(w: &mut World) {
+    w.scenario.restart().await;
+}
+
+#[then(
+    expr = "the session file of the ACP session {string} is gone and the sign-in files are unchanged"
+)]
+fn expired_file(w: &mut World, label: String) {
+    assert_eq!(label, "S1");
+    let home = w.scenario.root.path.join("data/runtime-home");
+    let sign_in =
+        ["settings.json", "acp_token.json"].map(|name| std::fs::read(home.join(name)).unwrap());
+    assert_eq!(
+        (
+            w.conversation
+                .session_files
+                .iter()
+                .map(|file| file.exists())
+                .collect::<Vec<_>>(),
+            sign_in
+        ),
+        (
+            vec![false; 4],
+            [
+                b"synthetic sign-in marker".to_vec(),
+                b"synthetic sign-in marker".to_vec()
+            ]
+        ),
+        "ADR-0005: the next start deletes the expired session file and preserves sign-in files"
     );
 }

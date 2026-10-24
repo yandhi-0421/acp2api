@@ -268,3 +268,123 @@ async fn a_permission_request_is_a_permission_event_and_not_refused() {
     })
     .await;
 }
+
+#[allow(
+    clippy::disallowed_methods,
+    reason = "The test calls only its loopback MCP listener with a real-time cap."
+)]
+async fn listed_tools(address: std::net::SocketAddr, url: &str) -> (u16, Value) {
+    tokio::time::timeout(DEADLINE, async {
+        let secret = url.rsplit('/').next().unwrap();
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        socket.write_all(format!(
+            "POST /mcp/{secret} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+        ).as_bytes()).await.unwrap();
+        let mut bytes = Vec::new();
+        socket.take(8193).read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.len() <= 8192, "MCP answer cap: 8 KiB");
+        let split = bytes.windows(4).position(|b| b == b"\r\n\r\n").unwrap();
+        let status = std::str::from_utf8(&bytes[..split]).unwrap()
+            .split_whitespace().nth(1).unwrap().parse().unwrap();
+        (status, serde_json::from_slice(&bytes[split + 4..]).unwrap())
+    }).await.expect("MCP request cap: 10 s")
+}
+
+#[tokio::test]
+async fn a_dropped_session_releases_its_mcp_tool_set_safety_tracker_and_folder() {
+    capped(async {
+        use agent_client_protocol_schema::v1::ToolCallStatus;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        let old_folder = std::fs::read_dir(&runtime.cwd)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        agent
+            .stdout(result(
+                3,
+                json!({"sessionId":"s2","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}),
+            ))
+            .await;
+        let tool = crate::conversation::ClientTool {
+            name: "lookup".into(),
+            kind: crate::conversation::ToolKind::Function,
+            namespace: None,
+            description: "A retained client tool".into(),
+            schema: json!({"type":"object"}),
+        };
+        runtime.new_session(&[tool], None).await.unwrap();
+        let created = agent.stdin().await;
+        assert_eq!(created["method"], "session/new");
+        let live_folder = PathBuf::from(created["params"]["cwd"].as_str().unwrap());
+        let urls = ["s1", "s2"].map(|session| runtime.tools[session].mcp_url.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let router = runtime.tool_sets.clone().router().layer(
+            axum::middleware::from_fn(move |request, next: axum::middleware::Next| {
+                let requests = requests.clone();
+                async move {
+                    assert!(
+                        requests.fetch_add(1, Ordering::SeqCst) < 4,
+                        "MCP endpoint cap: 4 requests"
+                    );
+                    next.run(request).await
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                RUN_CAP,
+                axum::serve(listener, router).into_future(),
+            ).await;
+        });
+        assert_eq!(listed_tools(address, &urls[0]).await.0, 200);
+        let live_tools = listed_tools(address, &urls[1]).await;
+        assert_eq!(live_tools.0, 200);
+        assert_eq!(live_tools.1["result"]["tools"][0]["name"], "lookup");
+        assert!(old_folder.is_dir() && live_folder.is_dir());
+        runtime.tool_calls.permission("s1", "permission");
+        runtime.tool_calls.update("s1", "pending", Some("view_file"), None, None);
+        assert_eq!(
+            runtime.tool_calls.update(
+                "s1", "reported", Some("view_file"), None, Some(ToolCallStatus::Completed),
+            ),
+            Some("view_file".into()),
+        );
+        runtime.tool_calls.permission("s2", "permission");
+
+        runtime.forget("s1");
+
+        let dropped_tools = listed_tools(address, &urls[0]).await;
+        let retained_tools = listed_tools(address, &urls[1]).await;
+        let observations = ["permission", "pending", "reported"].map(|id| {
+            runtime.tool_calls.update("s1", id, None, None, Some(ToolCallStatus::Completed))
+        });
+        let retained_permission = runtime.tool_calls.update(
+            "s2", "permission", None, None, Some(ToolCallStatus::Completed),
+        );
+        let folders = (old_folder.exists(), live_folder.is_dir());
+        let sessions = (runtime.tools.contains_key("s1"), runtime.tools.contains_key("s2"));
+        server.abort();
+        runtime.stop().await;
+        assert_eq!(
+            (dropped_tools.0, retained_tools, sessions),
+            (404, live_tools, (false, true)),
+            "only the dropped ACP session loses its MCP tool set and runtime resources"
+        );
+        assert_eq!(
+            (observations, retained_permission, folders),
+            (
+                [Some("unknown".into()), Some("unknown".into()), Some("unknown".into())],
+                None,
+                (false, true),
+            ),
+            "issue #93: a dropped ACP session loses every safety tracker entry and its folder; a retained ACP session keeps both"
+        );
+    })
+    .await;
+}
