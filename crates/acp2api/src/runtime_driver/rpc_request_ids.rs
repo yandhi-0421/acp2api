@@ -242,6 +242,56 @@ async fn permission_id_can_equal_a_pending_session_creation_id() {
         .expect("RPC routing probe cap: 10 seconds");
 }
 
+#[tokio::test]
+async fn a_rejected_session_removes_only_its_empty_folder() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let root = Root::new();
+        let (mut runtime, mut agent) = start(&root).await;
+        let accepted_folder = std::fs::read_dir(root.0.join("cwd"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        for nonempty in [true, false] {
+            runtime
+                .request_session("rejected".into(), &[], None)
+                .await
+                .unwrap();
+            let request = agent.receive("session/new").await;
+            let folder = PathBuf::from(request["params"]["cwd"].as_str().unwrap());
+            assert!(folder.is_dir());
+            if nonempty {
+                std::fs::write(folder.join("marker"), b"synthetic runtime output").unwrap();
+            }
+            agent
+                .send(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32000,"message":"session creation refused"}}))
+                .await;
+            let (event, _hold) = runtime.next().await;
+            let RuntimeEvent::Prepared {
+                work,
+                result: Err(error),
+            } = event
+            else {
+                panic!("session/new rejection must fail its pending work");
+            };
+            assert_eq!(
+                (work.as_str(), error.as_str(), folder.is_dir(), accepted_folder.is_dir()),
+                (
+                    "rejected",
+                    r#"{"code":-32000,"message":"session creation refused"}"#,
+                    nonempty,
+                    true,
+                ),
+                "a rejection removes only its empty folder and preserves the original error"
+            );
+        }
+        runtime.stop().await;
+    })
+    .await
+    .expect("rejected session folder test cap: 10 seconds");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn startup_keeps_the_session_root_private_and_removes_old_entries() {
