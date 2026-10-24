@@ -609,4 +609,74 @@ mod cleanup_tests {
         next.cleanup();
         active.cleanup();
     }
+
+    #[test]
+    fn concurrent_cleanup_removes_stale_owned_runs_without_panicking() {
+        use std::sync::{Arc, Barrier, mpsc};
+
+        const CLEANERS: usize = 8;
+        const ROUNDS: usize = 8;
+        let active = TestRoot::new();
+        let runs = active.path.join("concurrent-runs");
+        fs::create_dir(&runs).unwrap();
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "exit", "0"]);
+            command
+        } else {
+            std::process::Command::new("/usr/bin/true")
+        };
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while child.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "cleanup fixture process cap: 3 s"
+            );
+            std::thread::yield_now();
+        }
+        let stale = runs.join(child.id().to_string());
+        let barrier = Arc::new(Barrier::new(CLEANERS + 1));
+        let (send, recv) = mpsc::channel();
+        let cleaners: Vec<_> = (0..CLEANERS)
+            .map(|_| {
+                let (runs, barrier, send) = (runs.clone(), barrier.clone(), send.clone());
+                std::thread::spawn(move || {
+                    for _ in 0..ROUNDS {
+                        barrier.wait();
+                        send.send(std::panic::catch_unwind(|| cleanup_stale_runs(&runs)))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        for _ in 0..ROUNDS {
+            fs::create_dir(&stale).unwrap();
+            for part in 0..32 {
+                // Bulk entries sort before the marker to widen the ownership-check race.
+                let folder = stale.join(format!("!part-{part:02}"));
+                fs::create_dir(&folder).unwrap();
+                for file in 0..4 {
+                    fs::write(folder.join(file.to_string()), b"stale").unwrap();
+                }
+            }
+            fs::write(stale.join(".acp2api-run"), "acp2api-scenario-run-v1\n").unwrap();
+            assert!(Instant::now() < deadline, "concurrent cleanup cap: 30 s");
+            barrier.wait();
+            for _ in 0..CLEANERS {
+                recv.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .expect("concurrent cleanup cap: 30 s")
+                    .unwrap();
+            }
+            assert!(
+                !stale.exists(),
+                "all cleaners must finish the stale removal"
+            );
+        }
+        for cleaner in cleaners {
+            cleaner.join().unwrap();
+        }
+        active.cleanup();
+    }
 }
