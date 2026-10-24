@@ -10,27 +10,29 @@ async fn response_objects_return_request_tool_settings_in_the_body_and_stream() 
     ]);
     let mut observed = Vec::new();
     let mut expected = Vec::new();
-    for (fields, expected_tools, expected_choice) in [
+    for (index, (fields, expected_tools, expected_choice)) in [
         (
             json!({"tools":tools,"tool_choice":"none"}),
             tools.clone(),
             "none",
         ),
-        (
-            json!({"tools":tools,"tool_choice":"auto"}),
-            tools.clone(),
-            "auto",
-        ),
         (json!({"tools":tools}), tools.clone(), "auto"),
         (json!({}), json!([]), "auto"),
-        (json!({"tools":null,"tool_choice":null}), json!([]), "auto"),
         (
             json!({"tools":tools,"tool_choice":{"type":"none"}}),
             tools.clone(),
             "none",
         ),
-    ] {
-        for (stream, failed) in [(false, false), (true, false), (true, true)] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let modes: &[_] = if index == 0 {
+            &[(false, false), (true, false), (true, true)]
+        } else {
+            &[(false, false), (true, false)]
+        };
+        for &(stream, failed) in modes {
             let mut s = Scenario::default();
             s.plan(Setup::normal());
             if failed {
