@@ -241,3 +241,35 @@ async fn permission_id_can_equal_a_pending_session_creation_id() {
         .await
         .expect("RPC routing probe cap: 10 seconds");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn startup_keeps_the_session_root_private_and_removes_old_entries() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let root = Root::new();
+        std::fs::create_dir(&root.0).unwrap();
+        let cwd = root.0.join("cwd");
+        std::fs::DirBuilder::new().mode(0o700).create(&cwd).unwrap();
+        let old_session = cwd.join("old-session");
+        std::fs::create_dir(&old_session).unwrap();
+        std::fs::write(old_session.join("marker"), b"synthetic session cwd").unwrap();
+        let old_file = cwd.join("old-file");
+        std::fs::write(&old_file, b"synthetic root entry").unwrap();
+
+        let (runtime, _agent) = start(&root).await;
+        let observed = (
+            std::fs::metadata(&cwd).unwrap().permissions().mode() & 0o777,
+            old_session.exists(),
+            old_file.exists(),
+        );
+        runtime.stop().await;
+        assert_eq!(
+            observed,
+            (0o700, false, false),
+            "startup preserves the private session root and removes its old entries"
+        );
+    })
+    .await
+    .expect("startup cleanup test cap: 10 seconds");
+}

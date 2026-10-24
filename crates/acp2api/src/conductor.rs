@@ -713,12 +713,8 @@ impl Conductor {
                     }
                 }
                 Command::Forget(session) => {
-                    if let Some(runtime) = runtime.as_mut()
-                        && let Err(error) = runtime.forget(&session)
-                    {
-                        commands.extend(
-                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
-                        );
+                    if let Some(runtime) = runtime.as_mut() {
+                        runtime.forget(&session);
                     }
                 }
                 Command::Emit(output, event) => {

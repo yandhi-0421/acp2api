@@ -292,7 +292,7 @@ async fn listed_tools(address: std::net::SocketAddr, url: &str) -> (u16, Value) 
 }
 
 #[tokio::test]
-async fn a_dropped_session_releases_its_mcp_tool_set_safety_tracker_and_folder() {
+async fn a_dropped_session_releases_its_mcp_tool_set_and_safety_tracker_but_keeps_its_folder() {
     capped(async {
         use agent_client_protocol_schema::v1::ToolCallStatus;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -357,7 +357,7 @@ async fn a_dropped_session_releases_its_mcp_tool_set_safety_tracker_and_folder()
         );
         runtime.tool_calls.permission("s2", "permission");
 
-        runtime.forget("s1").unwrap();
+        runtime.forget("s1");
 
         let dropped_tools = listed_tools(address, &urls[0]).await;
         let retained_tools = listed_tools(address, &urls[1]).await;
@@ -381,9 +381,9 @@ async fn a_dropped_session_releases_its_mcp_tool_set_safety_tracker_and_folder()
             (
                 [Some("unknown".into()), Some("unknown".into()), Some("unknown".into())],
                 None,
-                (false, true),
+                (true, true),
             ),
-            "issue #93: a dropped ACP session loses every safety tracker entry and its folder; a retained ACP session keeps both"
+            "issue #93: a dropped ACP session loses every safety tracker entry; both ACP session folders stay while the runtime process runs"
         );
     })
     .await;

@@ -45,6 +45,20 @@ impl Runtime {
         {
             return Err(error.to_string());
         }
+        match std::fs::read_dir(&cwd) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                        std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
+                    } else {
+                        std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
         let program = program(data);
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
@@ -156,7 +170,6 @@ impl Runtime {
         let tools = SessionTools {
             mcp_url,
             tools: tools.to_vec(),
-            cwd,
         };
         Ok((params, tools))
     }
@@ -171,13 +184,11 @@ impl Runtime {
         self.creating.insert(id, (work, tools));
         Ok(())
     }
-    pub(crate) fn forget(&mut self, session: &str) -> Result<(), String> {
+    pub(crate) fn forget(&mut self, session: &str) {
         self.tool_calls.clear(session);
         if let Some(tools) = self.tools.remove(session) {
             self.tool_sets.remove(&tools.mcp_url);
-            std::fs::remove_dir_all(tools.cwd).map_err(|error| error.to_string())?;
         }
-        Ok(())
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
@@ -456,7 +467,6 @@ async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
 struct SessionTools {
     mcp_url: String,
     tools: Vec<crate::conversation::ClientTool>,
-    cwd: PathBuf,
 }
 enum Line {
     Stdout(Result<Value, String>),
