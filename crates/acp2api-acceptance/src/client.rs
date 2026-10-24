@@ -145,11 +145,12 @@ impl Call {
                     .expect("API request");
             }
             assert!(Instant::now() < real, "API request cap: 30 s");
-            if let Some(next) = time.next_deadline() {
-                assert!(
-                    next - start <= 3 * 60 * 60 * 1000,
-                    "API finish virtual cap: 3 hours"
-                );
+            // A deadline more than 3 virtual hours away, such as a 24-hour record expiry,
+            // does not end this request; wait for its I/O instead.
+            if let Some(next) = time
+                .next_deadline()
+                .filter(|next| *next - start <= 3 * 60 * 60 * 1000)
+            {
                 time.advance_to(next).await;
             } else {
                 let hub = self.hub.clone();
