@@ -289,6 +289,8 @@ fn scenario_roots() -> PathBuf {
         .join("scenario-roots")
 }
 fn cleanup_stale_runs(root: &Path) {
+    static CLEANUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _cleanup = CLEANUP.lock().unwrap();
     if !fs::symlink_metadata(root).is_ok_and(|meta| meta.is_dir() && !meta.is_symlink()) {
         return;
     }
