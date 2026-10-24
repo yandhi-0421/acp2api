@@ -325,14 +325,116 @@ fn cleanup_stale_runs(root: &Path) {
                         wait_for_fake_processes(&entry.path())?;
                     }
                 }
-                fs::remove_dir_all(path)
+                fs::remove_dir_all(&path)
             })();
             #[cfg(not(windows))]
             let removed = fs::remove_dir_all(path);
             match removed {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => panic!("stale test run cleanup failed: {error}"),
+                Err(error) => {
+                    #[cfg(windows)]
+                    {
+                        use std::{
+                            io::Write,
+                            process::Command,
+                            time::{Duration, Instant},
+                        };
+
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "TEMP diagnostic: stale run {}: {error}",
+                            path.display()
+                        );
+                        let script = r#"
+$ErrorActionPreference = 'Stop'
+function Emit($value) {
+    if ($script:lines -ge 200) { return }
+    $text = ConvertTo-Json -InputObject $value -Compress -Depth 4
+    $size = [Text.Encoding]::UTF8.GetByteCount($text)
+    if ($script:lines -eq 199 -or $script:bytes + $size -gt 1048576) {
+        $text = 'TEMP diagnostic: section truncated (200 lines / 1 MiB)'
+        $script:lines = 200
+    } else {
+        $script:lines++
+        $script:bytes += $size
+    }
+    [Console]::Error.WriteLine($text)
+}
+$script:lines = 0; $script:bytes = 0
+[Console]::Error.WriteLine('TEMP diagnostic: remaining paths')
+$entries = @()
+try {
+    $entries = @(Get-ChildItem -LiteralPath $env:ACP2API_DIAGNOSTIC_RUN -Force -Recurse -ErrorAction SilentlyContinue -ErrorVariable walkErrors)
+    foreach ($entry in $entries) { Emit @{path = $entry.FullName; attributes = [string]$entry.Attributes} }
+    foreach ($failure in $walkErrors) { Emit @{walk_error = $failure.Exception.Message} }
+} catch { Emit @{walk_error = $_.Exception.Message} }
+$script:lines = 0; $script:bytes = 0
+[Console]::Error.WriteLine('TEMP diagnostic: remaining PID files')
+foreach ($entry in $entries | Where-Object { $_.Name -eq '.acp2api-pids' -and -not $_.PSIsContainer }) {
+    try { Emit @{pid_file = $entry.FullName; contents = (Get-Content -LiteralPath $entry.FullName -Raw)} }
+    catch { Emit @{pid_file = $entry.FullName; read_error = $_.Exception.Message} }
+}
+$script:lines = 0; $script:bytes = 0
+[Console]::Error.WriteLine('TEMP diagnostic: matching processes (excluding this diagnostic)')
+try {
+    $target = [IO.Path]::GetFullPath($env:ACP2API_DIAGNOSTIC_TARGET).TrimEnd('\') + '\'
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.ProcessId -ne $PID -and (
+            ([string]$_.ExecutablePath).StartsWith($target, [StringComparison]::OrdinalIgnoreCase) -or
+            ([string]$_.CommandLine).IndexOf('scenario-roots', [StringComparison]::OrdinalIgnoreCase) -ge 0)
+    } | Select-Object ProcessId, ParentProcessId, CreationDate, ExecutablePath, CommandLine | ForEach-Object { Emit $_ }
+} catch { Emit @{process_error = $_.Exception.Message} }
+"#;
+                        match Command::new("powershell.exe")
+                            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+                            .env("ACP2API_DIAGNOSTIC_RUN", &path)
+                            .env("ACP2API_DIAGNOSTIC_TARGET", root.parent().unwrap())
+                            .stdin(std::process::Stdio::null())
+                            .spawn()
+                        {
+                            Err(failure) => {
+                                let _ = writeln!(
+                                    std::io::stderr(),
+                                    "TEMP diagnostic: PowerShell launch failed: {failure}"
+                                );
+                            }
+                            Ok(mut child) => {
+                                let deadline = Instant::now() + Duration::from_secs(10);
+                                loop {
+                                    match child.try_wait() {
+                                        Ok(Some(status)) => {
+                                            let _ = writeln!(
+                                                std::io::stderr(),
+                                                "TEMP diagnostic: PowerShell {status}"
+                                            );
+                                            break;
+                                        }
+                                        Err(failure) => {
+                                            let _ = writeln!(
+                                                std::io::stderr(),
+                                                "TEMP diagnostic: PowerShell wait failed: {failure}; kill: {:?}",
+                                                child.kill()
+                                            );
+                                            break;
+                                        }
+                                        Ok(None) => {}
+                                    }
+                                    if Instant::now() >= deadline {
+                                        let _ = writeln!(
+                                            std::io::stderr(),
+                                            "TEMP diagnostic: PowerShell cap: 10 s; kill: {:?}",
+                                            child.kill()
+                                        );
+                                        break;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(25));
+                                }
+                            }
+                        }
+                    }
+                    panic!("stale test run cleanup failed: {error}");
+                }
             }
         }
     }
