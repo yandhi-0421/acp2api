@@ -71,7 +71,7 @@ struct Active {
     output: Output,
     request: crate::journal::Request,
     session: Option<String>,
-    hashes: Vec<crate::conversation::ItemHash>,
+    hashes: crate::conversation::RecordHashes,
     tools_hash: crate::conversation::ToolSetHash,
     kind: crate::journal::SessionUse,
     used: u64,
@@ -486,6 +486,7 @@ impl Core {
             if end.is_ok() && !active.disconnected && ends_turn {
                 active
                     .hashes
+                    .messages
                     .push(crate::conversation::reply_hash(&active.text));
                 self.records.push(records::Record {
                     session: session.clone(),

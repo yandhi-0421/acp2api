@@ -151,6 +151,10 @@ pub(crate) fn prompt(kind: crate::journal::SessionUse, items: &[&Item]) -> Vec<P
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItemHash([u8; 32]);
+pub(crate) struct RecordHashes {
+    pub system: ItemHash,
+    pub messages: Vec<ItemHash>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ToolSetHash([u8; 32]);
 struct ItemHasher(sha2::Sha256);
@@ -218,16 +222,17 @@ fn item_hash(item: &Item) -> ItemHash {
     }
     ItemHash(hash.finish())
 }
-pub(crate) fn record_hashes(conversation: &Conversation) -> Vec<ItemHash> {
+pub(crate) fn record_hashes(conversation: &Conversation) -> RecordHashes {
     let mut system = ItemHasher::new("system");
     for part in &conversation.system {
         system.field(part.role.label());
         system.name(part.name.as_deref());
         system.text(&part.text);
     }
-    std::iter::once(ItemHash(system.finish()))
-        .chain(conversation.items().into_iter().map(item_hash))
-        .collect()
+    RecordHashes {
+        system: ItemHash(system.finish()),
+        messages: conversation.items().into_iter().map(item_hash).collect(),
+    }
 }
 pub(crate) fn reply_hash(text: &str) -> ItemHash {
     item_hash(&Item::Message {

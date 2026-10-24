@@ -1,13 +1,13 @@
-use crate::conversation::{self, Item, ItemHash, ToolSetHash};
+use crate::conversation::{self, Item, RecordHashes, ToolSetHash};
 pub(super) struct Record {
     pub session: String,
-    pub hashes: Vec<ItemHash>,
+    pub hashes: RecordHashes,
     pub tools: ToolSetHash,
     pub used: u64,
 }
 pub(super) fn select<'a>(
     records: &[Record],
-    hashes: &[ItemHash],
+    hashes: &RecordHashes,
     tools: ToolSetHash,
     items: &'a [&'a Item],
 ) -> Option<(usize, &'a [&'a Item])> {
@@ -16,11 +16,12 @@ pub(super) fn select<'a>(
         .enumerate()
         .filter(|(_, record)| {
             record.tools == tools
-                && hashes.starts_with(&record.hashes)
-                && conversation::user_suffix(&items[record.hashes.len() - 1..])
+                && hashes.system == record.hashes.system
+                && hashes.messages.starts_with(&record.hashes.messages)
+                && conversation::user_suffix(&items[record.hashes.messages.len()..])
         })
-        .max_by_key(|(_, record)| (record.hashes.len(), record.used))
-        .map(|(index, record)| (index, &items[record.hashes.len() - 1..]))
+        .max_by_key(|(_, record)| (record.hashes.messages.len(), record.used))
+        .map(|(index, record)| (index, &items[record.hashes.messages.len()..]))
 }
 
 #[cfg(test)]
@@ -46,13 +47,19 @@ mod tests {
         let records = vec![
             Record {
                 session: "short-recent".into(),
-                hashes: hashes[..2].into(),
+                hashes: RecordHashes {
+                    system: hashes.system,
+                    messages: hashes.messages[..1].into(),
+                },
                 tools,
                 used: 99,
             },
             Record {
                 session: "long-older".into(),
-                hashes: hashes[..3].into(),
+                hashes: RecordHashes {
+                    system: hashes.system,
+                    messages: hashes.messages[..2].into(),
+                },
                 tools,
                 used: 1,
             },
