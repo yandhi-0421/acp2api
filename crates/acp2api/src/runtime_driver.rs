@@ -39,6 +39,26 @@ impl Runtime {
         cwd: PathBuf,
         tool_sets: mcp::ToolSets,
     ) -> Result<(Self, crate::catalog::Catalog), String> {
+        if let Err(error) =
+            std::fs::remove_dir_all(data.join("runtime-home/antigravity-acp/conversations"))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error.to_string());
+        }
+        match std::fs::read_dir(&cwd) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                        std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
+                    } else {
+                        std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
         let program = program(data);
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
@@ -165,6 +185,7 @@ impl Runtime {
         Ok(())
     }
     pub(crate) fn forget(&mut self, session: &str) {
+        self.tool_calls.clear(session);
         if let Some(tools) = self.tools.remove(session) {
             self.tool_sets.remove(&tools.mcp_url);
         }
@@ -238,7 +259,7 @@ impl Runtime {
         prompt: Vec<crate::conversation::PromptBlock>,
         session: &str,
     ) -> Result<(), String> {
-        self.tool_calls.begin_prompt(session);
+        self.tool_calls.clear(session);
         let blocks: Vec<ContentBlock> = prompt
             .into_iter()
             .map(|block| match block {

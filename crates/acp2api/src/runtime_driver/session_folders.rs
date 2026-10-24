@@ -13,11 +13,7 @@ pub(crate) fn root(environment: &Environment) -> Result<PathBuf, String> {
     shared_folder(&container)?;
     let account = container.join(account);
     shared_folder(&account)?;
-    let run = account.join(crate::random_hex::<16>().map_err(|error| error.to_string())?);
-    new_folder(&run).map_err(|error| error.to_string())?;
-    let sessions = run.join("sessions");
-    new_folder(&sessions).map_err(|error| error.to_string())?;
-    Ok(sessions)
+    Ok(account)
 }
 fn shared_folder(path: &Path) -> Result<(), String> {
     match new_folder(path) {

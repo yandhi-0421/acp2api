@@ -4,6 +4,7 @@ pub(super) struct Record {
     pub hashes: RecordHashes,
     pub tools: ToolSetHash,
     pub used: u64,
+    pub expires: crate::Moment,
 }
 pub(super) fn select<'a>(
     records: &[Record],
@@ -53,6 +54,7 @@ mod tests {
                 },
                 tools,
                 used: 99,
+                expires: 0,
             },
             Record {
                 session: "long-older".into(),
@@ -62,6 +64,7 @@ mod tests {
                 },
                 tools,
                 used: 1,
+                expires: 0,
             },
         ];
         let items = conversation.items();

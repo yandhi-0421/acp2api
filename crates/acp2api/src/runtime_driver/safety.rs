@@ -24,7 +24,7 @@ enum Observation {
     Reported,
 }
 impl ToolCalls {
-    pub(super) fn begin_prompt(&mut self, session: &str) {
+    pub(super) fn clear(&mut self, session: &str) {
         self.0.retain(|(owner, _), _| owner != session);
     }
     pub(super) fn permission(&mut self, session: &str, id: &str) {

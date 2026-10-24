@@ -75,6 +75,7 @@ struct Active {
     tools_hash: crate::conversation::ToolSetHash,
     kind: crate::journal::SessionUse,
     used: u64,
+    expires: Moment,
     disconnected: bool,
     held: Option<String>,
     text: String,
@@ -129,6 +130,7 @@ impl Core {
                 Phase::Settling { at, .. } => Some(at),
                 _ => None,
             })
+            .chain(self.records.iter().map(|record| record.expires))
             .min()
     }
     fn check_model(&self, model: &str) -> Result<(), crate::messages::Refusal> {
@@ -310,6 +312,14 @@ impl Core {
                 }
             }
         }
+        self.records.retain(|record| {
+            if record.expires <= now {
+                commands.push(Command::Forget(record.session.clone()));
+                false
+            } else {
+                true
+            }
+        });
         while self.active.len() < usize::from(self.limit) {
             let Some(request) = self.waiting.pop_front() else {
                 break;
@@ -371,6 +381,7 @@ impl Core {
                 tools_hash,
                 kind,
                 used: self.use_sequence,
+                expires: now.saturating_add(24 * 60 * 60 * 1000),
                 disconnected: false,
                 held: None,
                 text: String::new(),
@@ -495,6 +506,7 @@ impl Core {
                     hashes: active.hashes,
                     tools: active.tools_hash,
                     used: active.used,
+                    expires: active.expires,
                 });
             } else {
                 commands.push(Command::Forget(session.clone()));
@@ -902,6 +914,42 @@ mod tests {
             forgotten,
             ["s1", "s2"],
             "a failed session and a session with no record; records stay above the limit"
+        );
+    }
+    #[test]
+    fn an_idle_session_is_forgotten_by_its_24_hour_wake_up() {
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            records: vec![records::Record {
+                session: "idle".into(),
+                hashes: crate::conversation::record_hashes(&turn.conversation),
+                tools: crate::conversation::tool_set_hash(&[]),
+                used: 1,
+                expires: 24 * 60 * 60 * 1000,
+            }],
+            startup_session: None,
+            use_sequence: 1,
+            limit: 1,
+            notices: watch::channel(Arc::new(Vec::new())).0,
+        };
+        let mut forgotten = Vec::new();
+        if let Some(at) = core.next_deadline()
+            && at <= 24 * 60 * 60 * 1000
+        {
+            for command in core.handle(Event::Deadline, at) {
+                if let Command::Forget(session) = command {
+                    forgotten.push((at, session));
+                }
+            }
+        }
+        assert_eq!(
+            forgotten,
+            [(86_400_000, "idle".to_owned())],
+            "an idle session is forgotten at 24 hours with only its scheduled wake-up"
         );
     }
     #[test]
