@@ -75,6 +75,7 @@ struct Active {
     tools_hash: crate::conversation::ToolSetHash,
     kind: crate::journal::SessionUse,
     used: u64,
+    expires: Moment,
     disconnected: bool,
     held: Option<String>,
     text: String,
@@ -129,6 +130,7 @@ impl Core {
                 Phase::Settling { at, .. } => Some(at),
                 _ => None,
             })
+            .chain(self.records.iter().map(|record| record.expires))
             .min()
     }
     fn check_model(&self, model: &str) -> Result<(), crate::messages::Refusal> {
@@ -310,6 +312,14 @@ impl Core {
                 }
             }
         }
+        self.records.retain(|record| {
+            if record.expires <= now {
+                commands.push(Command::Forget(record.session.clone()));
+                false
+            } else {
+                true
+            }
+        });
         while self.active.len() < usize::from(self.limit) {
             let Some(request) = self.waiting.pop_front() else {
                 break;
@@ -371,6 +381,7 @@ impl Core {
                 tools_hash,
                 kind,
                 used: self.use_sequence,
+                expires: now.saturating_add(24 * 60 * 60 * 1000),
                 disconnected: false,
                 held: None,
                 text: String::new(),
@@ -495,6 +506,7 @@ impl Core {
                     hashes: active.hashes,
                     tools: active.tools_hash,
                     used: active.used,
+                    expires: active.expires,
                 });
             } else {
                 commands.push(Command::Forget(session.clone()));
@@ -701,8 +713,12 @@ impl Conductor {
                     }
                 }
                 Command::Forget(session) => {
-                    if let Some(runtime) = runtime.as_mut() {
-                        runtime.forget(&session);
+                    if let Some(runtime) = runtime.as_mut()
+                        && let Err(error) = runtime.forget(&session)
+                    {
+                        commands.extend(
+                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
+                        );
                     }
                 }
                 Command::Emit(output, event) => {

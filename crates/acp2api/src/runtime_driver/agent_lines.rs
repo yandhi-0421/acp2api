@@ -357,7 +357,7 @@ async fn a_dropped_session_releases_its_mcp_tool_set_safety_tracker_and_folder()
         );
         runtime.tool_calls.permission("s2", "permission");
 
-        runtime.forget("s1");
+        runtime.forget("s1").unwrap();
 
         let dropped_tools = listed_tools(address, &urls[0]).await;
         let retained_tools = listed_tools(address, &urls[1]).await;

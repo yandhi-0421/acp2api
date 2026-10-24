@@ -39,6 +39,12 @@ impl Runtime {
         cwd: PathBuf,
         tool_sets: mcp::ToolSets,
     ) -> Result<(Self, crate::catalog::Catalog), String> {
+        if let Err(error) =
+            std::fs::remove_dir_all(data.join("runtime-home/antigravity-acp/conversations"))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error.to_string());
+        }
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
         let program = program(data);
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
@@ -150,6 +156,7 @@ impl Runtime {
         let tools = SessionTools {
             mcp_url,
             tools: tools.to_vec(),
+            cwd,
         };
         Ok((params, tools))
     }
@@ -164,10 +171,13 @@ impl Runtime {
         self.creating.insert(id, (work, tools));
         Ok(())
     }
-    pub(crate) fn forget(&mut self, session: &str) {
+    pub(crate) fn forget(&mut self, session: &str) -> Result<(), String> {
+        self.tool_calls.clear(session);
         if let Some(tools) = self.tools.remove(session) {
             self.tool_sets.remove(&tools.mcp_url);
+            std::fs::remove_dir_all(tools.cwd).map_err(|error| error.to_string())?;
         }
+        Ok(())
     }
     async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
         self.next_id += 1;
@@ -238,7 +248,7 @@ impl Runtime {
         prompt: Vec<crate::conversation::PromptBlock>,
         session: &str,
     ) -> Result<(), String> {
-        self.tool_calls.begin_prompt(session);
+        self.tool_calls.clear(session);
         let blocks: Vec<ContentBlock> = prompt
             .into_iter()
             .map(|block| match block {
@@ -446,6 +456,7 @@ async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
 struct SessionTools {
     mcp_url: String,
     tools: Vec<crate::conversation::ClientTool>,
+    cwd: PathBuf,
 }
 enum Line {
     Stdout(Result<Value, String>),
