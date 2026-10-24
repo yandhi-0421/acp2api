@@ -1,4 +1,5 @@
 use acp2api::{LaunchSpec, Launched, ProcessLauncher};
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{Scenario, Setup, adapters::GuardedLauncher};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -66,18 +67,24 @@ impl FakePipe {
     }
     pub async fn stdout(&mut self) -> Value {
         let mut line = String::new();
-        tokio::time::timeout(Duration::from_secs(3), self.out.read_line(&mut line))
-            .await
-            .unwrap()
-            .unwrap();
+        tokio::time::timeout(
+            real_limit(Duration::from_secs(3)),
+            self.out.read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         serde_json::from_str(&line).unwrap()
     }
     pub async fn stderr(&mut self) -> String {
         let mut line = String::new();
-        tokio::time::timeout(Duration::from_secs(3), self.err.read_line(&mut line))
-            .await
-            .unwrap()
-            .unwrap();
+        tokio::time::timeout(
+            real_limit(Duration::from_secs(3)),
+            self.err.read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         line.trim_end().into()
     }
     pub async fn finish(mut self) {
@@ -85,7 +92,7 @@ impl FakePipe {
         self.scenario
             .hub
             .command("normal", json!({"op":"Exit","code":0}));
-        tokio::time::timeout(Duration::from_secs(3), self.child.tree.exited())
+        tokio::time::timeout(real_limit(Duration::from_secs(3)), self.child.tree.exited())
             .await
             .unwrap();
         self.scenario.hub.close();

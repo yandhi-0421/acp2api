@@ -1,4 +1,5 @@
 //! Field-policy checks cross real HTTP and the guarded fake ACP process.
+use crate::real_limit;
 use crate::{
     Scenario, Setup,
     client::{Answer, ApiCall},
@@ -202,7 +203,7 @@ pub async fn raw(s: &mut Scenario, endpoint: &str, bytes: Vec<u8>) -> Answer {
             }
         }
     };
-    let request = tokio::time::timeout(Duration::from_secs(10), async {
+    let request = tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
         let socket = tokio::net::TcpStream::connect(&address).await.unwrap();
         let (mut sender, connection) = http1::handshake(TokioIo::new(socket)).await.unwrap();
         let connection = tokio::spawn(async move {

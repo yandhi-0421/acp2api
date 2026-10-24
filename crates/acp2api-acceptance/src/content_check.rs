@@ -1,4 +1,5 @@
 //! Content assertions use loopback HTTP and the fake process's captured ACP input.
+use crate::real_limit;
 use crate::{Scenario, client::ApiCall};
 use serde_json::{Value, json};
 pub const PNG: &str =
@@ -82,22 +83,29 @@ pub fn refusal(s: &Scenario, endpoint: &str, message: &str, code: &str, param: O
 /// A reachable, bounded local sink observes accidental URL fetches without contacting example.com.
 pub async fn no_fetch(s: &mut Scenario, endpoint: &str, file: bool) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    s.start().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = count.clone();
     let task = tokio::spawn(async move {
-        for _ in 0..4 {
-            let Ok(Ok((mut socket, _))) =
-                tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await
+        for attempt in 0..4 {
+            let limit = if attempt == 0 {
+                real_limit(std::time::Duration::from_secs(2))
+            } else {
+                std::time::Duration::from_secs(2)
+            };
+            let Ok(Ok((mut socket, _))) = tokio::time::timeout(limit, listener.accept()).await
             else {
                 break;
             };
             seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let mut bytes = [0; 1024];
-            let _ =
-                tokio::time::timeout(std::time::Duration::from_secs(1), socket.read(&mut bytes))
-                    .await;
+            let _ = tokio::time::timeout(
+                real_limit(std::time::Duration::from_secs(1)),
+                socket.read(&mut bytes),
+            )
+            .await;
             let _ = socket
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 .await;
@@ -109,10 +117,13 @@ pub async fn no_fetch(s: &mut Scenario, endpoint: &str, file: bool) {
         .await
         .unwrap();
     let mut reply = [0; 128];
-    let n = tokio::time::timeout(std::time::Duration::from_secs(1), control.read(&mut reply))
-        .await
-        .unwrap()
-        .unwrap();
+    let n = tokio::time::timeout(
+        real_limit(std::time::Duration::from_secs(1)),
+        control.read(&mut reply),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(
         reply[..n].starts_with(b"HTTP/1.1 200"),
         "sink reachability control"

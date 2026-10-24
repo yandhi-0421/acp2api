@@ -1,3 +1,4 @@
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{
     Scenario, Setup, TurnPlan, TurnStep, endpoint_check as wire, panel_check::Panel,
 };
@@ -6,7 +7,7 @@ use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn panel_limit_opens_a_third_place_without_restarting_and_routes_concurrent_replies() {
-    tokio::time::timeout(Duration::from_secs(45),async {
+    tokio::time::timeout(real_limit(Duration::from_secs(45)),async {
         let mut s=Scenario::default();s.plan(Setup::normal());s.start().await;
         let mut panel=Panel::default();panel.scenario(&mut s).await;panel.login_initial("owner").await;
         let mut calls=Vec::new();

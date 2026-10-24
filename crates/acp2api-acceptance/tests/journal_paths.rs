@@ -1,3 +1,4 @@
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{
     Scenario, Setup, TurnEndPlan, TurnPlan, TurnStep, client::ApiCall, journal_check as check,
 };
@@ -183,7 +184,7 @@ fn retention_uses_real_modification_order_and_leaves_unrelated_paths() {
     let mut first = None;
     let mut oldest = None;
     let mut written = 0;
-    let end = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    let end = std::time::Instant::now() + real_limit(std::time::Duration::from_secs(12));
     for n in 0..7 {
         assert!(
             std::time::Instant::now() < end,

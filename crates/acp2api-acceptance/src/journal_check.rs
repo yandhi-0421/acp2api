@@ -1,3 +1,4 @@
+use crate::real_limit;
 use crate::{Scenario, TurnPlan, endpoint_check};
 use acp2api::journal::{Api, RequestRecord, ResultKind, SessionUse, Writer};
 use serde_json::Value;
@@ -45,7 +46,7 @@ pub fn terminal(s: &Scenario) -> Vec<Value> {
         .collect()
 }
 pub async fn wait_terminal(s: &Scenario, count: usize) {
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now() + real_limit(Duration::from_secs(5));
     while terminal(s).len() < count && Instant::now() < end {
         let hub = s.hub.clone();
         tokio::task::spawn_blocking(move || hub.wait_change(end))
@@ -167,7 +168,7 @@ pub fn stress(folder: &Path, marker: &str) -> Retention {
         "stress marker cap"
     );
     fs::create_dir_all(folder).unwrap();
-    let end = Instant::now() + Duration::from_secs(12);
+    let end = Instant::now() + real_limit(Duration::from_secs(12));
     let mut writer = Writer::open(folder, wall(0)).unwrap();
     let mut written = 0;
     let mut first = None;

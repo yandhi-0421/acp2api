@@ -1,4 +1,5 @@
 use crate::hub::{Hub, HubLink, send};
+use crate::real_limit;
 use serde_json::json;
 use std::{
     sync::Arc,
@@ -69,7 +70,7 @@ impl TimeLine {
     }
 }
 fn settle_blocking(hub: &Hub) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + real_limit(Duration::from_secs(10));
     let link = HubLink::new(hub);
     let mut previous = None;
     loop {

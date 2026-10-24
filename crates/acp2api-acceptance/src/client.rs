@@ -1,3 +1,4 @@
+use crate::real_limit;
 use crate::{hub::Hub, timeline::TimeLine};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -135,7 +136,7 @@ impl Call {
     }
     pub async fn finish(mut self, time: &mut TimeLine) -> Answer {
         let start = time.hub.now();
-        let real = Instant::now() + Duration::from_secs(30);
+        let real = Instant::now() + real_limit(Duration::from_secs(30));
         loop {
             time.settle().await;
             if self.task.is_finished() {
@@ -200,11 +201,13 @@ impl ApiClient {
         let progress = Arc::new(Mutex::new(Vec::new()));
         let capture = progress.clone();
         let task = tokio::spawn(async move {
-            let result =
-                tokio::time::timeout(Duration::from_secs(30), client.exchange(call, capture))
-                    .await
-                    .map_err(|_| "API request cap: 30 s".to_owned())
-                    .and_then(|v| v);
+            let result = tokio::time::timeout(
+                real_limit(Duration::from_secs(30)),
+                client.exchange(call, capture),
+            )
+            .await
+            .map_err(|_| "API request cap: 30 s".to_owned())
+            .and_then(|v| v);
             client.hub.shared.1.notify_all();
             result
         });
@@ -583,7 +586,7 @@ mod tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap().to_string();
             let server = tokio::spawn(async move {
-                tokio::time::timeout(Duration::from_secs(30), async move {
+                tokio::time::timeout(real_limit(Duration::from_secs(30)), async move {
                     let (mut stream, _) = listener.accept().await.unwrap();
                     let mut request = [0; 4096];
                     let _ = stream.read(&mut request).await.unwrap();

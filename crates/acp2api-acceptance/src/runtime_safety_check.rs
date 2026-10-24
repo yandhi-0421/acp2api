@@ -1,3 +1,4 @@
+use crate::real_limit;
 use crate::{
     Scenario, Setup, TurnPlan, TurnStep,
     client::{Answer, ApiCall},
@@ -356,7 +357,7 @@ pub async fn two_conversations(s: &mut Scenario) {
     reply(&second.finish(&mut s.time).await, "safety-two");
 }
 pub async fn wait_prompts(s: &mut Scenario, count: usize) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + real_limit(Duration::from_secs(10));
     loop {
         s.time.settle().await;
         if s.fake().record().prompts().len() >= count {

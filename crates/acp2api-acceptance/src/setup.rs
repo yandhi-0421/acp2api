@@ -1,3 +1,5 @@
+#[cfg(any(test, windows))]
+use crate::real_limit;
 use crate::{
     adapters::{RunFile, RunFileReleaseFacts},
     hub::{Hub, HubLink},
@@ -400,7 +402,7 @@ fn wait_for_fake_processes(root: &Path) -> std::io::Result<()> {
         Err(error) => return Err(error),
     };
     // Windows locks a running process's current directory inside the test root.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + real_limit(Duration::from_secs(10));
     for line in text.lines() {
         let (pid, created) = line
             .split_once(' ')
@@ -464,7 +466,7 @@ mod cleanup_tests {
         };
         let mut child = command.spawn().unwrap();
         let pid = child.id();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(3));
         while child.try_wait().unwrap().is_none() {
             assert!(
                 Instant::now() < deadline,
@@ -530,7 +532,7 @@ mod cleanup_tests {
             std::process::Command::new("/usr/bin/true")
         };
         let mut child = command.spawn().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(3));
         while child.try_wait().unwrap().is_none() {
             assert!(
                 Instant::now() < deadline,
@@ -553,7 +555,7 @@ mod cleanup_tests {
                 })
             })
             .collect();
-        let cleanup_deadline = Instant::now() + Duration::from_secs(30);
+        let cleanup_deadline = Instant::now() + real_limit(Duration::from_secs(30));
         for _ in 0..ROUNDS {
             fs::create_dir(&stale).unwrap();
             for part in 0..32 {

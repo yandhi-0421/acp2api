@@ -1,3 +1,4 @@
+use crate::{TIME_FACTOR_ENV, real_limit, time_factor};
 use crate::{
     client::{Answer, ApiClient},
     fake::FakeRuntime,
@@ -88,6 +89,7 @@ impl Scenario {
     async fn spawn_host(&mut self, env: &[(&str, PathBuf)], address: String, key: String) {
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
+        command.env(TIME_FACTOR_ENV, time_factor().to_string());
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         let mut host = command
@@ -120,7 +122,7 @@ impl Scenario {
             });
         }
         self.host = Some(host);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(10));
         while !self.hub.ready() {
             if let Some(status) = self.host.as_mut().unwrap().try_wait().unwrap() {
                 panic!(
@@ -149,7 +151,7 @@ impl Scenario {
     pub async fn stop(&mut self) {
         if let Some(mut host) = self.host.take() {
             self.hub.stop();
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + real_limit(Duration::from_secs(10));
             loop {
                 if host.try_wait().unwrap().is_some() {
                     break;

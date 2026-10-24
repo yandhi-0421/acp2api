@@ -4,6 +4,7 @@ use crate::{
     hub::Hub,
     setup::{TestRoot, binary, random_hex},
 };
+use crate::{TIME_FACTOR_ENV, real_limit, time_factor};
 use std::{
     io::Read,
     path::PathBuf,
@@ -97,6 +98,7 @@ impl Startup {
         self.exited = None;
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
+        command.env(TIME_FACTOR_ENV, time_factor().to_string());
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         let mut child = command
@@ -130,7 +132,7 @@ impl Startup {
             }));
         }
         self.child = Some(child);
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(8));
         loop {
             if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
                 self.exited = Some(status.success());
@@ -161,7 +163,7 @@ impl Startup {
             if child.try_wait().unwrap().is_none() {
                 self.hub.as_ref().unwrap().stop();
             }
-            let deadline = Instant::now() + Duration::from_secs(8);
+            let deadline = Instant::now() + real_limit(Duration::from_secs(8));
             loop {
                 if child.try_wait().unwrap().is_some() {
                     break;
@@ -184,7 +186,7 @@ impl Startup {
         self.requests += 1;
         assert!(self.requests <= 32, "startup HTTP request cap: 32");
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let result = tokio::time::timeout(Duration::from_secs(2), async {
+        let result = tokio::time::timeout(real_limit(Duration::from_secs(2)), async {
             let mut stream =
                 tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await?;
             stream

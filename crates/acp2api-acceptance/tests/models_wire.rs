@@ -1,3 +1,4 @@
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{
     Scenario, Setup, client::ApiCall, content_check as c, fake::ModelSpec,
     journal_check as journal, model_check as check,
@@ -132,7 +133,7 @@ async fn requests_before_startup_result_wait_for_the_same_check_without_http_acc
         hub.clone(),
     );
     let observer = async move {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
             while fake.record().session_meta().is_empty() {
                 tokio::task::yield_now().await;
             }

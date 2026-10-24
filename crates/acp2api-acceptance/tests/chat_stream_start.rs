@@ -1,3 +1,4 @@
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{Scenario, Setup, TurnPlan, TurnStep, endpoint_check as wire};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -7,7 +8,7 @@ const ENDPOINT: &str = "POST /v1/chat/completions";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_waits_for_confirmed_text_before_its_first_data_chunk() {
     // One HTTP request; existing hub and HTTP readers bound each capture.
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(real_limit(Duration::from_secs(30)), async {
         let mut s = Scenario::default();
         s.plan(Setup::normal());
         s.fake().next_prompt(TurnPlan {
@@ -92,7 +93,7 @@ async fn chat_waits_for_confirmed_text_before_its_first_data_chunk() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_chat_reply_still_finishes_with_an_assistant_role() {
     // Two HTTP requests; normal empty replies with no chunk and with one empty chunk.
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(real_limit(Duration::from_secs(30)), async {
         for empty_chunk in [false, true] {
             let mut s = Scenario::default();
             s.plan(Setup::normal());

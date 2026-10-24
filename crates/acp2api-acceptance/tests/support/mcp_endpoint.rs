@@ -2,6 +2,7 @@
     clippy::disallowed_methods,
     reason = "Real-time safety caps must work while virtual time is blocked"
 )]
+use acp2api_acceptance::real_limit;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
@@ -30,7 +31,7 @@ impl Endpoint {
         let got = count.clone();
         let stopped = stop.clone();
         let worker = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + real_limit(Duration::from_secs(5));
             while !stopped.load(Ordering::SeqCst) && Instant::now() < deadline {
                 let (mut stream, _) = match listener.accept() {
                     Ok(pair) => pair,
@@ -46,10 +47,10 @@ impl Endpoint {
                 );
                 stream.set_nonblocking(false).unwrap();
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
                     .unwrap();
                 stream
-                    .set_write_timeout(Some(Duration::from_secs(3)))
+                    .set_write_timeout(Some(real_limit(Duration::from_secs(3))))
                     .unwrap();
                 let mut reader = BufReader::new(&mut stream);
                 let mut length = 0;

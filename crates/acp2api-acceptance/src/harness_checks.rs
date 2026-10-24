@@ -1,3 +1,4 @@
+use crate::real_limit;
 use crate::{
     adapters::{GuardedLauncher, HarnessClock},
     client::ApiCall,
@@ -141,7 +142,7 @@ async fn guard_refuses_unknown_bytes_and_tracks_fake_descendants() {
             "agy_acp_server.par"
         });
     let child = launcher.launch(launch(path)).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + real_limit(Duration::from_secs(2));
     wait_for(&s.hub, deadline, || {
         s.hub.entries().iter().any(|e| e.event["kind"] == "hello")
     })
@@ -161,7 +162,7 @@ async fn guard_refuses_unknown_bytes_and_tracks_fake_descendants() {
     #[cfg(not(windows))]
     {
         let mut tree = child.tree;
-        tokio::time::timeout(Duration::from_secs(2), tree.exited())
+        tokio::time::timeout(real_limit(Duration::from_secs(2)), tree.exited())
             .await
             .unwrap();
     }
@@ -230,7 +231,7 @@ async fn fake_enforces_line_and_duration_caps_without_files() {
                 child.stdin.write_all(line.as_bytes()).await.unwrap();
             }
         }
-        let status = tokio::time::timeout(Duration::from_secs(3), child.tree.exited())
+        let status = tokio::time::timeout(real_limit(Duration::from_secs(3)), child.tree.exited())
             .await
             .unwrap();
         assert_eq!(status.code(), Some(exit), "entries: {:?}", s.hub.entries());

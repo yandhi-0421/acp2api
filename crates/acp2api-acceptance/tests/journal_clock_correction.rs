@@ -1,4 +1,5 @@
 use acp2api::journal::{Api, RequestRecord, ResultKind, Writer};
+use acp2api_acceptance::real_limit;
 use acp2api_acceptance::setup::TestRoot;
 use std::{
     fs,
@@ -37,7 +38,7 @@ fn record(id: &str, padding: usize) -> RequestRecord {
 fn successful_write_after_retention_with_future_files_remains_readable() {
     let root = TestRoot::new();
     let folder = root.path.join("clock-correction-logs");
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + real_limit(Duration::from_secs(20));
     let wall = UNIX_EPOCH + Duration::from_secs(1_792_281_600);
     let future = SystemTime::now() + Duration::from_secs(365 * 24 * 60 * 60);
     let mut input = 0;
