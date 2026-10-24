@@ -52,20 +52,23 @@ pub(super) fn check(api: Api, value: &Value) -> Result<(), Refusal> {
         return Err(Refusal::field("n", Some(&value["n"])));
     }
     match &value["tool_choice"] {
-        Value::String(choice) if !matches!(choice.as_str(), "auto" | "none") => {
-            return Err(Refusal::field("tool_choice", Some(&value["tool_choice"])));
-        }
-        Value::Object(choice) => {
-            if let Some(kind) = choice.get("type").and_then(Value::as_str)
-                && !matches!(kind, "auto" | "none")
-            {
+        Value::Null => {}
+        Value::String(choice) if matches!(choice.as_str(), "auto" | "none") => {}
+        Value::Object(choice) => match choice.get("type").and_then(Value::as_str) {
+            Some("auto" | "none") => {}
+            Some(_) => {
                 return Err(Refusal::field(
                     "tool_choice.type",
                     Some(&value["tool_choice"]["type"]),
                 ));
             }
+            None => {
+                return Err(Refusal::field("tool_choice", Some(&value["tool_choice"])));
+            }
+        },
+        _ => {
+            return Err(Refusal::field("tool_choice", Some(&value["tool_choice"])));
         }
-        _ => {}
     }
     for field in ["web_search_options", "previous_response_id", "conversation"] {
         if enabled(&value[field]) {
