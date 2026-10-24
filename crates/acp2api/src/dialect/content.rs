@@ -129,6 +129,8 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         form: ReplyForm {
             stream: value["stream"].as_bool().unwrap_or(false),
             model_name: model,
+            tools: value["tools"].as_array().cloned().unwrap_or_default(),
+            tool_choice,
         },
         unknown_fields: value
             .as_object()
