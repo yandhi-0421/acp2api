@@ -55,12 +55,22 @@ mod system_prompt_and_role_labels;
 #[path = "steps/token_usage.rs"]
 mod token_usage;
 fn main() {
-    std::thread::Builder::new()
+    if let Err(payload) = std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
         .spawn(run)
         .unwrap()
         .join()
-        .unwrap();
+    {
+        let message = if let Some(message) = payload.downcast_ref::<String>() {
+            message.as_str()
+        } else if let Some(message) = payload.downcast_ref::<&str>() {
+            *message
+        } else {
+            "non-string panic payload"
+        };
+        eprintln!("acp2api acceptance runner panicked: {message}");
+        std::process::exit(101);
+    }
 }
 #[tokio::main]
 async fn run() {
