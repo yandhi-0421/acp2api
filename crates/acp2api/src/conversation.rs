@@ -83,6 +83,11 @@ pub(crate) enum PromptBlock {
     Text(String),
     Image { media_type: String, base64: String },
 }
+pub(crate) enum Prompt<'a> {
+    New { message: &'a Item },
+    Continue { new_items: &'a [&'a Item] },
+    Rebuild { conversation_items: &'a [&'a Item] },
+}
 const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
 impl Conversation {
     pub(crate) fn items(&self) -> Vec<&Item> {
@@ -92,8 +97,14 @@ impl Conversation {
             .collect()
     }
 }
-pub(crate) fn prompt(kind: crate::journal::SessionUse, items: &[&Item]) -> Vec<PromptBlock> {
-    let rebuild = matches!(kind, crate::journal::SessionUse::Rebuild);
+pub(crate) fn prompt(input: Prompt<'_>) -> (crate::journal::SessionUse, Vec<PromptBlock>) {
+    use crate::journal::SessionUse;
+    let (kind, items) = match &input {
+        Prompt::New { message } => (SessionUse::New, std::slice::from_ref(message)),
+        Prompt::Continue { new_items } => (SessionUse::Continue, *new_items),
+        Prompt::Rebuild { conversation_items } => (SessionUse::Rebuild, *conversation_items),
+    };
+    let rebuild = matches!(kind, SessionUse::Rebuild);
     let unnamed_user = matches!(
         items,
         [Item::Message {
@@ -147,10 +158,14 @@ pub(crate) fn prompt(kind: crate::journal::SessionUse, items: &[&Item]) -> Vec<P
             blocks.push(PromptBlock::Text(prefix));
         }
     }
-    blocks
+    (kind, blocks)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItemHash([u8; 32]);
+pub(crate) struct RecordHashes {
+    pub system: ItemHash,
+    pub messages: Vec<ItemHash>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ToolSetHash([u8; 32]);
 struct ItemHasher(sha2::Sha256);
@@ -218,16 +233,17 @@ fn item_hash(item: &Item) -> ItemHash {
     }
     ItemHash(hash.finish())
 }
-pub(crate) fn record_hashes(conversation: &Conversation) -> Vec<ItemHash> {
+pub(crate) fn record_hashes(conversation: &Conversation) -> RecordHashes {
     let mut system = ItemHasher::new("system");
     for part in &conversation.system {
         system.field(part.role.label());
         system.name(part.name.as_deref());
         system.text(&part.text);
     }
-    std::iter::once(ItemHash(system.finish()))
-        .chain(conversation.items().into_iter().map(item_hash))
-        .collect()
+    RecordHashes {
+        system: ItemHash(system.finish()),
+        messages: conversation.items().into_iter().map(item_hash).collect(),
+    }
 }
 pub(crate) fn reply_hash(text: &str) -> ItemHash {
     item_hash(&Item::Message {
