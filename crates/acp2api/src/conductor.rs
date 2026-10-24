@@ -917,6 +917,42 @@ mod tests {
         );
     }
     #[test]
+    fn an_idle_session_is_forgotten_by_its_24_hour_wake_up() {
+        let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
+        let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            records: vec![records::Record {
+                session: "idle".into(),
+                hashes: crate::conversation::record_hashes(&turn.conversation),
+                tools: crate::conversation::tool_set_hash(&[]),
+                used: 1,
+                expires: 24 * 60 * 60 * 1000,
+            }],
+            startup_session: None,
+            use_sequence: 1,
+            limit: 1,
+            notices: watch::channel(Arc::new(Vec::new())).0,
+        };
+        let mut forgotten = Vec::new();
+        if let Some(at) = core.next_deadline()
+            && at <= 24 * 60 * 60 * 1000
+        {
+            for command in core.handle(Event::Deadline, at) {
+                if let Command::Forget(session) = command {
+                    forgotten.push((at, session));
+                }
+            }
+        }
+        assert_eq!(
+            forgotten,
+            [(86_400_000, "idle".to_owned())],
+            "an idle session is forgotten at 24 hours with only its scheduled wake-up"
+        );
+    }
+    #[test]
     fn a_failed_session_creation_still_logs_its_session_use() {
         let folder = std::env::temp_dir().join(format!("acp2api-use-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
