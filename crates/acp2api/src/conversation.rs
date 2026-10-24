@@ -62,6 +62,7 @@ pub(crate) struct ClientTool {
     pub kind: ToolKind,
     pub namespace: Option<String>,
 }
+#[derive(Clone, Copy)]
 pub(crate) enum ToolChoice {
     Auto,
     Off,
@@ -299,6 +300,8 @@ pub(crate) fn output_tokens(text: &str) -> u64 {
 pub(crate) struct ReplyForm {
     pub stream: bool,
     pub model_name: String,
+    pub tools: Vec<serde_json::Value>,
+    pub tool_choice: ToolChoice,
 }
 pub(crate) struct Usage {
     pub input_tokens: u64,

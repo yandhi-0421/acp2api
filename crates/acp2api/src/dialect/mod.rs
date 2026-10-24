@@ -1,6 +1,6 @@
 use crate::{
     BoxFuture, Clock, Hold,
-    conversation::{ReplyForm, Ticket, TurnEvent, TurnRequest, Usage},
+    conversation::{ReplyForm, Ticket, ToolChoice, TurnEvent, TurnRequest, Usage},
     messages::{Message, Refusal, Row},
 };
 use axum::{
@@ -89,6 +89,8 @@ impl<T: WireDialect + 'static> Dialect for T {
                 self.prefix(),
                 self.call_prefix(),
                 form.model_name,
+                form.tools,
+                form.tool_choice,
                 clock.wall(),
             ) {
                 Ok(wire) => wire,
@@ -169,6 +171,8 @@ struct Encoding {
     id: String,
     item_id: String,
     model: String,
+    tools: Vec<Value>,
+    tool_choice: ToolChoice,
     created: u64,
     sequence: u64,
     text: String,
@@ -181,12 +185,16 @@ impl Encoding {
         prefix: &str,
         call_prefix: &str,
         model: String,
+        tools: Vec<Value>,
+        tool_choice: ToolChoice,
         wall: std::time::SystemTime,
     ) -> Result<Self, String> {
         Ok(Self {
             id: identifier(prefix)?,
             item_id: identifier("msg_")?,
             model,
+            tools,
+            tool_choice,
             created: wall
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| e.to_string())?

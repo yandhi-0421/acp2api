@@ -67,8 +67,11 @@ impl Responses {
             "store": false,
             "temperature": 1.0,
             "text": {"format": {"type": "text"}},
-            "tool_choice": "auto",
-            "tools": [],
+            "tool_choice": match w.tool_choice {
+                ToolChoice::Auto => "auto",
+                ToolChoice::Off => "none",
+            },
+            "tools": w.tools,
             "top_p": 1.0,
             "truncation": "disabled",
             "usage": usage,
