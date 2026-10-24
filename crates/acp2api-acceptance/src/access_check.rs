@@ -180,12 +180,14 @@ pub fn network_address() -> Option<IpAddr> {
     Some(socket.local_addr().ok()?.ip())
 }
 pub async fn connect(address: IpAddr, port: u16) -> bool {
+    // A loopback connection must succeed; another address is the window of "accepts no connection".
+    let limit = if address.is_loopback() {
+        real_limit(std::time::Duration::from_secs(2))
+    } else {
+        std::time::Duration::from_secs(2)
+    };
     matches!(
-        tokio::time::timeout(
-            real_limit(std::time::Duration::from_secs(2)),
-            tokio::net::TcpStream::connect((address, port))
-        )
-        .await,
+        tokio::time::timeout(limit, tokio::net::TcpStream::connect((address, port))).await,
         Ok(Ok(_))
     )
 }

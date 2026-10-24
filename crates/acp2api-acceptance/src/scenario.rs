@@ -1,4 +1,4 @@
-use crate::real_limit;
+use crate::{TIME_FACTOR_ENV, real_limit, time_factor};
 use crate::{
     client::{Answer, ApiClient},
     fake::FakeRuntime,
@@ -89,10 +89,7 @@ impl Scenario {
     async fn spawn_host(&mut self, env: &[(&str, PathBuf)], address: String, key: String) {
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
-        command.env(
-            "ACP2API_TEST_TIME_FACTOR",
-            real_limit(Duration::from_secs(1)).as_secs().to_string(),
-        );
+        command.env(TIME_FACTOR_ENV, time_factor().to_string());
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         let mut host = command

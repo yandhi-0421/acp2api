@@ -7,7 +7,7 @@ use acp2api_acceptance::startup_check::Startup;
     reason = "This OS-boundary test controls stdout and bounds the test host lifetime."
 )]
 async fn failed_terminal_delivery_leaves_no_undisclosed_saved_credentials() {
-    use acp2api_acceptance::real_limit;
+    use acp2api_acceptance::{TIME_FACTOR_ENV, real_limit, time_factor};
     use std::os::{fd::OwnedFd, unix::net::UnixStream};
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -23,10 +23,7 @@ async fn failed_terminal_delivery_leaves_no_undisclosed_saved_credentials() {
     drop(reader);
     let mut child = Command::new(env!("CARGO_BIN_EXE_acp2api-test-host"))
         .env_clear()
-        .env(
-            "ACP2API_TEST_TIME_FACTOR",
-            real_limit(Duration::from_secs(1)).as_secs().to_string(),
-        )
+        .env(TIME_FACTOR_ENV, time_factor().to_string())
         .env("ACP2API_TEST_RUN", run_path)
         .current_dir(&startup.root().path)
         .args([

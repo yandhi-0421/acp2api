@@ -1,10 +1,10 @@
-use crate::real_limit;
 use crate::{
     Setup,
     adapters::RunFile,
     hub::Hub,
     setup::{TestRoot, binary, random_hex},
 };
+use crate::{TIME_FACTOR_ENV, real_limit, time_factor};
 use std::{
     io::Read,
     path::PathBuf,
@@ -98,10 +98,7 @@ impl Startup {
         self.exited = None;
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
-        command.env(
-            "ACP2API_TEST_TIME_FACTOR",
-            real_limit(Duration::from_secs(1)).as_secs().to_string(),
-        );
+        command.env(TIME_FACTOR_ENV, time_factor().to_string());
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         let mut child = command

@@ -41,6 +41,7 @@ fn main() -> ExitCode {
         .get("run_ms")
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(300_000)
+        // The run cap is this base times ACP2API_TEST_TIME_FACTOR.
         .min(300_000);
     let run_limit = real_limit(Duration::from_millis(run_ms));
     thread::spawn(move || {

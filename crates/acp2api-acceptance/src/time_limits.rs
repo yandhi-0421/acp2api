@@ -1,8 +1,10 @@
 use std::{sync::OnceLock, time::Duration};
 
-pub fn real_limit(base: Duration) -> Duration {
+pub const TIME_FACTOR_ENV: &str = "ACP2API_TEST_TIME_FACTOR";
+
+pub fn time_factor() -> u32 {
     static FACTOR: OnceLock<u32> = OnceLock::new();
-    base * *FACTOR.get_or_init(|| match std::env::var_os("ACP2API_TEST_TIME_FACTOR") {
+    *FACTOR.get_or_init(|| match std::env::var_os(TIME_FACTOR_ENV) {
         None => 5,
         Some(value) => value
             .to_str()
@@ -12,6 +14,10 @@ pub fn real_limit(base: Duration) -> Duration {
     })
 }
 
+pub fn real_limit(base: Duration) -> Duration {
+    base * time_factor()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -19,6 +25,7 @@ mod tests {
     #[tokio::test]
     async fn setting_uses_default_validates_and_rejects_unusable_values() {
         if let Ok(seconds) = std::env::var("ACP2API_TEST_EXPECTED_SECONDS") {
+            assert_eq!(time_factor(), seconds.parse::<u32>().unwrap() / 2);
             assert_eq!(
                 real_limit(Duration::from_secs(2)),
                 Duration::from_secs(seconds.parse().unwrap())
@@ -42,12 +49,12 @@ mod tests {
                     "time_limits::tests::setting_uses_default_validates_and_rejects_unusable_values",
                     "--nocapture",
                 ])
-                .env_remove("ACP2API_TEST_TIME_FACTOR")
+                .env_remove(TIME_FACTOR_ENV)
                 .env("ACP2API_TEST_EXPECTED_SECONDS", seconds)
                 .env_remove("RUST_BACKTRACE")
                 .kill_on_drop(true);
             if let Some(value) = value {
-                command.env("ACP2API_TEST_TIME_FACTOR", value);
+                command.env(TIME_FACTOR_ENV, value);
             }
             let output =
                 tokio::time::timeout(real_limit(Duration::from_secs(10)), command.output())
@@ -61,9 +68,7 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
             if !succeeds {
-                assert!(
-                    String::from_utf8_lossy(&output.stderr).contains("ACP2API_TEST_TIME_FACTOR")
-                );
+                assert!(String::from_utf8_lossy(&output.stderr).contains(TIME_FACTOR_ENV));
             }
         }
     }
