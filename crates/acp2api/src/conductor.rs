@@ -1,7 +1,7 @@
 mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
-    conversation::{Ticket, TurnEvent, TurnRequest, Usage},
+    conversation::{Prompt, Ticket, TurnEvent, TurnRequest, Usage},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use std::{collections::VecDeque, sync::Arc};
@@ -327,14 +327,16 @@ impl Core {
             let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
             let items = request.turn.conversation.items();
             let matched = records::select(&self.records, &hashes, tools_hash, &items);
-            let (kind, prompt_items) = match matched {
-                Some((_, new_items)) => (crate::journal::SessionUse::Continue, new_items),
-                None if request.turn.conversation.earlier.is_empty() => {
-                    (crate::journal::SessionUse::New, &items[..])
-                }
-                None => (crate::journal::SessionUse::Rebuild, &items[..]),
+            let prompt = match matched {
+                Some((_, new_items)) => Prompt::Continue { new_items },
+                None if request.turn.conversation.earlier.is_empty() => Prompt::New {
+                    message: &request.turn.conversation.last,
+                },
+                None => Prompt::Rebuild {
+                    conversation_items: &items,
+                },
             };
-            let prompt = crate::conversation::prompt(kind, prompt_items);
+            let (kind, prompt) = crate::conversation::prompt(prompt);
             let ready = match matched {
                 Some((index, _)) => Some(self.records.remove(index).session),
                 None if settings.system.is_none() && settings.tools.is_empty() => {
