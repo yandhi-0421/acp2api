@@ -4,7 +4,7 @@ use cucumber::{given, then, when};
 use serde_json::{Value, json};
 #[derive(Default)]
 pub struct ConversationState {
-    record_folder: Option<std::path::PathBuf>,
+    folder_markers: Vec<std::path::PathBuf>,
     session_files: Vec<std::path::PathBuf>,
     system: Option<String>,
     initial: Vec<Value>,
@@ -378,16 +378,24 @@ fn persisted_session(w: &mut World, label: String) {
     assert_eq!(label, "S1");
     let session = w.conversation.session.as_ref().unwrap();
     let requests = system_check::requests(&w.scenario);
-    let created = requests
+    w.conversation.folder_markers = requests
         .iter()
-        .rfind(|v| v["method"] == "session/new")
-        .unwrap();
-    let folder = std::path::PathBuf::from(created["params"]["cwd"].as_str().unwrap());
-    assert!(
-        folder.is_dir(),
-        "the actual ACP session folder exists before expiry"
-    );
-    w.conversation.record_folder = Some(folder);
+        .filter(|v| v["method"] == "session/new")
+        .map(|created| {
+            let folder = std::path::PathBuf::from(created["params"]["cwd"].as_str().unwrap());
+            assert!(
+                folder.is_dir(),
+                "the actual ACP session folder exists before restart"
+            );
+            let marker = folder.join("session-folder-marker");
+            std::fs::write(&marker, b"synthetic ACP session cwd marker").unwrap();
+            assert!(
+                marker.is_file(),
+                "the session cwd marker exists before restart"
+            );
+            marker
+        })
+        .collect();
     let home = w.scenario.root.path.join("data/runtime-home");
     // Captured layout: docs/research/captures/2026-10-15-probe-p/session-files/summary.json.
     let files = home.join("antigravity-acp/conversations");
@@ -438,25 +446,8 @@ async fn explicit_history(w: &mut World, #[step] step: &cucumber::gherkin::Step)
     .await;
 }
 
-#[then(expr = "the ACP session {string} has no session folder")]
-fn expired_folder(w: &mut World, label: String) {
-    assert_eq!(label, "S1");
-    assert!(
-        !w.conversation.record_folder.as_ref().unwrap().exists(),
-        "ADR-0003: a record idle for 24 hours releases its ACP session folder"
-    );
-}
-
-#[when("the owner restarts acp2api after the idle interval")]
-async fn restart_after_expiry(w: &mut World) {
-    w.scenario.restart().await;
-}
-
-#[then(
-    expr = "the session file of the ACP session {string} is gone and the sign-in files are unchanged"
-)]
-fn expired_file(w: &mut World, label: String) {
-    assert_eq!(label, "S1");
+#[then("the session files and ACP session folders are gone and the sign-in files are unchanged")]
+fn restart_cleanup(w: &mut World) {
     let home = w.scenario.root.path.join("data/runtime-home");
     let sign_in =
         ["settings.json", "acp_token.json"].map(|name| std::fs::read(home.join(name)).unwrap());
@@ -467,15 +458,21 @@ fn expired_file(w: &mut World, label: String) {
                 .iter()
                 .map(|file| file.exists())
                 .collect::<Vec<_>>(),
+            w.conversation
+                .folder_markers
+                .iter()
+                .map(|file| file.exists())
+                .collect::<Vec<_>>(),
             sign_in
         ),
         (
             vec![false; 4],
+            vec![false; w.conversation.folder_markers.len()],
             [
                 b"synthetic sign-in marker".to_vec(),
                 b"synthetic sign-in marker".to_vec()
             ]
         ),
-        "ADR-0005: the next start deletes the expired session file and preserves sign-in files"
+        "ADR-0005: the next start deletes each session file and ACP session cwd and preserves sign-in files"
     );
 }

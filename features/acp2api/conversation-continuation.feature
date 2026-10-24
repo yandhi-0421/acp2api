@@ -96,13 +96,12 @@ Feature: The conversation in each prompt
     And the log has one rebuild line
 
   @FR-021 @issue-93
-  Scenario: An ACP session with no request for 24 hours loses its record and session folder
+  Scenario: An ACP session with no request for 24 hours loses its record
     Given the official runtime kept a session file for the ACP session "S1"
     When 24 hours pass since the last request of the ACP session "S1"
     And the API client sends the same conversation with the reply "Hi." and the new user message "How are you?"
     Then the official runtime gets a new ACP session
     And the first prompt of the new ACP session starts with the neutral line
-    And the ACP session "S1" has no session folder
 
   @FR-021 @issue-93
   Scenario: A continuation starts another 24 hours of record retention
@@ -112,7 +111,8 @@ Feature: The conversation in each prompt
     When the API client sends the same conversation with the reply "Hi." and the new user message "How are you?"
     Then the official runtime gets the prompt "How are you?" in the ACP session "S1"
     When 23 hours pass since the last request of the ACP session "S1"
-    And the API client sends this conversation:
+    Given the official runtime replies "Still fine." to the next prompt
+    When the API client sends this conversation:
       """
       [
         {"role":"user","content":"Hello"},
@@ -124,11 +124,22 @@ Feature: The conversation in each prompt
       """
     Then the official runtime gets the prompt "Again" in the ACP session "S1"
     When 24 hours pass since the last request of the ACP session "S1"
-    Then the ACP session "S1" has no session folder
+    And the API client sends this conversation:
+      """
+      [
+        {"role":"user","content":"Hello"},
+        {"role":"assistant","content":"Hi."},
+        {"role":"user","content":"How are you?"},
+        {"role":"assistant","content":"Fine."},
+        {"role":"user","content":"Again"},
+        {"role":"assistant","content":"Still fine."},
+        {"role":"user","content":"After a day"}
+      ]
+      """
+    Then the official runtime gets a new ACP session
 
   @FR-021 @issue-93
-  Scenario: The next start deletes the session file of an expired record
+  Scenario: The next start deletes each session file and each ACP session folder
     Given the official runtime kept a session file for the ACP session "S1"
-    When 24 hours pass since the last request of the ACP session "S1"
-    And the owner restarts acp2api after the idle interval
-    Then the session file of the ACP session "S1" is gone and the sign-in files are unchanged
+    When the owner restarts acp2api
+    Then the session files and ACP session folders are gone and the sign-in files are unchanged
