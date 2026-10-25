@@ -8,6 +8,7 @@ pub struct FieldState {
     endpoint: String,
     baseline: Option<Value>,
     expected: Option<(String, String)>,
+    body_field: Option<(String, Value)>,
     no_key: bool,
     readme: String,
 }
@@ -101,6 +102,10 @@ fn no_key(w: &mut World) {
 }
 #[given("the request has the field \"output_config.format\"")]
 fn schema(w: &mut World) {
+    w.fields.body_field = Some((
+        "output_config.format".into(),
+        serde_json::json!({"type":"json_schema","schema":{}}),
+    ));
     w.fields.expected = Some((
         "output_config.format".into(),
         "acp2api: the request field output_config.format is not supported.".into(),
@@ -124,12 +129,8 @@ async fn error_request(w: &mut World, endpoint: String) {
                 .await,
         );
     } else {
-        if let Some((field, _)) = &w.fields.expected {
-            f::set(
-                &mut call,
-                field,
-                serde_json::json!({"type":"json_schema","schema":{}}),
-            );
+        if let Some((field, value)) = w.fields.body_field.take() {
+            f::set(&mut call, &field, value);
         }
         w.request.queue_next(&w.scenario);
         content_check::send(&mut w.scenario, call).await;

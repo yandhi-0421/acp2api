@@ -69,14 +69,13 @@ fn built_in_run(w: &mut World, name: String) {
     w.safety.name = name;
 }
 async fn send(w: &mut World) {
-    let plan = w.request.plan.take().unwrap_or_else(|| {
+    w.request.plan.get_or_insert_with(|| {
         if w.safety.permission {
             safety::denial_plan(&w.safety.name, &w.safety.reply)
         } else {
             safety::execution_plan(&w.safety.name)
         }
     });
-    w.request.plan = Some(plan);
     w.request.queue_next(&w.scenario);
     w.scenario.answer = Some(safety::send(&mut w.scenario, "runtime safety request").await);
 }

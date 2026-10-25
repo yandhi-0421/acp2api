@@ -89,7 +89,7 @@ fn lines(s: &Scenario, direction: &str) -> Vec<Value> {
         .collect()
 }
 pub fn cancelled(s: &Scenario, expected: usize) {
-    cancelled_prompts(s, expected, &(0..expected).collect::<Vec<_>>());
+    cancelled_tool_prompts(s, expected, &(0..expected).collect::<Vec<_>>());
 }
 pub fn cancelled_prompts(s: &Scenario, expected: usize, prompt_indices: &[usize]) {
     assert_eq!(
@@ -108,6 +108,9 @@ pub fn cancelled_prompts(s: &Scenario, expected: usize, prompt_indices: &[usize]
         );
         assert!(cancel.get("id").is_none(), "cancel is an ACP notification");
     }
+}
+pub fn cancelled_tool_prompts(s: &Scenario, expected: usize, prompt_indices: &[usize]) {
+    cancelled_prompts(s, expected, prompt_indices);
     assert!(
         !permission_requests(s).is_empty(),
         "permission was actually sent"

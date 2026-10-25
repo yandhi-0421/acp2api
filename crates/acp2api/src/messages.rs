@@ -79,8 +79,10 @@ impl Refusal {
             Message::UpstreamHttp(ref error) if (500..600).contains(&error.code) => {
                 Row::Temporary503
             }
-            Message::UpstreamHttp(_) | Message::UpstreamAcp(_) => Row::Other502,
-            Message::Upstream(_) | Message::BuiltInToolRan(_) => Row::Other502,
+            Message::UpstreamHttp(_)
+            | Message::UpstreamAcp(_)
+            | Message::Upstream(_)
+            | Message::BuiltInToolRan(_) => Row::Other502,
             Message::Model { .. }
             | Message::Field { .. }
             | Message::Content(_)

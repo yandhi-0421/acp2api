@@ -256,9 +256,9 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
         Message::TooLarge => "request_too_large",
-        Message::Upstream(_) => "upstream_error",
-        Message::UpstreamHttp(_) => "upstream_error",
-        Message::UpstreamAcp(_) => "upstream_error",
+        Message::Upstream(_) | Message::UpstreamHttp(_) | Message::UpstreamAcp(_) => {
+            "upstream_error"
+        }
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
     }
 }

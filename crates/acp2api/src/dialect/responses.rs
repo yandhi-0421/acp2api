@@ -96,8 +96,9 @@ impl WireDialect for Responses {
             },
         );
         response["status"] = json!("failed");
-        response["error"] = json!({"code": if matches!(refusal.row(), Row::Temporary503) {"server_error"} else {"invalid_prompt"},"message":refusal.message.to_string()});
-        if matches!(refusal.row(), Row::Temporary503) {
+        let temporary = matches!(refusal.row(), Row::Temporary503);
+        response["error"] = json!({"code": if temporary {"server_error"} else {"invalid_prompt"},"message":refusal.message.to_string()});
+        if temporary {
             response["error"]["headers"] = json!({"retry-after":"30"});
         }
         response["usage"] = Value::Null;

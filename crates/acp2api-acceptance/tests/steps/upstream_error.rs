@@ -14,16 +14,22 @@ pub struct ErrorState {
     reply: String,
 }
 
-fn error_lines(message: &str) -> Vec<String> {
+fn error_steps(message: &str) -> Vec<TurnStep> {
     vec![
-        "Antigravity SDK error processing prompt for session {session}".into(),
-        format!("Error 503, Message: {message}, Status: UNAVAILABLE, Details: []"),
+        TurnStep::SessionStderr(
+            "Antigravity SDK error processing prompt for session {session}".into(),
+        ),
+        TurnStep::ErrorLine {
+            code: 503,
+            status: "UNAVAILABLE".into(),
+            message: message.into(),
+        },
     ]
 }
 fn end_with_error(w: &mut World, delay: u64, message: &str) {
     w.request.plan.as_mut().unwrap().end = TurnEndPlan::StopThenStderr {
         delay: Duration::from_millis(delay),
-        lines: error_lines(message),
+        steps: error_steps(message),
     };
 }
 
@@ -43,9 +49,8 @@ fn ends(_: &mut World) {}
 fn error_time(w: &mut World, time: String) {
     if time.starts_with("before") {
         let plan = w.request.plan.as_mut().unwrap();
-        for line in error_lines("The service is unavailable.") {
-            plan.steps.push(TurnStep::SessionStderr(line));
-        }
+        plan.steps
+            .extend(error_steps("The service is unavailable."));
     } else {
         end_with_error(
             w,
@@ -299,9 +304,14 @@ async fn text_stream(w: &mut World, first: String, last: String, endpoint: Strin
             TurnStep::Chunk(last),
             TurnStep::HoldUntil("upstream-error".into()),
         ],
-        end: TurnEndPlan::Never,
+        end: TurnEndPlan::Stop("end_turn".into()),
     });
-    w.endpoint.defer();
+    w.request
+        .plan
+        .as_mut()
+        .unwrap()
+        .steps
+        .extend(error_steps("The service is currently unavailable."));
     let call = endpoint_check::request(&endpoint, "Hello", true);
     let live = wire::begin(w, call).await;
     w.endpoint.set_live(live);
@@ -311,8 +321,14 @@ async fn text_stream(w: &mut World, first: String, last: String, endpoint: Strin
 async fn accepted(w: &mut World, endpoint: String) {
     w.request.plan = Some(TurnPlan {
         steps: vec![TurnStep::HoldUntil("upstream-error".into())],
-        end: TurnEndPlan::Never,
+        end: TurnEndPlan::Stop("end_turn".into()),
     });
+    w.request
+        .plan
+        .as_mut()
+        .unwrap()
+        .steps
+        .extend(error_steps("The service is currently unavailable."));
     let call = endpoint_check::request(&endpoint, "Hello", true);
     let live = wire::begin(w, call).await;
     assert_eq!(live.status(), Some(200), "stream accepted before error");
@@ -322,24 +338,9 @@ async fn accepted(w: &mut World, endpoint: String) {
 #[when("the prompt turn ends with an error of the 503 row")]
 #[when("an error of the 503 row ends the request")]
 async fn fail_stream(w: &mut World) {
-    let session = conversation::session(&w.scenario);
-    for line in error_lines("The service is currently unavailable.") {
-        w.scenario.hub.command(
-            "normal",
-            json!({"op":"Err","line":line.replace("{session}", &session)}),
-        );
-    }
-    w.scenario.hub.command(
-        "normal",
-        json!({"op":"Out","line":prompt_result(w).to_string()}),
-    );
+    w.scenario.fake().open_gate("upstream-error");
     let live = w.endpoint.take_live();
     w.scenario.answer = Some(live.finish(&mut w.scenario.time).await);
-}
-
-fn prompt_result(w: &World) -> Value {
-    let prompt = wire::frames(w, "session/prompt").pop().unwrap();
-    json!({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}})
 }
 
 #[then(

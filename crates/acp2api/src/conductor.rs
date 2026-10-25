@@ -93,10 +93,16 @@ struct Active {
     stop_prefix: String,
 }
 impl Active {
-    fn release_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) -> bool {
+    fn earliest_stop(&self, text: &str) -> Option<(usize, String)> {
+        self.stops
+            .iter()
+            .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
+            .min_by_key(|(at, _)| *at)
+    }
+    fn release_or_cut_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) {
         let complete = next.is_none();
         if !complete && self.stop.sequence().is_some() {
-            return false;
+            return;
         }
         let mut text = std::mem::take(&mut self.stop_prefix);
         if let Some(held) = self.held.take() {
@@ -106,11 +112,7 @@ impl Active {
         if let Some(next) = next {
             self.held = Some(next);
         }
-        let matched = self
-            .stops
-            .iter()
-            .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
-            .min_by_key(|(at, _)| *at);
+        let matched = self.earliest_stop(&text);
         let end = if let Some((at, _)) = &matched {
             *at
         } else if complete {
@@ -140,18 +142,15 @@ impl Active {
         }
         let matched = matched.or_else(|| {
             let combined = format!("{}{}", self.stop_prefix, self.held.as_deref().unwrap_or(""));
-            self.stops
-                .iter()
-                .filter_map(|stop| combined.find(stop).map(|at| (at, stop.clone())))
-                .min_by_key(|(at, _)| *at)
+            self.earliest_stop(&combined)
         });
         if let Some((_, stop)) = matched
             && self.stop.sequence().is_none()
         {
             self.stop = crate::conversation::Stop::Sequence(stop);
-            true
-        } else {
-            false
+            if let Some(session) = &self.session {
+                commands.push(Command::Cancel(session.clone()));
+            }
         }
     }
 }
@@ -544,8 +543,8 @@ impl Core {
         let active = &mut self.active[index];
         match update {
             TurnUpdate::Text(text) => {
-                if active.tool_call.is_none() && active.release_reply(Some(text), commands) {
-                    commands.push(Command::Cancel(session));
+                if active.tool_call.is_none() {
+                    active.release_or_cut_reply(Some(text), commands);
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
@@ -645,11 +644,7 @@ impl Core {
         if result.is_err() {
             active.held = None;
         }
-        if active.release_reply(None, commands)
-            && let Some(session) = &active.session
-        {
-            commands.push(Command::Cancel(session.clone()));
-        }
+        active.release_or_cut_reply(None, commands);
         let can_continue = can_continue && active.stop.sequence().is_none();
         let end = result.map(|()| {
             let mut output = active.text.clone();

@@ -1,17 +1,22 @@
 use super::*;
 pub(super) struct Messages;
+impl Messages {
+    fn error_kinds(&self, refusal: &Refusal) -> (&'static str, &'static str) {
+        match refusal.row() {
+            Row::Key => ("authentication_error", "authentication_error"),
+            Row::Rejected => ("invalid_request_error", "invalid_request_error"),
+            Row::TooLarge => ("request_too_large", "request_too_large"),
+            Row::Other502 => ("api_error", "invalid_request_error"),
+            Row::Temporary503 => ("api_error", "api_error"),
+        }
+    }
+}
 impl WireDialect for Messages {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         content::parse(content::Api::Messages, body)
     }
     fn refusal_body(&self, refusal: &Refusal) -> Value {
-        let kind = match refusal.row() {
-            Row::Key => "authentication_error",
-            Row::Rejected => "invalid_request_error",
-            Row::TooLarge => "request_too_large",
-            Row::Other502 => "api_error",
-            Row::Temporary503 => "api_error",
-        };
+        let (kind, _) = self.error_kinds(refusal);
         json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}})
     }
     fn error_events(&self, wire: &mut Encoding, refusal: &Refusal) -> Vec<Event> {
@@ -22,9 +27,10 @@ impl WireDialect for Messages {
                 json!({"type":"content_block_stop","index":0}),
             ));
         }
+        let (_, kind) = self.error_kinds(refusal);
         events.push(named(
             "error",
-            json!({"type":"error","error":{"type": if matches!(refusal.row(), Row::Temporary503) {"api_error"} else {"invalid_request_error"},"message":refusal.message.to_string()}}),
+            json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}}),
         ));
         events
     }

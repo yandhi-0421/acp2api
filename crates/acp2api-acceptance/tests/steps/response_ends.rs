@@ -1,4 +1,4 @@
-use crate::{World, prompt_turn as wire};
+use crate::{World, prompt_turn as turn};
 use acp2api_acceptance::{
     TurnPlan, TurnStep, client::Call, conversation_check as conversation, endpoint_check,
     fake::TurnEndPlan,
@@ -34,7 +34,7 @@ async fn stop_request(
 ) {
     let mut call = w.request.request(&endpoint, !stream.is_empty());
     call.body[&field] = serde_json::from_str(&stops).unwrap();
-    wire::send(w, call).await;
+    turn::send(w, call).await;
 }
 
 #[given(expr = "the next prompt turn ends with the stop reason {string}")]
@@ -115,7 +115,7 @@ async fn running(w: &mut World) {
         end: TurnEndPlan::Never,
     });
     let call = endpoint_check::request("POST /v1/chat/completions", "Disconnect test", true);
-    w.ends.live = Some(wire::begin(w, call).await);
+    w.ends.live = Some(turn::begin(w, call).await);
     w.ends.session = conversation::session(&w.scenario);
     assert!(
         w.scenario
@@ -141,30 +141,22 @@ async fn disconnect(w: &mut World) {
 )]
 async fn cancel_at_once(w: &mut World) {
     let deadline = Instant::now() + acp2api_acceptance::real_limit(Duration::from_secs(2));
-    while wire::frames(w, "session/cancel").is_empty() && Instant::now() < deadline {
+    while turn::frames(w, "session/cancel").is_empty() && Instant::now() < deadline {
         let hub = w.scenario.hub.clone();
         tokio::task::spawn_blocking(move || hub.wait_change(deadline))
             .await
             .unwrap();
         w.scenario.time.settle().await;
     }
-    let cancels: Vec<_> = w
-        .scenario
-        .hub
-        .entries()
-        .into_iter()
-        .filter(|entry| {
-            entry.event["kind"] == "got"
-                && entry.event["line"].as_str().is_some_and(|line| {
-                    let frame: Value = serde_json::from_str(line).unwrap();
-                    frame["method"] == "session/cancel"
-                        && frame["params"]["sessionId"] == w.ends.session
-                })
-        })
-        .collect();
+    let cancels = turn::frames(w, "session/cancel");
     assert_eq!(cancels.len(), 1, "FR-031 cancel on disconnect");
     assert_eq!(
-        cancels[0].at, w.ends.disconnected_at,
+        cancels[0]["params"]["sessionId"], w.ends.session,
+        "FR-031 cancels the disconnected prompt"
+    );
+    assert_eq!(
+        w.scenario.hub.now(),
+        w.ends.disconnected_at,
         "FR-031 cancel without advancing virtual time"
     );
     let call = conversation::call(
@@ -176,7 +168,7 @@ async fn cancel_at_once(w: &mut World) {
         None,
         Value::Null,
     );
-    wire::send(w, call).await;
+    turn::send(w, call).await;
     assert_ne!(
         conversation::session(&w.scenario),
         w.ends.session,
@@ -203,7 +195,7 @@ async fn cut_reply(w: &mut World, reply: String, _cut: String) {
         Value::Null,
     );
     call.body["stop"] = json!([w.ends.cut_stop]);
-    wire::send(w, call).await;
+    turn::send(w, call).await;
     w.ends.session = conversation::session(&w.scenario);
     w.ends.cut_reply = crate::slash_and_thought_support::reply(w.scenario.answer.as_ref().unwrap());
 }
@@ -221,7 +213,7 @@ async fn after_cut(w: &mut World, reply: String, next: String) {
         Some("Be kind."),
         Value::Null,
     );
-    wire::send(w, call).await;
+    turn::send(w, call).await;
 }
 
 #[then(expr = "the first prompt of the new ACP session holds the reply {string}")]
