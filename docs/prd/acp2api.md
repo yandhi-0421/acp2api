@@ -542,6 +542,8 @@ An error of the 503 row or the 502 row of FR-033 starts a retry wait of 30 s for
 
 When the API client disconnects during a prompt turn, acp2api cancels the prompt turn at once, and it sends no response. A request that waits in the queue leaves the queue at its disconnect.
 
+At a disconnect during a prompt turn, acp2api clears the current ACP session. That ACP session holds part of a reply that the API client did not get.
+
 **Pass:** after a disconnect during a prompt turn, the official runtime gets a cancel of the prompt turn. After a disconnect in the queue, the count of the queue decreases by one.
 
 #### FR-032 — Messages
