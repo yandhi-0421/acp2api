@@ -158,6 +158,7 @@ async fn send(w: &mut World, endpoint: String, model: String, stream: bool) {
     w.models.requested = model.clone();
     let mut call = acp2api_acceptance::endpoint_check::request(&endpoint, "Hello", stream);
     call.body["model"] = model.into();
+    w.request.queue_next(&w.scenario);
     c::send(&mut w.scenario, call).await;
 }
 #[when(expr = "an API client sends a request to {string} with the model {string}")]
