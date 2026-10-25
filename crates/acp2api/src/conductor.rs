@@ -349,7 +349,9 @@ impl Core {
                             self.catalog = Some(catalog);
                             let active = &mut self.active[index];
                             active.session = Some(session.clone());
-                            if let Phase::Preparing(prompt) =
+                            if active.disconnected {
+                                self.finish(index, Ok(()), &mut commands);
+                            } else if let Phase::Preparing(prompt) =
                                 std::mem::replace(&mut active.phase, Phase::Prompt)
                             {
                                 commands.push(Command::Prompt {
@@ -986,6 +988,79 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    #[test]
+    fn disconnect_during_session_creation_retires_without_a_prompt() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-disconnected-prepare-{}",
+            std::process::id()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let turn = crate::dialect::CHAT
+            .parse(br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        let request = journal.begin(crate::journal::Api::Chat, 0);
+        let work = request.id.clone();
+        let (output, ticket) = mpsc::unbounded_channel();
+        let mut core = Core {
+            catalog: None,
+            active: Vec::new(),
+            waiting: VecDeque::new(),
+            records: Vec::new(),
+            startup_session: None,
+            use_sequence: 0,
+            limit: 1,
+            notices: watch::channel(Arc::new(Vec::new())).0,
+        };
+        let commands = core.handle(
+            Event::Accepted(Box::new(Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request,
+                output,
+            })),
+            0,
+        );
+        assert!(matches!(&commands[..], [Command::Prepare { .. }]));
+        drop(ticket);
+        core.handle(Event::Disconnected(work.clone()), 1);
+        assert_eq!(
+            core.active.len(),
+            1,
+            "an outstanding ACP call retains its place"
+        );
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work,
+                result: Ok(("disconnected-session".into(), catalog)),
+            }),
+            2,
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, Command::Prompt { .. })),
+            "FR-031 sends no prompt for a disconnected request"
+        );
+        assert!(commands.iter().any(|command| matches!(command, Command::Forget(session) if session == "disconnected-session")), "FR-031 clears the created ACP session");
+        assert!(
+            core.active.is_empty(),
+            "the completed ACP call releases its place"
+        );
+        assert!(
+            core.records.is_empty(),
+            "the disconnected session cannot continue"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
     #[test]
     fn a_prompt_rpc_error_waits_for_the_http_error_lines() {
         let folder =

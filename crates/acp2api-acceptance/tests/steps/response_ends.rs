@@ -80,7 +80,7 @@ fn incomplete(w: &mut World, status: String, reason: String) {
 fn no_error(w: &mut World) {
     let answer = w.scenario.answer.as_ref().unwrap();
     assert_eq!(answer.status, 200, "FR-030 normal end");
-    assert!(answer.json().get("error").is_none(), "FR-030 no error");
+    assert!(answer.json()["error"].is_null(), "FR-030 no error");
 }
 
 #[then(expr = "the text of all stream events together is {string}")]

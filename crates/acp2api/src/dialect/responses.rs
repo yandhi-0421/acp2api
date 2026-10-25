@@ -58,6 +58,7 @@ impl Responses {
             "object": "response",
             "created_at": w.created,
             "status": status,
+            "error": null,
             "incomplete_details": match w.stop { Stop::MaxTokens => json!({"reason":"max_output_tokens"}), Stop::EndTurn | Stop::Sequence(_) => Value::Null },
             "instructions": null,
             "max_output_tokens": null,
@@ -184,5 +185,33 @@ impl WireDialect for Responses {
             json!({"response":self.response(w,Some(usage))}),
         ));
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn successful_responses_keep_the_null_error_field() {
+        let form = WireDialect::parse(&Responses, br#"{"model":"m","input":"Hi"}"#)
+            .ok()
+            .unwrap()
+            .form;
+        let mut wire = Encoding::new("resp_", "call_", form, std::time::UNIX_EPOCH).unwrap();
+        for stop in [Stop::EndTurn, Stop::MaxTokens] {
+            wire.stop = stop;
+            let body = Responses.body(
+                &wire,
+                &Usage {
+                    input_tokens: 2,
+                    output_tokens: 0,
+                },
+            );
+            assert_eq!(
+                body.get("error"),
+                Some(&Value::Null),
+                "Responses preserves its success schema"
+            );
+        }
     }
 }
