@@ -351,7 +351,7 @@ No text of an API client starts a slash command of the official runtime. The fir
 `GLOSSARY.md` defines the system prompt.
 
 - The model gets the system prompt as an addition to the system text of the official runtime, not as user text.
-- acp2api joins the parts of the system prompt with one blank line. A part with a `name` starts with its role label on its own line, for example `[system: example_user]`.
+- A part of the system prompt is one message. acp2api joins these messages with one blank line. Within each message, the content follows FR-020. A message with a `name` starts with its role label once, on its own line, for example `[system: example_user]`.
 - When the first `system` block is the attribution block of Claude Code, acp2api removes it. acp2api finds the block by the start of its text. The client check of SC-003 finds that start, and the written design records it.
 - A later `system` or `developer` message is a message of the conversation. It stays at its place, with its role label.
 
@@ -361,6 +361,7 @@ No text of an API client starts a slash command of the official runtime. The fir
 
 - A role label is a line of its own before an item: `[user]`, `[assistant]`, `[system]`, or `[developer]`. With a `name`, the form is `[user: Alice]`.
 - The content of an item starts on the line after its role label. Each role label and each sentence of FR-023 starts a new line. No blank line separates two items.
+- Within one message, acp2api joins the text blocks in order with no added separator.
 - In the text of a rebuild, one blank line follows the neutral line (FR-021).
 - acp2api keeps the `name` of each message of each role.
 - A tool call and a tool result get a sentence, not a role label (FR-023).

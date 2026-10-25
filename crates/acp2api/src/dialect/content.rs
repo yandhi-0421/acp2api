@@ -39,13 +39,6 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let mut system = Vec::new();
     if matches!(api, Api::Messages) && !value["system"].is_null() {
         system = system_parts(api, Role::System, None, &value["system"])?;
-        if value["system"].is_array()
-            && system
-                .first()
-                .is_some_and(|part| part.text.starts_with("x-anthropic-billing-header:"))
-        {
-            system.remove(0);
-        }
     }
     if matches!(api, Api::Responses) && !value["instructions"].is_null() {
         system.push(SystemPart {
@@ -218,7 +211,7 @@ fn system_parts(
     if let Some(text) = value.as_str() {
         return Ok(vec![make(text)]);
     }
-    value
+    let mut parts = value
         .as_array()
         .ok_or_else(|| Refusal::invalid("system prompt must be text or text blocks"))?
         .iter()
@@ -230,9 +223,21 @@ fn system_parts(
             ) {
                 return Err(Message::Content(kind.into()).into());
             }
-            Ok(make(required(part, "text")?))
+            required(part, "text")
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if matches!(api, Api::Messages)
+        && parts
+            .first()
+            .is_some_and(|text| text.starts_with("x-anthropic-billing-header:"))
+    {
+        parts.remove(0);
+    }
+    Ok(if parts.is_empty() {
+        Vec::new()
+    } else {
+        vec![make(&parts.concat())]
+    })
 }
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
     v[key]

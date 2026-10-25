@@ -47,7 +47,7 @@ async fn parent_system_probe() {
             (
                 json!([{"type":"text","text":attribution},{"type":"text","text":first},{"type":"text","text":second}]),
                 Value::Null,
-                format!("{first}\n\n{second}"),
+                format!("{first}{second}"),
             )
         } else {
             (

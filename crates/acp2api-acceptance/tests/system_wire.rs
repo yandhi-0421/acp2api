@@ -14,7 +14,7 @@ async fn messages_system_string_and_text_blocks_keep_their_exact_content() {
         let expected = if let Some(text) = system.as_str() {
             text.to_owned()
         } else {
-            "First 雪\ninside\n\nSecond 🙂".into()
+            "First 雪\ninsideSecond 🙂".into()
         };
         let mut scenario = setup();
         s::send(
@@ -31,9 +31,20 @@ async fn messages_system_string_and_text_blocks_keep_their_exact_content() {
 async fn named_system_and_developer_parts_keep_their_original_roles() {
     for endpoint in ["POST /v1/chat/completions", "POST /v1/responses"] {
         let mut scenario = setup();
+        let kind = if endpoint.ends_with("responses") {
+            "input_text"
+        } else {
+            "text"
+        };
         let messages = json!([
-            s::message("system", Some("系统 雪"), "First\n\ninside"),
-            s::message("developer", Some("规则 🙂"), "Second"),
+            {"role":"system","name":"系统 雪","content":[
+                {"type":kind,"text":"First\n"},
+                {"type":kind,"text":"\ninside"}
+            ]},
+            {"role":"developer","name":"规则 🙂","content":[
+                {"type":kind,"text":"Sec"},
+                {"type":kind,"text":"ond"}
+            ]},
             s::message("user", None, "user")
         ]);
         let system = if endpoint.ends_with("responses") {
@@ -98,7 +109,7 @@ async fn attribution_stripping_uses_only_the_first_text_block_exact_prefix() {
         ),
         (
             json!([{"type":"text","text":"Keep me"},{"type":"text","text":s::ATTRIBUTION}]),
-            format!("Keep me\n\n{}", s::ATTRIBUTION),
+            format!("Keep me{}", s::ATTRIBUTION),
             false,
         ),
         (
