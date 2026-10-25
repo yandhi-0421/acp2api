@@ -132,6 +132,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         input_tokens: crate::conversation::input_tokens(&conversation, &tool_text),
         conversation,
         model: model.clone(),
+        effort: effort(api, &value),
         tools: client_tools,
         tool_choice,
     };
@@ -153,6 +154,31 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             .cloned()
             .collect(),
     })
+}
+fn effort(api: Api, value: &Value) -> crate::conversation::EffortAsk {
+    use crate::conversation::{EffortAsk, ThinkingLevel};
+    let field = match api {
+        Api::Chat => &value["reasoning_effort"],
+        Api::Responses => &value["reasoning"]["effort"],
+        Api::Messages => {
+            if value["output_config"]["effort"].is_null() {
+                return if value["thinking"]["type"] == "disabled" {
+                    EffortAsk::Level(ThinkingLevel::Low)
+                } else {
+                    EffortAsk::Absent
+                };
+            }
+            &value["output_config"]["effort"]
+        }
+    };
+    match field.as_str() {
+        Some("none" | "minimal" | "low") => EffortAsk::Level(ThinkingLevel::Low),
+        Some("medium") => EffortAsk::Level(ThinkingLevel::Medium),
+        Some("high" | "xhigh" | "max" | "ultra") => EffortAsk::Level(ThinkingLevel::High),
+        Some(value) => EffortAsk::Unknown(value.into()),
+        None if field.is_null() => EffortAsk::Absent,
+        None => EffortAsk::Unknown(field.to_string()),
+    }
 }
 fn message(role: Role, name: Option<&str>, parts: Vec<Part>) -> Item {
     Item::Message {

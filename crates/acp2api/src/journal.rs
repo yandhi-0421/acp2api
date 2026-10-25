@@ -279,7 +279,28 @@ pub(crate) struct SafetyReport {
     pub kind: SafetyKind,
     pub tool: String,
 }
+#[derive(Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub(crate) enum Diagnostic {
+    UnknownEffort { value: String },
+}
 impl Journal {
+    pub(crate) fn diagnostic(
+        &self,
+        request: &Request,
+        diagnostic: Diagnostic,
+        clock: &dyn crate::Clock,
+    ) {
+        let result = (|| -> io::Result<()> {
+            let mut record = serde_json::to_value(diagnostic)?;
+            record["time"] = timestamp(clock.wall())?.into();
+            record["request_id"] = request.id.clone().into();
+            self.emit_to_file_then_stdout_under_writer_lock(&record)
+        })();
+        if let Err(error) = result {
+            eprintln!("acp2api: cannot write request diagnostic: {error}");
+        }
+    }
     pub(crate) fn safety(&self, report: SafetyReport, clock: &dyn crate::Clock) {
         if let Err(error) = self.safety_line(report, clock) {
             eprintln!("acp2api: cannot write runtime safety event: {error}");

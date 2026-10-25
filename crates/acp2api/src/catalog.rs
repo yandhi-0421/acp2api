@@ -1,3 +1,4 @@
+use crate::conversation::{EffortAsk, ThinkingLevel, TurnRequest};
 use agent_client_protocol_schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
 };
@@ -25,7 +26,7 @@ pub(crate) struct Catalog {
 struct OfferedModel {
     value: String,
     name: String,
-    levels: Vec<String>,
+    levels: Vec<ThinkingLevel>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,11 +58,14 @@ impl Catalog {
             .into_iter()
             .map(|option| {
                 let value = option.value.to_string();
-                let levels = ["low", "medium", "high"]
-                    .into_iter()
-                    .filter(|level| available.contains(&format!("{value}-{level}")))
-                    .map(str::to_owned)
-                    .collect();
+                let levels = [
+                    ThinkingLevel::Low,
+                    ThinkingLevel::Medium,
+                    ThinkingLevel::High,
+                ]
+                .into_iter()
+                .filter(|level| available.contains(&format!("{value}-{}", level.as_str())))
+                .collect();
                 OfferedModel {
                     value,
                     name: option.name,
@@ -85,7 +89,7 @@ impl Catalog {
                     model
                         .levels
                         .iter()
-                        .map(|level| format!("{}-{level}", model.value)),
+                        .map(|level| format!("{}-{}", model.value, level.as_str())),
                 )
                 .map(|id| (id, model.name.as_str()))
         })
@@ -103,16 +107,48 @@ impl Catalog {
             })
             .collect()
     }
-    pub(crate) fn check(&self, requested: &str) -> Result<(), crate::messages::Refusal> {
-        if self.names().any(|(id, _)| id == requested) {
-            Ok(())
-        } else {
-            Err(crate::messages::Message::Model {
-                requested: requested.into(),
-                names: self.names().map(|(id, _)| id).collect(),
+    pub(crate) fn resolve(
+        &self,
+        turn: &mut TurnRequest,
+    ) -> Result<Option<String>, crate::messages::Refusal> {
+        let found = self.models.iter().find_map(|model| {
+            if model.value == turn.model {
+                Some((model, None))
+            } else {
+                model
+                    .levels
+                    .iter()
+                    .copied()
+                    .find(|level| turn.model == format!("{}-{}", model.value, level.as_str()))
+                    .map(|level| (model, Some(level)))
             }
-            .into())
-        }
+        });
+        let (model, suffix) = found.ok_or_else(|| {
+            crate::messages::Refusal::from(crate::messages::Message::Model {
+                requested: turn.model.clone(),
+                names: self.names().map(|(id, _)| id).collect(),
+            })
+        })?;
+        let mut unknown = None;
+        let wanted = suffix.unwrap_or_else(|| match &turn.effort {
+            EffortAsk::Level(level) => *level,
+            EffortAsk::Absent => ThinkingLevel::High,
+            EffortAsk::Unknown(value) => {
+                unknown = Some(value.clone());
+                ThinkingLevel::High
+            }
+        });
+        turn.effort = match model
+            .levels
+            .iter()
+            .find(|level| **level >= wanted)
+            .or_else(|| model.levels.last())
+        {
+            Some(level) => EffortAsk::Level(*level),
+            None => EffortAsk::Absent,
+        };
+        turn.model = model.value.clone();
+        Ok(unknown)
     }
 }
 fn model_options(config: &[serde_json::Value]) -> Result<Vec<SessionConfigSelectOption>, String> {

@@ -1,7 +1,7 @@
 mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
-    conversation::{Prompt, Ticket, TurnEvent, TurnRequest, Usage},
+    conversation::{EffortAsk, Prompt, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use std::{collections::VecDeque, sync::Arc};
@@ -63,7 +63,7 @@ struct Session {
     system: Option<String>,
 }
 enum Phase {
-    Preparing(Vec<crate::conversation::PromptBlock>),
+    Preparing(PromptRequest),
     Prompt,
     Settling { at: Moment, can_continue: bool },
 }
@@ -113,7 +113,7 @@ enum Command {
     Prompt {
         work: String,
         session: String,
-        prompt: Vec<crate::conversation::PromptBlock>,
+        prompt: PromptRequest,
     },
     Emit(Output, TurnEvent),
     Permission {
@@ -133,10 +133,13 @@ impl Core {
             .chain(self.records.iter().map(|record| record.expires))
             .min()
     }
-    fn check_model(&self, model: &str) -> Result<(), crate::messages::Refusal> {
+    fn check_model(
+        &self,
+        turn: &mut TurnRequest,
+    ) -> Result<Option<String>, crate::messages::Refusal> {
         self.catalog
             .as_ref()
-            .map_or(Ok(()), |catalog| catalog.check(model))
+            .map_or(Ok(None), |catalog| catalog.resolve(turn))
     }
     fn model_entries(&self) -> Vec<crate::catalog::ModelEntry> {
         self.catalog
@@ -167,12 +170,21 @@ impl Core {
     }
     fn admit(
         &self,
-        work: TurnWork,
+        mut work: TurnWork,
         journal: &crate::journal::Journal,
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let (output, ticket) = mpsc::unbounded_channel();
-        let admitted = self.check_model(&work.turn.model).map(|()| ticket);
+        let admitted = self.check_model(&mut work.turn).map(|unknown| {
+            if let Some(value) = unknown {
+                journal.diagnostic(
+                    &work.request,
+                    crate::journal::Diagnostic::UnknownEffort { value },
+                    clock,
+                );
+            }
+            ticket
+        });
         let refused = admitted.is_err();
         if work.admission.send(admitted).is_err() {
             journal.complete(
@@ -347,6 +359,14 @@ impl Core {
                 },
             };
             let (kind, prompt) = crate::conversation::prompt(prompt, &items);
+            let prompt = PromptRequest {
+                blocks: prompt,
+                model: request.turn.model,
+                level: match request.turn.effort {
+                    EffortAsk::Level(level) => Some(level),
+                    EffortAsk::Absent | EffortAsk::Unknown(_) => None,
+                },
+            };
             let ready = match matched {
                 Some((index, _)) => Some(self.records.remove(index).session),
                 None if settings.system.is_none() && settings.tools.is_empty() => {
@@ -714,7 +734,7 @@ impl Conductor {
                     prompt,
                 } => {
                     let result = match readable(runtime, *read_open) {
-                        Ok(runtime) => runtime.start_prompt(prompt, &session).await,
+                        Ok(runtime) => runtime.start_configured_prompt(prompt, &session).await,
                         Err(error) => Err(error),
                     };
                     if let Err(error) = result {
@@ -941,10 +961,15 @@ mod tests {
             notices: watch::channel(Arc::new(Vec::new())).0,
         };
         assert_eq!(core.model_entries().len(), 1);
-        assert!(core.check_model("missing").is_err());
+        let mut missing = crate::dialect::CHAT
+            .parse(br#"{"model":"missing","messages":[{"role":"user","content":"Hi"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        assert!(core.check_model(&mut missing).is_err());
         core.handle(Event::Runtime(RuntimeEvent::Closed), 0);
         assert_eq!(core.model_entries().len(), 0, "GET /v1/models");
-        assert!(core.check_model("missing").is_ok());
+        assert!(core.check_model(&mut missing).is_ok());
     }
     #[test]
     fn a_session_that_leaves_for_good_is_forgotten() {

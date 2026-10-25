@@ -88,9 +88,35 @@ pub(crate) struct ToolCall {
 pub(crate) struct TurnRequest {
     pub conversation: Conversation,
     pub model: String,
+    pub effort: EffortAsk,
     pub tools: Vec<ClientTool>,
     pub input_tokens: u64,
     pub tool_choice: ToolChoice,
+}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ThinkingLevel {
+    Low,
+    Medium,
+    High,
+}
+impl ThinkingLevel {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+pub(crate) enum EffortAsk {
+    Absent,
+    Level(ThinkingLevel),
+    Unknown(String),
+}
+pub(crate) struct PromptRequest {
+    pub blocks: Vec<PromptBlock>,
+    pub model: String,
+    pub level: Option<ThinkingLevel>,
 }
 pub(crate) enum PromptBlock {
     Text(String),
