@@ -351,7 +351,7 @@ No text of an API client starts a slash command of the official runtime. The fir
 `GLOSSARY.md` defines the system prompt.
 
 - The model gets the system prompt as an addition to the system text of the official runtime, not as user text.
-- acp2api joins the parts of the system prompt with one blank line. A part with a `name` starts with its role label on its own line, for example `[system: example_user]`.
+- Each `system` field, `instructions` field, and initial `system` or `developer` message is one part of the system prompt. acp2api joins these parts with one blank line. Within each part, acp2api joins the text blocks in order with one blank line. A message with a `name` starts with its role label once, on its own line, for example `[system: example_user]`.
 - When the first `system` block is the attribution block of Claude Code, acp2api removes it. acp2api finds the block by the start of its text. The client check of SC-003 finds that start, and the written design records it.
 - A later `system` or `developer` message is a message of the conversation. It stays at its place, with its role label.
 
@@ -540,6 +540,8 @@ An error of the 503 row or the 502 row of FR-033 starts a retry wait of 30 s for
 #### FR-031 — Disconnect of the API client
 
 When the API client disconnects during a prompt turn, acp2api cancels the prompt turn at once, and it sends no response. A request that waits in the queue leaves the queue at its disconnect.
+
+At a disconnect during a prompt turn, acp2api clears the current ACP session. That ACP session holds part of a reply that the API client did not get.
 
 **Pass:** after a disconnect during a prompt turn, the official runtime gets a cancel of the prompt turn. After a disconnect in the queue, the count of the queue decreases by one.
 
@@ -936,6 +938,8 @@ A log holds only metadata:
   - the error code, and the unknown field names;
 - one line for each change of state;
 - the lines that other FRs name, for example for a rebuild.
+
+For a refused request, the log line has the `model` value of the body when the body parses and that value is a string of at most 256 bytes. Otherwise, the log line has `model: null`.
 
 No log line, no terminal line, and no state file holds these items:
 

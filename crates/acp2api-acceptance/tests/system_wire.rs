@@ -32,8 +32,14 @@ async fn named_system_and_developer_parts_keep_their_original_roles() {
     for endpoint in ["POST /v1/chat/completions", "POST /v1/responses"] {
         let mut scenario = setup();
         let messages = json!([
-            s::message("system", Some("系统 雪"), "First\n\ninside"),
-            s::message("developer", Some("规则 🙂"), "Second"),
+            {"role":"system","name":"系统 雪","content":[
+                c::text(endpoint, "First\n"),
+                c::text(endpoint, "\ninside")
+            ]},
+            {"role":"developer","name":"规则 🙂","content":[
+                c::text(endpoint, "Sec"),
+                c::text(endpoint, "ond")
+            ]},
             s::message("user", None, "user")
         ]);
         let system = if endpoint.ends_with("responses") {
@@ -47,9 +53,9 @@ async fn named_system_and_developer_parts_keep_their_original_roles() {
         )
         .await;
         let expected = if endpoint.ends_with("responses") {
-            "Base instructions\n\n[system: 系统 雪]\nFirst\n\ninside\n\n[developer: 规则 🙂]\nSecond"
+            "Base instructions\n\n[system: 系统 雪]\nFirst\n\n\n\ninside\n\n[developer: 规则 🙂]\nSec\n\nond"
         } else {
-            "[system: 系统 雪]\nFirst\n\ninside\n\n[developer: 规则 🙂]\nSecond"
+            "[system: 系统 雪]\nFirst\n\n\n\ninside\n\n[developer: 规则 🙂]\nSec\n\nond"
         };
         s::addition(&scenario, expected);
         s::prompt(&scenario, "user");

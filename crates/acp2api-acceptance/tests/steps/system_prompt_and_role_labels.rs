@@ -74,20 +74,29 @@ async fn system_parts(
     .await;
 }
 #[when(
-    expr = "an API client sends a request to {string} with the system message {string} with the name {string}, and then one user message {string}"
+    expr = "an API client sends a request to {string} with the system message named {string} and these text blocks:"
 )]
-async fn named_system(w: &mut World, endpoint: String, text: String, name: String, user: String) {
-    use acp2api_acceptance::system_check as s;
+async fn named_system(
+    w: &mut World,
+    endpoint: String,
+    name: String,
+    #[step] step: &cucumber::gherkin::Step,
+) {
+    use acp2api_acceptance::{content_check, system_check as s};
+    let blocks: Vec<_> = step.table.as_ref().unwrap().rows[1..]
+        .iter()
+        .map(|row| content_check::text(&endpoint, &row[0]))
+        .collect();
     s::send(
         &mut w.scenario,
         s::request(
             &endpoint,
             serde_json::Value::Null,
             serde_json::json!([
-                s::message("system", Some(&name), &text),
-                s::message("user", None, &user)
+                {"role":"system","name":name,"content":blocks},
+                s::message("user", None, "Hello")
             ]),
-            &user,
+            "Hello",
         ),
     )
     .await;

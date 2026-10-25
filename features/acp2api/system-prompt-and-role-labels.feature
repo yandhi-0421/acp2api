@@ -30,13 +30,23 @@ Feature: System prompt and role labels
       | POST /v1/responses        | the instructions "Part one." and the developer message "Part two."       |
 
   @FR-019 @issue-41
-  Scenario: A part of the system prompt with a name starts with its role label
-    When an API client sends a request to "POST /v1/chat/completions" with the system message "Use short answers." with the name "example_user", and then one user message "Hello"
+  Scenario Outline: A named system message gets one role label before all its text blocks
+    When an API client sends a request to "<endpoint>" with the system message named "example_user" and these text blocks:
+      | text      |
+      | Part one. |
+      | Part two. |
     Then the ACP session gets this system prompt addition:
       """
       [system: example_user]
-      Use short answers.
+      Part one.
+
+      Part two.
       """
+
+    Examples:
+      | endpoint                  |
+      | POST /v1/chat/completions |
+      | POST /v1/responses        |
 
   @FR-019 @issue-41
   Scenario: acp2api removes the attribution block of Claude Code

@@ -15,6 +15,7 @@ mod content;
 mod fields;
 mod messages;
 mod responses;
+pub(crate) use fields::request_model;
 pub(crate) static MESSAGES: &dyn Dialect = &messages::Messages;
 pub(crate) static RESPONSES: &dyn Dialect = &responses::Responses;
 pub(crate) static CHAT: &dyn Dialect = &chat::Chat;
