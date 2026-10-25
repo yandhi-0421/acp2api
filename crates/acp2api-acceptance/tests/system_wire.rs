@@ -14,7 +14,7 @@ async fn messages_system_string_and_text_blocks_keep_their_exact_content() {
         let expected = if let Some(text) = system.as_str() {
             text.to_owned()
         } else {
-            "First 雪\ninsideSecond 🙂".into()
+            "First 雪\ninside\n\nSecond 🙂".into()
         };
         let mut scenario = setup();
         s::send(
@@ -53,9 +53,9 @@ async fn named_system_and_developer_parts_keep_their_original_roles() {
         )
         .await;
         let expected = if endpoint.ends_with("responses") {
-            "Base instructions\n\n[system: 系统 雪]\nFirst\n\ninside\n\n[developer: 规则 🙂]\nSecond"
+            "Base instructions\n\n[system: 系统 雪]\nFirst\n\n\n\ninside\n\n[developer: 规则 🙂]\nSec\n\nond"
         } else {
-            "[system: 系统 雪]\nFirst\n\ninside\n\n[developer: 规则 🙂]\nSecond"
+            "[system: 系统 雪]\nFirst\n\n\n\ninside\n\n[developer: 规则 🙂]\nSec\n\nond"
         };
         s::addition(&scenario, expected);
         s::prompt(&scenario, "user");
@@ -104,7 +104,7 @@ async fn attribution_stripping_uses_only_the_first_text_block_exact_prefix() {
         ),
         (
             json!([{"type":"text","text":"Keep me"},{"type":"text","text":s::ATTRIBUTION}]),
-            format!("Keep me{}", s::ATTRIBUTION),
+            format!("Keep me\n\n{}", s::ATTRIBUTION),
             false,
         ),
         (

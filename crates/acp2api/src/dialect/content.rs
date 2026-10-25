@@ -225,7 +225,7 @@ fn system_part(role: Role, name: Option<&str>, texts: &[&str]) -> Option<SystemP
     (!texts.is_empty()).then(|| SystemPart {
         role,
         name: name.map(str::to_owned),
-        text: texts.concat(),
+        text: texts.join("\n\n"),
     })
 }
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {

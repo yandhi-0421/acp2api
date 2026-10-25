@@ -351,7 +351,7 @@ No text of an API client starts a slash command of the official runtime. The fir
 `GLOSSARY.md` defines the system prompt.
 
 - The model gets the system prompt as an addition to the system text of the official runtime, not as user text.
-- Each `system` field, `instructions` field, and initial `system` or `developer` message is one part of the system prompt. acp2api joins these parts with one blank line. Within each part, acp2api joins the text blocks in order with no added separator. A message with a `name` starts with its role label once, on its own line, for example `[system: example_user]`.
+- Each `system` field, `instructions` field, and initial `system` or `developer` message is one part of the system prompt. acp2api joins these parts with one blank line. Within each part, acp2api joins the text blocks in order with one blank line. A message with a `name` starts with its role label once, on its own line, for example `[system: example_user]`.
 - When the first `system` block is the attribution block of Claude Code, acp2api removes it. acp2api finds the block by the start of its text. The client check of SC-003 finds that start, and the written design records it.
 - A later `system` or `developer` message is a message of the conversation. It stays at its place, with its role label.
 

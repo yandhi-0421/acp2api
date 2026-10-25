@@ -14,7 +14,7 @@ Feature: System prompt and role labels
     And the prompt that the official runtime gets is "Hello"
 
   @FR-019 @issue-41
-  Scenario Outline: acp2api joins the messages of the system prompt with one blank line
+  Scenario Outline: acp2api joins the parts of the system prompt with one blank line
     When an API client sends a request to "<endpoint>" with <parts> and then one user message "Hello"
     Then the ACP session gets this system prompt addition:
       """
@@ -25,13 +25,9 @@ Feature: System prompt and role labels
 
     Examples:
       | endpoint                  | parts                                                                    |
+      | POST /v1/messages         | the system blocks "Part one." and "Part two."                            |
       | POST /v1/chat/completions | the system message "Part one." and the developer message "Part two."     |
       | POST /v1/responses        | the instructions "Part one." and the developer message "Part two."       |
-
-  @FR-019 @issue-41
-  Scenario: The text blocks of one system message have no added separator
-    When an API client sends a request to "POST /v1/messages" with the system blocks "Part one." and "Part two." and then one user message "Hello"
-    Then the ACP session gets the system prompt addition "Part one.Part two."
 
   @FR-019 @issue-41
   Scenario Outline: A named system message gets one role label before all its text blocks
@@ -42,7 +38,9 @@ Feature: System prompt and role labels
     Then the ACP session gets this system prompt addition:
       """
       [system: example_user]
-      Part one.Part two.
+      Part one.
+
+      Part two.
       """
 
     Examples:
