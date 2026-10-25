@@ -76,26 +76,34 @@ impl Runtime {
         )
         .await?;
         let (tx, lines) = mpsc::channel(128);
-        let (stdout_tx, clock) = (tx.clone(), start.clock.clone());
-        tokio::spawn(async move {
-            let mut stdout = BufReader::new(child.stdout);
-            while let Some(line) = read_line(&mut stdout).await {
-                let hold = clock.hold(HoldKind::RuntimeLine);
-                let line = serde_json::from_slice(&line).map_err(|e| format!("ACP JSON: {e}"));
-                if stdout_tx.send((Line::Stdout(line), hold)).await.is_err() {
-                    return;
-                }
-            }
-            let _ = stdout_tx
-                .send((Line::Closed, clock.hold(HoldKind::TurnEvent)))
-                .await;
-        });
         let clock = start.clock.clone();
         tokio::spawn(async move {
-            let mut stderr = BufReader::new(child.stderr);
-            while let Some(line) = read_line(&mut stderr).await {
-                let hold = clock.hold(HoldKind::RuntimeLine);
-                if tx.send((Line::Stderr(line), hold)).await.is_err() {
+            let mut stdout = BufReader::new(child.stdout).split(b'\n');
+            let mut stderr = BufReader::new(child.stderr).split(b'\n');
+            let mut stderr_open = true;
+            loop {
+                // Drain buffered reply chunks before stderr can end their prompt turn.
+                let line = tokio::select! {
+                    biased;
+                    line = stdout.next_segment() => match line {
+                        Ok(Some(line)) => Line::Stdout(serde_json::from_slice(&line).map_err(|e| format!("ACP JSON: {e}"))),
+                        Ok(None) | Err(_) => Line::Closed,
+                    },
+                    line = stderr.next_segment(), if stderr_open => match line {
+                        Ok(Some(line)) => Line::Stderr(line),
+                        Ok(None) | Err(_) => {
+                            stderr_open = false;
+                            continue;
+                        }
+                    },
+                };
+                let closed = matches!(line, Line::Closed);
+                let hold = clock.hold(if closed {
+                    HoldKind::TurnEvent
+                } else {
+                    HoldKind::RuntimeLine
+                });
+                if tx.send((line, hold)).await.is_err() || closed {
                     return;
                 }
             }
@@ -606,13 +614,6 @@ impl Runtime {
 pub(crate) fn program(data: &std::path::Path) -> std::path::PathBuf {
     data.join(crate::runtime_builds::COPY)
         .join(crate::runtime_builds::SERVER)
-}
-async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
-    let mut line = Vec::new();
-    match input.read_until(b'\n', &mut line).await {
-        Ok(0) | Err(_) => None,
-        Ok(_) => Some(line),
-    }
 }
 fn acp_error(value: &Value) -> crate::messages::Message {
     match serde_json::from_value(value.clone()) {

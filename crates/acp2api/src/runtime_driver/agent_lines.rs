@@ -539,3 +539,22 @@ async fn a_cancelled_config_call_completes_without_starting_its_prompt() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn buffered_stdout_is_drained_before_a_ready_stderr_error() {
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime.start_prompt(vec![PromptBlock::Text("Hello".into())], "s1").await.unwrap();
+        let _prompt = agent.stdin().await;
+        // Separate pipes can wake their readers in a different order from the writes.
+        agent.stderr(b"Antigravity SDK error processing prompt for session s1\n").await;
+        agent.stderr(b"Error 503, Message: The service is unavailable., Status: UNAVAILABLE, Details: []\n").await;
+        agent.stdout(chunk("Sure, ")).await;
+        agent.stdout(chunk("503 The service is unavailable.")).await;
+        let mut observed = Vec::new();
+        for _ in 0..4 {
+            observed.push(next(&mut runtime).await);
+        }
+        assert_eq!(observed, ["text Sure, ", "text 503 The service is unavailable.", "stderr", "upstream 503"], "FR-028 buffered reply text must reach the holdback before its stderr error");
+    }).await;
+}
