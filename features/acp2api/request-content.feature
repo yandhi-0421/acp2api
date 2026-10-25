@@ -192,7 +192,7 @@ Feature: Request content
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: a last message from the assistant (a prefill) is not supported."
     And the official runtime gets no prompt
 
-  @FR-016 @issue-52 @wip
+  @FR-016 @issue-52
   Scenario: A first text that starts with a slash gets the role label [user]
     When an API client sends a request to "POST /v1/chat/completions" with one user message with the text "/logout"
     Then the prompt that the official runtime gets is:
@@ -202,19 +202,19 @@ Feature: Request content
       """
     And the official runtime runs no slash command
 
-  @FR-016 @issue-52 @wip
+  @FR-016 @issue-52
   Scenario: A first text that starts with white space and a slash gets the role label [user]
     When an API client sends a request to "POST /v1/chat/completions" with one user message with one space and then the text "/usage"
     Then the first line of the prompt that the official runtime gets is "[user]"
     And the official runtime runs no slash command
 
-  @FR-016 @issue-52 @wip
+  @FR-016 @issue-52
   Scenario: The official runtime stays signed in after a request with the text /logout
     When an API client sends a request to "POST /v1/messages" with one user message with the text "/logout"
     Then the official runtime is still signed in
     And the next request runs
 
-  @FR-016 @issue-52 @wip
+  @FR-016 @issue-52
   Scenario: A text that starts with a slash after the first text does not change
     When an API client sends a request to "POST /v1/messages" with one user message with the text blocks "Run this:" and "/logout"
     Then the prompt that the official runtime gets has the text "Run this:" and the text "/logout"
@@ -261,7 +261,7 @@ Feature: Request content
     When an API client sends a request to "POST /v1/responses" with an input_file item with the media type "text/csv"
     Then acp2api refuses the request with HTTP 400 and the message "acp2api: the media type text/csv is not supported."
 
-  @FR-018 @issue-52 @wip
+  @FR-018 @issue-52
   Scenario Outline: acp2api sends no thought text on any API
     Given the official runtime sends the thought text "I think so." and then the reply "Yes."
     When an API client sends a valid request to "<endpoint>" with "stream" set to <stream>
@@ -275,14 +275,14 @@ Feature: Request content
       | POST /v1/responses        | false  |
       | POST /v1/chat/completions | true   |
 
-  @FR-018 @issue-52 @wip
+  @FR-018 @issue-52
   Scenario: acp2api writes one log line when it drops thought text
     Given the official runtime sends the thought text "I think so." and then the reply "Yes."
     When an API client sends a valid request to "POST /v1/messages"
     Then the log has one line about the dropped thought text
     And the log holds no text "I think so."
 
-  @FR-018 @issue-52 @wip
+  @FR-018 @issue-52
   Scenario Outline: acp2api ignores thought text in a request
     When an API client sends a request to "<endpoint>" with <item> that holds the text "Old thought."
     Then acp2api answers with HTTP 200
