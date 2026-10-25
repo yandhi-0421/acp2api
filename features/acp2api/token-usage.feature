@@ -79,7 +79,7 @@ Feature: Token usage
       | the request needs a rebuild                                       |
       | an ACP session already holds the first user text and assistant text |
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario Outline: The input estimate counts tool arguments and results without generated text
     Given the request has one earlier tool call "read" with <arguments>
     And the result of that call is "DATA", followed by the user text "NEXT"

@@ -19,7 +19,7 @@ pub(super) fn select<'a>(
             record.tools == tools
                 && hashes.system == record.hashes.system
                 && hashes.messages.starts_with(&record.hashes.messages)
-                && conversation::user_suffix(&items[record.hashes.messages.len()..])
+                && conversation::continues_after(items, record.hashes.messages.len())
         })
         .max_by_key(|(_, record)| (record.hashes.messages.len(), record.used))
         .map(|(index, record)| (index, &items[record.hashes.messages.len()..]))
