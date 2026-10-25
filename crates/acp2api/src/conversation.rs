@@ -177,8 +177,12 @@ pub(crate) fn prompt(
         [Item::Message {
             role: Role::User,
             name: None,
-            ..
+            parts,
         }]
+        if !parts.iter().find_map(|part| match part {
+            Part::Text(text) => Some(text),
+            _ => None,
+        }).is_some_and(|text| text.trim_start().starts_with('/'))
     );
     let mut blocks = Vec::new();
     for (index, item) in items.iter().enumerate() {
@@ -259,13 +263,6 @@ pub(crate) fn prompt(
         if !prefix.is_empty() {
             blocks.push(PromptBlock::Text(prefix));
         }
-    }
-    if let Some(PromptBlock::Text(text)) = blocks
-        .iter_mut()
-        .find(|block| matches!(block, PromptBlock::Text(_)))
-        && text.trim_start().starts_with('/')
-    {
-        text.insert_str(0, "[user]\n");
     }
     (kind, blocks)
 }

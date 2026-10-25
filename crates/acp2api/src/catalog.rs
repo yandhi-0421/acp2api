@@ -28,6 +28,15 @@ struct OfferedModel {
     name: String,
     levels: Vec<ThinkingLevel>,
 }
+impl OfferedModel {
+    fn name_with_level(&self, level: ThinkingLevel) -> String {
+        format!("{}-{}", self.value, level.as_str())
+    }
+}
+pub(crate) struct SelectedModel {
+    pub model: String,
+    pub level: Option<ThinkingLevel>,
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Metadata {
@@ -58,19 +67,20 @@ impl Catalog {
             .into_iter()
             .map(|option| {
                 let value = option.value.to_string();
-                let levels = [
+                let mut model = OfferedModel {
+                    value,
+                    name: option.name,
+                    levels: Vec::new(),
+                };
+                model.levels = [
                     ThinkingLevel::Low,
                     ThinkingLevel::Medium,
                     ThinkingLevel::High,
                 ]
                 .into_iter()
-                .filter(|level| available.contains(&format!("{value}-{}", level.as_str())))
+                .filter(|level| available.contains(&model.name_with_level(*level)))
                 .collect();
-                OfferedModel {
-                    value,
-                    name: option.name,
-                    levels,
-                }
+                model
             })
             .collect();
         if models.is_empty() {
@@ -89,7 +99,7 @@ impl Catalog {
                     model
                         .levels
                         .iter()
-                        .map(|level| format!("{}-{}", model.value, level.as_str())),
+                        .map(|level| model.name_with_level(*level)),
                 )
                 .map(|id| (id, model.name.as_str()))
         })
@@ -109,8 +119,8 @@ impl Catalog {
     }
     pub(crate) fn resolve(
         &self,
-        turn: &mut TurnRequest,
-    ) -> Result<Option<serde_json::Value>, crate::messages::Refusal> {
+        turn: &TurnRequest,
+    ) -> Result<SelectedModel, crate::messages::Refusal> {
         let found = self.models.iter().find_map(|model| {
             if model.value == turn.model {
                 Some((model, None))
@@ -119,7 +129,7 @@ impl Catalog {
                     .levels
                     .iter()
                     .copied()
-                    .find(|level| turn.model == format!("{}-{}", model.value, level.as_str()))
+                    .find(|level| turn.model == model.name_with_level(*level))
                     .map(|level| (model, Some(level)))
             }
         });
@@ -129,26 +139,20 @@ impl Catalog {
                 names: self.names().map(|(id, _)| id).collect(),
             })
         })?;
-        let mut unknown = None;
-        let wanted = suffix.unwrap_or_else(|| match &turn.effort {
+        let wanted = suffix.unwrap_or(match &turn.effort {
             EffortAsk::Level(level) => *level,
-            EffortAsk::Absent => ThinkingLevel::High,
-            EffortAsk::Unknown(value) => {
-                unknown = Some(value.clone());
-                ThinkingLevel::High
-            }
+            EffortAsk::Absent | EffortAsk::Unknown(_) => ThinkingLevel::High,
         });
-        turn.effort = match model
+        let level = model
             .levels
             .iter()
             .find(|level| **level >= wanted)
             .or_else(|| model.levels.last())
-        {
-            Some(level) => EffortAsk::Level(*level),
-            None => EffortAsk::Absent,
-        };
-        turn.model = model.value.clone();
-        Ok(unknown)
+            .copied();
+        Ok(SelectedModel {
+            model: model.value.clone(),
+            level,
+        })
     }
 }
 fn model_options(config: &[serde_json::Value]) -> Result<Vec<SessionConfigSelectOption>, String> {

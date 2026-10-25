@@ -1,4 +1,4 @@
-use crate::{World, thought_support as check};
+use crate::{World, slash_and_thought_support as check};
 use acp2api_acceptance::{TurnStep, content_check, endpoint_check};
 use cucumber::{given, then, when};
 use serde_json::{Value, json};
@@ -19,8 +19,8 @@ async fn send_text(w: &mut World, endpoint: String, text: String) {
     expr = "an API client sends a request to {string} with one user message with one space and then the text {string}"
 )]
 async fn leading_space(w: &mut World, endpoint: String, text: String) {
-    let call = endpoint_check::request(&endpoint, &format!(" {text}"), false);
     w.request.queue_next(&w.scenario);
+    let call = endpoint_check::request(&endpoint, &format!(" {text}"), false);
     content_check::send(&mut w.scenario, call).await;
 }
 
@@ -183,7 +183,7 @@ fn dropped(w: &mut World) {
         "Yes.",
         "real reply control"
     );
-    let lines = crate::request_logs::lines(&w.scenario);
+    let lines = acp2api_acceptance::journal_check::lines(&w.scenario);
     let count = lines
         .iter()
         .filter(|line| {
@@ -199,7 +199,7 @@ fn dropped(w: &mut World) {
 
 #[then(expr = "the log holds no text {string}")]
 fn no_log_text(w: &mut World, text: String) {
-    let lines = crate::request_logs::lines(&w.scenario);
+    let lines = acp2api_acceptance::journal_check::lines(&w.scenario);
     assert!(!lines.is_empty(), "real log control");
     assert!(
         lines.iter().all(|line| !line.contains(&text)),

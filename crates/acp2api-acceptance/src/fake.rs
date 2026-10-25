@@ -332,31 +332,22 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                 .find(|block| block["type"] == "text")
                 .and_then(|block| block["text"].as_str())
                 .map(str::trim_start);
-            if matches!(command, Some("/logout" | "/usage")) {
-                let command = command.unwrap();
-                s.record(json!({"kind":"slash-command","name":command}));
-                if command == "/logout" {
+            let plan = match command {
+                Some(command @ "/logout") => {
+                    s.record(json!({"kind":"slash-command","name":command}));
                     s.fake.signed_in = false;
+                    TurnPlan::new().chunk("Signed out.")
                 }
-                let session = call["params"]["sessionId"].as_str().unwrap().to_owned();
-                run_plan(
-                    s,
-                    label,
-                    id,
-                    session,
-                    TurnPlan::new().chunk(if command == "/logout" {
-                        "Signed out."
-                    } else {
-                        "Quota information."
-                    }),
-                );
-                return;
-            }
+                Some(command @ "/usage") => {
+                    s.record(json!({"kind":"slash-command","name":command}));
+                    TurnPlan::new().chunk("Quota information.")
+                }
+                _ => s.fake.plans.pop_front().unwrap_or_default(),
+            };
             let session = call["params"]["sessionId"]
                 .as_str()
                 .unwrap_or("")
                 .to_owned();
-            let plan = s.fake.plans.pop_front().unwrap_or_default();
             run_plan(s, label, id, session, plan);
         }
 

@@ -115,7 +115,7 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     agent
         .stdout(result(
             2,
-            json!({"sessionId":"s1","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}),
+            json!({"sessionId":"s1","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"},{"value":"other","name":"Other"}]}]}),
         ))
         .await;
     let mut ports = Ports::production();

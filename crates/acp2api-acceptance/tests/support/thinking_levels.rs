@@ -2,7 +2,7 @@ use acp2api_acceptance::Scenario;
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub fn level_at_prompt(s: &Scenario, expected: &str) {
+pub fn level_at_prompt(s: &Scenario, model: &str, expected: &str) {
     let mut options: HashMap<String, HashMap<String, Value>> = HashMap::new();
     let mut selected = None;
     for entry in s.hub.entries() {
@@ -53,7 +53,7 @@ pub fn level_at_prompt(s: &Scenario, expected: &str) {
         "FR-013 request succeeds"
     );
     let selected = selected.expect("request reached ACP prompt");
-    assert_eq!(selected["model"], "gemini-3.8-flash", "FR-013 base model");
+    assert_eq!(selected["model"], model, "FR-013 base model");
     assert_eq!(
         selected["thinking_level"], expected,
         "FR-013 thinking level at prompt"

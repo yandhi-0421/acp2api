@@ -54,6 +54,7 @@ const UNAVAILABLE: &str = "official runtime is not available";
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
+    model: crate::catalog::SelectedModel,
     request: crate::journal::Request,
     output: Output,
 }
@@ -137,11 +138,17 @@ impl Core {
     }
     fn check_model(
         &self,
-        turn: &mut TurnRequest,
-    ) -> Result<Option<serde_json::Value>, crate::messages::Refusal> {
-        self.catalog
-            .as_ref()
-            .map_or(Ok(None), |catalog| catalog.resolve(turn))
+        turn: &TurnRequest,
+    ) -> Result<crate::catalog::SelectedModel, crate::messages::Refusal> {
+        self.catalog.as_ref().map_or_else(
+            || {
+                Ok(crate::catalog::SelectedModel {
+                    model: turn.model.clone(),
+                    level: None,
+                })
+            },
+            |catalog| catalog.resolve(turn),
+        )
     }
     fn model_entries(&self) -> Vec<crate::catalog::ModelEntry> {
         self.catalog
@@ -172,23 +179,29 @@ impl Core {
     }
     fn admit(
         &self,
-        mut work: TurnWork,
+        work: TurnWork,
         journal: &crate::journal::Journal,
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let (output, ticket) = mpsc::unbounded_channel();
-        let admitted = self.check_model(&mut work.turn).map(|unknown| {
-            if let Some(value) = unknown {
-                journal.diagnostic(
-                    &work.request,
-                    crate::journal::Diagnostic::UnknownEffort { value },
-                    clock,
-                );
+        let (model, admitted) = match self.check_model(&work.turn) {
+            Ok(model) => {
+                if model.model == work.turn.model
+                    && let EffortAsk::Unknown(value) = &work.turn.effort
+                {
+                    journal.diagnostic(
+                        &work.request,
+                        crate::journal::Diagnostic::UnknownEffort {
+                            value: value.clone(),
+                        },
+                        clock,
+                    );
+                }
+                (Some(model), work.admission.send(Ok(ticket)))
             }
-            ticket
-        });
-        let refused = admitted.is_err();
-        if work.admission.send(admitted).is_err() {
+            Err(error) => (None, work.admission.send(Err(error))),
+        };
+        if admitted.is_err() {
             journal.complete(
                 crate::journal::Completion {
                     request: work.request,
@@ -200,11 +213,10 @@ impl Core {
             );
             return None;
         }
-        if refused {
-            return None;
-        }
+        let model = model?;
         let accepted = Accepted {
             turn: work.turn,
+            model,
             request: work.request,
             output,
         };
@@ -363,11 +375,8 @@ impl Core {
             let (kind, prompt) = crate::conversation::prompt(prompt, &items);
             let prompt = PromptRequest {
                 blocks: prompt,
-                model: request.turn.model,
-                level: match request.turn.effort {
-                    EffortAsk::Level(level) => Some(level),
-                    EffortAsk::Absent | EffortAsk::Unknown(_) => None,
-                },
+                model: request.model.model,
+                level: request.model.level,
             };
             let ready = match matched {
                 Some((index, _)) => Some(self.records.remove(index).session),
@@ -919,6 +928,10 @@ mod tests {
             selected.extend(
                 core.handle(
                     Event::Accepted(Accepted {
+                        model: crate::catalog::SelectedModel {
+                            model: "m".into(),
+                            level: None,
+                        },
                         turn: next,
                         request: journal.begin(crate::journal::Api::Chat, 200),
                         output,
@@ -977,15 +990,15 @@ mod tests {
             notices: watch::channel(Arc::new(Vec::new())).0,
         };
         assert_eq!(core.model_entries().len(), 1);
-        let mut missing = crate::dialect::CHAT
+        let missing = crate::dialect::CHAT
             .parse(br#"{"model":"missing","messages":[{"role":"user","content":"Hi"}]}"#)
             .ok()
             .unwrap()
             .turn;
-        assert!(core.check_model(&mut missing).is_err());
+        assert!(core.check_model(&missing).is_err());
         core.handle(Event::Runtime(RuntimeEvent::Closed), 0);
         assert_eq!(core.model_entries().len(), 0, "GET /v1/models");
-        assert!(core.check_model(&mut missing).is_ok());
+        assert!(core.check_model(&missing).is_ok());
     }
     #[test]
     fn a_session_that_leaves_for_good_is_forgotten() {
@@ -1020,6 +1033,10 @@ mod tests {
             outputs.push(ticket);
             let mut commands = core.handle(
                 Event::Accepted(Accepted {
+                    model: crate::catalog::SelectedModel {
+                        model: "m".into(),
+                        level: None,
+                    },
                     turn,
                     request,
                     output,
@@ -1126,6 +1143,10 @@ mod tests {
         let work = request.id.clone();
         let (output, _ticket) = mpsc::unbounded_channel();
         let accepted = Event::Accepted(Accepted {
+            model: crate::catalog::SelectedModel {
+                model: "m".into(),
+                level: None,
+            },
             turn,
             request,
             output,

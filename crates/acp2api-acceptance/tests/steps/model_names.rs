@@ -14,7 +14,7 @@ pub const NAMES: [&str; 4] = [
 pub struct ModelState {
     pub endpoint: String,
     pub requested: String,
-    models: Vec<ModelSpec>,
+    pub(super) models: Vec<ModelSpec>,
 }
 #[given(
     expr = "the config option {string} of the official runtime has one value {string} with the name {string}"
