@@ -57,7 +57,7 @@ Feature: Logs
     And a lockout signal then starts a lockout
     Then the logs, the terminal, and the state file do not hold "K1" or "P1"
 
-  @FR-056 @issue-50 @wip
+  @FR-056 @issue-50
   Scenario: acp2api writes only the parsed error line of the stderr of the official runtime
     Given the stderr of the official runtime has the line "I1018 harness: MARKER-STDERR"
     And the stderr then has the error line with the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
@@ -65,20 +65,20 @@ Feature: Logs
     Then the log holds the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
     And the log does not hold "MARKER-STDERR"
 
-  @FR-056 @issue-50 @wip
-  Scenario Outline: acp2api replaces each email address in an error text with <REDACTED>
+  @FR-056 @issue-50
+  Scenario Outline: acp2api replaces each email address in an error text with the redaction mark
     Given the stderr of the official runtime has an error line with the message "Account <address> is not valid"
     When an API client sends a valid request
-    Then the log holds "Account <REDACTED> is not valid"
+    Then the log holds "<logged message>"
     And the log does not hold "<address>"
 
     Examples:
-      | address            |
-      | name@example.com   |
-      | name%40example.com |
+      | address            | logged message                  |
+      | name@example.com   | Account <REDACTED> is not valid |
+      | name%40example.com | Account <REDACTED> is not valid |
 
-  @FR-056 @issue-50 @wip
-  Scenario Outline: acp2api replaces each value with the form of a token with <REDACTED>
+  @FR-056 @issue-50
+  Scenario Outline: acp2api replaces each value with the form of a token with the redaction mark
     Given the stderr of the official runtime has an error line with the message "<message>"
     When an API client sends a valid request
     Then the log holds "<logged message>"

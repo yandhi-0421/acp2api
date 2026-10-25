@@ -1,5 +1,16 @@
 use std::fmt;
 
+#[derive(Clone, Debug)]
+pub(crate) struct HttpError {
+    pub code: u16,
+    pub status: String,
+    pub message: String,
+}
+#[derive(serde::Deserialize)]
+pub(crate) struct AcpError {
+    pub code: i64,
+    pub message: String,
+}
 pub(crate) enum Message {
     Field {
         path: String,
@@ -31,6 +42,8 @@ pub(crate) enum Message {
     Key,
     TooLarge,
     Upstream(String),
+    UpstreamHttp(HttpError),
+    UpstreamAcp(AcpError),
     BuiltInToolRan(String),
 }
 pub(crate) enum Row {
@@ -38,6 +51,7 @@ pub(crate) enum Row {
     Rejected,
     TooLarge,
     Other502,
+    Temporary503,
 }
 pub(crate) struct Refusal {
     pub message: Message,
@@ -62,7 +76,13 @@ impl Refusal {
         match self.message {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
-            Message::Upstream(_) | Message::BuiltInToolRan(_) => Row::Other502,
+            Message::UpstreamHttp(ref error) if (500..600).contains(&error.code) => {
+                Row::Temporary503
+            }
+            Message::UpstreamHttp(_)
+            | Message::UpstreamAcp(_)
+            | Message::Upstream(_)
+            | Message::BuiltInToolRan(_) => Row::Other502,
             Message::Model { .. }
             | Message::Field { .. }
             | Message::Content(_)
@@ -135,6 +155,8 @@ impl fmt::Display for Message {
             Self::BuiltInToolRan(name) => write!(f, "acp2api: the built-in tool {name} of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
+            Self::UpstreamHttp(error) => write!(f, "acp2api: upstream error {} {}: {}", error.code, error.status, error.message),
+            Self::UpstreamAcp(error) => write!(f, "acp2api: upstream ACP error {}: {}", error.code, error.message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
             Self::TooLarge => f.write_str("acp2api: the request body is larger than 32 MB."),
         }

@@ -96,7 +96,7 @@ async fn namespace_context_reaches_mcp_and_preserves_member_identity() {
             responses.push(json!({"stream":stream,"status":answer.status,"body":if stream {Value::Null} else {answer.json()},"events":answer.events.iter().map(|event|json!({"event":event.event,"data":event.data})).collect::<Vec<_>>()}));
         }
     }
-    t::cancelled_prompts(&s, 6, &[1, 2, 3, 4, 5, 6]);
+    t::cancelled_tool_prompts(&s, 6, &[1, 2, 3, 4, 5, 6]);
     let records = s.fake().record();
     assert_eq!(
         records

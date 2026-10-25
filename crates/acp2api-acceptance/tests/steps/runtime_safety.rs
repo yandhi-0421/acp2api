@@ -69,11 +69,14 @@ fn built_in_run(w: &mut World, name: String) {
     w.safety.name = name;
 }
 async fn send(w: &mut World) {
-    w.scenario.fake().next_prompt(if w.safety.permission {
-        safety::denial_plan(&w.safety.name, &w.safety.reply)
-    } else {
-        safety::execution_plan(&w.safety.name)
+    w.request.plan.get_or_insert_with(|| {
+        if w.safety.permission {
+            safety::denial_plan(&w.safety.name, &w.safety.reply)
+        } else {
+            safety::execution_plan(&w.safety.name)
+        }
     });
+    w.request.queue_next(&w.scenario);
     w.scenario.answer = Some(safety::send(&mut w.scenario, "runtime safety request").await);
 }
 #[when("an API client sends a valid request")]
@@ -91,7 +94,13 @@ fn denied(w: &mut World) {
 }
 #[then(expr = "the reply text of the response is {string}")]
 fn reply_text(w: &mut World, text: String) {
-    safety::reply(w.scenario.answer.as_ref().unwrap(), &text);
+    let answer = w.scenario.answer.as_ref().unwrap();
+    assert_eq!(answer.status, 200);
+    assert_eq!(
+        crate::slash_and_thought_support::reply(answer),
+        text,
+        "reply text of the response"
+    );
 }
 #[then("the log has a line about the refused permission request")]
 fn refusal_log(w: &mut World) {

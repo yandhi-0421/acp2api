@@ -38,11 +38,19 @@ pub enum TurnStep {
     },
     Stderr(String),
     HoldUntil(String),
+    SessionStderr(String),
 }
 #[derive(Clone, Debug)]
 pub enum TurnEndPlan {
     Stop(String),
-    RpcError { code: i64, message: String },
+    RpcError {
+        code: i64,
+        message: String,
+    },
+    StopThenStderr {
+        delay: Duration,
+        steps: Vec<TurnStep>,
+    },
     IgnoreCancel,
     Exit(i32),
     Never,
@@ -165,7 +173,7 @@ impl FakeRuntime {
             panic!("pending session result required")
         };
         let now = state.now;
-        emit(&mut state, &label, now, response);
+        emit_stdout(&mut state, &label, now, response);
         self.hub.shared.1.notify_all();
     }
     pub fn catalog(&self, models: &[ModelSpec]) {
@@ -232,8 +240,10 @@ impl FakeRuntime {
 fn result(id: Value, value: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":value})
 }
-fn emit(s: &mut State, label: &str, at: u64, value: Value) {
-    let command = json!({"op":"Out","line":value.to_string()});
+fn emit_stdout(s: &mut State, label: &str, at: u64, value: Value) {
+    emit(s, label, at, json!({"op":"Out","line":value.to_string()}));
+}
+fn emit(s: &mut State, label: &str, at: u64, command: Value) {
     if at <= s.now {
         s.out(label, command);
     } else {
@@ -247,7 +257,7 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
     let id = call["id"].clone();
     let method = call["method"].as_str().unwrap_or("");
     match method {
-        "initialize" => emit(
+        "initialize" => emit_stdout(
             s,
             label,
             s.now,
@@ -258,7 +268,7 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
         ),
         "session/new" | "session/load" => {
             if !s.fake.signed_in {
-                emit(
+                emit_stdout(
                     s,
                     label,
                     s.now,
@@ -311,10 +321,10 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                     s.record(json!({"kind":"session-result-held"}));
                     return;
                 }
-                emit(s, label, s.now, result(id, metadata));
+                emit_stdout(s, label, s.now, result(id, metadata));
                 return;
             }
-            emit(
+            emit_stdout(
                 s,
                 label,
                 s.now,
@@ -366,13 +376,13 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                     events.retain(|event| event["session"] != session);
                 }
                 s.external.retain(|_, events| !events.is_empty());
-                emit(
+                emit_stdout(
                     s,
                     &turn.label,
                     s.now,
                     json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"tool_call_update","toolCallId":"cancelled","status":"failed","content":[{"type":"content","content":{"type":"text","text":"The request was cancelled by the client."}}]}}}),
                 );
-                emit(
+                emit_stdout(
                     s,
                     &turn.label,
                     s.now,
@@ -381,9 +391,9 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
             }
         }
         "session/set_config_option" | "authenticate" => {
-            emit(s, label, s.now, result(id, json!({})))
+            emit_stdout(s, label, s.now, result(id, json!({})))
         }
-        _ if !id.is_null() => emit(
+        _ if !id.is_null() => emit_stdout(
             s,
             label,
             s.now,
@@ -546,6 +556,19 @@ impl Record {
     }
 }
 
+fn stderr_line(step: TurnStep, session: &str) -> String {
+    match step {
+        TurnStep::Stderr(line) => line,
+        TurnStep::SessionStderr(line) => line.replace("{session}", session),
+        TurnStep::ErrorLine {
+            code,
+            status,
+            message,
+        } => format!("Error {code}, Message: {message}, Status: {status}, Details: []"),
+        _ => panic!("a stderr step is required"),
+    }
+}
+
 fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPlan) {
     let mut at = s.now;
     s.fake.pending.insert(
@@ -572,22 +595,15 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
                 at += duration.as_millis() as u64;
                 continue;
             }
-            TurnStep::Stderr(line) => {
-                let c = json!({"op":"Err","line":line});
-                turn_schedule(s, label, at, (&session, &id), c, false);
-                continue;
-            }
-            TurnStep::ErrorLine {
-                code,
-                status,
-                message,
-            } => {
+            step @ (TurnStep::Stderr(_)
+            | TurnStep::SessionStderr(_)
+            | TurnStep::ErrorLine { .. }) => {
                 turn_schedule(
                     s,
                     label,
                     at,
                     (&session, &id),
-                    json!({"op":"Err","line":format!("Error {code}, Message: {message}, Status: {status}, Details: []")}),
+                    json!({"op":"Err","line":stderr_line(step, &session)}),
                     false,
                 );
                 continue;
@@ -660,6 +676,25 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
             json!({"op":"Out","line":json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}).to_string()})
         }
         TurnEndPlan::Exit(code) => json!({"op":"Exit","code":code}),
+        TurnEndPlan::StopThenStderr { delay, steps } => {
+            turn_schedule(
+                s,
+                label,
+                at,
+                (&session, &id),
+                json!({"op":"Out","line":result(id.clone(), json!({"stopReason":"end_turn"})).to_string()}),
+                true,
+            );
+            for step in steps {
+                emit(
+                    s,
+                    label,
+                    at + delay.as_millis() as u64,
+                    json!({"op":"Err","line":stderr_line(step, &session)}),
+                );
+            }
+            return;
+        }
         TurnEndPlan::Never | TurnEndPlan::IgnoreCancel => return,
     };
     turn_schedule(s, label, at, (&session, &id), command, true);

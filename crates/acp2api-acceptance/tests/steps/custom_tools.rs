@@ -142,5 +142,5 @@ fn namespace_result(w: &mut World, kind: String, name: String, namespace: String
             &json!({"path":"文档/雪🙂.txt"}),
         );
     }
-    t::cancelled_prompts(&w.scenario, 2, &[1, 2]);
+    t::cancelled_tool_prompts(&w.scenario, 2, &[1, 2]);
 }

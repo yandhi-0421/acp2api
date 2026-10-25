@@ -132,6 +132,27 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         last,
     };
     let turn = TurnRequest {
+        stop: match api {
+            Api::Messages => value
+                .get("stop_sequences")
+                .map(|stop| ("stop_sequences", stop)),
+            Api::Chat => value.get("stop").map(|stop| ("stop", stop)),
+            Api::Responses => None,
+        }
+        .filter(|(_, stop)| !stop.is_null())
+        .map(|(field, stop)| {
+            if let Some(text) = stop.as_str() {
+                Ok(vec![text.to_owned()])
+            } else {
+                serde_json::from_value::<Vec<String>>(stop.clone())
+                    .map_err(|_| Refusal::field(field, Some(stop)))
+            }
+        })
+        .transpose()?
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|stop| !stop.is_empty())
+        .collect(),
         input_tokens: crate::conversation::input_tokens(&conversation, &tool_text),
         conversation,
         model: model.clone(),
@@ -754,6 +775,50 @@ fn server_tool(kind: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn null_stop_fields_are_absent() {
+        for (api, field) in [(Api::Chat, "stop"), (Api::Messages, "stop_sequences")] {
+            let mut body = json!({"model":"m","messages":[{"role":"user","content":"Hi"}]});
+            body[field] = Value::Null;
+            let stops = parse(api, &serde_json::to_vec(&body).unwrap())
+                .map(|parsed| parsed.turn.stop)
+                .map_err(|refusal| refusal.message.to_string());
+            assert_eq!(stops, Ok(Vec::new()), "FR-014 {field}: null disables stops");
+        }
+    }
+    #[test]
+    fn invalid_stop_values_use_the_field_message() {
+        for (api, field) in [(Api::Chat, "stop"), (Api::Messages, "stop_sequences")] {
+            let mut body = json!({"model":"m","messages":[{"role":"user","content":"Hi"}]});
+            body[field] = json!(7);
+            let refusal = parse(api, &serde_json::to_vec(&body).unwrap())
+                .err()
+                .unwrap();
+            assert_eq!(
+                refusal.message.to_string(),
+                format!("acp2api: the request field {field} = 7 is not supported.")
+            );
+            assert_eq!(refusal.param(), Some(field));
+        }
+    }
+    #[test]
+    fn empty_stop_sequences_are_ignored() {
+        for (api, field) in [(Api::Chat, "stop"), (Api::Messages, "stop_sequences")] {
+            for (value, expected) in [
+                (json!(""), Vec::<String>::new()),
+                (json!(["", "STOP", ""]), vec!["STOP".to_owned()]),
+            ] {
+                let mut body = json!({"model":"m","messages":[{"role":"user","content":"Hi"}]});
+                body[field] = value;
+                let stops = parse(api, &serde_json::to_vec(&body).unwrap())
+                    .ok()
+                    .unwrap()
+                    .turn
+                    .stop;
+                assert_eq!(stops, expected, "an empty string cannot stop a reply");
+            }
+        }
+    }
     #[test]
     fn messages_tool_results_allow_omitted_or_null_content() {
         for content in ["", r#", "content":null"#] {

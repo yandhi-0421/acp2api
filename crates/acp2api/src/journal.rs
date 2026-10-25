@@ -285,7 +285,80 @@ pub(crate) enum Diagnostic {
     UnknownEffort { value: serde_json::Value },
     DroppedThoughtText,
 }
+fn redact_error(text: &str) -> String {
+    let local_char = |c: char| c.is_alphanumeric() || "-_.+%".contains(c);
+    let domain_char = |c: char| c.is_alphanumeric() || "-.".contains(c);
+    let mut remaining = text;
+    let mut redacted_emails = String::new();
+    while let Some((at, width)) = [
+        remaining.find('@').map(|at| (at, 1)),
+        remaining.find("%40").map(|at| (at, 3)),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|(at, _)| *at)
+    {
+        let start = remaining[..at]
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !local_char(*c))
+            .map_or(0, |(at, c)| at + c.len_utf8());
+        let after = &remaining[at + width..];
+        let end = after.find(|c| !domain_char(c)).unwrap_or(after.len());
+        let domain = after[..end].trim_end_matches('.');
+        if start < at && !domain.is_empty() {
+            redacted_emails.push_str(&remaining[..start]);
+            redacted_emails.push_str("<REDACTED>");
+            remaining = &after[domain.len()..];
+        } else {
+            redacted_emails.push_str(&remaining[..at + width]);
+            remaining = after;
+        }
+    }
+    redacted_emails.push_str(remaining);
+    let text = redacted_emails.as_str();
+    let token_char = |c: char| c.is_ascii_alphanumeric() || "-_.+/=".contains(c);
+    let word_char = |c: char| c.is_alphanumeric() || "-_.+/=@%!#$*^`{|}~".contains(c);
+    let mut output = String::new();
+    let mut offset = 0;
+    for part in text.split_inclusive(|c| !word_char(c)) {
+        let word = part.trim_end_matches(|c| !word_char(c));
+        if !word.is_empty() && text[..offset].ends_with("Bearer ") {
+            output.push_str("<REDACTED>");
+        } else {
+            for segment in word.split_inclusive(|c| !token_char(c)) {
+                let value = segment.trim_end_matches(|c| !token_char(c));
+                output.push_str(if value.len() >= 32 {
+                    "<REDACTED>"
+                } else {
+                    value
+                });
+                output.push_str(&segment[value.len()..]);
+            }
+        }
+        output.push_str(&part[word.len()..]);
+        offset += part.len();
+    }
+    output
+}
 impl Journal {
+    pub(crate) fn upstream(
+        &self,
+        session: &str,
+        error: &crate::messages::HttpError,
+        late: bool,
+        clock: &dyn crate::Clock,
+    ) {
+        let result = timestamp(clock.wall()).and_then(|time| self.emit_to_file_then_stdout_under_writer_lock(&serde_json::json!({
+            "time": time,
+            "session": session.chars().take(12).collect::<String>(),
+            "event": if late { "late_upstream_error" } else { "upstream_error" },
+            "code": error.code, "status": redact_error(&error.status), "message": redact_error(&error.message),
+        })));
+        if let Err(error) = result {
+            eprintln!("acp2api: cannot write upstream error: {error}");
+        }
+    }
     pub(crate) fn diagnostic(
         &self,
         request: &Request,
@@ -407,6 +480,7 @@ impl Journal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    use crate::Clock;
     use std::time::Duration;
     fn folder(name: &str) -> std::path::PathBuf {
         let folder =
@@ -437,6 +511,64 @@ mod tests {
             error_code: None,
             unknown_fields: Vec::new(),
         }
+    }
+    #[test]
+    fn email_boundaries_preserve_braces() {
+        assert_eq!(redact_error("{a@example.com}"), "{<REDACTED>}");
+    }
+    #[test]
+    fn email_boundaries_preserve_an_encoded_field_value_suffix() {
+        assert_eq!(
+            redact_error("Email=name%40example.com}"),
+            "Email=<REDACTED>}"
+        );
+    }
+    #[test]
+    fn email_boundaries_preserve_trailing_prose_punctuation() {
+        for (input, expected) in [
+            ("Account a@example.com.", "Account <REDACTED>."),
+            ("Account a@example.com,", "Account <REDACTED>,"),
+            ("Account a@example.com)", "Account <REDACTED>)"),
+        ] {
+            assert_eq!(redact_error(input), expected);
+        }
+    }
+    #[test]
+    fn quoted_email_is_redacted() {
+        assert_eq!(redact_error("'a@example.com'"), "'<REDACTED>'");
+    }
+    #[test]
+    fn email_in_a_query_value_is_redacted() {
+        assert_eq!(
+            redact_error("?Email=name%40example.com&y=1"),
+            "?Email=<REDACTED>&y=1"
+        );
+    }
+    #[test]
+    fn upstream_logs_redact_values_inside_punctuation_without_changing_the_error() {
+        let folder = folder("upstream-redaction");
+        let clock = crate::os::SystemClock::default();
+        let journal = Journal::open(&folder, clock.wall()).unwrap();
+        let error = crate::messages::HttpError {
+            code: 503, status: "UNAVAILABLE".into(),
+            message: "Account (first.last+tag@sub.example.org), second%40example.org; Header Bearer short; Key ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ.".into(),
+        };
+        journal.upstream("s1", &error, false, &clock);
+        let file = std::fs::read_dir(&folder)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        assert_eq!(
+            record["message"],
+            "Account (<REDACTED>), <REDACTED>; Header Bearer <REDACTED>; Key <REDACTED>"
+        );
+        assert!(error.message.contains("first.last+tag@sub.example.org"));
+        drop(journal);
+        std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]
     fn retention_keeps_the_active_file_after_the_clock_went_back() {

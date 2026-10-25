@@ -1,19 +1,25 @@
 use super::*;
 pub(super) struct Messages;
+impl Messages {
+    fn error_kinds(&self, refusal: &Refusal) -> (&'static str, &'static str) {
+        match refusal.row() {
+            Row::Key => ("authentication_error", "authentication_error"),
+            Row::Rejected => ("invalid_request_error", "invalid_request_error"),
+            Row::TooLarge => ("request_too_large", "request_too_large"),
+            Row::Other502 => ("api_error", "invalid_request_error"),
+            Row::Temporary503 => ("api_error", "api_error"),
+        }
+    }
+}
 impl WireDialect for Messages {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         content::parse(content::Api::Messages, body)
     }
     fn refusal_body(&self, refusal: &Refusal) -> Value {
-        let kind = match refusal.row() {
-            Row::Key => "authentication_error",
-            Row::Rejected => "invalid_request_error",
-            Row::TooLarge => "request_too_large",
-            Row::Other502 => "api_error",
-        };
+        let (kind, _) = self.error_kinds(refusal);
         json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}})
     }
-    fn built_in_tool_ran_events(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn error_events(&self, wire: &mut Encoding, refusal: &Refusal) -> Vec<Event> {
         let mut events = Vec::new();
         if !wire.text.is_empty() {
             events.push(named(
@@ -21,9 +27,10 @@ impl WireDialect for Messages {
                 json!({"type":"content_block_stop","index":0}),
             ));
         }
+        let (_, kind) = self.error_kinds(refusal);
         events.push(named(
             "error",
-            json!({"type":"error","error":{"type":"invalid_request_error","message":message}}),
+            json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}}),
         ));
         events
     }
@@ -48,7 +55,7 @@ impl WireDialect for Messages {
             "model": w.model,
             "content": content,
             "stop_reason": stop_reason(w),
-            "stop_sequence": null,
+            "stop_sequence": w.stop.sequence(),
             "usage": {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
         })
     }
@@ -94,7 +101,7 @@ impl WireDialect for Messages {
             "message_delta",
             json!({
                 "type": "message_delta",
-                "delta": {"stop_reason": stop_reason(w), "stop_sequence": null},
+                "delta": {"stop_reason": stop_reason(w), "stop_sequence": w.stop.sequence()},
                 "usage": {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
             }),
         ));
@@ -106,6 +113,10 @@ fn stop_reason(w: &Encoding) -> &'static str {
     if w.tool_call.is_some() {
         "tool_use"
     } else {
-        "end_turn"
+        match w.stop {
+            Stop::EndTurn => "end_turn",
+            Stop::MaxTokens => "max_tokens",
+            Stop::Sequence(_) => "stop_sequence",
+        }
     }
 }

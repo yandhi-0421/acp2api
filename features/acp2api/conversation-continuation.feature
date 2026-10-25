@@ -60,7 +60,7 @@ Feature: The conversation in each prompt
       | the stderr error line 503 "UNAVAILABLE" |
       | the stop reason "refusal", and "/usage" shows quota for the model |
 
-  @FR-021 @issue-51 @wip
+  @FR-021 @issue-51
   Scenario: The text of a rebuild after a cut holds the reply only up to the cut
     Given the API client sent the user message "Count to 3." with the stop sequence "3"
     And the official runtime replied "1, 2, 3, 4", so acp2api cut the reply to "1, 2, "

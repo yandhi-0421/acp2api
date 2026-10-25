@@ -36,7 +36,10 @@ impl Responses {
     }
     fn response(&self, w: &Encoding, usage: Option<&Usage>) -> Value {
         let status = if usage.is_some() {
-            "completed"
+            match w.stop {
+                Stop::MaxTokens => "incomplete",
+                Stop::EndTurn | Stop::Sequence(_) => "completed",
+            }
         } else {
             "in_progress"
         };
@@ -56,7 +59,7 @@ impl Responses {
             "created_at": w.created,
             "status": status,
             "error": null,
-            "incomplete_details": null,
+            "incomplete_details": match w.stop { Stop::MaxTokens => json!({"reason":"max_output_tokens"}), Stop::EndTurn | Stop::Sequence(_) => Value::Null },
             "instructions": null,
             "max_output_tokens": null,
             "model": w.model,
@@ -84,7 +87,7 @@ impl WireDialect for Responses {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         content::parse(content::Api::Responses, body)
     }
-    fn built_in_tool_ran_events(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn error_events(&self, wire: &mut Encoding, refusal: &Refusal) -> Vec<Event> {
         let mut response = self.body(
             wire,
             &Usage {
@@ -93,7 +96,11 @@ impl WireDialect for Responses {
             },
         );
         response["status"] = json!("failed");
-        response["error"] = json!({"code":"invalid_prompt","message":message});
+        let temporary = matches!(refusal.row(), Row::Temporary503);
+        response["error"] = json!({"code": if temporary {"server_error"} else {"invalid_prompt"},"message":refusal.message.to_string()});
+        if temporary {
+            response["error"]["headers"] = json!({"retry-after":"30"});
+        }
         response["usage"] = Value::Null;
         vec![wire.event("response.failed", json!({"response":response}))]
     }
@@ -172,9 +179,40 @@ impl WireDialect for Responses {
             ));
         }
         events.push(w.event(
-            "response.completed",
+            match w.stop {
+                Stop::MaxTokens => "response.incomplete",
+                Stop::EndTurn | Stop::Sequence(_) => "response.completed",
+            },
             json!({"response":self.response(w,Some(usage))}),
         ));
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn successful_responses_keep_the_null_error_field() {
+        let form = WireDialect::parse(&Responses, br#"{"model":"m","input":"Hi"}"#)
+            .ok()
+            .unwrap()
+            .form;
+        let mut wire = Encoding::new("resp_", "call_", form, std::time::UNIX_EPOCH).unwrap();
+        for stop in [Stop::EndTurn, Stop::MaxTokens] {
+            wire.stop = stop;
+            let body = Responses.body(
+                &wire,
+                &Usage {
+                    input_tokens: 2,
+                    output_tokens: 0,
+                },
+            );
+            assert_eq!(
+                body.get("error"),
+                Some(&Value::Null),
+                "Responses preserves its success schema"
+            );
+        }
     }
 }

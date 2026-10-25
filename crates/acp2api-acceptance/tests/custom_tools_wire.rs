@@ -80,7 +80,7 @@ async fn custom_and_namespace_http_lever() {
             evidence.push(capture(&answer, stream));
         }
     }
-    t::cancelled_prompts(&s, 10, &[0, 1, 3, 4, 5, 6, 7, 8, 9, 10]);
+    t::cancelled_tool_prompts(&s, 10, &[0, 1, 3, 4, 5, 6, 7, 8, 9, 10]);
     let records = s.fake().record();
     let prompts = records.prompts();
     let sessions: std::collections::HashSet<_> = prompts.iter().map(|p| &p.session).collect();
@@ -169,6 +169,6 @@ async fn custom_namespace_keeps_both_kind_and_namespace() {
             &json!("精确\ninput🙂\n"),
         );
     }
-    t::cancelled_prompts(&s, 2, &[1, 2]);
+    t::cancelled_tool_prompts(&s, 2, &[1, 2]);
     s.finish(true).await;
 }

@@ -219,7 +219,8 @@ fn no_allow(w: &mut World) {
 }
 #[then("the official runtime gets a cancel of the prompt turn")]
 fn cancel(w: &mut World) {
-    t::cancelled(&w.scenario, 1);
+    let prompt_index = w.scenario.fake().record().prompts().len() - 1;
+    t::cancelled_prompts(&w.scenario, 1, &[prompt_index]);
 }
 #[then(expr = "the response holds the tool call of {string}")]
 fn call(w: &mut World, name: String) {

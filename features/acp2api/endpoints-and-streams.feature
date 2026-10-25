@@ -71,7 +71,7 @@ Feature: Endpoints and streams
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
-  @FR-010 @FR-028 @issue-50 @wip
+  @FR-010 @FR-028 @issue-50
   Scenario Outline: A reply with one text chunk stays held through the error-line wait
     Given the official runtime sends only the reply text chunk "Hello"
     And the prompt turn ends 10 s later with no error line
