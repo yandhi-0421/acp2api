@@ -14,7 +14,7 @@ Feature: Errors
     Then the request waits in the queue
     And the API client already has the status 200 and the headers of the stream
 
-  @FR-032 @FR-033 @issue-50 @wip
+  @FR-032 @FR-033 @issue-50
   Scenario Outline: An ACP error without an HTTP error line keeps its JSON-RPC values
     Given the next ACP call fails with code -32099 and message "Synthetic ACP failure"
     And the official runtime sends no stderr error line
@@ -63,7 +63,7 @@ Feature: Errors
       | an error of the 503 row                     | api_error             |
       | an error of the 502 row                     | invalid_request_error |
 
-  @FR-027 @issue-50 @wip
+  @FR-027 @issue-50
   Scenario: After text, an Anthropic stream closes the text block before the error event
     Given the official runtime sent the text chunks "Hel" and "lo" in a streamed request to "POST /v1/messages"
     When the prompt turn ends with an error of the 503 row
@@ -85,14 +85,14 @@ Feature: Errors
       | the start of a quota wait                   |
       | an error of the 502 row                     |
 
-  @FR-027 @issue-50 @wip
+  @FR-027 @issue-50
   Scenario: An error of the 503 row is a response.failed event with the code server_error
     Given a streamed request to "POST /v1/responses" was accepted
     When an error of the 503 row ends the request
     Then the stream has a "response.failed" event with the code "server_error"
     And "error.headers" of the event holds "retry-after" with the value 30
 
-  @FR-027 @issue-50 @wip
+  @FR-027 @issue-50
   Scenario: An error in a Chat Completions stream is one data line and no [DONE]
     Given a streamed request to "POST /v1/chat/completions" was accepted
     When an error of the 503 row ends the request
@@ -163,7 +163,7 @@ Feature: Errors
     Then acp2api answers with HTTP 429 and the header "retry-after: 120"
     And the error body has the "error.type" "rate_limit_error"
 
-  @FR-033 @issue-50 @wip
+  @FR-033 @issue-50
   Scenario: The message of an upstream error holds the values of the stderr error line
     Given the next prompt turn gets the stderr error line with the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
     When an API client sends a request to "POST /v1/messages" with "stream" set to false

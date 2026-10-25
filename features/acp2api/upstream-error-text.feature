@@ -48,7 +48,7 @@ Feature: No text of an upstream error as reply text
     When an API client sends a valid request with a stream to "POST /v1/messages"
     Then the stream ends with an "error" event less than 200 ms after the end of the prompt turn
 
-  @FR-028 @issue-50 @wip
+  @FR-028 @issue-50
   Scenario: With no error line, the held chunk reaches the API client
     Given the official runtime sends the text chunks "Sure, " and "here it is."
     And the prompt turn ends, and no error line comes

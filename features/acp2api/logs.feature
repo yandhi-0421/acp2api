@@ -57,7 +57,7 @@ Feature: Logs
     And a lockout signal then starts a lockout
     Then the logs, the terminal, and the state file do not hold "K1" or "P1"
 
-  @FR-056 @issue-50 @wip
+  @FR-056 @issue-50
   Scenario: acp2api writes only the parsed error line of the stderr of the official runtime
     Given the stderr of the official runtime has the line "I1018 harness: MARKER-STDERR"
     And the stderr then has the error line with the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
