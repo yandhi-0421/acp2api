@@ -186,6 +186,7 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|_| failed(path))?;
+    drop(file);
     fs::rename(temp, path).map_err(|_| failed(path))
 }
 #[derive(Clone)]
@@ -1000,6 +1001,23 @@ mod tests {
         .expect("recovery unit cap: 5 seconds; one native child, no captured output");
     }
 
+    #[test]
+    fn coordination_records_can_be_published_and_replaced() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-publication-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        for name in [OWNERSHIP, "panel"] {
+            let path = root.join(name);
+            write(&path, b"first publication").unwrap();
+            write(&path, b"replacement publication").unwrap();
+            validate_private_record(&path).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"replacement publication");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn account_claim_records_a_private_run_under_the_canonical_account() {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1027,9 +1045,12 @@ mod tests {
                 .ok()
                 .map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).unwrap());
             let canonical = fs::canonicalize(&env.account_root).unwrap();
-            let expected = env.temp.join("acp2api").join(crate::hex(&Sha256::digest(
-                canonical.as_os_str().as_encoded_bytes(),
-            )));
+            let expected = fs::canonicalize(&env.temp)
+                .unwrap()
+                .join("acp2api")
+                .join(crate::hex(&Sha256::digest(
+                    canonical.as_os_str().as_encoded_bytes(),
+                )));
             let observed = record.as_ref().map(|record| {
                 let path = PathBuf::from(record["roots"][0]["path"].as_str().unwrap());
                 (
