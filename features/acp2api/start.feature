@@ -91,7 +91,7 @@ Feature: Start of acp2api
     Then the first acp2api answers the next request
     And the temporary folder and the session cwd folder of the first acp2api are still there
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario: A second start waits for the first panel address
     Given a first acp2api owns the account lock and has not published its panel address
     When a second acp2api starts for that account
