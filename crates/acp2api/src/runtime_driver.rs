@@ -167,7 +167,10 @@ impl Runtime {
         system: Option<&str>,
     ) -> Result<(Value, SessionTools), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
-        let cwd = self.cwd.join(format!("session-{}", self.next_id));
+        let cwd = self.cwd.join(format!(
+            "session-{}",
+            crate::random_hex::<16>().map_err(|error| error.to_string())?
+        ));
         std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
         let mut params = json!({
             "cwd": cwd,
