@@ -110,6 +110,31 @@ impl Conversation {
             .collect()
     }
 }
+fn result_line(history: &[&Item], id: &str, error: bool) -> String {
+    let call = history.iter().rev().find_map(|item| match item {
+        Item::ToolCall {
+            id: call_id,
+            name,
+            arguments,
+        } if call_id == id => Some((name, arguments)),
+        _ => None,
+    });
+    match call {
+        Some((name, arguments)) => {
+            let (arguments, cut) = match arguments.char_indices().nth(1000) {
+                Some((end, _)) => (&arguments[..end], " [arguments cut]"),
+                None => (arguments.as_str(), ""),
+            };
+            let note = if error {
+                " (the tool reported an error)"
+            } else {
+                ""
+            };
+            format!("Result of your tool call {name} {arguments}{cut}{note}:")
+        }
+        None => format!("Result of the tool call {id}:"),
+    }
+}
 pub(crate) fn prompt(
     input: Prompt<'_>,
     history: &[&Item],
@@ -151,33 +176,7 @@ pub(crate) fn prompt(
                 parts
             }
             Item::ToolResult { id, parts, error } => {
-                let call = history[..history.len() - items.len() + index]
-                    .iter()
-                    .rev()
-                    .find_map(|item| match item {
-                        Item::ToolCall {
-                            id: call_id,
-                            name,
-                            arguments,
-                        } if call_id == id => Some((name, arguments)),
-                        _ => None,
-                    });
-                let line = match call {
-                    Some((name, arguments)) => {
-                        let (arguments, cut) = match arguments.char_indices().nth(1000) {
-                            Some((end, _)) => (&arguments[..end], " [arguments cut]"),
-                            None => (arguments.as_str(), ""),
-                        };
-                        let note = if *error {
-                            " (the tool reported an error)"
-                        } else {
-                            ""
-                        };
-                        format!("Result of your tool call {name} {arguments}{cut}{note}:")
-                    }
-                    None => format!("Result of the tool call {id}:"),
-                };
-                prefix.push_str(&line);
+                prefix.push_str(&result_line(history, id, *error));
                 if parts
                     .iter()
                     .any(|part| !matches!(part, Part::Text(text) if text.is_empty()))
@@ -196,7 +195,11 @@ pub(crate) fn prompt(
             }
         };
         for (part_index, part) in parts.iter().enumerate() {
-            if part_index > 0 && matches!(parts[part_index - 1], Part::PdfNote) {
+            if part_index > 0
+                && (matches!(part, Part::PdfNote) || matches!(parts[part_index - 1], Part::PdfNote))
+                && prefix.is_empty()
+                && matches!(blocks.last(), Some(PromptBlock::Text(text)) if !text.ends_with('\n'))
+            {
                 prefix.push('\n');
             }
             let block = match part {
@@ -220,17 +223,10 @@ pub(crate) fn prompt(
                         .map(|title| format!("[document: {title}]"))
                         .unwrap_or_else(|| "[document]".into())
                 )),
-                Part::PdfNote => {
-                    if prefix.is_empty()
-                        && matches!(blocks.last(), Some(PromptBlock::Text(text)) if !text.ends_with('\n'))
-                    {
-                        prefix.push('\n');
-                    }
-                    PromptBlock::Text(format!(
-                        "{}[A PDF document was here. acp2api cannot give PDF documents to the model.]",
-                        std::mem::take(&mut prefix)
-                    ))
-                }
+                Part::PdfNote => PromptBlock::Text(format!(
+                    "{}[A PDF document was here. acp2api cannot give PDF documents to the model.]",
+                    std::mem::take(&mut prefix)
+                )),
             };
             blocks.push(block);
         }
@@ -376,6 +372,15 @@ pub(crate) fn tool_set_hash(tools: &[ClientTool]) -> ToolSetHash {
         hash.0.update(member);
     }
     ToolSetHash(hash.finish())
+}
+pub(crate) fn continues_after(items: &[&Item], len: usize) -> bool {
+    match (&items[len - 1], &items[len..]) {
+        (Item::ToolCall { id, .. }, [Item::ToolResult { id: result_id, .. }, following @ ..]) => {
+            id == result_id && (following.is_empty() || user_suffix(following))
+        }
+        (Item::ToolCall { .. }, _) => false,
+        (_, following) => user_suffix(following),
+    }
 }
 pub(crate) fn user_suffix(items: &[&Item]) -> bool {
     !items.is_empty()

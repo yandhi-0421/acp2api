@@ -63,6 +63,11 @@ pub fn kind(s: &Scenario) -> String {
         .unwrap()
         .into()
 }
+pub fn response(s: &Scenario) -> Option<(u16, Value)> {
+    s.answer
+        .as_ref()
+        .map(|answer| (answer.status, answer.json()))
+}
 pub fn exact_text(s: &Scenario, expected: &str) {
     let actual = s
         .answer
@@ -73,9 +78,7 @@ pub fn exact_text(s: &Scenario, expected: &str) {
         actual.as_deref(),
         Some(expected),
         "FR-020/021 complete ordered prompt text; HTTP response: {:?}",
-        s.answer
-            .as_ref()
-            .map(|answer| (answer.status, answer.json()))
+        response(s)
     );
 }
 pub fn continuation(s: &Scenario, previous: &str, text: &str) {

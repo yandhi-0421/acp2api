@@ -14,6 +14,7 @@ async fn model_call(w: &mut World, endpoint: String, name: String, arguments: St
     w.tool_results.endpoint = endpoint.clone();
     w.tool_results.tools = vec![tool_check::tool(&name)];
     w.tool_results.messages = vec![c::message("user", None, "Use an offered tool.")];
+    w.tool_results.name = name.clone();
     w.tool_results.arguments = arguments.clone();
     w.request.output_call = Some((name, arguments));
     send(w).await;
@@ -58,6 +59,7 @@ async fn long_call(w: &mut World, name: String, length: String, endpoint: String
 }
 
 #[when(expr = "the API client sends the tool result {string} for that tool call")]
+#[when(expr = "the request has the tool result {string} for that tool call")]
 async fn result(w: &mut World, text: String) {
     w.tool_results.result(json!(text), false);
     send(w).await;
@@ -79,10 +81,7 @@ fn first_line(w: &World, expected: &str) {
         w.tool_results.first_line(&w.scenario).as_deref(),
         Some(expected),
         "FR-023 tool-result first line; HTTP response: {:?}",
-        w.scenario
-            .answer
-            .as_ref()
-            .map(|answer| (answer.status, answer.json()))
+        c::response(&w.scenario)
     );
 }
 
@@ -107,51 +106,16 @@ async fn image(w: &mut World, before: String, after: String) {
 }
 
 #[then(
-    "the prompt that the official runtime gets has the text \"Before:\", the image, and the text \"After.\" in this order"
-)]
-fn image_position(w: &mut World) {
-    let prompt = w.tool_results.prompt(&w.scenario);
-    let actual = prompt.as_ref().and_then(|prompt| {
-        let blocks = prompt.as_array().unwrap();
-        let images = blocks
-            .iter()
-            .enumerate()
-            .filter(|(_, block)| block["type"] == "image")
-            .collect::<Vec<_>>();
-        let [(index, image)] = images.as_slice() else {
-            return None;
-        };
-        let before: String = blocks[..*index]
-            .iter()
-            .map(|block| block["text"].as_str().unwrap())
-            .collect();
-        let after: String = blocks[index + 1..]
-            .iter()
-            .map(|block| block["text"].as_str().unwrap())
-            .collect();
-        Some((before.ends_with("Before:"), (*image).clone(), after))
-    });
-    assert_eq!(
-        actual,
-        Some((
-            true,
-            json!({"type":"image","data":content_check::PNG,"mimeType":"image/png"}),
-            "After.".into()
-        )),
-        "FR-023 original image bytes and text stay in order; actual prompt: {prompt:?}"
-    );
-}
-
-#[then(
     regex = r#"^the first line of the tool result in the prompt holds (all 1,000 characters of the arguments, and no mark|only the first 1,000 characters of the arguments, and then the mark " \[arguments cut\]" before the colon)$"#
 )]
 fn truncated(w: &mut World, part: String) {
+    let name = &w.tool_results.name;
     let arguments = &w.tool_results.arguments;
     let expected = if part.starts_with("all") {
-        format!("Result of your tool call write_file {arguments}:")
+        format!("Result of your tool call {name} {arguments}:")
     } else {
         format!(
-            "Result of your tool call write_file {} [arguments cut]:",
+            "Result of your tool call {name} {} [arguments cut]:",
             arguments.chars().take(1000).collect::<String>()
         )
     };
@@ -164,6 +128,7 @@ fn truncated(w: &mut World, part: String) {
 fn historical(w: &mut World, endpoint: String, name: String, description: String) {
     w.tool_results.endpoint = endpoint.clone();
     w.tool_results.id = "earlier-call".into();
+    w.tool_results.name = name.clone();
     let arguments = description
         .strip_prefix("the input object ")
         .or_else(|| {
@@ -178,12 +143,6 @@ fn historical(w: &mut World, endpoint: String, name: String, description: String
         json!({"role":"assistant","content":null,"tool_calls":[{"id":"earlier-call","type":"function","function":{"name":name,"arguments":arguments}}]})
     };
     w.tool_results.messages = vec![c::message("user", None, "Read the file."), assistant];
-}
-
-#[when(expr = "the request has the tool result {string} for that tool call")]
-async fn historical_result(w: &mut World, text: String) {
-    w.tool_results.result(json!(text), false);
-    send(w).await;
 }
 
 #[given(expr = "the conversation has no tool call with the ID {string}")]
@@ -241,18 +200,15 @@ fn sentence(w: &mut World, start: String, end: String) {
             .lines()
             .any(|line| line.starts_with(&start) && line.ends_with(&end))),
         "FR-023 rebuild tool-call sentence; actual prompt: {text:?}; HTTP response: {:?}",
-        w.scenario
-            .answer
-            .as_ref()
-            .map(|answer| (answer.status, answer.json()))
+        c::response(&w.scenario)
     );
 }
 
 #[then("the arguments in that sentence have all 5,000 characters")]
 fn full_arguments(w: &mut World) {
     let sentence = format!(
-        "You called the tool write_file with the arguments {}.",
-        w.tool_results.arguments
+        "You called the tool {} with the arguments {}.",
+        w.tool_results.name, w.tool_results.arguments
     );
     assert!(
         w.tool_results
@@ -327,6 +283,7 @@ async fn late_system(w: &mut World, result: String, text: String) {
 async fn pdf(w: &mut World, endpoint: String, text: String) {
     w.tool_results.endpoint = endpoint.clone();
     w.tool_results.id = "pdf-call".into();
+    w.tool_results.result_text = text.clone();
     w.tool_results.messages = vec![
         c::message("user", None, "Read the PDF."),
         json!({"role":"assistant","content":[{"type":"tool_use","id":"pdf-call","name":"read_file","input":{"path":"a.pdf"}}]}),
@@ -349,7 +306,7 @@ fn retained_text(w: &mut World, expected: String) {
 
 #[then(expr = "the tool result in the prompt holds the line {string} at the place of the PDF")]
 fn pdf_note(w: &mut World, note: String) {
-    let expected = format!("Page count: 3\n{note}");
+    let expected = format!("{}\n{note}", w.tool_results.result_text);
     assert!(
         w.tool_results
             .text(&w.scenario)

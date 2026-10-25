@@ -56,11 +56,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         });
     }
     if let (Api::Responses, Some(text)) = (api, input.as_str()) {
-        items.push(Item::Message {
-            role: Role::User,
-            name: None,
-            parts: vec![Part::Text(text.into())],
-        });
+        items.push(message(Role::User, None, vec![Part::Text(text.into())]));
     } else {
         let mut at_start = true;
         for item in input
@@ -76,37 +72,12 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 });
                 continue;
             }
-            if let (Api::Responses, Some(kind)) = (api, item["type"].as_str()) {
-                match kind {
-                    "function_call" | "custom_tool_call" => {
-                        at_start = false;
-                        items.push(Item::ToolCall {
-                            id: required(item, "call_id")?.into(),
-                            name: required(item, "name")?.into(),
-                            arguments: required(
-                                item,
-                                if kind == "function_call" {
-                                    "arguments"
-                                } else {
-                                    "input"
-                                },
-                            )?
-                            .into(),
-                        });
-                        continue;
-                    }
-                    "function_call_output" | "custom_tool_call_output" => {
-                        at_start = false;
-                        items.push(Item::ToolResult {
-                            id: required(item, "call_id")?.into(),
-                            parts: result_parts(api, &item["output"], &client_tools)?,
-                            error: false,
-                        });
-                        continue;
-                    }
-                    "message" => {}
-                    _ => return Err(Message::Content(kind.into()).into()),
-                }
+            if matches!(api, Api::Responses)
+                && let Some(tool) = responses_item(item, &client_tools)?
+            {
+                at_start = false;
+                items.push(tool);
+                continue;
             }
             let role = match required(item, "role")? {
                 "user" => Role::User,
@@ -123,72 +94,15 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 system.extend(system_part(role, item["name"].as_str(), &texts));
             } else {
                 at_start = false;
-                if let (Api::Messages, Some(blocks)) = (api, item["content"].as_array())
-                    && blocks.iter().any(|block| {
-                        matches!(block["type"].as_str(), Some("tool_use" | "tool_result"))
-                    })
-                {
-                    let mut pending = Vec::new();
-                    for block in blocks {
-                        let tool = match block["type"].as_str() {
-                            Some("tool_use") => {
-                                if !block["input"].is_object() {
-                                    return Err(Refusal::invalid("tool input must be an object"));
-                                }
-                                Item::ToolCall {
-                                    id: required(block, "id")?.into(),
-                                    name: required(block, "name")?.into(),
-                                    arguments: block["input"].to_string(),
-                                }
-                            }
-                            Some("tool_result") => Item::ToolResult {
-                                id: required(block, "tool_use_id")?.into(),
-                                parts: result_parts(api, &block["content"], &client_tools)?,
-                                error: block["is_error"].as_bool().unwrap_or(false),
-                            },
-                            _ => {
-                                push_part(api, block, &client_tools, &mut pending)?;
-                                continue;
-                            }
-                        };
-                        if !pending.is_empty() {
-                            items.push(Item::Message {
-                                role,
-                                name: item["name"].as_str().map(str::to_owned),
-                                parts: std::mem::take(&mut pending),
-                            });
-                        }
-                        items.push(tool);
-                    }
-                    if !pending.is_empty() {
-                        items.push(Item::Message {
-                            role,
-                            name: item["name"].as_str().map(str::to_owned),
-                            parts: pending,
-                        });
-                    }
-                    continue;
-                }
-                let calls = matches!(api, Api::Chat)
-                    .then(|| item["tool_calls"].as_array())
-                    .flatten();
-                if calls.is_none() || !item["content"].is_null() && item["content"] != "" {
-                    let parts = parts(api, &item["content"], &client_tools)?;
-                    items.push(Item::Message {
+                items.extend(match api {
+                    Api::Messages => messages_blocks(item, role, &client_tools)?,
+                    Api::Chat => chat_assistant(item, role, &client_tools)?,
+                    Api::Responses => vec![message(
                         role,
-                        name: item["name"].as_str().map(str::to_owned),
-                        parts,
-                    });
-                }
-                if let Some(calls) = calls {
-                    for call in calls {
-                        items.push(Item::ToolCall {
-                            id: required(call, "id")?.into(),
-                            name: required(&call["function"], "name")?.into(),
-                            arguments: required(&call["function"], "arguments")?.into(),
-                        });
-                    }
-                }
+                        item["name"].as_str(),
+                        parts(api, &item["content"], &client_tools)?,
+                    )],
+                });
             }
         }
     }
@@ -238,6 +152,120 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             .filter(|name| !known_field(api, name))
             .cloned()
             .collect(),
+    })
+}
+fn message(role: Role, name: Option<&str>, parts: Vec<Part>) -> Item {
+    Item::Message {
+        role,
+        name: name.map(str::to_owned),
+        parts,
+    }
+}
+fn messages_blocks(
+    item: &Value,
+    role: Role,
+    tools: &[crate::conversation::ClientTool],
+) -> Result<Vec<Item>, Refusal> {
+    let Some(blocks) = item["content"].as_array().filter(|blocks| {
+        blocks
+            .iter()
+            .any(|block| matches!(block["type"].as_str(), Some("tool_use" | "tool_result")))
+    }) else {
+        return Ok(vec![message(
+            role,
+            item["name"].as_str(),
+            parts(Api::Messages, &item["content"], tools)?,
+        )]);
+    };
+    let mut items = Vec::new();
+    let mut pending = Vec::new();
+    for block in blocks {
+        let tool = match block["type"].as_str() {
+            Some("tool_use") => {
+                if !block["input"].is_object() {
+                    return Err(Refusal::invalid("tool input must be an object"));
+                }
+                Item::ToolCall {
+                    id: required(block, "id")?.into(),
+                    name: required(block, "name")?.into(),
+                    arguments: block["input"].to_string(),
+                }
+            }
+            Some("tool_result") => Item::ToolResult {
+                id: required(block, "tool_use_id")?.into(),
+                parts: result_parts(Api::Messages, &block["content"], tools)?,
+                error: block["is_error"].as_bool().unwrap_or(false),
+            },
+            _ => {
+                push_part(Api::Messages, block, tools, &mut pending)?;
+                continue;
+            }
+        };
+        if !pending.is_empty() {
+            items.push(message(
+                role,
+                item["name"].as_str(),
+                std::mem::take(&mut pending),
+            ));
+        }
+        items.push(tool);
+    }
+    if !pending.is_empty() {
+        items.push(message(role, item["name"].as_str(), pending));
+    }
+    Ok(items)
+}
+fn chat_assistant(
+    item: &Value,
+    role: Role,
+    tools: &[crate::conversation::ClientTool],
+) -> Result<Vec<Item>, Refusal> {
+    let mut items = Vec::new();
+    let calls = item["tool_calls"].as_array();
+    let has_content = !item["content"].is_null() && item["content"] != "";
+    if calls.is_none() || has_content {
+        items.push(message(
+            role,
+            item["name"].as_str(),
+            parts(Api::Chat, &item["content"], tools)?,
+        ));
+    }
+    if let Some(calls) = calls {
+        for call in calls {
+            items.push(Item::ToolCall {
+                id: required(call, "id")?.into(),
+                name: required(&call["function"], "name")?.into(),
+                arguments: required(&call["function"], "arguments")?.into(),
+            });
+        }
+    }
+    Ok(items)
+}
+fn responses_item(
+    item: &Value,
+    tools: &[crate::conversation::ClientTool],
+) -> Result<Option<Item>, Refusal> {
+    Ok(match item["type"].as_str() {
+        Some(kind @ ("function_call" | "custom_tool_call")) => Some(Item::ToolCall {
+            id: required(item, "call_id")?.into(),
+            name: required(item, "name")?.into(),
+            arguments: required(
+                item,
+                if kind == "function_call" {
+                    "arguments"
+                } else {
+                    "input"
+                },
+            )?
+            .into(),
+        }),
+        Some("function_call_output" | "custom_tool_call_output") => Some(Item::ToolResult {
+            id: required(item, "call_id")?.into(),
+            parts: result_parts(Api::Responses, &item["output"], tools)?,
+            error: false,
+        }),
+        None | Some("message") => None,
+        Some(kind) => return Err(Message::Content(kind.into()).into()),
     })
 }
 fn known_field(api: Api, name: &str) -> bool {
@@ -703,18 +731,7 @@ mod tests {
         let body = br#"{"model":"m","tools":[{"name":"read","input_schema":{}}],"messages":[
             {"role":"user","content":[{"type":"tool_addition","tool":{"type":"tool_reference","name":"read"}}]}
         ]}"#;
-        let actual = parse(Api::Messages, body)
-            .map(|parsed| {
-                let items = parsed.turn.conversation.items();
-                let (_, blocks) = crate::conversation::prompt(
-                    crate::conversation::Prompt::New {
-                        message: &parsed.turn.conversation.last,
-                    },
-                    &items,
-                );
-                (parsed.turn.input_tokens, blocks.len())
-            })
-            .map_err(|refusal| refusal.message.to_string());
+        let actual = rendered(Api::Messages, body).map(|(tokens, blocks, _)| (tokens, blocks));
         assert_eq!(
             actual,
             Ok((2, 0)),
@@ -753,27 +770,8 @@ mod tests {
             {"type":"custom_tool_call","call_id":"call_1","name":"patch","input":"*** Begin Patch"},
             {"type":"custom_tool_call_output","call_id":"call_1","output":"DONE"}
         ]}"#;
-        let actual = parse(Api::Responses, body.as_bytes())
-            .map(|parsed| {
-                let items = parsed.turn.conversation.items();
-                let (_, blocks) = crate::conversation::prompt(
-                    crate::conversation::Prompt::Rebuild {
-                        conversation_items: &items,
-                    },
-                    &items,
-                );
-                let text: String = blocks
-                    .into_iter()
-                    .map(|block| match block {
-                        crate::conversation::PromptBlock::Text(text) => text,
-                        crate::conversation::PromptBlock::Image { .. } => {
-                            "[unexpected image]".into()
-                        }
-                    })
-                    .collect();
-                (parsed.turn.input_tokens, text)
-            })
-            .map_err(|refusal| refusal.message.to_string());
+        let actual =
+            rendered(Api::Responses, body.as_bytes()).map(|(tokens, _, text)| (tokens, text));
         assert_eq!(actual, Ok((8, concat!(
             "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.\n\n",
             "[assistant]\nPatch.\nYou called the tool patch with the arguments *** Begin Patch.\n",
@@ -791,16 +789,33 @@ mod tests {
                 {"type":"input_text","text":"NEXT"}
             ]}
         ]}"#;
-        let actual = parse(Api::Responses, body.as_bytes())
+        let actual =
+            rendered(Api::Responses, body.as_bytes()).map(|(tokens, _, text)| (tokens, text));
+        assert_eq!(actual, Ok((9, concat!(
+            "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.\n\n",
+            "You called the tool read with the arguments { \"a\": \"é\", \"b\": 1 }.\n",
+            "Result of your tool call read { \"a\": \"é\", \"b\": 1 }:\nDATA\n",
+            "[A PDF document was here. acp2api cannot give PDF documents to the model.]\n",
+            "[image:image/png:aQ==]NEXT"
+        ).into())), "FR-023 content order and FR-025 client text count");
+    }
+    fn rendered(api: Api, body: &[u8]) -> Result<(u64, usize, String), String> {
+        parse(api, body)
             .map(|parsed| {
-                let items = parsed.turn.conversation.items();
-                let (_, blocks) = crate::conversation::prompt(
+                let conversation = &parsed.turn.conversation;
+                let items = conversation.items();
+                let input = if conversation.earlier.is_empty() {
+                    crate::conversation::Prompt::New {
+                        message: &conversation.last,
+                    }
+                } else {
                     crate::conversation::Prompt::Rebuild {
                         conversation_items: &items,
-                    },
-                    &items,
-                );
-                let observed: String = blocks
+                    }
+                };
+                let (_, blocks) = crate::conversation::prompt(input, &items);
+                let count = blocks.len();
+                let text = blocks
                     .into_iter()
                     .map(|block| match block {
                         crate::conversation::PromptBlock::Text(text) => text,
@@ -809,16 +824,9 @@ mod tests {
                         }
                     })
                     .collect();
-                (parsed.turn.input_tokens, observed)
+                (parsed.turn.input_tokens, count, text)
             })
-            .map_err(|refusal| refusal.message.to_string());
-        assert_eq!(actual, Ok((9, concat!(
-            "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.\n\n",
-            "You called the tool read with the arguments { \"a\": \"é\", \"b\": 1 }.\n",
-            "Result of your tool call read { \"a\": \"é\", \"b\": 1 }:\nDATA\n",
-            "[A PDF document was here. acp2api cannot give PDF documents to the model.]\n",
-            "[image:image/png:aQ==]NEXT"
-        ).into())), "FR-023 content order and FR-025 client text count");
+            .map_err(|refusal| refusal.message.to_string())
     }
     fn input_estimate(body: &str) -> u64 {
         let parsed = parse(Api::Responses, body.as_bytes())

@@ -7,7 +7,9 @@ pub struct ToolResultState {
     pub messages: Vec<Value>,
     pub tools: Vec<Value>,
     pub id: String,
+    pub name: String,
     pub arguments: String,
+    pub result_text: String,
     pub prompt_count: usize,
 }
 
