@@ -64,7 +64,19 @@ pub fn kind(s: &Scenario) -> String {
         .into()
 }
 pub fn exact_text(s: &Scenario, expected: &str) {
-    assert_eq!(text(s), expected, "FR-020/021 complete ordered prompt text");
+    let actual = s
+        .answer
+        .as_ref()
+        .filter(|answer| answer.status == 200)
+        .map(|_| text(s));
+    assert_eq!(
+        actual.as_deref(),
+        Some(expected),
+        "FR-020/021 complete ordered prompt text; HTTP response: {:?}",
+        s.answer
+            .as_ref()
+            .map(|answer| (answer.status, answer.json()))
+    );
 }
 pub fn continuation(s: &Scenario, previous: &str, text: &str) {
     assert_eq!(

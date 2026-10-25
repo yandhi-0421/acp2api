@@ -95,7 +95,9 @@ async fn pdf(w: &mut World, endpoint: String, position: String) {
     w.content.endpoint = endpoint;
     c::send(&mut w.scenario, call).await;
 }
-#[when(regex = r#"^an API client sends a request to "([^"]+)" with (.+) with the text "([^"]+)"$"#)]
+#[when(
+    regex = r#"^an API client sends a request to "([^"]+)" with (a document block with .+|an input_file item with .+) with the text "([^"]+)"$"#
+)]
 async fn document(w: &mut World, endpoint: String, description: String, text: String) {
     let mut doc = if description.contains("source type \"text\"") {
         json!({"type":"document","title":"Notes","source":{"type":"text","media_type":"text/plain","data":text}})
@@ -185,7 +187,7 @@ async fn no_fetch(w: &mut World, host: String) {
     c::no_fetch(&mut w.scenario, &w.content.endpoint, false).await;
 }
 #[then(
-    expr = "the prompt that the official runtime gets has the text {string}, the image, and the text {string} in this order"
+    regex = r#"^the prompt that the official runtime gets has the text "(Look at this:)", the image, and the text "(What is it\?)" in this order$"#
 )]
 fn ordered(w: &mut World, first: String, last: String) {
     assert_eq!(

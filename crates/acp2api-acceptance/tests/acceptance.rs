@@ -5,6 +5,10 @@ mod panel;
 mod selection;
 #[path = "support/timed_steps.rs"]
 mod timed_steps;
+#[path = "support/tool_results.rs"]
+mod tool_result_support;
+#[path = "steps/tool_results.rs"]
+mod tool_results;
 #[path = "support/usage_contract.rs"]
 mod usage_contract;
 #[path = "steps/usage_contract.rs"]
@@ -26,6 +30,7 @@ struct World {
     content: request_content::ContentState,
     tools: client_tools::ToolState,
     custom_tools: custom_tools::CustomToolState,
+    tool_results: tool_result_support::ToolResultState,
 }
 #[path = "steps/access_protection.rs"]
 mod access_protection;
