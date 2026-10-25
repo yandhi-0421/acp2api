@@ -5,19 +5,16 @@ use serde_json::{Value, json};
 
 #[given(expr = "the prompt turn has the usage updates with \"used\" {int} and then \"used\" {int}")]
 fn updates(w: &mut World, first: u64, last: u64) {
-    w.usage.active = true;
     w.usage.updates = vec![first, last];
 }
 
 #[given(expr = "the prompt turn has the last usage update with \"used\" {int}")]
 fn last_update(w: &mut World, used: u64) {
-    w.usage.active = true;
     w.usage.updates = vec![used];
 }
 
 #[given("the prompt turn ends with no usage update")]
 fn no_usage(w: &mut World) {
-    w.usage.active = true;
     w.usage.updates.clear();
 }
 
@@ -25,7 +22,6 @@ fn no_usage(w: &mut World) {
     regex = r#"^the model calls "([^"]+)" with the 8 ASCII characters (\{.*\}) as arguments and sends no text$"#
 )]
 fn output_call(w: &mut World, name: String, arguments: String) {
-    w.usage.active = true;
     w.usage.output_call = Some((name, arguments));
 }
 
@@ -75,7 +71,10 @@ async fn prefix(w: &mut World) {
         .finish(&mut w.scenario.time)
         .await;
     assert_eq!(answer.status, 200, "seed ACP session");
-    assert_eq!(answer.json()["content"][0]["text"], "EFGH");
+    assert_eq!(
+        answer.json()["content"][0]["text"],
+        w.usage.messages[1]["content"]
+    );
     w.usage.continued = true;
 }
 
@@ -160,7 +159,7 @@ fn zero(w: &mut World) {
         .or_else(|| usage.get("prompt_tokens"));
     assert_eq!(
         input.and_then(Value::as_u64),
-        Some(5183),
+        Some(*w.usage.updates.last().unwrap()),
         "real usage is present"
     );
     check::zero_details(usage, "usage");
@@ -182,8 +181,8 @@ fn initial(w: &mut World, event: String, field: String) {
     let usage = check::event_usage(w.scenario.answer.as_ref().unwrap(), &event);
     assert_eq!(
         usage[&field].as_u64(),
-        Some(2),
-        "FR-025 initial estimate of Hello"
+        Some(check::USER_TEXT_TOKENS),
+        "FR-025 initial estimate of the default user text"
     );
 }
 
@@ -204,12 +203,7 @@ fn last(w: &mut World, event: String, input: u64, output: u64) {
 
 #[then(expr = "the {string} event carries the usage with {string} {int}")]
 fn completed(w: &mut World, event: String, field: String, expected: u64) {
-    let usage = check::event_usage(w.scenario.answer.as_ref().unwrap(), &event);
-    assert_eq!(
-        usage[&field].as_u64(),
-        Some(expected),
-        "FR-025 completed response usage"
-    );
+    estimate(w, field, event, expected);
 }
 
 #[then(expr = "the last chunk before \"data: [DONE]\" carries the usage with {string} {int}")]
@@ -227,7 +221,7 @@ fn no_chunk_usage(w: &mut World) {
     let answer = w.scenario.answer.as_ref().unwrap();
     assert_eq!(
         endpoint_check::text(&answer.events),
-        "OK",
+        check::DEFAULT_REPLY,
         "real stream reply"
     );
     for chunk in check::chat_chunks(answer) {
@@ -242,7 +236,7 @@ fn no_chunk_usage(w: &mut World) {
 fn is_stream(w: &mut World) {
     let answer = w.scenario.answer.as_ref().unwrap();
     assert!(answer.headers["content-type"].starts_with("text/event-stream"));
-    assert_eq!(endpoint_check::text(&answer.events), "OK");
+    assert_eq!(endpoint_check::text(&answer.events), check::DEFAULT_REPLY);
 }
 
 #[then("the last chunk of the stream before \"data: [DONE]\" carries the usage")]
@@ -250,7 +244,7 @@ fn carries_usage(w: &mut World) {
     let chunks = check::chat_chunks(w.scenario.answer.as_ref().unwrap());
     assert_eq!(
         chunks.last().unwrap()["usage"]["prompt_tokens"].as_u64(),
-        Some(1000),
+        Some(*w.usage.updates.last().unwrap()),
         "FR-014 last Chat chunk carries usage"
     );
 }

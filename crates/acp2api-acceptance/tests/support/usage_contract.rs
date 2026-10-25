@@ -5,9 +5,13 @@ use acp2api_acceptance::{
 };
 use serde_json::{Value, json};
 
+pub const USER_TEXT: &str = "Hello";
+pub const USER_TEXT_TOKENS: u64 = 2;
+pub const DEFAULT_REPLY: &str = "OK";
+const DEFAULT_USED: u64 = 1000;
+
 #[derive(Debug)]
 pub struct UsageCase {
-    pub active: bool,
     pub updates: Vec<u64>,
     pub reply: String,
     pub system: Option<String>,
@@ -23,9 +27,8 @@ pub struct UsageCase {
 impl Default for UsageCase {
     fn default() -> Self {
         Self {
-            active: false,
-            updates: vec![1000],
-            reply: "OK".into(),
+            updates: vec![DEFAULT_USED],
+            reply: DEFAULT_REPLY.into(),
             system: None,
             messages: Vec::new(),
             tools: Vec::new(),
@@ -40,10 +43,11 @@ impl Default for UsageCase {
 
 impl UsageCase {
     pub fn request(&self, endpoint: &str, stream: bool) -> ApiCall {
-        let mut call = endpoint_check::request(endpoint, "Hello", stream);
-        if !self.tools.is_empty() {
-            call = tool_check::request(endpoint, &self.tools, stream, "auto");
-        }
+        let mut call = if self.tools.is_empty() {
+            endpoint_check::request(endpoint, USER_TEXT, stream)
+        } else {
+            tool_check::request(endpoint, &self.tools, stream, "auto")
+        };
         if let Some(system) = &self.system {
             call.body["system"] = json!(system);
         }
@@ -67,7 +71,7 @@ impl UsageCase {
         call
     }
 
-    pub async fn send(&self, scenario: &mut Scenario, call: ApiCall) {
+    pub fn plan(&mut self) -> TurnPlan {
         let mut plan = TurnPlan::new();
         if let Some((name, arguments)) = &self.output_call {
             plan.steps.push(TurnStep::ClientToolCall {
@@ -76,12 +80,20 @@ impl UsageCase {
             });
             plan.end = acp2api_acceptance::fake::TurnEndPlan::Never;
         } else {
-            plan = plan.chunk(&self.reply);
+            plan = plan.chunk(&std::mem::replace(&mut self.reply, DEFAULT_REPLY.into()));
         }
+        self.with_usage(plan)
+    }
+
+    pub fn with_usage(&self, mut plan: TurnPlan) -> TurnPlan {
         for used in &self.updates {
             plan = plan.usage(*used, 1_048_576);
         }
-        scenario.fake().next_prompt(plan);
+        plan
+    }
+
+    pub async fn send(&mut self, scenario: &mut Scenario, call: ApiCall) {
+        scenario.fake().next_prompt(self.plan());
         let answer = scenario
             .client()
             .await
@@ -100,7 +112,11 @@ impl UsageCase {
                 prompts[0].session, prompts[1].session,
                 "continued ACP session"
             );
-            assert_eq!(prompts[1].text, "你IJKL", "only the new input reaches ACP");
+            assert_eq!(
+                prompts[1].text,
+                self.messages.last().unwrap()["content"].as_str().unwrap(),
+                "only the new input reaches ACP"
+            );
         }
         scenario.answer = Some(answer);
     }

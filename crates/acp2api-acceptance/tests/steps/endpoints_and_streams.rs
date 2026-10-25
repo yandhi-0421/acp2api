@@ -19,9 +19,9 @@ impl std::fmt::Debug for EndpointState {
     expr = "the official runtime sends the text chunks {string} and {string}, and then waits 10 s before the end of the prompt turn"
 )]
 fn chunks(w: &mut World, first: String, last: String) {
-    let mut plan = TurnPlan::new()
-        .chunk(&first)
-        .usage(1000, 1_048_576)
+    let mut plan = w
+        .usage
+        .with_usage(TurnPlan::new().chunk(&first))
         .chunk(&last);
     plan.steps.push(TurnStep::HoldUntil("prompt-end".into()));
     w.scenario.fake().next_prompt(
@@ -31,19 +31,16 @@ fn chunks(w: &mut World, first: String, last: String) {
     w.endpoint.incremental = true;
 }
 async fn send(w: &mut World, path: String, stream: bool) {
-    if w.usage.active {
-        w.usage
-            .send(&mut w.scenario, w.usage.request(&path, stream))
-            .await;
-        return;
-    }
     w.endpoint.path = path.clone();
     w.endpoint.stream = stream;
+    if !w.endpoint.incremental {
+        w.scenario.fake().next_prompt(w.usage.plan());
+    }
     let call = w
         .scenario
         .client()
         .await
-        .send(wire::request(&path, "Hello", stream));
+        .send(w.usage.request(&path, stream));
     if w.endpoint.incremental {
         w.endpoint.live = Some(call);
         w.scenario.time.settle().await;

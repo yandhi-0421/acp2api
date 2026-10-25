@@ -34,7 +34,7 @@ fn history(w: &World, user: &str, reply: &str, next: Option<&str>) -> Value {
 }
 async fn send(w: &mut World, items: Value) {
     let call = c::call(items, w.conversation.system.as_deref(), Value::Null);
-    // Do not override the scenario's explicit next fake reply.
+    w.scenario.fake().next_prompt(w.usage.plan());
     content_check::send(&mut w.scenario, call).await;
     assert_eq!(
         w.scenario.answer.as_ref().unwrap().status,
@@ -85,6 +85,7 @@ async fn edited(w: &mut World, user: String, reply: String, next: String) {
     let mut call = acp2api_acceptance::client::ApiCall::one_user_message("POST /v1/messages", "");
     call.body["messages"] = history(w, &user, &reply, Some(&next));
     call.body["system"] = json!(w.conversation.system);
+    w.scenario.fake().next_prompt(w.usage.plan());
     content_check::send(&mut w.scenario, call).await;
     assert_eq!(w.scenario.answer.as_ref().unwrap().status, 200);
 }
