@@ -161,26 +161,36 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
 fn effort(api: Api, value: &Value) -> crate::conversation::EffortAsk {
     use crate::conversation::{EffortAsk, ThinkingLevel};
     let field = match api {
-        Api::Chat => &value["reasoning_effort"],
-        Api::Responses => &value["reasoning"]["effort"],
+        Api::Chat => value.get("reasoning_effort"),
+        Api::Responses => value["reasoning"].get("effort"),
         Api::Messages => {
-            if value["output_config"]["effort"].is_null() {
+            if value["output_config"].get("effort").is_none() {
                 return if value["thinking"]["type"] == "disabled" {
                     EffortAsk::Level(ThinkingLevel::Low)
                 } else {
                     EffortAsk::Absent
                 };
             }
-            &value["output_config"]["effort"]
+            value["output_config"].get("effort")
         }
     };
-    match field.as_str() {
-        Some("none" | "minimal" | "low") => EffortAsk::Level(ThinkingLevel::Low),
-        Some("medium") => EffortAsk::Level(ThinkingLevel::Medium),
-        Some("high" | "xhigh" | "max" | "ultra") => EffortAsk::Level(ThinkingLevel::High),
-        Some(value) => EffortAsk::Unknown(value.into()),
-        None if field.is_null() => EffortAsk::Absent,
-        None => EffortAsk::Unknown(field.to_string()),
+    match field {
+        Some(Value::String(value)) => match value.as_str() {
+            "none" | "minimal" | "low" => EffortAsk::Level(ThinkingLevel::Low),
+            "medium" => EffortAsk::Level(ThinkingLevel::Medium),
+            "high" | "xhigh" | "max" | "ultra" => EffortAsk::Level(ThinkingLevel::High),
+            _ => EffortAsk::Unknown(if value.len() <= 256 {
+                value.clone().into()
+            } else {
+                Value::Null
+            }),
+        },
+        Some(Value::Null) => EffortAsk::Unknown("null".into()),
+        Some(Value::Bool(_)) => EffortAsk::Unknown("boolean".into()),
+        Some(Value::Number(_)) => EffortAsk::Unknown("number".into()),
+        Some(Value::Array(_)) => EffortAsk::Unknown("array".into()),
+        Some(Value::Object(_)) => EffortAsk::Unknown("object".into()),
+        None => EffortAsk::Absent,
     }
 }
 fn message(role: Role, name: Option<&str>, parts: Vec<Part>) -> Item {

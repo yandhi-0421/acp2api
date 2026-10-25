@@ -138,7 +138,7 @@ impl Core {
     fn check_model(
         &self,
         turn: &mut TurnRequest,
-    ) -> Result<Option<String>, crate::messages::Refusal> {
+    ) -> Result<Option<serde_json::Value>, crate::messages::Refusal> {
         self.catalog
             .as_ref()
             .map_or(Ok(None), |catalog| catalog.resolve(turn))

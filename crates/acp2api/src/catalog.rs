@@ -110,7 +110,7 @@ impl Catalog {
     pub(crate) fn resolve(
         &self,
         turn: &mut TurnRequest,
-    ) -> Result<Option<String>, crate::messages::Refusal> {
+    ) -> Result<Option<serde_json::Value>, crate::messages::Refusal> {
         let found = self.models.iter().find_map(|model| {
             if model.value == turn.model {
                 Some((model, None))

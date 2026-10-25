@@ -39,6 +39,7 @@ struct ConfiguringPrompt {
     prompt: crate::conversation::PromptRequest,
     option: String,
     value: String,
+    sent: Vec<&'static str>,
 }
 impl Runtime {
     pub(crate) async fn start(
@@ -283,6 +284,14 @@ impl Runtime {
         prompt: crate::conversation::PromptRequest,
         session: &str,
     ) -> Result<(), String> {
+        self.configure_prompt(prompt, session, Vec::new()).await
+    }
+    async fn configure_prompt(
+        &mut self,
+        prompt: crate::conversation::PromptRequest,
+        session: &str,
+        mut sent: Vec<&'static str>,
+    ) -> Result<(), String> {
         let desired = [
             ("model", Some(prompt.model.as_str())),
             ("thinking_level", prompt.level.map(|level| level.as_str())),
@@ -297,6 +306,12 @@ impl Runtime {
                     != Some(*value)
             });
         if let Some((option, value)) = changed {
+            if sent.contains(&option) {
+                return Err(format!(
+                    "official runtime did not apply session config option {option}"
+                ));
+            }
+            sent.push(option);
             let option = option.to_owned();
             let value = value.to_owned();
             let id = self
@@ -312,6 +327,7 @@ impl Runtime {
                     prompt,
                     option,
                     value,
+                    sent,
                 },
             );
             Ok(())
@@ -372,7 +388,10 @@ impl Runtime {
                 self.config
                     .insert((session.clone(), pending.option), pending.value);
                 self.remember_config(&session, &value["result"]);
-                return match self.start_configured_prompt(pending.prompt, &session).await {
+                return match self
+                    .configure_prompt(pending.prompt, &session, pending.sent)
+                    .await
+                {
                     Ok(()) => RuntimeEvent::Other,
                     Err(error) => RuntimeEvent::Turn {
                         session,

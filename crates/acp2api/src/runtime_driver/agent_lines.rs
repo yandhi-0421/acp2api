@@ -177,6 +177,26 @@ async fn capped(test: impl std::future::Future<Output = ()>) {
 }
 
 #[tokio::test]
+async fn a_config_option_that_stays_different_fails_without_a_retry() {
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime.start_configured_prompt(crate::conversation::PromptRequest {
+            blocks: vec![PromptBlock::Text("Hello".into())],
+            model: "other".into(),
+            level: None,
+        }, "s1").await.unwrap();
+        let option = agent.stdin().await;
+        assert_eq!(option["method"], "session/set_config_option");
+        assert_eq!(option["params"], json!({"sessionId":"s1","configId":"model","value":"other"}));
+        agent.stdout(result(option["id"].as_u64().unwrap(), json!({"configOptions":[
+            {"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"},{"value":"other","name":"Other"}]}
+        ]}))).await;
+        let event = next(&mut runtime).await;
+        assert!(event.starts_with("failed "), "FR-033 upstream failure after one attempt; actual: {event}");
+    }).await;
+}
+
+#[tokio::test]
 async fn model_configuration_uses_the_returned_level_without_losing_another_turn() {
     capped(async {
         let (mut runtime, mut agent, _root) = start(Vec::new()).await;

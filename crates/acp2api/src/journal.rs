@@ -282,7 +282,7 @@ pub(crate) struct SafetyReport {
 #[derive(Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub(crate) enum Diagnostic {
-    UnknownEffort { value: String },
+    UnknownEffort { value: serde_json::Value },
     DroppedThoughtText,
 }
 impl Journal {

@@ -111,7 +111,7 @@ impl ThinkingLevel {
 pub(crate) enum EffortAsk {
     Absent,
     Level(ThinkingLevel),
-    Unknown(String),
+    Unknown(serde_json::Value),
 }
 pub(crate) struct PromptRequest {
     pub blocks: Vec<PromptBlock>,
