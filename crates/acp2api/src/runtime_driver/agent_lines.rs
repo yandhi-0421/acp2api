@@ -471,3 +471,16 @@ async fn a_dropped_session_releases_its_mcp_tool_set_and_safety_tracker_but_keep
     })
     .await;
 }
+
+#[tokio::test]
+async fn captured_stderr_uses_only_the_first_error_chain() {
+    tokio::time::timeout(RUN_CAP, async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        agent.stderr(b"Antigravity SDK error processing prompt for session s1\n").await;
+        agent.stderr(concat!(r#"[t_ms=9029.7] google.antigravity.types.AntigravityConnectionError: Agent execution terminated due to error. ("agent executor error: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]: Error 400, Message: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting, Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:cloudcode-pa.googleapis.com metadata:map[error_number:2011] reason:INVALID_MEDIA]]")"#, "\n").as_bytes()).await;
+        assert!(matches!(runtime.next().await.0, RuntimeEvent::Stderr));
+        let RuntimeEvent::UpstreamError { session, error } = runtime.next().await.0 else { panic!("parsed upstream error") };
+        assert_eq!(session, "s1");
+        assert_eq!(crate::messages::Message::UpstreamHttp(error).to_string(), "acp2api: upstream error 400 INVALID_ARGUMENT: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting");
+    }).await.expect("captured stderr test run cap");
+}

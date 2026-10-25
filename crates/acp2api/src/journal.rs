@@ -287,7 +287,7 @@ pub(crate) enum Diagnostic {
 }
 fn redact_error(text: &str) -> String {
     let token_char = |c: char| c.is_ascii_alphanumeric() || "-_.+/=".contains(c);
-    let word_char = |c: char| c.is_alphanumeric() || "-_.+/=@%!#$&'*?^`{|}~".contains(c);
+    let word_char = |c: char| c.is_alphanumeric() || "-_.+/=@%!#$*^`{|}~".contains(c);
     let mut output = String::new();
     let mut offset = 0;
     for part in text.split_inclusive(|c| !word_char(c)) {
@@ -295,17 +295,18 @@ fn redact_error(text: &str) -> String {
         let email = word
             .split_once('@')
             .or_else(|| word.split_once("%40"))
-            .is_some_and(|(local, domain)| {
+            .filter(|(local, domain)| {
                 !local.is_empty()
                     && !domain.is_empty()
                     && domain
                         .chars()
                         .all(|c| c.is_alphanumeric() || "-.".contains(c))
-            });
-        if email || (!word.is_empty() && text[..offset].ends_with("Bearer ")) {
+            })
+            .map(|(local, _)| local.rfind('=').map_or(0, |at| at + 1));
+        if !word.is_empty() && text[..offset].ends_with("Bearer ") {
             output.push_str("<REDACTED>");
         } else {
-            for segment in word.split_inclusive(|c| !token_char(c)) {
+            for segment in word[..email.unwrap_or(word.len())].split_inclusive(|c| !token_char(c)) {
                 let value = segment.trim_end_matches(|c| !token_char(c));
                 output.push_str(if value.len() >= 32 {
                     "<REDACTED>"
@@ -313,6 +314,9 @@ fn redact_error(text: &str) -> String {
                     value
                 });
                 output.push_str(&segment[value.len()..]);
+            }
+            if email.is_some() {
+                output.push_str("<REDACTED>");
             }
         }
         output.push_str(&part[word.len()..]);
@@ -490,6 +494,17 @@ mod tests {
             error_code: None,
             unknown_fields: Vec::new(),
         }
+    }
+    #[test]
+    fn quoted_email_is_redacted() {
+        assert_eq!(redact_error("'a@example.com'"), "'<REDACTED>'");
+    }
+    #[test]
+    fn email_in_a_query_value_is_redacted() {
+        assert_eq!(
+            redact_error("?Email=name%40example.com&y=1"),
+            "?Email=<REDACTED>&y=1"
+        );
     }
     #[test]
     fn upstream_logs_redact_values_inside_punctuation_without_changing_the_error() {

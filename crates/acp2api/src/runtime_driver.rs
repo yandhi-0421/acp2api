@@ -383,7 +383,7 @@ impl Runtime {
         } else if let Some((_, error)) = line.split_once("Error ")
             && let Some((code, rest)) = error.split_once(", Message: ")
             && let Ok(code) = code.parse::<u16>()
-            && let Some((message, rest)) = rest.rsplit_once(", Status: ")
+            && let Some((message, rest)) = rest.split_once(", Status: ")
             && let Some((status, _)) = rest.split_once(", Details:")
             && let Some(session) = self.stderr_session.take()
         {
