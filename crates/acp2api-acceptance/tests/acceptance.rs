@@ -4,6 +4,8 @@ use cucumber::{World as _, event::ScenarioFinished};
 mod panel;
 #[path = "support/prompt_turn.rs"]
 mod prompt_turn;
+#[path = "steps/response_ends.rs"]
+mod response_ends;
 mod selection;
 #[path = "steps/slash_and_thought.rs"]
 mod slash_and_thought;
@@ -27,6 +29,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    ends: response_ends::EndState,
     upstream: upstream_error::ErrorState,
     request: usage_contract::RequestCase,
     conversation: conversation::ConversationState,

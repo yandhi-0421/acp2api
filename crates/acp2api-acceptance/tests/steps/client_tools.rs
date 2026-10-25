@@ -219,7 +219,18 @@ fn no_allow(w: &mut World) {
 }
 #[then("the official runtime gets a cancel of the prompt turn")]
 fn cancel(w: &mut World) {
-    t::cancelled(&w.scenario, 1);
+    let prompts = w.scenario.fake().record().prompts();
+    let cancels = w.scenario.fake().record().cancels();
+    assert_eq!(cancels.len(), 1, "one actual session/cancel");
+    assert_eq!(
+        cancels[0]["params"]["sessionId"],
+        prompts.last().unwrap().session,
+        "cancel targets the prompt turn"
+    );
+    assert!(
+        cancels[0].get("id").is_none(),
+        "cancel is an ACP notification"
+    );
 }
 #[then(expr = "the response holds the tool call of {string}")]
 fn call(w: &mut World, name: String) {
