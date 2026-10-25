@@ -286,27 +286,47 @@ pub(crate) enum Diagnostic {
     DroppedThoughtText,
 }
 fn redact_error(text: &str) -> String {
+    let local_char = |c: char| c.is_alphanumeric() || "-_.+%".contains(c);
+    let domain_char = |c: char| c.is_alphanumeric() || "-.".contains(c);
+    let mut remaining = text;
+    let mut redacted_emails = String::new();
+    while let Some((at, width)) = [
+        remaining.find('@').map(|at| (at, 1)),
+        remaining.find("%40").map(|at| (at, 3)),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|(at, _)| *at)
+    {
+        let start = remaining[..at]
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !local_char(*c))
+            .map_or(0, |(at, c)| at + c.len_utf8());
+        let after = &remaining[at + width..];
+        let end = after.find(|c| !domain_char(c)).unwrap_or(after.len());
+        let domain = after[..end].trim_end_matches('.');
+        if start < at && !domain.is_empty() {
+            redacted_emails.push_str(&remaining[..start]);
+            redacted_emails.push_str("<REDACTED>");
+            remaining = &after[domain.len()..];
+        } else {
+            redacted_emails.push_str(&remaining[..at + width]);
+            remaining = after;
+        }
+    }
+    redacted_emails.push_str(remaining);
+    let text = redacted_emails.as_str();
     let token_char = |c: char| c.is_ascii_alphanumeric() || "-_.+/=".contains(c);
     let word_char = |c: char| c.is_alphanumeric() || "-_.+/=@%!#$*^`{|}~".contains(c);
     let mut output = String::new();
     let mut offset = 0;
     for part in text.split_inclusive(|c| !word_char(c)) {
         let word = part.trim_end_matches(|c| !word_char(c));
-        let email = word
-            .split_once('@')
-            .or_else(|| word.split_once("%40"))
-            .filter(|(local, domain)| {
-                !local.is_empty()
-                    && !domain.is_empty()
-                    && domain
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || "-.".contains(c))
-            })
-            .map(|(local, _)| local.rfind('=').map_or(0, |at| at + 1));
         if !word.is_empty() && text[..offset].ends_with("Bearer ") {
             output.push_str("<REDACTED>");
         } else {
-            for segment in word[..email.unwrap_or(word.len())].split_inclusive(|c| !token_char(c)) {
+            for segment in word.split_inclusive(|c| !token_char(c)) {
                 let value = segment.trim_end_matches(|c| !token_char(c));
                 output.push_str(if value.len() >= 32 {
                     "<REDACTED>"
@@ -314,9 +334,6 @@ fn redact_error(text: &str) -> String {
                     value
                 });
                 output.push_str(&segment[value.len()..]);
-            }
-            if email.is_some() {
-                output.push_str("<REDACTED>");
             }
         }
         output.push_str(&part[word.len()..]);
@@ -493,6 +510,27 @@ mod tests {
             result: ResultKind::Success,
             error_code: None,
             unknown_fields: Vec::new(),
+        }
+    }
+    #[test]
+    fn email_boundaries_preserve_braces() {
+        assert_eq!(redact_error("{a@example.com}"), "{<REDACTED>}");
+    }
+    #[test]
+    fn email_boundaries_preserve_an_encoded_field_value_suffix() {
+        assert_eq!(
+            redact_error("Email=name%40example.com}"),
+            "Email=<REDACTED>}"
+        );
+    }
+    #[test]
+    fn email_boundaries_preserve_trailing_prose_punctuation() {
+        for (input, expected) in [
+            ("Account a@example.com.", "Account <REDACTED>."),
+            ("Account a@example.com,", "Account <REDACTED>,"),
+            ("Account a@example.com)", "Account <REDACTED>)"),
+        ] {
+            assert_eq!(redact_error(input), expected);
         }
     }
     #[test]
