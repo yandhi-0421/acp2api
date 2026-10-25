@@ -476,7 +476,12 @@ fn record_files(path: &std::path::Path, files: &mut BTreeMap<PathBuf, String>) {
             record_files(&entry.unwrap().path(), files);
         }
     } else {
-        let hash = Sha256::digest(fs::read(path).unwrap())
+        let bytes = if fs::metadata(path).unwrap().len() == 0 {
+            Vec::new()
+        } else {
+            fs::read(path).unwrap()
+        };
+        let hash = Sha256::digest(bytes)
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
@@ -526,5 +531,46 @@ fn identity(path: &std::path::Path) -> Option<FileIdentity> {
             u64::from(info.volume),
             (u64::from(info.index_high) << 32) | u64::from(info.index_low),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_locked_files_can_be_included_in_an_account_snapshot() {
+        let root = TestRoot::new();
+        let folder = root.path.join("account");
+        let mut locks = Vec::new();
+        for name in ["startup.lock", "instance.lock"] {
+            let path = folder.join(name);
+            let file = File::create(&path).unwrap();
+            file.try_lock().unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o200)).unwrap();
+            }
+            locks.push(file);
+        }
+        fs::write(folder.join("panel"), b"abc").unwrap();
+        let mut snapshot = BTreeMap::new();
+        record_files(&folder, &mut snapshot);
+        assert_eq!(
+            (
+                snapshot[&folder.join("startup.lock")].as_str(),
+                snapshot[&folder.join("instance.lock")].as_str(),
+                snapshot[&folder.join("panel")].as_str(),
+            ),
+            (
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+            "empty locked files and nonempty records both participate in the snapshot"
+        );
+        drop(locks);
+        root.cleanup();
     }
 }
