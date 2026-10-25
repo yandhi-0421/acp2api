@@ -418,8 +418,8 @@ impl Core {
                 use agent_client_protocol_schema::v1::StopReason;
                 active.phase = Phase::Settling {
                     at: now.saturating_add(200),
-                    can_continue: stop_reason == StopReason::EndTurn
-                        || stop_reason == StopReason::Cancelled && active.tool_call.is_some(),
+                    can_continue: stop_reason == Some(StopReason::EndTurn)
+                        || stop_reason == Some(StopReason::Cancelled) && active.tool_call.is_some(),
                 };
             }
             TurnUpdate::Failed(error) => self.finish(
@@ -825,9 +825,10 @@ mod tests {
         let mut selected = Vec::new();
         use agent_client_protocol_schema::v1::StopReason;
         for stop_reason in [
-            StopReason::Refusal,
-            StopReason::EndTurn,
-            StopReason::Cancelled,
+            Some(StopReason::Refusal),
+            Some(StopReason::EndTurn),
+            Some(StopReason::Cancelled),
+            None,
         ] {
             let turn = crate::dialect::CHAT
                 .parse(br#"{"model":"m","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[{"role":"user","content":"First"}]}"#)
@@ -899,7 +900,7 @@ mod tests {
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(
             selected,
-            ["rebuild", "existing", "existing"],
+            ["rebuild", "existing", "existing", "rebuild"],
             "ADR-0003 excludes a refused turn even when it returned a tool call"
         );
     }
@@ -1009,11 +1010,11 @@ mod tests {
             }));
         };
         let ended = |end_turn| TurnUpdate::PromptEnded {
-            stop_reason: if end_turn {
+            stop_reason: Some(if end_turn {
                 agent_client_protocol_schema::v1::StopReason::EndTurn
             } else {
                 agent_client_protocol_schema::v1::StopReason::Refusal
-            },
+            }),
         };
         turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
         turn(&mut core, "B", "s2", ended(false));

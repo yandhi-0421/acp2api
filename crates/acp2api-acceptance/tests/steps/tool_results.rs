@@ -106,6 +106,42 @@ async fn image(w: &mut World, before: String, after: String) {
 }
 
 #[then(
+    "the prompt that the official runtime gets has the text \"Before:\", the image, and the text \"After.\" in this order"
+)]
+fn image_position(w: &mut World) {
+    let prompt = w.tool_results.prompt(&w.scenario);
+    let actual = prompt.as_ref().and_then(|prompt| {
+        let blocks = prompt.as_array().unwrap();
+        let images = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| block["type"] == "image")
+            .collect::<Vec<_>>();
+        let [(index, image)] = images.as_slice() else {
+            return None;
+        };
+        let before: String = blocks[..*index]
+            .iter()
+            .map(|block| block["text"].as_str().unwrap())
+            .collect();
+        let after: String = blocks[index + 1..]
+            .iter()
+            .map(|block| block["text"].as_str().unwrap())
+            .collect();
+        Some((before.ends_with("Before:"), (*image).clone(), after))
+    });
+    assert_eq!(
+        actual,
+        Some((
+            true,
+            json!({"type":"image","data":content_check::PNG,"mimeType":"image/png"}),
+            "After.".into()
+        )),
+        "FR-023 original image bytes and text stay in order; actual prompt: {prompt:?}"
+    );
+}
+
+#[then(
     regex = r#"^the first line of the tool result in the prompt holds (all 1,000 characters of the arguments, and no mark|only the first 1,000 characters of the arguments, and then the mark " \[arguments cut\]" before the colon)$"#
 )]
 fn truncated(w: &mut World, part: String) {

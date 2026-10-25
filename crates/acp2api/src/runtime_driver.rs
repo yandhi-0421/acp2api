@@ -315,9 +315,9 @@ impl Runtime {
             if let Some(session) = self.prompts.remove(&id) {
                 let update = match value.get("error") {
                     Some(error) => TurnUpdate::Failed(error.to_string()),
-                    None => match serde_json::from_value(value["result"]["stopReason"].clone()) {
-                        Ok(stop_reason) => TurnUpdate::PromptEnded { stop_reason },
-                        Err(error) => TurnUpdate::Failed(format!("ACP stop reason: {error}")),
+                    None => TurnUpdate::PromptEnded {
+                        stop_reason: serde_json::from_value(value["result"]["stopReason"].clone())
+                            .ok(),
                     },
                 };
                 return RuntimeEvent::Turn { session, update };
@@ -508,7 +508,7 @@ pub(crate) enum TurnUpdate {
     },
     UnpermittedTool(String),
     PromptEnded {
-        stop_reason: StopReason,
+        stop_reason: Option<StopReason>,
     },
     Failed(String),
 }

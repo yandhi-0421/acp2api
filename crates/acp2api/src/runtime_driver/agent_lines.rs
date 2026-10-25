@@ -176,6 +176,26 @@ async fn capped(test: impl std::future::Future<Output = ()>) {
 }
 
 #[tokio::test]
+async fn unknown_or_missing_stop_reasons_end_the_turn_normally() {
+    capped(async {
+        for response in [json!({"stopReason":"a_future_stop_reason"}), json!({})] {
+            let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+            runtime
+                .start_prompt(vec![PromptBlock::Text("Hi".into())], "s1")
+                .await
+                .unwrap();
+            agent.stdout(chunk("Hello")).await;
+            agent.stdout(result(3, response)).await;
+            assert_eq!(
+                [next(&mut runtime).await, next(&mut runtime).await],
+                ["text Hello", "prompt ended"]
+            );
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runtime() {
     capped(async {
         let (mut runtime, mut agent, _root) = start(Vec::new()).await;

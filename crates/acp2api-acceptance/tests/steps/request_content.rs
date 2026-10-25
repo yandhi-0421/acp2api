@@ -187,39 +187,15 @@ async fn no_fetch(w: &mut World, host: String) {
     c::no_fetch(&mut w.scenario, &w.content.endpoint, false).await;
 }
 #[then(
-    expr = "the prompt that the official runtime gets has the text {string}, the image, and the text {string} in this order"
+    regex = r#"^the prompt that the official runtime gets has the text "(Look at this:)", the image, and the text "(What is it\?)" in this order$"#
 )]
 fn ordered(w: &mut World, first: String, last: String) {
-    let prompts = c::blocks(&w.scenario);
-    let prompt = prompts.last();
-    let actual = prompt.and_then(|prompt| {
-        let blocks = prompt.as_array().unwrap();
-        let images = blocks
-            .iter()
-            .enumerate()
-            .filter(|(_, block)| block["type"] == "image")
-            .collect::<Vec<_>>();
-        let [(index, image)] = images.as_slice() else {
-            return None;
-        };
-        let before: String = blocks[..*index]
-            .iter()
-            .map(|block| block["text"].as_str().unwrap())
-            .collect();
-        let after: String = blocks[index + 1..]
-            .iter()
-            .map(|block| block["text"].as_str().unwrap())
-            .collect();
-        Some((before.ends_with(&first), (*image).clone(), after))
-    });
     assert_eq!(
-        actual,
-        Some((
-            true,
-            json!({"type":"image","data":c::PNG,"mimeType":"image/png"}),
-            last
-        )),
-        "ordered ACP image bytes and text on the last prompt: {prompt:?}"
+        c::blocks(&w.scenario),
+        vec![
+            json!([{"type":"text","text":first},{"type":"image","data":c::PNG,"mimeType":"image/png"},{"type":"text","text":last}])
+        ],
+        "ordered ACP image bytes and media type"
     );
 }
 #[then("the prompt that the official runtime gets holds the image")]
