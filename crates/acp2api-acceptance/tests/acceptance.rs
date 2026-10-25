@@ -11,7 +11,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
-    usage: usage_contract::UsageCase,
+    request: usage_contract::RequestCase,
     conversation: conversation::ConversationState,
     fields: request_fields::FieldState,
     safety: runtime_safety::SafetyState,

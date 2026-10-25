@@ -5,36 +5,36 @@ use serde_json::{Value, json};
 
 #[given(expr = "the prompt turn has the usage updates with \"used\" {int} and then \"used\" {int}")]
 fn updates(w: &mut World, first: u64, last: u64) {
-    w.usage.updates = vec![first, last];
+    w.request.updates = vec![first, last];
 }
 
 #[given(expr = "the prompt turn has the last usage update with \"used\" {int}")]
 fn last_update(w: &mut World, used: u64) {
-    w.usage.updates = vec![used];
+    w.request.updates = vec![used];
 }
 
 #[given("the prompt turn ends with no usage update")]
 fn no_usage(w: &mut World) {
-    w.usage.updates.clear();
+    w.request.updates.clear();
 }
 
 #[given(
     regex = r#"^the model calls "([^"]+)" with the 8 ASCII characters (\{.*\}) as arguments and sends no text$"#
 )]
 fn output_call(w: &mut World, name: String, arguments: String) {
-    w.usage.output_call = Some((name, arguments));
+    w.request.output_call = Some((name, arguments));
 }
 
 #[given(expr = "the request has the system prompt {string}")]
 fn system(w: &mut World, text: String) {
-    w.usage.system = Some(text);
+    w.request.system = Some(text);
 }
 
 #[given(
     expr = "the request has the user text {string}, assistant text {string}, and new user text {string}"
 )]
 fn conversation(w: &mut World, first: String, reply: String, last: String) {
-    w.usage.messages = vec![
+    w.request.messages = vec![
         json!({"role":"user","content":first}),
         json!({"role":"assistant","content":reply}),
         json!({"role":"user","content":last}),
@@ -46,7 +46,7 @@ fn conversation(w: &mut World, first: String, reply: String, last: String) {
 )]
 fn schema(w: &mut World, name: String, description: String, schema_json: String) {
     let schema: Value = serde_json::from_str(&schema_json).unwrap();
-    w.usage.tools = vec![json!({"name":name,"description":description,"inputSchema":schema})];
+    w.request.tools = vec![json!({"name":name,"description":description,"inputSchema":schema})];
 }
 
 #[given("the request needs a rebuild")]
@@ -56,11 +56,11 @@ fn rebuild(w: &mut World) {
 
 #[given("an ACP session already holds the first user text and assistant text")]
 async fn prefix(w: &mut World) {
-    let mut call = w.usage.request("POST /v1/messages", false);
-    call.body["messages"] = json!([w.usage.messages[0]]);
+    let mut call = w.request.request("POST /v1/messages", false);
+    call.body["messages"] = json!([w.request.messages[0]]);
     w.scenario.fake().next_prompt(
         TurnPlan::new()
-            .chunk(w.usage.messages[1]["content"].as_str().unwrap())
+            .chunk(w.request.messages[1]["content"].as_str().unwrap())
             .end("end_turn"),
     );
     let answer = w
@@ -73,9 +73,9 @@ async fn prefix(w: &mut World) {
     assert_eq!(answer.status, 200, "seed ACP session");
     assert_eq!(
         answer.json()["content"][0]["text"],
-        w.usage.messages[1]["content"]
+        w.request.messages[1]["content"]
     );
-    w.usage.continued = true;
+    w.request.continued = true;
 }
 
 #[given(
@@ -87,59 +87,59 @@ fn earlier_call(w: &mut World, name: String, form: String, arguments: String) {
     } else {
         json!(arguments)
     };
-    w.usage.earlier_call = Some((name, arguments));
+    w.request.earlier_call = Some((name, arguments));
 }
 
 #[given(expr = "the result of that call is {string}, followed by the user text {string}")]
 fn result(w: &mut World, tool_result: String, next: String) {
-    w.usage.result = tool_result;
-    w.usage.next_text = next;
+    w.request.result = tool_result;
+    w.request.next_text = next;
 }
 
 #[given("the request has no system prompt, declared tool, or other message text")]
 fn no_other_input(w: &mut World) {
-    assert!(w.usage.system.is_none());
-    assert!(w.usage.tools.is_empty());
-    assert!(w.usage.messages.is_empty());
+    assert!(w.request.system.is_none());
+    assert!(w.request.tools.is_empty());
+    assert!(w.request.messages.is_empty());
 }
 
 #[when(expr = "an API client sends that request with a stream to {string}")]
 async fn stream(w: &mut World, endpoint: String) {
-    w.usage
-        .send(&mut w.scenario, w.usage.request(&endpoint, true))
+    w.request
+        .send(&mut w.scenario, w.request.request(&endpoint, true))
         .await;
 }
 
 #[when(expr = "an API client sends that request with no stream to {string}")]
 async fn body(w: &mut World, endpoint: String) {
-    w.usage
-        .send(&mut w.scenario, w.usage.request(&endpoint, false))
+    w.request
+        .send(&mut w.scenario, w.request.request(&endpoint, false))
         .await;
 }
 
 #[when(expr = "an API client sends only the user text {string} with a stream to {string}")]
 async fn only_text(w: &mut World, text: String, endpoint: String) {
     let call = endpoint_check::request(&endpoint, &text, true);
-    w.usage.send(&mut w.scenario, call).await;
+    w.request.send(&mut w.scenario, call).await;
 }
 
 #[when(
     expr = "an API client sends a valid request with a stream to {string} with \"stream_options.include_usage\" set to {word}"
 )]
 async fn include_usage(w: &mut World, endpoint: String, include: String) {
-    let mut call = w.usage.request(&endpoint, true);
+    let mut call = w.request.request(&endpoint, true);
     call.body["stream_options"] = json!({"include_usage":include == "true"});
-    w.usage.send(&mut w.scenario, call).await;
+    w.request.send(&mut w.scenario, call).await;
 }
 
 #[when(
     expr = "an API client sends a valid request to {string} with \"stream\" set to true, \"stream_options.include_usage\" set to true, and \"n\" set to 1"
 )]
 async fn one_choice(w: &mut World, endpoint: String) {
-    let mut call = w.usage.request(&endpoint, true);
+    let mut call = w.request.request(&endpoint, true);
     call.body["stream_options"] = json!({"include_usage":true});
     call.body["n"] = json!(1);
-    w.usage.send(&mut w.scenario, call).await;
+    w.request.send(&mut w.scenario, call).await;
 }
 
 #[then(expr = "the body of the response carries the usage with {string} set to {int}")]
@@ -159,7 +159,7 @@ fn zero(w: &mut World) {
         .or_else(|| usage.get("prompt_tokens"));
     assert_eq!(
         input.and_then(Value::as_u64),
-        Some(*w.usage.updates.last().unwrap()),
+        Some(*w.request.updates.last().unwrap()),
         "real usage is present"
     );
     check::zero_details(usage, "usage");
@@ -244,7 +244,7 @@ fn carries_usage(w: &mut World) {
     let chunks = check::chat_chunks(w.scenario.answer.as_ref().unwrap());
     assert_eq!(
         chunks.last().unwrap()["usage"]["prompt_tokens"].as_u64(),
-        Some(*w.usage.updates.last().unwrap()),
+        Some(*w.request.updates.last().unwrap()),
         "FR-014 last Chat chunk carries usage"
     );
 }

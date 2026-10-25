@@ -20,7 +20,7 @@ impl std::fmt::Debug for EndpointState {
 )]
 fn chunks(w: &mut World, first: String, last: String) {
     let mut plan = w
-        .usage
+        .request
         .with_usage(TurnPlan::new().chunk(&first))
         .chunk(&last);
     plan.steps.push(TurnStep::HoldUntil("prompt-end".into()));
@@ -34,13 +34,13 @@ async fn send(w: &mut World, path: String, stream: bool) {
     w.endpoint.path = path.clone();
     w.endpoint.stream = stream;
     if !w.endpoint.incremental {
-        w.scenario.fake().next_prompt(w.usage.plan());
+        w.request.queue_next(&w.scenario);
     }
     let call = w
         .scenario
         .client()
         .await
-        .send(w.usage.request(&path, stream));
+        .send(w.request.request(&path, stream));
     if w.endpoint.incremental {
         w.endpoint.live = Some(call);
         w.scenario.time.settle().await;

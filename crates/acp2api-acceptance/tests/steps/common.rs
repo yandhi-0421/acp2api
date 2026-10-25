@@ -10,5 +10,5 @@ fn model(world: &mut World, name: String) {
 }
 #[given(expr = "the official runtime replies {string} to the next prompt")]
 fn reply(world: &mut World, text: String) {
-    world.usage.reply = text;
+    world.request.reply = text;
 }

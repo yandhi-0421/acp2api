@@ -12,12 +12,12 @@ async fn send(world: &mut World, endpoint: String) {
         world.scenario.answer = Some(call.finish(&mut world.scenario.time).await);
         return;
     }
-    world.scenario.fake().next_prompt(world.usage.plan());
+    world.request.queue_next(&world.scenario);
     let call = world
         .scenario
         .client()
         .await
-        .send(world.usage.request(&endpoint, false));
+        .send(world.request.request(&endpoint, false));
     let answer = call.finish(&mut world.scenario.time).await;
     assert_eq!(answer.status, 200, "request must reach the product");
     world.scenario.answer = Some(answer);

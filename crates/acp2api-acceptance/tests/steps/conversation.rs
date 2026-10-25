@@ -34,7 +34,7 @@ fn history(w: &World, user: &str, reply: &str, next: Option<&str>) -> Value {
 }
 async fn send(w: &mut World, items: Value) {
     let call = c::call(items, w.conversation.system.as_deref(), Value::Null);
-    w.scenario.fake().next_prompt(w.usage.plan());
+    w.request.queue_next(&w.scenario);
     content_check::send(&mut w.scenario, call).await;
     assert_eq!(
         w.scenario.answer.as_ref().unwrap().status,
@@ -85,7 +85,7 @@ async fn edited(w: &mut World, user: String, reply: String, next: String) {
     let mut call = acp2api_acceptance::client::ApiCall::one_user_message("POST /v1/messages", "");
     call.body["messages"] = history(w, &user, &reply, Some(&next));
     call.body["system"] = json!(w.conversation.system);
-    w.scenario.fake().next_prompt(w.usage.plan());
+    w.request.queue_next(&w.scenario);
     content_check::send(&mut w.scenario, call).await;
     assert_eq!(w.scenario.answer.as_ref().unwrap().status, 200);
 }
@@ -218,6 +218,7 @@ async fn edit_header(w: &mut World, text: String, header: String) {
     );
     let (key, value) = header.split_once(": ").unwrap();
     call.headers.push((key.into(), value.into()));
+    w.request.queue_next(&w.scenario);
     content_check::send(&mut w.scenario, call).await;
     assert_eq!(w.scenario.answer.as_ref().unwrap().status, 200);
 }
@@ -240,6 +241,7 @@ async fn cache(w: &mut World, reply: String, next: String, field: String, value:
         Value::Null,
     );
     call.body[field] = value.into();
+    w.request.queue_next(&w.scenario);
     content_check::send(&mut w.scenario, call).await;
     assert_eq!(w.scenario.answer.as_ref().unwrap().status, 200);
 }

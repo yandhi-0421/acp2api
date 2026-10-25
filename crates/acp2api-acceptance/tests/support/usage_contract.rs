@@ -9,9 +9,10 @@ pub const USER_TEXT: &str = "Hello";
 pub const USER_TEXT_TOKENS: u64 = 2;
 pub const DEFAULT_REPLY: &str = "OK";
 const DEFAULT_USED: u64 = 1000;
+const CONTEXT_SIZE: u64 = 1_048_576;
 
 #[derive(Debug)]
-pub struct UsageCase {
+pub struct RequestCase {
     pub updates: Vec<u64>,
     pub reply: String,
     pub system: Option<String>,
@@ -24,7 +25,7 @@ pub struct UsageCase {
     pub continued: bool,
 }
 
-impl Default for UsageCase {
+impl Default for RequestCase {
     fn default() -> Self {
         Self {
             updates: vec![DEFAULT_USED],
@@ -41,7 +42,7 @@ impl Default for UsageCase {
     }
 }
 
-impl UsageCase {
+impl RequestCase {
     pub fn request(&self, endpoint: &str, stream: bool) -> ApiCall {
         let mut call = if self.tools.is_empty() {
             endpoint_check::request(endpoint, USER_TEXT, stream)
@@ -71,7 +72,7 @@ impl UsageCase {
         call
     }
 
-    pub fn plan(&mut self) -> TurnPlan {
+    pub fn next_plan(&mut self) -> TurnPlan {
         let mut plan = TurnPlan::new();
         if let Some((name, arguments)) = &self.output_call {
             plan.steps.push(TurnStep::ClientToolCall {
@@ -87,13 +88,17 @@ impl UsageCase {
 
     pub fn with_usage(&self, mut plan: TurnPlan) -> TurnPlan {
         for used in &self.updates {
-            plan = plan.usage(*used, 1_048_576);
+            plan = plan.usage(*used, CONTEXT_SIZE);
         }
         plan
     }
 
+    pub fn queue_next(&mut self, scenario: &Scenario) {
+        scenario.fake().next_prompt(self.next_plan());
+    }
+
     pub async fn send(&mut self, scenario: &mut Scenario, call: ApiCall) {
-        scenario.fake().next_prompt(self.plan());
+        self.queue_next(scenario);
         let answer = scenario
             .client()
             .await

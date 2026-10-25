@@ -11,12 +11,12 @@ pub struct ToolState {
 }
 #[given(expr = "the request has the client tool {string}")]
 fn one(w: &mut World, name: String) {
-    w.usage.tools = vec![t::tool(&name)];
+    w.request.tools = vec![t::tool(&name)];
     w.scenario.plan(acp2api_acceptance::Setup::normal());
 }
 #[given(expr = "the request has the client tools {string} and {string}")]
 fn two(w: &mut World, a: String, b: String) {
-    w.usage.tools = vec![t::tool(&a), t::tool(&b)];
+    w.request.tools = vec![t::tool(&a), t::tool(&b)];
 }
 #[given(
     regex = r#"^the model sends the text "Let me look\." and then calls "([^"]+)" with the arguments (\{.*\})$"#
@@ -43,15 +43,15 @@ async fn send(w: &mut World, endpoint: String, choice: &str, pair: bool) {
         w.tools.calls.clone()
     };
     let plan = if names.is_empty() {
-        w.usage.plan()
+        w.request.next_plan()
     } else {
-        w.usage.with_usage(t::plan(&names, &w.tools.args))
+        w.request.with_usage(t::plan(&names, &w.tools.args))
     };
     w.scenario.fake().next_prompt(plan.clone());
     w.scenario.answer = Some(
         t::send(
             &mut w.scenario,
-            t::request(&endpoint, &w.usage.tools, false, choice),
+            t::request(&endpoint, &w.request.tools, false, choice),
         )
         .await,
     );
@@ -60,7 +60,7 @@ async fn send(w: &mut World, endpoint: String, choice: &str, pair: bool) {
         w.tools.stream = Some(
             t::send(
                 &mut w.scenario,
-                t::request(&endpoint, &w.usage.tools, true, choice),
+                t::request(&endpoint, &w.request.tools, true, choice),
             )
             .await,
         );
@@ -88,29 +88,29 @@ async fn send_auto(w: &mut World, endpoint: String) {
     expr = "an API client sends a request to {string} with the client tools {string} and {string}, each with a description and a schema"
 )]
 async fn send_tools(w: &mut World, endpoint: String, a: String, b: String) {
-    w.usage.tools = vec![t::tool(&a), t::tool(&b)];
+    w.request.tools = vec![t::tool(&a), t::tool(&b)];
     send(w, endpoint, "auto", false).await;
 }
 #[then(expr = "the official runtime offers the model exactly the tools {string} and {string}")]
 fn offer_two(w: &mut World, a: String, b: String) {
     assert_eq!(
-        w.usage
+        w.request
             .tools
             .iter()
             .map(|v| v["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
         [a, b]
     );
-    t::offers(&w.scenario, &w.usage.tools);
+    t::offers(&w.scenario, &w.request.tools);
 }
 #[then("each tool has the description and the schema of the request")]
 fn descriptions(w: &mut World) {
-    t::offers(&w.scenario, &w.usage.tools);
+    t::offers(&w.scenario, &w.request.tools);
 }
 #[then(expr = "the official runtime offers the model the client tool {string}")]
 fn offer_one(w: &mut World, name: String) {
-    assert_eq!(w.usage.tools[0]["name"], name);
-    t::offers(&w.scenario, &w.usage.tools);
+    assert_eq!(w.request.tools[0]["name"], name);
+    t::offers(&w.scenario, &w.request.tools);
 }
 #[then(
     regex = r#"^the response holds the text "Let me look\." and then (a "tool_use" block for "read_file"|"tool_calls" with "read_file"|a "function_call" item for "read_file")$"#
