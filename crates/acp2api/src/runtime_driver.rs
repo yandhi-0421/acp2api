@@ -308,7 +308,7 @@ impl Runtime {
         if let Some((option, value)) = changed {
             if sent.contains(&option) {
                 return Err(format!(
-                    "official runtime did not apply session config option {option}"
+                    "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."
                 ));
             }
             sent.push(option);

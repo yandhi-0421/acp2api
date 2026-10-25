@@ -192,7 +192,7 @@ async fn a_config_option_that_stays_different_fails_without_a_retry() {
             {"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"},{"value":"other","name":"Other"}]}
         ]}))).await;
         let event = next(&mut runtime).await;
-        assert!(event.starts_with("failed "), "FR-033 upstream failure after one attempt; actual: {event}");
+        assert_eq!(event, "failed acp2api: the official runtime did not apply the model value other, so acp2api ended the prompt turn.", "M-29 names the unapplied option and requested value");
     }).await;
 }
 

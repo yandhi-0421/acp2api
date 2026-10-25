@@ -238,7 +238,7 @@ acp2api rejects a request with a `model` that is not a model name, for example `
 - When no effort field sets a level, the thinking level is `high`.
 - When the model does not have the level, acp2api uses the next higher level of the model. When the model has no higher level, acp2api uses its highest level.
 - The `model` field of each response holds the model name of the request.
-- acp2api sends each session config option at most once per prompt turn. If the runtime returns a different value, acp2api ends the turn with the 502 row of FR-033.
+- acp2api sends each session config option at most once per prompt turn. If the official runtime returns a different value, acp2api ends the turn with the 502 row of FR-033 and M-29.
 
 | Value of an effort field | Thinking level |
 |---|---|
@@ -562,13 +562,13 @@ Each message that acp2api writes starts with `acp2api: `. The messages of FR-024
 | A quota wait | 429 with `retry-after`: the seconds to the reset time | `rate_limit_error` | `rate_limit_error` | Claude Code retries only when the reset time is 60 s away or less |
 | A full queue | 529 on the Anthropic Messages API and 503 on the two OpenAI APIs, with `retry-after: 10` | `overloaded_error` | Does not occur | Yes |
 | The 503 row: a temporary upstream error, an update timeout, or a runtime process failure (see below) | 503 with `retry-after: 30` | `api_error` | `api_error` | Yes |
-| The 502 row: another upstream error, for example a Google 400; the stop reason `max_turn_requests`, or a built-in tool that runs with no permission request | 502 with `x-should-retry: false` | `api_error` | `invalid_request_error` | No |
+| The 502 row: another upstream error, for example a Google 400; the stop reason `max_turn_requests`, a built-in tool that runs with no permission request, or a session config option that the official runtime did not apply | 502 with `x-should-retry: false` | `api_error` | `invalid_request_error` | No |
 
 An upstream error that is a lockout signal, a quota signal, or a sign-in error (FR-034) gets the row of the state that it starts.
 
 The 503 row includes a Google 5xx, an upstream timeout, a prompt turn without an update for 5 minutes, and a runtime process failure.
 
-The message of an upstream error is M-18. The other causes of the 503 row and the 502 row have M-19 to M-22, and the exit of acp2api has M-15.
+The message of an upstream error is M-18. The other causes of the 503 row and the 502 row have M-19 to M-22 and M-29, and the exit of acp2api has M-15.
 An ACP error without an HTTP error line uses the ACP form of M-18. It keeps its JSON-RPC code and message.
 
 **Pass:** each case gives the status, the headers, and the `error.type` of its row. With the real Claude Code and Codex, the retries of SC-003 occur.
@@ -1001,6 +1001,7 @@ The age of a log file is the time since its last modification.
 | M-26 | A setting with a wrong value, an unknown key, or a TOML syntax error | `acp2api: the setting <setting> in <path of the configuration file> has a value that acp2api cannot use.` `<setting>` is the key. For a syntax error with no identifiable key, it is `at line <n>`, with a one-based line number. |
 | M-27 | A last item from the assistant (a prefill) | `acp2api: a last message from the assistant (a prefill) is not supported.` |
 | M-28 | Unreadable or damaged account coordination data | `acp2api: cannot use the account coordination data at <path>.` |
+| M-29 | A session config option that the official runtime did not apply | `acp2api: the official runtime did not apply the <option> value <value>, so acp2api ended the prompt turn.` |
 
 The reasons of M-14 are `acp2api found no executable of the official runtime`, `no build that acp2api found is an accepted version`, and `the runtime process failed 3 times in 10 minutes`.
 
