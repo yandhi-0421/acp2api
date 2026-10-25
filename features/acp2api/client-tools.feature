@@ -85,7 +85,7 @@ Feature: Client tools
       | POST /v1/messages  | a client tool with the name "list_resources" | acp2api: the client tool name list_resources is not supported, because a built-in tool of the official runtime has this name. |
       | POST /v1/messages  | a client tool with the name "read_resource"  | acp2api: the client tool name read_resource is not supported, because a built-in tool of the official runtime has this name.  |
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario: The model gets a tool result as text in the next prompt
     Given the model called "read_file" with the arguments {"path":"a.txt"} in a request to "POST /v1/chat/completions"
     When the API client sends the tool result "abc" for that tool call
@@ -95,7 +95,7 @@ Feature: Client tools
       abc
       """
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario: An error result gets a note after the arguments
     Given the model called "read_file" with the arguments {"path":"a.txt"} in a request to "POST /v1/messages"
     When the API client sends an error tool result "No such file" for that tool call
@@ -104,13 +104,13 @@ Feature: Client tools
       Result of your tool call read_file {"path":"a.txt"} (the tool reported an error):
       """
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario: Each image of a tool result is at its place
     Given the model called "screenshot" in a request to "POST /v1/messages"
     When the API client sends a tool result with the text "Before:", an image, and the text "After."
     Then the prompt that the official runtime gets has the text "Before:", the image, and the text "After." in this order
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario Outline: The first line holds no more than 1,000 characters of the arguments
     Given the model called "write_file" with arguments of <length> characters in a request to "POST /v1/chat/completions"
     When the API client sends the tool result "done" for that tool call
@@ -121,7 +121,7 @@ Feature: Client tools
       | 1,000  | all 1,000 characters of the arguments, and no mark                                         |
       | 1,001  | only the first 1,000 characters of the arguments, and then the mark " [arguments cut]" before the colon |
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario Outline: The arguments in the first line are the text of the arguments of the request
     Given a request to "<endpoint>" has an earlier tool call of "read_file" with <arguments of the request>
     When the request has the tool result "abc" for that tool call
@@ -132,20 +132,20 @@ Feature: Client tools
       | POST /v1/chat/completions | the JSON string {"path": "a.txt", "mode": "r"} as arguments | {"path": "a.txt", "mode": "r"} |
       | POST /v1/messages         | the input object {"path": "a.txt", "mode": "r"}             | {"path":"a.txt","mode":"r"}    |
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario: A tool result with an unknown ID gets the first line with its ID
     Given the conversation has no tool call with the ID "call_9"
     When an API client sends a request to "POST /v1/chat/completions" with a tool result for "call_9" with the text "abc"
     Then the first line of the tool result in the prompt is "Result of the tool call call_9:"
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario: The text of a rebuild holds an earlier tool call as a sentence with the full arguments
     Given an earlier tool call of the conversation called "write_file" with arguments of 5,000 characters
     When the API client sends a request of that conversation that does a rebuild
     Then the first prompt of the new ACP session holds a sentence that starts with "You called the tool write_file with the arguments " and ends with "."
     And the arguments in that sentence have all 5,000 characters
 
-  @FR-023 @issue-54 @wip
+  @FR-023 @issue-54
   Scenario: A tool result has the same form in a continued ACP session and in the text of a rebuild
     Given the model called "read_file" with the arguments {"path":"a.txt"}, and the tool result "abc" went into the continued ACP session
     When the API client sends a request of that conversation that does a rebuild

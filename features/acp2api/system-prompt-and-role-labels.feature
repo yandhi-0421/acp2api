@@ -99,7 +99,7 @@ Feature: System prompt and role labels
       | the request has no earlier conversation                    |
       | the request continues the last reply of an ACP session     |
 
-  @FR-020 @issue-54 @wip
+  @FR-020 @issue-54
   Scenario: A tool result gets a sentence and a system message gets a role label
     Given an API client sent a request to "POST /v1/chat/completions" with the client tool "read_file", and the model called "read_file" with the arguments {"path":"a.txt"}
     When the API client sends the next request of that conversation with the tool result "abc" and then the system message "Be brief."

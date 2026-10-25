@@ -232,7 +232,7 @@ Feature: Request content
       | POST /v1/responses        | the last user message     | input_file |
       | POST /v1/chat/completions | the last user message     | file       |
 
-  @FR-017 @issue-54 @wip
+  @FR-017 @issue-54
   Scenario: A PDF in a tool result becomes a note, and the other content stays
     When an API client sends a request to "POST /v1/messages" with a tool result that holds the text "Page count: 3" and a PDF document
     Then acp2api answers with HTTP 200
