@@ -7,7 +7,7 @@ Feature: Errors
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-026 @issue-60 @wip
+  @FR-026 @issue-60
   Scenario: A streamed request that passed all admission checks has status 200 in the queue
     Given each place holds a prompt turn
     When an API client sends a valid request with a stream to "POST /v1/messages"
@@ -145,7 +145,7 @@ Feature: Errors
       | the next prompt turn ends with the stop reason "max_turn_requests"                 | 502    | the header "x-should-retry: false" | api_error        |
       | a built-in tool runs with no permission request in the next prompt turn            | 502    | the header "x-should-retry: false" | api_error        |
 
-  @FR-033 @issue-60 @wip
+  @FR-033 @issue-60
   Scenario Outline: A full queue gets HTTP 503 on the OpenAI APIs
     Given the queue holds 32 requests
     When an API client sends a valid request to "<endpoint>"

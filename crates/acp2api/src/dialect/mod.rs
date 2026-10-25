@@ -36,6 +36,9 @@ pub(crate) trait Dialect: Sync {
     ) -> BoxFuture<'static, Response>;
 }
 trait WireDialect: Sync {
+    fn refusal_status(&self, refusal: &Refusal) -> axum::http::StatusCode {
+        refusal_status(refusal)
+    }
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
     fn refusal_body(&self, refusal: &Refusal) -> Value {
         let kind = if refusal_status(refusal).is_server_error() {
@@ -67,13 +70,21 @@ impl<T: WireDialect + 'static> Dialect for T {
         WireDialect::parse(self, body)
     }
     fn refusal(&self, refusal: &Refusal) -> Response {
-        let mut response =
-            (refusal_status(refusal), Json(self.refusal_body(refusal))).into_response();
+        let mut response = (
+            self.refusal_status(refusal),
+            Json(self.refusal_body(refusal)),
+        )
+            .into_response();
         match refusal.row() {
             Row::Temporary503 => {
                 response
                     .headers_mut()
                     .insert("retry-after", axum::http::HeaderValue::from_static("30"));
+            }
+            Row::QueueFull => {
+                response
+                    .headers_mut()
+                    .insert("retry-after", axum::http::HeaderValue::from_static("10"));
             }
             Row::Other502 => {
                 response.headers_mut().insert(
@@ -88,10 +99,11 @@ impl<T: WireDialect + 'static> Dialect for T {
     fn respond(
         &'static self,
         form: ReplyForm,
-        mut ticket: Ticket,
+        ticket: Ticket,
         clock: Arc<dyn Clock>,
     ) -> BoxFuture<'static, Response> {
         Box::pin(async move {
+            let Ticket { mut events, hold } = ticket;
             let stream = form.stream;
             let mut wire =
                 match Encoding::new(self.prefix(), self.call_prefix(), form, clock.wall()) {
@@ -103,10 +115,10 @@ impl<T: WireDialect + 'static> Dialect for T {
             if stream {
                 let initial = self.start(&mut wire).into();
                 let state = StreamState {
-                    ticket,
+                    events,
                     wire,
                     pending: initial,
-                    hold: Some(clock.hold(crate::HoldKind::TurnEvent)),
+                    hold: Some(hold),
                     ended: false,
                 };
                 let events = stream::unfold(state, move |mut state| async move {
@@ -118,7 +130,7 @@ impl<T: WireDialect + 'static> Dialect for T {
                         if state.ended {
                             return None;
                         }
-                        let (event, hold) = state.ticket.recv().await?;
+                        let (event, hold) = state.events.recv().await?;
                         state.hold = Some(hold);
                         match event {
                             TurnEvent::Stop(stop) => state.wire.stop = stop,
@@ -141,7 +153,8 @@ impl<T: WireDialect + 'static> Dialect for T {
                 });
                 Sse::new(events).into_response()
             } else {
-                while let Some((event, _hold)) = ticket.recv().await {
+                drop(hold);
+                while let Some((event, _hold)) = events.recv().await {
                     match event {
                         TurnEvent::Stop(stop) => wire.stop = stop,
                         TurnEvent::Text(chunk) => wire.text.push_str(&chunk),
@@ -160,7 +173,7 @@ impl<T: WireDialect + 'static> Dialect for T {
     }
 }
 struct StreamState {
-    ticket: Ticket,
+    events: tokio::sync::mpsc::UnboundedReceiver<(TurnEvent, Hold)>,
     wire: Encoding,
     pending: VecDeque<Event>,
     hold: Option<Hold>,
@@ -234,7 +247,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
         Row::Rejected => StatusCode::BAD_REQUEST,
         Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
-        Row::Temporary503 => StatusCode::SERVICE_UNAVAILABLE,
+        Row::Temporary503 | Row::QueueFull => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -256,6 +269,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::Invalid(_) => "invalid_request_error",
         Message::Key => "invalid_api_key",
         Message::TooLarge => "request_too_large",
+        Message::QueueFull => "queue_full",
         Message::Upstream(_) | Message::UpstreamHttp(_) | Message::UpstreamAcp(_) => {
             "upstream_error"
         }

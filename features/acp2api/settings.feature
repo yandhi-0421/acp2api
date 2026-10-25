@@ -142,7 +142,7 @@ Feature: Data folder and settings
     And a request with the local API key "K1" gets HTTP 401
     And the terminal does not show "P1"
 
-  @FR-049 @issue-60 @wip
+  @FR-049 @issue-60
   Scenario: A concurrency limit above the highest value of the platform stops the start
     Given the build of acp2api for this platform has the highest concurrency limit 2, as its release notes name
     And the configuration file has the concurrency limit 3

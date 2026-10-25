@@ -5,7 +5,7 @@ use cucumber::{given, then, when};
 pub struct EndpointState {
     path: String,
     stream: bool,
-    incremental: bool,
+    pub incremental: bool,
     live: Option<Call>,
 }
 impl std::fmt::Debug for EndpointState {

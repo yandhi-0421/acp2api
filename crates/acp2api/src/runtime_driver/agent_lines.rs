@@ -153,6 +153,7 @@ async fn next(runtime: &mut Runtime) -> String {
             TurnUpdate::Failed(error) => format!("failed {error}"),
         },
         RuntimeEvent::Prepared { .. } => "prepared".into(),
+        RuntimeEvent::Retired { .. } => "retired".into(),
         RuntimeEvent::Failed(error) => format!("failed {error}"),
         RuntimeEvent::Stderr => "stderr".into(),
         RuntimeEvent::UpstreamError { error, .. } => format!("upstream {}", error.code),
@@ -483,4 +484,42 @@ async fn captured_stderr_uses_only_the_first_error_chain() {
         assert_eq!(session, "s1");
         assert_eq!(crate::messages::Message::UpstreamHttp(error).to_string(), "acp2api: upstream error 400 INVALID_ARGUMENT: Unable to process input image. Please retry or report in https://developers.generativeai.google/guide/troubleshooting");
     }).await.expect("captured stderr test run cap");
+}
+
+#[tokio::test]
+async fn a_cancelled_config_call_completes_without_starting_its_prompt() {
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime
+            .start_configured_prompt(
+                crate::conversation::PromptRequest {
+                    blocks: vec![PromptBlock::Text("Cancelled input".into())],
+                    model: "other".into(),
+                    level: None,
+                },
+                "s1",
+            )
+            .await
+            .unwrap();
+        let config = agent.stdin().await;
+        assert_eq!(config["method"], "session/set_config_option");
+        runtime.cancel("s1").await.unwrap();
+        assert_eq!(agent.stdin().await["method"], "session/cancel");
+        agent
+            .stdout(result(config["id"].as_u64().unwrap(), json!({})))
+            .await;
+        let _ = runtime.next().await;
+        runtime
+            .start_prompt(vec![PromptBlock::Text("Connected input".into())], "s2")
+            .await
+            .unwrap();
+        let prompt = agent.stdin().await;
+        assert_eq!(prompt["method"], "session/prompt");
+        assert_eq!(
+            prompt["params"]["sessionId"], "s2",
+            "FR-049/FR-031 a completed non-prompt call must not start disconnected work"
+        );
+        assert_eq!(prompt["params"]["prompt"][0]["text"], "Connected input");
+    })
+    .await;
 }

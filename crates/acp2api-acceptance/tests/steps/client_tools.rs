@@ -1,5 +1,5 @@
-use crate::World;
-use acp2api_acceptance::{client::Answer, tool_check as t};
+use crate::{World, places_support as queue};
+use acp2api_acceptance::{TurnPlan, client::Answer, tool_check as t};
 use cucumber::{given, then, when};
 use serde_json::{Value, json};
 #[derive(Debug, Default)]
@@ -229,5 +229,64 @@ fn call(w: &mut World, name: String) {
         &w.tools.endpoint,
         &name,
         &w.tools.args,
+    );
+}
+
+#[given(expr = "a request of the conversation {string} got a response with a tool call")]
+async fn tool_response(w: &mut World, name: String) {
+    let mut call = acp2api_acceptance::tool_check::request(
+        "POST /v1/messages",
+        &[acp2api_acceptance::tool_check::tool("read_file")],
+        false,
+        "auto",
+    );
+    call.body["messages"][0]["content"] = queue::marker(&name).into();
+    w.request.plan = Some(TurnPlan {
+        steps: vec![acp2api_acceptance::TurnStep::ClientToolCall {
+            name: "read_file".into(),
+            arguments: "{\"path\":\"a.txt\"}".into(),
+        }],
+        end: acp2api_acceptance::fake::TurnEndPlan::Never,
+    });
+    let live = queue::send(w, call).await;
+    let answer = live.finish(&mut w.scenario.time).await;
+    assert_eq!(answer.status, 200);
+    assert_eq!(
+        t::calls(&answer, "POST /v1/messages").len(),
+        1,
+        "prior response contains a client tool call"
+    );
+    assert_eq!(
+        answer.json()["stop_reason"],
+        "tool_use",
+        "prior request returned the tool call to its API client"
+    );
+    w.places.tool_session = w
+        .scenario
+        .fake()
+        .record()
+        .prompts()
+        .last()
+        .unwrap()
+        .session
+        .clone();
+}
+
+#[when(expr = "a request of another conversation {string} comes")]
+async fn other_conversation(w: &mut World, name: String) {
+    w.places.arrival = w.scenario.hub.now();
+    queue::held(w, &name, false).await;
+}
+
+#[then(expr = "the official runtime got a cancel of the prompt turn of {string}")]
+fn tool_cancel(w: &mut World, _name: String) {
+    assert!(
+        w.scenario
+            .fake()
+            .record()
+            .cancels()
+            .iter()
+            .any(|call| call["params"]["sessionId"] == w.places.tool_session),
+        "FR-022 the tool call cancels its own ACP prompt"
     );
 }

@@ -35,6 +35,9 @@ async fn platform_folder(w: &mut World, platform: String) {
     assert!(!w.startup.data.exists());
 }
 #[given(expr = "the platform maximum concurrency limit is {int}")]
+#[given(
+    expr = "the build of acp2api for this platform has the highest concurrency limit {int}, as its release notes name"
+)]
 async fn maximum(w: &mut World, n: u8) {
     w.startup.initialize().await;
     w.startup.run.as_mut().unwrap().release.highest = n;

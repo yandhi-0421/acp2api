@@ -2,8 +2,14 @@ use acp2api_acceptance::Scenario;
 use cucumber::{World as _, event::ScenarioFinished};
 #[path = "steps/panel.rs"]
 mod panel;
+#[path = "steps/places_and_queue.rs"]
+mod places_and_queue;
+#[path = "support/places_and_queue.rs"]
+mod places_support;
 #[path = "support/prompt_turn.rs"]
 mod prompt_turn;
+#[path = "steps/queue_errors.rs"]
+mod queue_errors;
 #[path = "steps/response_ends.rs"]
 mod response_ends;
 mod selection;
@@ -29,6 +35,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    places: places_support::PlacesState,
     ends: response_ends::EndState,
     upstream: upstream_error::ErrorState,
     request: usage_contract::RequestCase,
@@ -148,6 +155,7 @@ async fn run() {
         .after(|_, _, _, finished, world| {
             Box::pin(async move {
                 if let Some(world) = world {
+                    places_support::cleanup(world).await;
                     world
                         .scenario
                         .finish(matches!(finished, ScenarioFinished::StepPassed))

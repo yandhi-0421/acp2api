@@ -8,10 +8,19 @@ impl Messages {
             Row::TooLarge => ("request_too_large", "request_too_large"),
             Row::Other502 => ("api_error", "invalid_request_error"),
             Row::Temporary503 => ("api_error", "api_error"),
+            Row::QueueFull => ("overloaded_error", "api_error"),
         }
     }
 }
 impl WireDialect for Messages {
+    fn refusal_status(&self, refusal: &Refusal) -> axum::http::StatusCode {
+        match refusal.row() {
+            Row::QueueFull => axum::http::StatusCode::from_u16(529).unwrap(),
+            Row::Key | Row::Rejected | Row::TooLarge | Row::Other502 | Row::Temporary503 => {
+                refusal_status(refusal)
+            }
+        }
+    }
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         content::parse(content::Api::Messages, body)
     }
