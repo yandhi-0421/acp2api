@@ -18,6 +18,11 @@ async fn send(world: &mut World, endpoint: String) {
         .client()
         .await
         .send(world.request.request(&endpoint, false));
+    if world.endpoint.incremental {
+        world.endpoint.set_live(call);
+        world.scenario.time.settle().await;
+        return;
+    }
     let answer = call.finish(&mut world.scenario.time).await;
     assert_eq!(answer.status, 200, "request must reach the product");
     world.scenario.answer = Some(answer);

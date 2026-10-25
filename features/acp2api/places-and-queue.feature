@@ -94,7 +94,7 @@ Feature: Places and queue
     When the request "A" comes
     Then the official runtime gets no call for "A" until the end of the "/usage"
 
-  @FR-049 @issue-60 @wip
+  @FR-049 @issue-63 @wip
   Scenario: The start of a runtime process holds no place
     Given the concurrency limit is 2
     When acp2api starts a runtime process
