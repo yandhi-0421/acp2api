@@ -38,11 +38,13 @@ pub enum TurnStep {
     },
     Stderr(String),
     HoldUntil(String),
+    SessionStderr(String),
 }
 #[derive(Clone, Debug)]
 pub enum TurnEndPlan {
     Stop(String),
     RpcError { code: i64, message: String },
+    StopThenStderr { delay: Duration, lines: Vec<String> },
     IgnoreCancel,
     Exit(i32),
     Never,
@@ -643,6 +645,17 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
                 );
                 return;
             }
+            TurnStep::SessionStderr(line) => {
+                turn_schedule(
+                    s,
+                    label,
+                    at,
+                    (&session, &id),
+                    json!({"op":"Err","line":line.replace("{session}", &session)}),
+                    false,
+                );
+                continue;
+            }
         };
         turn_emit(
             s,
@@ -660,6 +673,25 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
             json!({"op":"Out","line":json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}).to_string()})
         }
         TurnEndPlan::Exit(code) => json!({"op":"Exit","code":code}),
+        TurnEndPlan::StopThenStderr { delay, lines } => {
+            turn_schedule(
+                s,
+                label,
+                at,
+                (&session, &id),
+                json!({"op":"Out","line":result(id.clone(), json!({"stopReason":"end_turn"})).to_string()}),
+                true,
+            );
+            for line in lines {
+                emit(
+                    s,
+                    label,
+                    at + delay.as_millis() as u64,
+                    json!({"op":"Err","line":line.replace("{session}", &session)}),
+                );
+            }
+            return;
+        }
         TurnEndPlan::Never | TurnEndPlan::IgnoreCancel => return,
     };
     turn_schedule(s, label, at, (&session, &id), command, true);

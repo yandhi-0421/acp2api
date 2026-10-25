@@ -124,11 +124,14 @@ async fn error_request(w: &mut World, endpoint: String) {
                 .await,
         );
     } else {
-        f::set(
-            &mut call,
-            "output_config.format",
-            serde_json::json!({"type":"json_schema","schema":{}}),
-        );
+        if let Some((field, _)) = &w.fields.expected {
+            f::set(
+                &mut call,
+                field,
+                serde_json::json!({"type":"json_schema","schema":{}}),
+            );
+        }
+        w.request.queue_next(&w.scenario);
         content_check::send(&mut w.scenario, call).await;
     }
 }

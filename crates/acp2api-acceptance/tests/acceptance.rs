@@ -2,6 +2,8 @@ use acp2api_acceptance::Scenario;
 use cucumber::{World as _, event::ScenarioFinished};
 #[path = "steps/panel.rs"]
 mod panel;
+#[path = "support/prompt_turn.rs"]
+mod prompt_turn;
 mod selection;
 #[path = "steps/slash_and_thought.rs"]
 mod slash_and_thought;
@@ -17,12 +19,15 @@ mod timed_steps;
 mod tool_result_support;
 #[path = "steps/tool_results.rs"]
 mod tool_results;
+#[path = "steps/upstream_error.rs"]
+mod upstream_error;
 #[path = "support/usage_contract.rs"]
 mod usage_contract;
 #[path = "steps/usage_contract.rs"]
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    upstream: upstream_error::ErrorState,
     request: usage_contract::RequestCase,
     conversation: conversation::ConversationState,
     fields: request_fields::FieldState,

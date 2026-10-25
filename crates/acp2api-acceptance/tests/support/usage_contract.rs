@@ -13,6 +13,7 @@ const CONTEXT_SIZE: u64 = 1_048_576;
 
 #[derive(Debug)]
 pub struct RequestCase {
+    pub plan: Option<TurnPlan>,
     pub before_reply: Vec<TurnStep>,
     pub updates: Vec<u64>,
     pub reply: String,
@@ -29,6 +30,7 @@ pub struct RequestCase {
 impl Default for RequestCase {
     fn default() -> Self {
         Self {
+            plan: None,
             before_reply: Vec::new(),
             updates: vec![DEFAULT_USED],
             reply: DEFAULT_REPLY.into(),
@@ -75,6 +77,9 @@ impl RequestCase {
     }
 
     pub fn next_plan(&mut self) -> TurnPlan {
+        if let Some(plan) = self.plan.take() {
+            return self.with_usage(plan);
+        }
         let mut plan = TurnPlan::new();
         if let Some((name, arguments)) = &self.output_call {
             plan.steps.push(TurnStep::ClientToolCall {

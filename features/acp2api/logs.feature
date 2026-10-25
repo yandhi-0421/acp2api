@@ -66,19 +66,19 @@ Feature: Logs
     And the log does not hold "MARKER-STDERR"
 
   @FR-056 @issue-50 @wip
-  Scenario Outline: acp2api replaces each email address in an error text with <REDACTED>
+  Scenario Outline: acp2api replaces each email address in an error text with the redaction mark
     Given the stderr of the official runtime has an error line with the message "Account <address> is not valid"
     When an API client sends a valid request
-    Then the log holds "Account <REDACTED> is not valid"
+    Then the log holds "<logged message>"
     And the log does not hold "<address>"
 
     Examples:
-      | address            |
-      | name@example.com   |
-      | name%40example.com |
+      | address            | logged message                  |
+      | name@example.com   | Account <REDACTED> is not valid |
+      | name%40example.com | Account <REDACTED> is not valid |
 
   @FR-056 @issue-50 @wip
-  Scenario Outline: acp2api replaces each value with the form of a token with <REDACTED>
+  Scenario Outline: acp2api replaces each value with the form of a token with the redaction mark
     Given the stderr of the official runtime has an error line with the message "<message>"
     When an API client sends a valid request
     Then the log holds "<logged message>"
