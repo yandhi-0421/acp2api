@@ -324,6 +324,7 @@ impl Core {
             let Some(request) = self.waiting.pop_front() else {
                 break;
             };
+            let input_tokens = crate::conversation::input_tokens(&request.turn);
             let settings = Session {
                 system: crate::conversation::system_prompt_addition(
                     &request.turn.conversation.system,
@@ -385,7 +386,7 @@ impl Core {
                 disconnected: false,
                 held: None,
                 text: String::new(),
-                input_tokens: 0,
+                input_tokens,
                 phase,
                 tool_call: None,
             });
@@ -484,7 +485,9 @@ impl Core {
                 active.text.push_str(&text);
                 commands.push(Command::Emit(active.output.clone(), TurnEvent::Text(text)));
             }
+            let mut output = active.text.clone();
             if let Some(call) = active.tool_call.take() {
+                output.push_str(&call.arguments);
                 commands.push(Command::Emit(
                     active.output.clone(),
                     TurnEvent::ToolCall(call),
@@ -492,7 +495,7 @@ impl Core {
             }
             Usage {
                 input_tokens: active.input_tokens,
-                output_tokens: crate::conversation::output_tokens(&active.text),
+                output_tokens: crate::conversation::output_tokens(&output),
             }
         });
         if let Some(session) = &active.session {

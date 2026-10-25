@@ -297,8 +297,38 @@ pub(crate) fn output_tokens(text: &str) -> u64 {
     ascii.div_ceil(4) + other
 }
 
+pub(crate) fn input_tokens(turn: &TurnRequest) -> u64 {
+    let mut text = String::new();
+    for part in &turn.conversation.system {
+        if let Some(name) = &part.name {
+            text.push_str(name);
+        }
+        text.push_str(&part.text);
+    }
+    for item in turn.conversation.items() {
+        let Item::Message { name, parts, .. } = item;
+        if let Some(name) = name {
+            text.push_str(name);
+        }
+        for part in parts {
+            match part {
+                Part::Text(value) | Part::Document { text: value, .. } => text.push_str(value),
+                Part::Image { .. } => {}
+            }
+        }
+    }
+    for tool in &turn.tools {
+        text.push_str(&tool.name);
+        text.push_str(&tool.description);
+        text.push_str(&tool.schema.to_string());
+    }
+    output_tokens(&text)
+}
+
 pub(crate) struct ReplyForm {
     pub stream: bool,
+    pub include_usage: bool,
+    pub input_tokens: u64,
     pub model_name: String,
     pub tools: Vec<serde_json::Value>,
     pub tool_choice: ToolChoice,

@@ -115,19 +115,23 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     } else {
         ToolChoice::Auto
     };
-    Ok(Parsed {
-        turn: TurnRequest {
-            conversation: Conversation {
-                system,
-                earlier: items,
-                last,
-            },
-            model: model.clone(),
-            tools: client_tools,
-            tool_choice,
+    let turn = TurnRequest {
+        conversation: Conversation {
+            system,
+            earlier: items,
+            last,
         },
+        model: model.clone(),
+        tools: client_tools,
+        tool_choice,
+    };
+    let input_tokens = crate::conversation::input_tokens(&turn);
+    Ok(Parsed {
+        turn,
         form: ReplyForm {
             stream: value["stream"].as_bool().unwrap_or(false),
+            include_usage: value["stream_options"]["include_usage"] == true,
+            input_tokens,
             model_name: model,
             tools: value["tools"].as_array().cloned().unwrap_or_default(),
             tool_choice,

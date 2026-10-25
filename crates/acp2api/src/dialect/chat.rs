@@ -66,7 +66,7 @@ impl WireDialect for Chat {
         w.text.push_str(text);
         vec![self.chunk(w, delta, Value::Null)]
     }
-    fn end(&self, w: &mut Encoding, _: &Usage) -> Vec<Event> {
+    fn end(&self, w: &mut Encoding, u: &Usage) -> Vec<Event> {
         let mut events = Vec::new();
         if let Some(call) = &w.tool_call {
             let mut header = json!({"tool_calls":[{"index":0,"id":w.call_id,"type":"function","function":{"name":call.name,"arguments":""}}]});
@@ -94,6 +94,20 @@ impl WireDialect for Chat {
                 .into(),
             ),
         );
+        if w.include_usage {
+            events.push(data(json!({
+                "id": w.id,
+                "object": "chat.completion.chunk",
+                "created": w.created,
+                "model": w.model,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": u.input_tokens,
+                    "completion_tokens": u.output_tokens,
+                    "total_tokens": u.input_tokens + u.output_tokens
+                }
+            })));
+        }
         events.push(Event::default().data("[DONE]"));
         events
     }
