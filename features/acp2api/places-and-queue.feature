@@ -7,7 +7,7 @@ Feature: Places and queue
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-049 @issue-60 @wip
+  @FR-049 @issue-60
   Scenario: With the concurrency limit 2, the third request waits until a place is free
     Given the concurrency limit is 2
     When API clients send the requests "A", "B", and "C" of three conversations
@@ -15,7 +15,7 @@ Feature: Places and queue
     When the prompt turn of "A" ends
     Then the official runtime gets the first call for "C"
 
-  @FR-049 @issue-60 @wip
+  @FR-049 @issue-60
   Scenario: A change of the concurrency limit applies at once
     Given the concurrency limit is 2
     And the platform maximum concurrency limit is 3
@@ -23,7 +23,7 @@ Feature: Places and queue
     When the owner sets the concurrency limit 3 in the management panel
     Then the prompt turn of "C" starts at once
 
-  @FR-049 @issue-60 @wip
+  @FR-049 @issue-60
   Scenario: A lower limit preserves work and stops new acquisitions until the count is below the limit
     Given the concurrency limit is 3
     And the prompt turns "A", "B", and "C" run, and request "D" waits
@@ -100,7 +100,7 @@ Feature: Places and queue
     When acp2api starts a runtime process
     Then the count of the places in use is 0 during the start
 
-  @FR-049 @issue-60 @wip
+  @FR-049 @issue-60
   Scenario Outline: The management panel offers no concurrency limit above the platform maximum
     Given the platform maximum concurrency limit is <maximum>, as its release notes name
     When the owner opens the management panel with a panel session
@@ -112,7 +112,7 @@ Feature: Places and queue
       | 2       | 1 and 2     |
       | 3       | 1, 2, and 3 |
 
-  @FR-050 @issue-60 @wip
+  @FR-050 @issue-60
   Scenario: Requests start in the order of arrival
     Given the concurrency limit is 1
     And the prompt turn of the request "A" runs
@@ -120,7 +120,7 @@ Feature: Places and queue
     When the prompt turn of "A" ends
     Then the prompt turn of "B" starts before the prompt turn of "C"
 
-  @FR-050 @issue-60 @wip
+  @FR-050 @issue-60
   Scenario: A request waits with no time limit while its API client stays connected
     Given the concurrency limit is 1
     And the prompt turn of the request "A" runs for 60 minutes
@@ -128,7 +128,7 @@ Feature: Places and queue
     When the prompt turn of "A" ends
     Then the prompt turn of "B" starts
 
-  @FR-050 @issue-60 @wip
+  @FR-050 @issue-60
   Scenario Outline: The queue holds no more than 32 requests
     Given each place holds a prompt turn
     And <count> requests wait in the queue

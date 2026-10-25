@@ -69,7 +69,7 @@ Feature: Ends of a response
     When the API client disconnects
     Then the official runtime gets a cancel of the prompt turn at once
 
-  @FR-031 @issue-60 @wip
+  @FR-031 @issue-60
   Scenario: A request that waits in the queue leaves the queue at its disconnect
     Given each place holds a prompt turn
     And 2 requests wait in the queue

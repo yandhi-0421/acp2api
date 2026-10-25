@@ -35,7 +35,7 @@ Feature: Client tools
     When an API client sends that request to "POST /v1/messages"
     Then the response has exactly one "tool_use" block
 
-  @FR-022 @issue-60 @wip
+  @FR-022 @issue-60
   Scenario: No prompt turn waits for a tool result
     Given the concurrency limit is 1
     And a request of the conversation "C1" got a response with a tool call
