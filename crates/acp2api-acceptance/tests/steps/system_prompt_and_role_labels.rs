@@ -82,15 +82,10 @@ async fn named_system(
     name: String,
     #[step] step: &cucumber::gherkin::Step,
 ) {
-    use acp2api_acceptance::system_check as s;
-    let kind = if endpoint.ends_with("responses") {
-        "input_text"
-    } else {
-        "text"
-    };
+    use acp2api_acceptance::{content_check, system_check as s};
     let blocks: Vec<_> = step.table.as_ref().unwrap().rows[1..]
         .iter()
-        .map(|row| serde_json::json!({"type":kind,"text":row[0]}))
+        .map(|row| content_check::text(&endpoint, &row[0]))
         .collect();
     s::send(
         &mut w.scenario,

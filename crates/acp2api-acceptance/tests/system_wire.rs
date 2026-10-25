@@ -31,19 +31,14 @@ async fn messages_system_string_and_text_blocks_keep_their_exact_content() {
 async fn named_system_and_developer_parts_keep_their_original_roles() {
     for endpoint in ["POST /v1/chat/completions", "POST /v1/responses"] {
         let mut scenario = setup();
-        let kind = if endpoint.ends_with("responses") {
-            "input_text"
-        } else {
-            "text"
-        };
         let messages = json!([
             {"role":"system","name":"系统 雪","content":[
-                {"type":kind,"text":"First\n"},
-                {"type":kind,"text":"\ninside"}
+                c::text(endpoint, "First\n"),
+                c::text(endpoint, "\ninside")
             ]},
             {"role":"developer","name":"规则 🙂","content":[
-                {"type":kind,"text":"Sec"},
-                {"type":kind,"text":"ond"}
+                c::text(endpoint, "Sec"),
+                c::text(endpoint, "ond")
             ]},
             s::message("user", None, "user")
         ]);

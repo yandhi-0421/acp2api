@@ -38,7 +38,15 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     let mut items = Vec::new();
     let mut system = Vec::new();
     if matches!(api, Api::Messages) && !value["system"].is_null() {
-        system = system_parts(api, Role::System, None, &value["system"])?;
+        let mut texts = system_texts(api, &value["system"])?;
+        if value["system"].is_array()
+            && texts
+                .first()
+                .is_some_and(|text| text.starts_with("x-anthropic-billing-header:"))
+        {
+            texts.remove(0);
+        }
+        system.extend(system_part(Role::System, None, &texts));
     }
     if matches!(api, Api::Responses) && !value["instructions"].is_null() {
         system.push(SystemPart {
@@ -75,12 +83,8 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
                 && at_start
                 && matches!(role, Role::System | Role::Developer)
             {
-                system.extend(system_parts(
-                    api,
-                    role,
-                    item["name"].as_str(),
-                    &item["content"],
-                )?);
+                let texts = system_texts(api, &item["content"])?;
+                system.extend(system_part(role, item["name"].as_str(), &texts));
             } else {
                 at_start = false;
                 let parts = parts(api, &item["content"], &client_tools)?;
@@ -197,21 +201,11 @@ fn known_field(api: Api, name: &str) -> bool {
         Api::Responses => matches!(name, "input" | "instructions"),
     }
 }
-fn system_parts(
-    api: Api,
-    role: Role,
-    name: Option<&str>,
-    value: &Value,
-) -> Result<Vec<SystemPart>, Refusal> {
-    let make = |text: &str| SystemPart {
-        role,
-        name: name.map(str::to_owned),
-        text: text.into(),
-    };
+fn system_texts(api: Api, value: &Value) -> Result<Vec<&str>, Refusal> {
     if let Some(text) = value.as_str() {
-        return Ok(vec![make(text)]);
+        return Ok(vec![text]);
     }
-    let mut parts = value
+    value
         .as_array()
         .ok_or_else(|| Refusal::invalid("system prompt must be text or text blocks"))?
         .iter()
@@ -225,18 +219,13 @@ fn system_parts(
             }
             required(part, "text")
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    if matches!(api, Api::Messages)
-        && parts
-            .first()
-            .is_some_and(|text| text.starts_with("x-anthropic-billing-header:"))
-    {
-        parts.remove(0);
-    }
-    Ok(if parts.is_empty() {
-        Vec::new()
-    } else {
-        vec![make(&parts.concat())]
+        .collect()
+}
+fn system_part(role: Role, name: Option<&str>, texts: &[&str]) -> Option<SystemPart> {
+    (!texts.is_empty()).then(|| SystemPart {
+        role,
+        name: name.map(str::to_owned),
+        text: texts.concat(),
     })
 }
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, Refusal> {
