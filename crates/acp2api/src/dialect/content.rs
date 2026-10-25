@@ -163,7 +163,7 @@ fn effort(api: Api, value: &Value) -> crate::conversation::EffortAsk {
     let field = match api {
         Api::Chat => value.get("reasoning_effort"),
         Api::Responses => value["reasoning"].get("effort"),
-        Api::Messages if value["output_config"].get("effort").is_none() => {
+        Api::Messages if value["output_config"]["effort"].is_null() => {
             return if value["thinking"]["type"] == "disabled" {
                 EffortAsk::Level(ThinkingLevel::Low)
             } else {
@@ -183,7 +183,7 @@ fn effort(api: Api, value: &Value) -> crate::conversation::EffortAsk {
                 Value::Null
             }),
         },
-        Some(Value::Null) => EffortAsk::Unknown("null".into()),
+        Some(Value::Null) => EffortAsk::Absent,
         Some(Value::Bool(_)) => EffortAsk::Unknown("boolean".into()),
         Some(Value::Number(_)) => EffortAsk::Unknown("number".into()),
         Some(Value::Array(_)) => EffortAsk::Unknown("array".into()),

@@ -249,7 +249,7 @@ acp2api rejects a request with a `model` that is not a model name, for example `
 - `reasoning.effort`, `reasoning_effort`, and `output_config.effort` use the values of the table.
 - `thinking` with the type `adaptive` or `enabled` sets no level. `budget_tokens` has no effect.
 - When a request has `output_config.effort` and `thinking`, `output_config.effort` sets the level.
-- acp2api ignores a value that the table does not give, and the default level applies. It logs a string of at most 256 bytes, or `null` for a longer string. For another JSON value, it logs only the JSON type.
+- acp2api ignores a value that the table does not give, and the default level applies. It logs a string of at most 256 bytes, or `null` for a longer string. For a JSON value other than a string or `null`, it logs only the JSON type.
 
 **Pass:** for each row of the table, the prompt turn runs at the level of the row. `gemini-3.8-flash-low` with `reasoning.effort: "high"` runs at `low`. A request with no effort field runs at `high`. A response to `gemini-3.8-flash` has `model: "gemini-3.8-flash"`.
 
