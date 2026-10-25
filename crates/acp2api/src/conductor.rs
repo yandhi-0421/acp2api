@@ -145,6 +145,7 @@ impl Core {
                 Ok(crate::catalog::SelectedModel {
                     model: turn.model.clone(),
                     level: None,
+                    level_from_name: false,
                 })
             },
             |catalog| catalog.resolve(turn),
@@ -186,7 +187,8 @@ impl Core {
         let (output, ticket) = mpsc::unbounded_channel();
         let (model, admitted) = match self.check_model(&work.turn) {
             Ok(model) => {
-                if model.model == work.turn.model
+                if self.catalog.is_some()
+                    && !model.level_from_name
                     && let EffortAsk::Unknown(value) = &work.turn.effort
                 {
                     journal.diagnostic(
@@ -931,6 +933,7 @@ mod tests {
                         model: crate::catalog::SelectedModel {
                             model: "m".into(),
                             level: None,
+                            level_from_name: false,
                         },
                         turn: next,
                         request: journal.begin(crate::journal::Api::Chat, 200),
@@ -1036,6 +1039,7 @@ mod tests {
                     model: crate::catalog::SelectedModel {
                         model: "m".into(),
                         level: None,
+                        level_from_name: false,
                     },
                     turn,
                     request,
@@ -1146,6 +1150,7 @@ mod tests {
             model: crate::catalog::SelectedModel {
                 model: "m".into(),
                 level: None,
+                level_from_name: false,
             },
             turn,
             request,
@@ -1182,7 +1187,7 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
-        let body = br#"{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Hi"}]}"#;
+        let body = br#"{"model":"gemini-3.8-flash","reasoning_effort":"extreme","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let request = journal.begin(crate::journal::Api::Chat, clock.now());
         let admitted = conductor
@@ -1201,10 +1206,22 @@ mod tests {
             .await
             .ok()
             .map(|entries| entries.len());
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
         std::fs::remove_dir_all(&folder).unwrap();
         let unavailable = Some("official runtime is not available".to_owned());
         assert_eq!(end, unavailable, "answer to a request");
         assert_eq!(listed, Some(0), "GET /v1/models lists no model");
+        assert!(
+            lines.contains(r#""result":"failed""#),
+            "request log control: {lines}"
+        );
+        assert!(
+            !lines.contains(r#""event":"unknown_effort""#),
+            "61ee383 emits no effort diagnostic without a catalog: {lines}"
+        );
     }
     #[tokio::test]
     async fn a_client_gone_before_admission_still_has_its_request_line() {

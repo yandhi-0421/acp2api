@@ -36,6 +36,7 @@ impl OfferedModel {
 pub(crate) struct SelectedModel {
     pub model: String,
     pub level: Option<ThinkingLevel>,
+    pub level_from_name: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,6 +153,7 @@ impl Catalog {
         Ok(SelectedModel {
             model: model.value.clone(),
             level,
+            level_from_name: suffix.is_some(),
         })
     }
 }
