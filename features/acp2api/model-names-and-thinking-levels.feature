@@ -70,12 +70,12 @@ Feature: Model names and thinking levels
       | sign-in required    | 400    |
       | runtime unavailable | 400    |
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario: The suffix of a model name sets the thinking level and acp2api ignores the effort fields
     When an API client sends a request to "POST /v1/responses" with the model "gemini-3.8-flash-low" and "reasoning.effort" set to "high"
     Then the prompt turn runs with the thinking level "low"
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario Outline: Each value of an effort field gives its thinking level
     When an API client sends a request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and "reasoning_effort" set to "<value>"
     Then the prompt turn runs with the thinking level "<level>"
@@ -91,7 +91,7 @@ Feature: Model names and thinking levels
       | max     | high   |
       | ultra   | high   |
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario Outline: Each effort field of each API sets the thinking level
     When an API client sends a request to "<endpoint>" with the model "gemini-3.8-flash" and <effort field>
     Then the prompt turn runs with the thinking level "<level>"
@@ -104,24 +104,24 @@ Feature: Model names and thinking levels
       | POST /v1/messages         | "thinking" with the type "adaptive"             | high   |
       | POST /v1/messages         | "thinking" with the type "enabled" and "budget_tokens" 1024 | high |
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario: A request with no effort field runs at the thinking level high
     When an API client sends a request to "POST /v1/messages" with the model "gemini-3.8-flash" and no effort field
     Then the prompt turn runs with the thinking level "high"
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario: output_config.effort sets the thinking level when the request also has thinking
     When an API client sends a request to "POST /v1/messages" with the model "gemini-3.8-flash", "output_config.effort" set to "medium", and "thinking" with the type "disabled"
     Then the prompt turn runs with the thinking level "medium"
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario: acp2api ignores an effort value that the table does not give and writes it into the log
     When an API client sends a request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and "reasoning_effort" set to "extreme"
     Then the prompt turn runs with the thinking level "high"
     And the log has a line with the value "extreme"
     And the API client gets no error
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario Outline: A thinking level that the model does not have gives another level of the model
     Given the model "gemini-3.8-flash" has only the thinking levels <levels of the model>
     When an API client sends a request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and "reasoning_effort" set to "<value>"
@@ -132,7 +132,7 @@ Feature: Model names and thinking levels
       | "low" and "high"      | medium | high   |
       | "low" and "medium"    | high   | medium |
 
-  @FR-013 @issue-48 @wip
+  @FR-013 @issue-48
   Scenario Outline: The model field of each response holds the model name of the request
     When an API client sends a request to "POST /v1/chat/completions" with the model "<model name>"
     Then the response has "model" with the value "<model name>"
