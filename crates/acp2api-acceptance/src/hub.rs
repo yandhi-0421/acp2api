@@ -496,25 +496,37 @@ pub fn send(stream: &mut TcpStream, value: &Value) -> std::io::Result<()> {
 pub struct HubLink {
     pub address: String,
     pub token: String,
+    #[serde(skip)]
+    connection: Arc<Mutex<Option<BufReader<TcpStream>>>>,
 }
 impl HubLink {
     pub fn new(hub: &Hub) -> Self {
         Self {
             address: hub.address.clone(),
             token: hub.token.clone(),
+            connection: Arc::default(),
         }
     }
-    pub fn connect(&self, mut message: Value) -> std::io::Result<BufReader<TcpStream>> {
-        let mut stream = TcpStream::connect(&self.address)?;
+    fn open(&self) -> std::io::Result<TcpStream> {
+        let stream = TcpStream::connect(&self.address)?;
         stream.set_read_timeout(Some(real_limit(Duration::from_secs(300))))?;
         stream.set_write_timeout(Some(real_limit(Duration::from_secs(10))))?;
+        Ok(stream)
+    }
+    pub fn connect(&self, mut message: Value) -> std::io::Result<BufReader<TcpStream>> {
+        let mut stream = self.open()?;
         message["token"] = json!(self.token);
         message["role"] = json!("rpc");
         send(&mut stream, &message)?;
         Ok(BufReader::new(stream))
     }
-    pub fn call(&self, message: Value) -> Value {
-        let mut reader = self.connect(message).expect("hub RPC connect");
+    pub fn call(&self, mut message: Value) -> Value {
+        let mut connection = self.connection.lock().unwrap();
+        let reader =
+            connection.get_or_insert_with(|| BufReader::new(self.open().expect("hub RPC connect")));
+        message["token"] = json!(self.token);
+        message["role"] = json!("rpc_stream");
+        send(reader.get_mut(), &message).expect("hub RPC request");
         let mut line = String::new();
         reader.read_line(&mut line).expect("hub RPC response");
         serde_json::from_str(&line).expect("hub RPC JSON")
@@ -561,5 +573,85 @@ impl Hub {
         state.stop = false;
         state.ready = false;
         state.servers.remove("stop");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn repeated_rpc_calls_share_a_client_port_and_keep_their_responses() {
+        const REQUESTS: usize = 32;
+        const FRAME_CAP: u64 = 4096;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let link: HubLink = serde_json::from_value(json!({
+            "address": listener.local_addr().unwrap().to_string(),
+            "token": "local-rpc-test"
+        }))
+        .unwrap();
+        let peer = thread::spawn(move || {
+            let deadline = Instant::now() + real_limit(Duration::from_secs(5));
+            let mut ports = HashSet::new();
+            let mut received = 0;
+            while received < REQUESTS {
+                assert!(Instant::now() < deadline, "RPC peer run cap: 5 s");
+                let (stream, address) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(error) => panic!("RPC peer accept: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                ports.insert(address.port());
+                stream
+                    .set_read_timeout(Some(real_limit(Duration::from_secs(2))))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(real_limit(Duration::from_secs(2))))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                while received < REQUESTS {
+                    assert!(Instant::now() < deadline, "RPC peer run cap: 5 s");
+                    let mut line = String::new();
+                    let size = reader
+                        .by_ref()
+                        .take(FRAME_CAP + 1)
+                        .read_line(&mut line)
+                        .unwrap();
+                    assert!(size <= FRAME_CAP as usize, "RPC peer frame cap: 4 KiB");
+                    if size == 0 {
+                        break;
+                    }
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    send(reader.get_mut(), &json!({"answer": request["value"]})).unwrap();
+                    received += 1;
+                }
+            }
+            ports.len()
+        });
+        thread::scope(|scope| {
+            for worker in 0..2 {
+                let link = link.clone();
+                scope.spawn(move || {
+                    for request in 0..REQUESTS / 2 {
+                        let value = worker * 100 + request;
+                        assert_eq!(
+                            link.call(json!({"op":"echo", "value":value})),
+                            json!({"answer":value})
+                        );
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            peer.join().unwrap(),
+            1,
+            "short RPC polling uses one client port"
+        );
     }
 }
