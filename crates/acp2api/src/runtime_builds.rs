@@ -41,7 +41,7 @@ impl Builds {
         ports: &Ports,
         environment: Environment,
         data: PathBuf,
-        cwd: PathBuf,
+        temporary: crate::account::Temporary,
         tools: crate::runtime_driver::mcp::ToolSets,
         port: u16,
     ) -> Self {
@@ -51,7 +51,7 @@ impl Builds {
                 launcher: ports.launcher.clone(),
                 release: ports.release.clone(),
                 data,
-                cwd,
+                temporary,
                 tool_sets: tools,
             },
             environment,
@@ -359,7 +359,7 @@ mod tests {
                 &ports,
                 environment,
                 root.clone(),
-                root.join("cwd"),
+                crate::account::Temporary::fixture(&root),
                 crate::runtime_driver::mcp::ToolSets::new(0),
                 0,
             );

@@ -333,7 +333,7 @@ mod tests {
             &ports,
             crate::Environment::from_process(),
             folder.into(),
-            folder.join("sessions"),
+            crate::account::Temporary::fixture(folder),
             crate::runtime_driver::mcp::ToolSets::new(8329),
             8329,
         );

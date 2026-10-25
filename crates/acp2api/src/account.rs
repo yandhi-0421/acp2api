@@ -1,5 +1,6 @@
 use crate::{Clock, Environment, StopSignal};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
@@ -10,8 +11,9 @@ pub(super) struct Account {
     root: PathBuf,
     gate: Option<File>,
     instance: File,
+    pub(crate) temporary: Temporary,
 }
-#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Identity {
     pid: u32,
@@ -99,11 +101,15 @@ impl Account {
         let instance_path = env.account_root.join("instance.lock");
         let instance = open_lock(&instance_path)?;
         match instance.try_lock() {
-            Ok(()) => Ok(Some(Self {
-                root: env.account_root.clone(),
-                gate: Some(gate),
-                instance,
-            })),
+            Ok(()) => {
+                let temporary = Temporary::create(&env.account_root, &env.temp)?;
+                Ok(Some(Self {
+                    root: env.account_root.clone(),
+                    gate: Some(gate),
+                    instance,
+                    temporary,
+                }))
+            }
             Err(fs::TryLockError::WouldBlock) => {
                 let path = env.account_root.join("panel");
                 let bytes = fs::read(&path).map_err(|_| failed(&path))?;
@@ -148,6 +154,7 @@ impl Account {
         clock: &dyn Clock,
         listener: std::net::TcpListener,
     ) -> Result<(), String> {
+        self.temporary.finish()?;
         let gate_path = self.root.join("startup.lock");
         let gate = open_lock(&gate_path)?;
         loop {
@@ -172,18 +179,336 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         "{}.new",
         crate::random_hex::<12>().map_err(|_| failed(path))?
     ));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temp).map_err(|_| failed(path))?;
+    let mut file = crate::os::private_file(&temp).map_err(|_| failed(path))?;
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|_| failed(path))?;
     fs::rename(temp, path).map_err(|_| failed(path))
+}
+#[derive(Clone)]
+pub(crate) struct Temporary {
+    account: PathBuf,
+    root: PathBuf,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Ownership {
+    format: u8,
+    roots: Vec<OwnedRoot>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnedRoot {
+    path: PathBuf,
+    process: Identity,
+    processes: Vec<OwnedProcess>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnedProcess {
+    path: PathBuf,
+    // A launch interrupted before identity persistence remains unproven.
+    process: Option<Identity>,
+}
+impl Ownership {
+    fn load(account: &Path) -> Result<Self, String> {
+        let path = account.join("owned-temporary-files.json");
+        match fs::symlink_metadata(&path) {
+            Ok(_) => validate_private(&path, false, true)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    format: 1,
+                    roots: Vec::new(),
+                });
+            }
+            Err(_) => return Err(failed(&path)),
+        }
+        let bytes = fs::read(&path).map_err(|_| failed(&path))?;
+        let record: Self = serde_json::from_slice(&bytes).map_err(|_| failed(&path))?;
+        if record.format != 1 {
+            return Err(failed(&path));
+        }
+        let id = crate::hex(&Sha256::digest(account.as_os_str().as_encoded_bytes()));
+        for root in &record.roots {
+            let parent = root.path.parent().ok_or_else(|| failed(&root.path))?;
+            let name = root
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| failed(&root.path))?;
+            if !root.path.is_absolute()
+                || root
+                    .path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+                || name.len() != 32
+                || !name.bytes().all(|c| c.is_ascii_hexdigit())
+                || parent.file_name().and_then(|name| name.to_str()) != Some(&id)
+                || parent
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    != Some("acp2api")
+            {
+                return Err(failed(&root.path));
+            }
+            for process in &root.processes {
+                let name = process
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| failed(&process.path))?;
+                if process.path.parent() != Some(root.path.join("processes").as_path())
+                    || name.len() != 32
+                    || !name.bytes().all(|c| c.is_ascii_hexdigit())
+                    || process
+                        .path
+                        .components()
+                        .any(|part| matches!(part, std::path::Component::ParentDir))
+                {
+                    return Err(failed(&process.path));
+                }
+            }
+        }
+        Ok(record)
+    }
+    fn save(&self, account: &Path) -> Result<(), String> {
+        let path = account.join("owned-temporary-files.json");
+        write(&path, &serde_json::to_vec(self).map_err(|_| failed(&path))?)
+    }
+}
+impl Temporary {
+    #[cfg(test)]
+    #[allow(clippy::disallowed_methods)]
+    pub(crate) fn fixture(root: &Path) -> Self {
+        for folder in ["account", "temp"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        Self::create(&root.join("account"), &root.join("temp")).unwrap()
+    }
+    pub(crate) fn create(account: &Path, temp: &Path) -> Result<Self, String> {
+        let account = fs::canonicalize(account).map_err(|_| failed(account))?;
+        let temp = fs::canonicalize(temp).map_err(|_| failed(temp))?;
+        let id = crate::hex(&Sha256::digest(account.as_os_str().as_encoded_bytes()));
+        let container = temp.join("acp2api").join(id);
+        let shared = temp.join("acp2api");
+        fs::create_dir_all(&shared).map_err(|_| failed(&shared))?;
+        if fs::canonicalize(&shared).map_err(|_| failed(&shared))? != shared {
+            return Err(failed(&shared));
+        }
+        match fs::symlink_metadata(&container) {
+            Ok(_) => validate_private(&container, true, true)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                private_folder(&container)?
+            }
+            Err(_) => return Err(failed(&container)),
+        }
+        let root = container.join(crate::random_hex::<16>().map_err(|_| failed(&container))?);
+        let files = Self { account, root };
+        let mut record = Ownership::load(&files.account)?;
+        record.roots.push(OwnedRoot {
+            path: files.root.clone(),
+            process: identity(std::process::id()).ok_or_else(|| failed(&files.account))?,
+            processes: Vec::new(),
+        });
+        record.save(&files.account)?;
+        private_folder(&files.root)?;
+        private_folder(&files.sessions())?;
+        private_folder(&files.root.join("processes"))?;
+        Ok(files)
+    }
+    pub(crate) fn recover(&self) -> Result<(), String> {
+        let mut record = Ownership::load(&self.account)?;
+        let mut retained = Vec::new();
+        for root in record.roots {
+            match fs::symlink_metadata(&root.path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(failed(&root.path)),
+                Ok(_) => {}
+            }
+            if process_ended(&root.process) && root.processes.iter().all(process_tree_ended) {
+                remove_root(&root.path)?;
+            } else {
+                retained.push(root);
+            }
+        }
+        record.roots = retained;
+        record.save(&self.account)
+    }
+    pub(crate) fn sessions(&self) -> PathBuf {
+        self.root.join("sessions")
+    }
+    pub(crate) async fn launch(
+        &self,
+        launcher: &dyn crate::ProcessLauncher,
+        clock: std::sync::Arc<dyn Clock>,
+        mut spec: crate::LaunchSpec,
+    ) -> Result<crate::Launched, String> {
+        let path = self
+            .root
+            .join("processes")
+            .join(crate::random_hex::<16>().map_err(|_| failed(&self.root))?);
+        let mut record = Ownership::load(&self.account)?;
+        record
+            .roots
+            .iter_mut()
+            .find(|root| root.path == self.root)
+            .ok_or_else(|| failed(&self.account.join("owned-temporary-files.json")))?
+            .processes
+            .push(OwnedProcess {
+                path: path.clone(),
+                process: None,
+            });
+        record.save(&self.account)?;
+        private_folder(&path)?;
+        spec.own_temp = Some(path);
+        let child = launcher
+            .launch(spec)
+            .map_err(|error| format!("runtime launch: {error:?}"))?;
+        let process = identity(child.tree.pid());
+        record
+            .roots
+            .iter_mut()
+            .find(|root| root.path == self.root)
+            .expect("registered current run")
+            .processes
+            .last_mut()
+            .expect("registered launch")
+            .process = process;
+        if let Err(error) = record.save(&self.account) {
+            child.tree.stop(clock).await;
+            return Err(error);
+        }
+        Ok(child)
+    }
+    fn finish(&self) -> Result<(), String> {
+        let mut record = Ownership::load(&self.account)?;
+        let current = record
+            .roots
+            .iter()
+            .find(|root| root.path == self.root)
+            .ok_or_else(|| failed(&self.account.join("owned-temporary-files.json")))?;
+        if !current.processes.iter().all(process_tree_ended) {
+            return Ok(());
+        }
+        remove_root(&self.root)?;
+        record.roots.retain(|root| root.path != self.root);
+        record.save(&self.account)
+    }
+}
+fn private_folder(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path)
+            .map_err(|_| failed(path))
+    }
+    #[cfg(windows)]
+    crate::os::private_folder(path).map_err(|_| failed(path))
+}
+fn validate_private(path: &Path, directory: bool, private: bool) -> Result<(), String> {
+    let meta = fs::symlink_metadata(path).map_err(|_| failed(path))?;
+    if meta.file_type().is_symlink()
+        || (directory && !meta.is_dir())
+        || (!directory && !meta.is_file())
+    {
+        return Err(failed(path));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let mask = if private { 0o077 } else { 0o022 };
+        if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & mask != 0 {
+            return Err(failed(path));
+        }
+    }
+    #[cfg(windows)]
+    {
+        crate::os::validate_private(path, private).map_err(|_| failed(path))?;
+    }
+    Ok(())
+}
+fn remove_root(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(failed(path)),
+        Ok(_) => {}
+    }
+    if fs::canonicalize(path).map_err(|_| failed(path))? != path {
+        return Err(failed(path));
+    }
+    validate_private(path, true, true)?;
+    fn children(path: &Path) -> Result<(), String> {
+        for entry in fs::read_dir(path).map_err(|_| failed(path))? {
+            let entry = entry.map_err(|_| failed(path))?;
+            let folder = entry
+                .file_type()
+                .map_err(|_| failed(&entry.path()))?
+                .is_dir();
+            validate_private(&entry.path(), folder, false)?;
+            if folder {
+                children(&entry.path())?;
+            }
+        }
+        Ok(())
+    }
+    children(path)?;
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(failed(path)),
+    }
+}
+fn process_tree_ended(process: &OwnedProcess) -> bool {
+    let Some(identity) = &process.process else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::killpg(identity.pid as i32, 0) == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = identity;
+        crate::os::process_tree_ended(&process.path)
+    }
+}
+fn process_ended(process: &Identity) -> bool {
+    if let Some(current) = identity(process.pid) {
+        return current != *process;
+    }
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::kill(process.pid as i32, 0) == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, ERROR_INVALID_PARAMETER},
+            System::Threading::{
+                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            },
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process.pid);
+            if handle.is_null() {
+                return std::io::Error::last_os_error().raw_os_error()
+                    == Some(ERROR_INVALID_PARAMETER as i32);
+            }
+            let mut code = 0;
+            let ended = GetExitCodeProcess(handle, &mut code) != 0 && code != 259;
+            CloseHandle(handle);
+            ended
+        }
+    }
 }
 #[cfg(target_os = "macos")]
 fn identity(pid: u32) -> Option<Identity> {
@@ -230,5 +555,394 @@ fn identity(pid: u32) -> Option<Identity> {
             pid,
             created: (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime),
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn start_temporary(account: &Path, temp: &Path) -> Result<Temporary, String> {
+        let files = Temporary::create(account, temp)?;
+        files.recover()?;
+        Ok(files)
+    }
+
+    #[test]
+    fn normal_cleanup_forgets_a_registered_root_that_is_already_absent() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-finish-absent-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let files = Temporary::fixture(&root);
+        fs::remove_dir_all(&files.root).unwrap();
+        let result = files.finish();
+        let count = Ownership::load(&files.account).unwrap().roots.len();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            result.is_ok() && count == 0,
+            "normal cleanup must remove the entry after proof that its root is absent"
+        );
+    }
+
+    #[test]
+    fn ownership_rejects_a_process_folder_outside_its_registered_run() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-process-path-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let old = Temporary::fixture(&root);
+        let mut record = Ownership::load(&old.account).unwrap();
+        record.roots[0].processes.push(OwnedProcess {
+            path: root.join("outside"),
+            process: None,
+        });
+        record.save(&old.account).unwrap();
+        let rejected = start_temporary(&old.account, &root.join("temp")).is_err();
+        let preserved = old.root.exists();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            rejected && preserved,
+            "a process folder must belong to its recorded run before any native check"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_drops_an_entry_after_proving_its_root_is_absent() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-absent-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let old = Temporary::fixture(&root);
+        fs::remove_dir_all(&old.root).unwrap();
+        let new = start_temporary(&old.account, &root.join("temp")).unwrap();
+        let count = Ownership::load(&old.account).unwrap().roots.len();
+        let created = new.root.exists();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            (count, created),
+            (1, true),
+            "proof of an absent root removes its entry before a new run"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_keeps_an_unproven_launch_and_continues_startup() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!("acp2api-unproven-{}", crate::random_hex::<12>().unwrap()));
+            let old = Temporary::fixture(&root);
+            let mut owner = tokio::process::Command::new(if cfg!(windows) { "cmd.exe" } else { "/bin/cat" })
+                .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).kill_on_drop(true).spawn().unwrap();
+            let process = identity(owner.id().unwrap()).unwrap();
+            owner.kill().await.unwrap();
+            let mut record = Ownership::load(&old.account).unwrap();
+            record.roots[0].process = process;
+            record.roots[0].processes.push(OwnedProcess { path: old.root.join("processes/00000000000000000000000000000000"), process: None });
+            record.save(&old.account).unwrap();
+            let next = start_temporary(&old.account, &root.join("temp")).unwrap();
+            let actual = (old.root.exists(), next.root.exists(), Ownership::load(&old.account).unwrap().roots.len());
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, (true, true, 2), "a crash before process identity persistence cannot authorize deletion or refuse startup");
+        }).await.expect("unproven-launch cap: 5 seconds; one child, no captured output");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_exited_runtime_leader_does_not_prove_its_descendants_ended() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            use tokio::io::AsyncWriteExt;
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-descendants-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            for folder in ["account", "temp"] {
+                fs::create_dir_all(root.join(folder)).unwrap();
+            }
+            let old = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
+            let clock: std::sync::Arc<dyn Clock> =
+                std::sync::Arc::new(crate::os::SystemClock::default());
+            let mut launched = old
+                .launch(
+                    &crate::os::OsLauncher,
+                    clock.clone(),
+                    crate::LaunchSpec {
+                        program: "/bin/sh".into(),
+                        args: vec!["-c".into(), "read line; sleep 30 &".into()],
+                        env_set: vec![],
+                        cwd: old.sessions(),
+                        own_temp: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let group = launched.tree.pid();
+            launched.stdin.write_all(b"go\n").await.unwrap();
+            launched.tree.exited().await;
+            let mut record = Ownership::load(&old.account).unwrap();
+            record.roots[0].process = record.roots[0].processes[0].process.clone().unwrap();
+            record.save(&old.account).unwrap();
+            let next = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
+            let kept = old.root.exists();
+            unsafe {
+                libc::killpg(group as i32, libc::SIGKILL);
+            }
+            launched.tree.stop(clock).await;
+            drop(next);
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                kept,
+                "the runtime group still contains a live descendant after its leader exited"
+            );
+        })
+        .await
+        .expect("descendant recovery cap: 5 seconds; one shell and one sleep, no captured output");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recovery_keeps_a_live_runtime_tree_when_its_owner_has_ended() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-tree-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            for folder in ["account", "temp"] {
+                fs::create_dir_all(root.join(folder)).unwrap();
+            }
+            let old = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
+            let clock: std::sync::Arc<dyn Clock> =
+                std::sync::Arc::new(crate::os::SystemClock::default());
+            let launched = old
+                .launch(
+                    &crate::os::OsLauncher,
+                    clock.clone(),
+                    crate::LaunchSpec {
+                        program: "/bin/cat".into(),
+                        args: vec![],
+                        env_set: vec![],
+                        cwd: old.sessions(),
+                        own_temp: None,
+                    },
+                )
+                .await
+                .unwrap();
+            let mut owner = tokio::process::Command::new("/bin/cat")
+                .stdin(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let process = identity(owner.id().unwrap()).unwrap();
+            owner.kill().await.unwrap();
+            let mut record = Ownership::load(&old.account).unwrap();
+            record.roots[0].process = process;
+            record.save(&old.account).unwrap();
+            let next = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
+            let kept = (
+                old.root.exists(),
+                Ownership::load(&old.account).unwrap().roots.len(),
+            );
+            drop(launched.stdin);
+            launched.tree.stop(clock).await;
+            drop(next);
+            let recovered = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
+            let cleaned = !old.root.exists();
+            drop(recovered);
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                (kept, cleaned),
+                ((true, 2), true),
+                "keep the earlier live tree, then recover its files once the native tree ends"
+            );
+        })
+        .await
+        .expect("live-tree recovery cap: 5 seconds; two native children, no captured output");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cleanup_rejects_symlink_escapes_and_nonprivate_ownership_records() {
+        use std::os::unix::{
+            fs::{PermissionsExt, symlink},
+            process::CommandExt,
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-permissions-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            for folder in ["account", "temp", "outside"] {
+                fs::create_dir_all(root.join(folder)).unwrap();
+            }
+            fs::write(root.join("outside/marker"), b"keep").unwrap();
+            let old = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
+            let mut command = std::process::Command::new("/bin/cat");
+            command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .process_group(0);
+            let mut child = command.spawn().unwrap();
+            let process = identity(child.id()).unwrap();
+            child.kill().unwrap();
+            child.wait().unwrap();
+            let mut record = Ownership::load(&old.account).unwrap();
+            record.roots[0].process = process;
+            record.save(&old.account).unwrap();
+            symlink(root.join("outside"), old.sessions().join("escape")).unwrap();
+            let symlink_rejected =
+                start_temporary(&root.join("account"), &root.join("temp")).is_err();
+            let _ = fs::remove_file(old.sessions().join("escape"));
+            fs::set_permissions(
+                old.account.join("owned-temporary-files.json"),
+                fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+            let record_rejected =
+                start_temporary(&root.join("account"), &root.join("temp")).is_err();
+            let preserved = fs::read(root.join("outside/marker")).unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                (symlink_rejected, record_rejected, preserved),
+                (true, true, b"keep".to_vec()),
+                "unsafe coordination files and escaping links cannot authorize cleanup"
+            );
+        })
+        .await
+        .expect("boundary unit cap: 5 seconds; one native child, no captured output");
+    }
+
+    #[tokio::test]
+    async fn an_ownership_record_cannot_authorize_deleting_an_unrelated_folder() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-untrusted-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            for folder in ["account", "temp", "unrelated"] {
+                fs::create_dir_all(root.join(folder)).unwrap();
+            }
+            fs::write(root.join("unrelated/marker"), b"keep").unwrap();
+            let old = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
+            let mut child =
+                tokio::process::Command::new(if cfg!(windows) { "cmd.exe" } else { "/bin/cat" })
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap();
+            let process = identity(child.id().unwrap()).unwrap();
+            child.kill().await.unwrap();
+            let mut record = Ownership::load(&old.account).unwrap();
+            record.roots[0].path = root.join("unrelated");
+            record.roots[0].process = process;
+            record.save(&old.account).unwrap();
+            let result = start_temporary(&root.join("account"), &root.join("temp"));
+            let preserved = fs::read(root.join("unrelated/marker")).ok();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                result.is_err() && preserved == Some(b"keep".to_vec()),
+                "invalid ownership paths must report an error and preserve unrelated bytes"
+            );
+        })
+        .await
+        .expect("untrusted-record unit cap: 5 seconds; one child, no captured output");
+    }
+
+    #[tokio::test]
+    async fn recovery_removes_an_ended_run_even_after_the_temporary_folder_changes() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-recovery-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            for folder in ["account", "old", "new"] {
+                fs::create_dir_all(root.join(folder)).unwrap();
+            }
+            let old = start_temporary(&root.join("account"), &root.join("old")).unwrap();
+            let mut child =
+                tokio::process::Command::new(if cfg!(windows) { "cmd.exe" } else { "/bin/cat" })
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap();
+            let process = identity(child.id().unwrap()).unwrap();
+            child.kill().await.unwrap();
+            let mut record = Ownership::load(&old.account).unwrap();
+            record.roots[0].process = process;
+            record.save(&old.account).unwrap();
+            let new = start_temporary(&root.join("account"), &root.join("new")).unwrap();
+            let actual = (
+                !old.root.exists(),
+                new.root.exists(),
+                Ownership::load(&new.account).unwrap().roots.len(),
+            );
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                actual,
+                (true, true, 1),
+                "a native proof of exit permits cleanup of the recorded earlier root"
+            );
+        })
+        .await
+        .expect("recovery unit cap: 5 seconds; one native child, no captured output");
+    }
+
+    #[tokio::test]
+    async fn account_claim_records_a_private_run_under_the_canonical_account() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-owned-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            fs::create_dir_all(root.join("account/alias")).unwrap();
+            fs::create_dir_all(root.join("temp")).unwrap();
+            let env = Environment {
+                account_root: root.join("account/alias/.."),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            };
+            let clock = crate::os::SystemClock::default();
+            let mut stop = crate::os::TerminalStop;
+            let account = Account::claim(&env, &clock, &mut stop)
+                .await
+                .unwrap()
+                .unwrap();
+            let record = fs::read(env.account_root.join("owned-temporary-files.json"))
+                .ok()
+                .map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).unwrap());
+            let canonical = fs::canonicalize(&env.account_root).unwrap();
+            let expected = env.temp.join("acp2api").join(crate::hex(&Sha256::digest(
+                canonical.as_os_str().as_encoded_bytes(),
+            )));
+            let observed = record.as_ref().map(|record| {
+                let path = PathBuf::from(record["roots"][0]["path"].as_str().unwrap());
+                (
+                    path.parent().unwrap().to_path_buf(),
+                    path.join("sessions").is_dir(),
+                    path.join("processes").is_dir(),
+                )
+            });
+            drop(account);
+            fs::remove_dir_all(&root).unwrap();
+            assert_eq!(
+                record
+                    .as_ref()
+                    .map(|record| record["format"].as_u64().unwrap()),
+                Some(1),
+                "ownership format must exist before runtime launch"
+            );
+            assert_eq!(
+                observed,
+                Some((expected, true, true)),
+                "each run needs separate session and process children"
+            );
+        })
+        .await
+        .expect("account ownership unit cap: 5 seconds");
     }
 }

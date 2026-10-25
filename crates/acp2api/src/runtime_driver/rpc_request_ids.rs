@@ -57,7 +57,7 @@ impl ProcessLauncher for AgentLauncher {
 struct AgentTree;
 impl ProcessTree for AgentTree {
     fn pid(&self) -> u32 {
-        0
+        std::process::id()
     }
     fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
         Box::pin(async { ExitStatus::default() })
@@ -109,12 +109,17 @@ async fn start(root: &Root) -> (Runtime, Agent) {
             tree: Box::new(AgentTree),
         })),
     });
+    for folder in ["account", "temp"] {
+        std::fs::create_dir_all(root.0.join(folder)).unwrap();
+    }
+    let temporary =
+        crate::account::Temporary::create(&root.0.join("account"), &root.0.join("temp")).unwrap();
     let start = RuntimeStart {
         clock: ports.clock.clone(),
         launcher: ports.launcher.clone(),
         release: ports.release.clone(),
         data: root.0.clone(),
-        cwd: root.0.join("cwd"),
+        temporary,
         tool_sets: mcp::ToolSets::new(0),
     };
     let (started, ()) = tokio::join!(Runtime::start(&start, "1.4.0"), async {
@@ -255,7 +260,7 @@ async fn a_rejected_session_removes_only_its_empty_folder() {
     tokio::time::timeout(Duration::from_secs(10), async {
         let root = Root::new();
         let (mut runtime, mut agent) = start(&root).await;
-        let accepted_folder = std::fs::read_dir(root.0.join("cwd"))
+        let accepted_folder = std::fs::read_dir(&runtime.cwd)
             .unwrap()
             .next()
             .unwrap()
@@ -302,7 +307,7 @@ async fn a_rejected_session_removes_only_its_empty_folder() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn startup_keeps_the_session_root_private_and_removes_old_entries() {
+async fn runtime_start_preserves_unrecorded_temporary_entries() {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     tokio::time::timeout(Duration::from_secs(10), async {
         let root = Root::new();
@@ -324,8 +329,8 @@ async fn startup_keeps_the_session_root_private_and_removes_old_entries() {
         runtime.stop().await;
         assert_eq!(
             observed,
-            (0o700, false, false),
-            "startup preserves the private session root and removes its old entries"
+            (0o700, true, true),
+            "runtime startup cannot delete entries without an ownership record"
         );
     })
     .await

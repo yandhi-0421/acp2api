@@ -1,11 +1,9 @@
 #[cfg(test)]
 mod agent_lines;
 pub(crate) mod mcp;
-mod safety;
-mod session_folders;
-pub(crate) use session_folders::root as session_root;
 #[cfg(test)]
 mod rpc_request_ids;
+mod safety;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
@@ -24,7 +22,7 @@ pub(crate) struct RuntimeStart {
     pub(crate) launcher: Arc<dyn ProcessLauncher>,
     pub(crate) release: Arc<dyn ReleaseFacts>,
     pub(crate) data: PathBuf,
-    pub(crate) cwd: PathBuf,
+    pub(crate) temporary: crate::account::Temporary,
     pub(crate) tool_sets: mcp::ToolSets,
 }
 pub(crate) struct Runtime {
@@ -56,44 +54,26 @@ impl Runtime {
         expected_version: &str,
     ) -> Result<(Self, crate::catalog::Catalog), String> {
         let data = &start.data;
-        let cwd = start.cwd.clone();
+        let cwd = start.temporary.sessions();
         let tool_sets = start.tool_sets.clone();
-        if let Err(error) =
-            std::fs::remove_dir_all(data.join("runtime-home/antigravity-acp/conversations"))
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(error.to_string());
-        }
-        match std::fs::read_dir(&cwd) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry.map_err(|e| e.to_string())?;
-                    if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-                        std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
-                    } else {
-                        std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
-        }
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
-        let program = program(data);
-        std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
         let child = start
-            .launcher
-            .launch(LaunchSpec {
-                program,
-                args: Vec::new(),
-                env_set: vec![(
-                    "GEMINI_HOME".into(),
-                    data.join("runtime-home").into_os_string(),
-                )],
-                cwd: cwd.clone(),
-                own_temp: None,
-            })
-            .map_err(|e| format!("runtime launch: {e:?}"))?;
+            .temporary
+            .launch(
+                start.launcher.as_ref(),
+                start.clock.clone(),
+                LaunchSpec {
+                    program: program(data),
+                    args: Vec::new(),
+                    env_set: vec![(
+                        "GEMINI_HOME".into(),
+                        data.join("runtime-home").into_os_string(),
+                    )],
+                    cwd: cwd.clone(),
+                    own_temp: None,
+                },
+            )
+            .await?;
         let (tx, lines) = mpsc::channel(128);
         let (stdout_tx, clock) = (tx.clone(), start.clock.clone());
         tokio::spawn(async move {

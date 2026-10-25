@@ -71,7 +71,7 @@ impl ProcessLauncher for OneChild {
 struct NoTree;
 impl ProcessTree for NoTree {
     fn pid(&self) -> u32 {
-        0
+        std::process::id()
     }
     fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
         Box::pin(std::future::pending())
@@ -138,7 +138,7 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
                 launcher: ports.launcher.clone(),
                 release: ports.release.clone(),
                 data: root.0.clone(),
-                cwd: root.0.join("cwd"),
+                temporary: crate::account::Temporary::fixture(&root.0),
                 tool_sets: mcp::ToolSets::new(1),
             },
             "1.4.0",
