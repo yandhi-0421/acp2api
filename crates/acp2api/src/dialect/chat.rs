@@ -1,5 +1,12 @@
 use super::*;
 pub(super) struct Chat;
+fn usage(u: &Usage) -> Value {
+    json!({
+        "prompt_tokens": u.input_tokens,
+        "completion_tokens": u.output_tokens,
+        "total_tokens": u.input_tokens + u.output_tokens
+    })
+}
 impl Chat {
     fn envelope(&self, w: &Encoding, choices: Value) -> Value {
         json!({"id":w.id,"object":"chat.completion.chunk","created":w.created,"model":w.model,"choices":choices})
@@ -48,11 +55,7 @@ impl WireDialect for Chat {
                 "logprobs": null,
                 "finish_reason": finish_reason
             }],
-            "usage": {
-                "prompt_tokens": u.input_tokens,
-                "completion_tokens": u.output_tokens,
-                "total_tokens": u.input_tokens + u.output_tokens
-            }
+            "usage": usage(u)
         })
     }
     fn start(&self, _: &mut Encoding) -> Vec<Event> {
@@ -100,11 +103,7 @@ impl WireDialect for Chat {
         );
         if w.include_usage {
             let mut chunk = self.envelope(w, json!([]));
-            chunk["usage"] = json!({
-                "prompt_tokens": u.input_tokens,
-                "completion_tokens": u.output_tokens,
-                "total_tokens": u.input_tokens + u.output_tokens
-            });
+            chunk["usage"] = usage(u);
             events.push(data(chunk));
         }
         events.push(Event::default().data("[DONE]"));
