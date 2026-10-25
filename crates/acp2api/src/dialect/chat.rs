@@ -1,10 +1,14 @@
 use super::*;
 pub(super) struct Chat;
 impl Chat {
+    fn envelope(&self, w: &Encoding, choices: Value) -> Value {
+        json!({"id":w.id,"object":"chat.completion.chunk","created":w.created,"model":w.model,"choices":choices})
+    }
     fn chunk(&self, w: &Encoding, delta: Value, finish: Value) -> Event {
-        data(
-            json!({"id":w.id,"object":"chat.completion.chunk","created":w.created,"model":w.model,"choices":[{"index":0,"delta":delta,"logprobs":null,"finish_reason":finish}]}),
-        )
+        data(self.envelope(
+            w,
+            json!([{"index":0,"delta":delta,"logprobs":null,"finish_reason":finish}]),
+        ))
     }
 }
 impl WireDialect for Chat {
@@ -95,18 +99,13 @@ impl WireDialect for Chat {
             ),
         );
         if w.include_usage {
-            events.push(data(json!({
-                "id": w.id,
-                "object": "chat.completion.chunk",
-                "created": w.created,
-                "model": w.model,
-                "choices": [],
-                "usage": {
-                    "prompt_tokens": u.input_tokens,
-                    "completion_tokens": u.output_tokens,
-                    "total_tokens": u.input_tokens + u.output_tokens
-                }
-            })));
+            let mut chunk = self.envelope(w, json!([]));
+            chunk["usage"] = json!({
+                "prompt_tokens": u.input_tokens,
+                "completion_tokens": u.output_tokens,
+                "total_tokens": u.input_tokens + u.output_tokens
+            });
+            events.push(data(chunk));
         }
         events.push(Event::default().data("[DONE]"));
         events

@@ -78,7 +78,7 @@ pub(crate) struct TurnRequest {
     pub conversation: Conversation,
     pub model: String,
     pub tools: Vec<ClientTool>,
-    pub tool_text: String,
+    pub input_tokens: u64,
     pub tool_choice: ToolChoice,
 }
 pub(crate) enum PromptBlock {
@@ -292,21 +292,21 @@ pub(crate) fn user_suffix(items: &[&Item]) -> bool {
         })
 }
 
-pub(crate) fn output_tokens(text: &str) -> u64 {
+pub(crate) fn estimate_tokens(text: &str) -> u64 {
     let ascii = text.chars().filter(char::is_ascii).count() as u64;
     let other = text.chars().filter(|ch| !ch.is_ascii()).count() as u64;
     ascii.div_ceil(4) + other
 }
 
-pub(crate) fn input_tokens(turn: &TurnRequest) -> u64 {
+pub(crate) fn input_tokens(conversation: &Conversation, tool_text: &str) -> u64 {
     let mut text = String::new();
-    for part in &turn.conversation.system {
+    for part in &conversation.system {
         if let Some(name) = &part.name {
             text.push_str(name);
         }
         text.push_str(&part.text);
     }
-    for item in turn.conversation.items() {
+    for item in conversation.items() {
         let Item::Message { name, parts, .. } = item;
         if let Some(name) = name {
             text.push_str(name);
@@ -318,8 +318,8 @@ pub(crate) fn input_tokens(turn: &TurnRequest) -> u64 {
             }
         }
     }
-    text.push_str(&turn.tool_text);
-    output_tokens(&text)
+    text.push_str(tool_text);
+    estimate_tokens(&text)
 }
 
 pub(crate) struct ReplyForm {

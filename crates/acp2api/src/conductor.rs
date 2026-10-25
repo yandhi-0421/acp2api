@@ -324,7 +324,6 @@ impl Core {
             let Some(request) = self.waiting.pop_front() else {
                 break;
             };
-            let input_tokens = crate::conversation::input_tokens(&request.turn);
             let settings = Session {
                 system: crate::conversation::system_prompt_addition(
                     &request.turn.conversation.system,
@@ -386,7 +385,7 @@ impl Core {
                 disconnected: false,
                 held: None,
                 text: String::new(),
-                input_tokens,
+                input_tokens: request.turn.input_tokens,
                 phase,
                 tool_call: None,
             });
@@ -495,7 +494,7 @@ impl Core {
             }
             Usage {
                 input_tokens: active.input_tokens,
-                output_tokens: crate::conversation::output_tokens(&output),
+                output_tokens: crate::conversation::estimate_tokens(&output),
             }
         });
         if let Some(session) = &active.session {
