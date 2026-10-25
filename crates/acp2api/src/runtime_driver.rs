@@ -9,7 +9,7 @@ mod rpc_request_ids;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SessionNotification, SessionUpdate, TextContent,
+    RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -315,8 +315,9 @@ impl Runtime {
             if let Some(session) = self.prompts.remove(&id) {
                 let update = match value.get("error") {
                     Some(error) => TurnUpdate::Failed(error.to_string()),
-                    None => TurnUpdate::PromptEnded {
-                        end_turn: value["result"]["stopReason"] == "end_turn",
+                    None => match serde_json::from_value(value["result"]["stopReason"].clone()) {
+                        Ok(stop_reason) => TurnUpdate::PromptEnded { stop_reason },
+                        Err(error) => TurnUpdate::Failed(format!("ACP stop reason: {error}")),
                     },
                 };
                 return RuntimeEvent::Turn { session, update };
@@ -507,7 +508,7 @@ pub(crate) enum TurnUpdate {
     },
     UnpermittedTool(String),
     PromptEnded {
-        end_turn: bool,
+        stop_reason: StopReason,
     },
     Failed(String),
 }

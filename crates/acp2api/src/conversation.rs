@@ -173,11 +173,17 @@ pub(crate) fn prompt(
                         } else {
                             ""
                         };
-                        format!("Result of your tool call {name} {arguments}{cut}{note}:\n")
+                        format!("Result of your tool call {name} {arguments}{cut}{note}:")
                     }
-                    None => format!("Result of the tool call {id}:\n"),
+                    None => format!("Result of the tool call {id}:"),
                 };
                 prefix.push_str(&line);
+                if parts
+                    .iter()
+                    .any(|part| !matches!(part, Part::Text(text) if text.is_empty()))
+                {
+                    prefix.push('\n');
+                }
                 parts
             }
             Item::ToolCall {
@@ -444,3 +450,44 @@ pub(crate) enum TurnEvent {
     End(Result<Usage, crate::messages::Message>),
 }
 pub(crate) type Ticket = tokio::sync::mpsc::UnboundedReceiver<(TurnEvent, crate::Hold)>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_tool_result_has_no_blank_line_before_the_next_item() {
+        for parts in [vec![Part::Text(String::new())], Vec::new()] {
+            let call = Item::ToolCall {
+                id: "c".into(),
+                name: "read".into(),
+                arguments: "{}".into(),
+            };
+            let result = Item::ToolResult {
+                id: "c".into(),
+                parts,
+                error: false,
+            };
+            let next = Item::Message {
+                role: Role::User,
+                name: None,
+                parts: vec![Part::Text("Next".into())],
+            };
+            let history = [&call, &result, &next];
+            let (_, blocks) = prompt(
+                Prompt::Continue {
+                    new_items: &history[1..],
+                },
+                &history,
+            );
+            let actual: String = blocks
+                .into_iter()
+                .map(|block| match block {
+                    PromptBlock::Text(text) => text,
+                    PromptBlock::Image { .. } => panic!("no image in the request"),
+                })
+                .collect();
+            assert_eq!(actual, "Result of your tool call read {}:\n[user]\nNext");
+        }
+    }
+}

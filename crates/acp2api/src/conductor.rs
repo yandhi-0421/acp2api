@@ -65,7 +65,7 @@ struct Session {
 enum Phase {
     Preparing(Vec<crate::conversation::PromptBlock>),
     Prompt,
-    Settling { at: Moment, end_turn: bool },
+    Settling { at: Moment, can_continue: bool },
 }
 struct Active {
     output: Output,
@@ -414,10 +414,12 @@ impl Core {
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
-            TurnUpdate::PromptEnded { end_turn } => {
+            TurnUpdate::PromptEnded { stop_reason } => {
+                use agent_client_protocol_schema::v1::StopReason;
                 active.phase = Phase::Settling {
                     at: now.saturating_add(200),
-                    end_turn,
+                    can_continue: stop_reason == StopReason::EndTurn
+                        || stop_reason == StopReason::Cancelled && active.tool_call.is_some(),
                 };
             }
             TurnUpdate::Failed(error) => self.finish(
@@ -477,9 +479,17 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let mut active = self.active.remove(index);
-        let ends_turn = matches!(active.phase, Phase::Settling { end_turn: true, .. })
-            && active.tool_call.is_none();
-        let calls_tool = active.tool_call.is_some();
+        let can_continue = matches!(
+            active.phase,
+            Phase::Settling {
+                can_continue: true,
+                ..
+            }
+        );
+        let tool_hash = active
+            .tool_call
+            .as_ref()
+            .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
         let end = result.map(|()| {
             if let Some(text) = active.held.take() {
                 active.text.push_str(&text);
@@ -487,19 +497,6 @@ impl Core {
             }
             let mut output = active.text.clone();
             if let Some(call) = active.tool_call.take() {
-                if !active.text.is_empty() {
-                    active
-                        .hashes
-                        .messages
-                        .push(crate::conversation::reply_hash(&active.text));
-                }
-                active
-                    .hashes
-                    .messages
-                    .push(crate::conversation::tool_call_hash(
-                        &call.name,
-                        &call.arguments,
-                    ));
                 output.push_str(&call.arguments);
                 commands.push(Command::Emit(
                     active.output.clone(),
@@ -512,12 +509,15 @@ impl Core {
             }
         });
         if let Some(session) = &active.session {
-            if end.is_ok() && !active.disconnected && (ends_turn || calls_tool) {
-                if ends_turn {
+            if end.is_ok() && !active.disconnected && can_continue {
+                if tool_hash.is_none() || !active.text.is_empty() {
                     active
                         .hashes
                         .messages
                         .push(crate::conversation::reply_hash(&active.text));
+                }
+                if let Some(hash) = tool_hash {
+                    active.hashes.messages.push(hash);
                 }
                 self.records.push(records::Record {
                     session: session.clone(),
@@ -817,6 +817,92 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_tool_call_does_not_make_a_refused_turn_reusable() {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-tool-refusal-{}", std::process::id()));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let mut selected = Vec::new();
+        use agent_client_protocol_schema::v1::StopReason;
+        for stop_reason in [
+            StopReason::Refusal,
+            StopReason::EndTurn,
+            StopReason::Cancelled,
+        ] {
+            let turn = crate::dialect::CHAT
+                .parse(br#"{"model":"m","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[{"role":"user","content":"First"}]}"#)
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, _ticket) = mpsc::unbounded_channel();
+            let mut core = Core {
+                catalog: None,
+                active: vec![Active {
+                    output: output.clone(),
+                    request: journal.begin(crate::journal::Api::Chat, 0),
+                    session: Some("existing".into()),
+                    hashes: crate::conversation::record_hashes(&turn.conversation),
+                    tools_hash: crate::conversation::tool_set_hash(&turn.tools),
+                    kind: crate::journal::SessionUse::New,
+                    used: 1,
+                    expires: 100_000,
+                    disconnected: false,
+                    held: Some("Before".into()),
+                    text: String::new(),
+                    input_tokens: turn.input_tokens,
+                    phase: Phase::Prompt,
+                    tool_call: Some(crate::conversation::ToolCall {
+                        name: "read".into(),
+                        arguments: "{}".into(),
+                        kind: crate::conversation::ToolKind::Function,
+                        namespace: None,
+                    }),
+                }],
+                waiting: VecDeque::new(),
+                records: Vec::new(),
+                startup_session: None,
+                use_sequence: 1,
+                limit: 1,
+                notices: watch::channel(Arc::new(Vec::new())).0,
+            };
+            core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session: "existing".into(),
+                    update: TurnUpdate::PromptEnded { stop_reason },
+                }),
+                0,
+            );
+            core.handle(Event::Deadline, 200);
+            let next = crate::dialect::CHAT.parse(br#"{"model":"m","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[
+                {"role":"user","content":"First"},
+                {"role":"assistant","content":"Before","tool_calls":[{"id":"call-id","function":{"name":"read","arguments":"{}"}}]},
+                {"role":"tool","tool_call_id":"call-id","content":"Done"},
+                {"role":"user","content":"Next"}
+            ]}"#).ok().unwrap().turn;
+            selected.extend(
+                core.handle(
+                    Event::Accepted(Accepted {
+                        turn: next,
+                        request: journal.begin(crate::journal::Api::Chat, 200),
+                        output,
+                    }),
+                    200,
+                )
+                .into_iter()
+                .filter_map(|command| match command {
+                    Command::Prepare { .. } => Some("rebuild".to_owned()),
+                    Command::Prompt { session, .. } => Some(session),
+                    _ => None,
+                }),
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            selected,
+            ["rebuild", "existing", "existing"],
+            "ADR-0003 excludes a refused turn even when it returned a tool call"
+        );
+    }
     fn start_without_runtime(
         clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
@@ -922,7 +1008,13 @@ mod tests {
                 _ => None,
             }));
         };
-        let ended = |end_turn| TurnUpdate::PromptEnded { end_turn };
+        let ended = |end_turn| TurnUpdate::PromptEnded {
+            stop_reason: if end_turn {
+                agent_client_protocol_schema::v1::StopReason::EndTurn
+            } else {
+                agent_client_protocol_schema::v1::StopReason::Refusal
+            },
+        };
         turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
         turn(&mut core, "B", "s2", ended(false));
         turn(&mut core, "C", "s3", ended(true));

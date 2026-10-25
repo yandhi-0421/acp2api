@@ -371,6 +371,9 @@ fn result_parts(
     value: &Value,
     tools: &[crate::conversation::ClientTool],
 ) -> Result<Vec<Part>, Refusal> {
+    if matches!(api, Api::Messages) && value.is_null() {
+        return Ok(Vec::new());
+    }
     if value.is_string() {
         return parts(api, value, tools);
     }
@@ -678,6 +681,23 @@ fn server_tool(kind: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn messages_tool_results_allow_omitted_or_null_content() {
+        for content in ["", r#", "content":null"#] {
+            let body = format!(
+                r#"{{"model":"m","messages":[{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"empty"{content}}}]}}]}}"#
+            );
+            let actual = parse(Api::Messages, body.as_bytes())
+                .map(|parsed| match parsed.turn.conversation.last {
+                    Item::ToolResult { id, parts, error } => {
+                        (id, parts.len(), error, parsed.turn.input_tokens)
+                    }
+                    _ => panic!("expected a tool result"),
+                })
+                .map_err(|refusal| refusal.message.to_string());
+            assert_eq!(actual, Ok(("empty".into(), 0, false, 0)));
+        }
+    }
     #[test]
     fn an_ignored_tool_addition_keeps_an_otherwise_empty_user_message() {
         let body = br#"{"model":"m","tools":[{"name":"read","input_schema":{}}],"messages":[
