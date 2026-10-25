@@ -1,6 +1,7 @@
 use acp2api_acceptance::real_limit;
 use acp2api_acceptance::{
-    Scenario, Setup, TurnEndPlan, TurnPlan, TurnStep, client::ApiCall, journal_check as check,
+    Scenario, Setup, TurnEndPlan, TurnPlan, TurnStep, client::ApiCall, field_check,
+    journal_check as check,
 };
 use serde_json::{Value, json};
 fn one(s: &Scenario, result: &str, code: &str, model: Option<&str>) {
@@ -21,6 +22,8 @@ fn one(s: &Scenario, result: &str, code: &str, model: Option<&str>) {
 }
 #[tokio::test]
 async fn authorization_and_parse_refusals_have_one_metadata_only_record() {
+    let model_256_bytes = "é".repeat(128);
+    let model_257_bytes = format!("{model_256_bytes}x");
     for (unauthorized, model, expected) in [
         (false, json!("gemini-3.8-flash"), Some("gemini-3.8-flash")),
         (true, json!("gemini-3.8-flash"), Some("gemini-3.8-flash")),
@@ -28,6 +31,14 @@ async fn authorization_and_parse_refusals_have_one_metadata_only_record() {
         (true, json!("unavailable-model"), Some("unavailable-model")),
         (false, json!(null), None),
         (true, json!(17), None),
+        (
+            false,
+            json!(model_256_bytes),
+            Some(model_256_bytes.as_str()),
+        ),
+        (true, json!(model_256_bytes), Some(model_256_bytes.as_str())),
+        (true, json!(model_257_bytes), None),
+        (false, json!(model_257_bytes), None),
     ] {
         let mut s = Scenario::default();
         s.plan(Setup::normal());
@@ -60,6 +71,21 @@ async fn authorization_and_parse_refusals_have_one_metadata_only_record() {
         assert_eq!(r[0]["duration_ms"], 0);
         s.finish(true).await;
     }
+    for (model, expected) in [
+        (&model_256_bytes, Some(model_256_bytes.as_str())),
+        (&model_257_bytes, None),
+    ] {
+        let mut s = Scenario::default();
+        s.plan(Setup::normal());
+        let mut call =
+            ApiCall::one_user_message("POST /v1/chat/completions", "PRIVATE-PATH-CONTENT");
+        call.body["model"] = model.as_str().into();
+        let a = s.client().await.send(call).finish(&mut s.time).await;
+        assert_eq!(a.status, 400);
+        check::wait_terminal(&s, 1).await;
+        one(&s, "refused", "model_not_found", expected);
+        s.finish(true).await;
+    }
     for (body, code) in [
         (br#"{"messages":[]}"#.to_vec(), "invalid_request_error"),
         (
@@ -67,14 +93,13 @@ async fn authorization_and_parse_refusals_have_one_metadata_only_record() {
             "invalid_json",
         ),
         (
-            acp2api_acceptance::field_check::deep_body("POST /v1/chat/completions", 129),
+            field_check::deep_body("POST /v1/chat/completions", 129),
             "invalid_json",
         ),
     ] {
         let mut s = Scenario::default();
         s.plan(Setup::normal());
-        let a =
-            acp2api_acceptance::field_check::raw(&mut s, "POST /v1/chat/completions", body).await;
+        let a = field_check::raw(&mut s, "POST /v1/chat/completions", body).await;
         assert_eq!(a.status, 400);
         check::wait_terminal(&s, 1).await;
         one(&s, "refused", code, None);

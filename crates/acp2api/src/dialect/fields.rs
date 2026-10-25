@@ -14,6 +14,10 @@ pub(super) fn parse_json(body: &[u8]) -> Result<Value, Refusal> {
     deserializer.end().map_err(|_| Message::InvalidJson)?;
     Ok(value)
 }
+pub(crate) fn request_model(body: &[u8]) -> Option<String> {
+    let value = parse_json(body).ok()?;
+    value.get("model")?.as_str().map(str::to_owned)
+}
 fn nesting_within_max_depth(body: &[u8]) -> bool {
     let mut depth = 0_usize;
     let mut quoted = false;

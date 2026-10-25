@@ -939,7 +939,7 @@ A log holds only metadata:
 - one line for each change of state;
 - the lines that other FRs name, for example for a rebuild.
 
-For a refused request, the log line has the model name when the body parses and `model` is a string. Otherwise, it has `model: null`.
+For a refused request, the log line has the `model` value of the body when the body parses and that value is a string of at most 256 bytes. Otherwise, the log line has `model: null`.
 
 No log line, no terminal line, and no state file holds these items:
 

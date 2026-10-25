@@ -192,10 +192,11 @@ async fn input_hold(
 
 fn refuse(
     app: &App,
-    request: crate::journal::Request,
+    mut request: crate::journal::Request,
     dialect: &dyn Dialect,
     error: crate::messages::Refusal,
 ) -> axum::response::Response {
+    request.model = request.model.filter(|model| model.len() <= 256);
     let completion = crate::journal::Completion {
         request,
         session: None,

@@ -15,6 +15,7 @@ mod content;
 mod fields;
 mod messages;
 mod responses;
+pub(crate) use fields::request_model;
 pub(crate) static MESSAGES: &dyn Dialect = &messages::Messages;
 pub(crate) static RESPONSES: &dyn Dialect = &responses::Responses;
 pub(crate) static CHAT: &dyn Dialect = &chat::Chat;
@@ -23,10 +24,6 @@ pub(crate) struct Parsed {
     pub turn: TurnRequest,
     pub form: ReplyForm,
     pub unknown_fields: Vec<String>,
-}
-pub(crate) fn request_model(body: &[u8]) -> Option<String> {
-    let value = fields::parse_json(body).ok()?;
-    value.get("model")?.as_str().map(str::to_owned)
 }
 pub(crate) trait Dialect: Sync {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
