@@ -21,11 +21,19 @@ fn one(s: &Scenario, result: &str, code: &str, model: Option<&str>) {
 }
 #[tokio::test]
 async fn authorization_and_parse_refusals_have_one_metadata_only_record() {
-    for unauthorized in [false, true] {
+    for (unauthorized, model, expected) in [
+        (false, json!("gemini-3.8-flash"), Some("gemini-3.8-flash")),
+        (true, json!("gemini-3.8-flash"), Some("gemini-3.8-flash")),
+        (false, json!(""), Some("")),
+        (true, json!("unavailable-model"), Some("unavailable-model")),
+        (false, json!(null), None),
+        (true, json!(17), None),
+    ] {
         let mut s = Scenario::default();
         s.plan(Setup::normal());
         let mut call =
             ApiCall::one_user_message("POST /v1/chat/completions", "PRIVATE-PATH-CONTENT");
+        call.body["model"] = model;
         if unauthorized {
             call.headers
                 .push(("x-api-key".into(), "deliberately-wrong".into()));
@@ -43,13 +51,33 @@ async fn authorization_and_parse_refusals_have_one_metadata_only_record() {
             } else {
                 "invalid_request_error"
             },
-            None,
+            expected,
         );
         let r = check::records(&s);
         assert_eq!(r[0]["request_id"], a.headers["x-request-id"]);
         assert!(r[0]["session"].is_null());
         assert!(r[0]["session_use"].is_null());
         assert_eq!(r[0]["duration_ms"], 0);
+        s.finish(true).await;
+    }
+    for (body, code) in [
+        (br#"{"messages":[]}"#.to_vec(), "invalid_request_error"),
+        (
+            br#"{"model":"gemini-3.8-flash","messages":[]"#.to_vec(),
+            "invalid_json",
+        ),
+        (
+            acp2api_acceptance::field_check::deep_body("POST /v1/chat/completions", 129),
+            "invalid_json",
+        ),
+    ] {
+        let mut s = Scenario::default();
+        s.plan(Setup::normal());
+        let a =
+            acp2api_acceptance::field_check::raw(&mut s, "POST /v1/chat/completions", body).await;
+        assert_eq!(a.status, 400);
+        check::wait_terminal(&s, 1).await;
+        one(&s, "refused", code, None);
         s.finish(true).await;
     }
 }

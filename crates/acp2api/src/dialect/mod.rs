@@ -24,6 +24,10 @@ pub(crate) struct Parsed {
     pub form: ReplyForm,
     pub unknown_fields: Vec<String>,
 }
+pub(crate) fn request_model(body: &[u8]) -> Option<String> {
+    let value = fields::parse_json(body).ok()?;
+    value.get("model")?.as_str().map(str::to_owned)
+}
 pub(crate) trait Dialect: Sync {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
     fn refusal(&self, refusal: &Refusal) -> Response;

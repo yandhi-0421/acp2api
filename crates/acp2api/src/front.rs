@@ -7,7 +7,7 @@ use crate::{
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Extension, State, rejection::BytesRejection},
+    extract::{DefaultBodyLimit, Extension, FromRequest, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -70,9 +70,13 @@ async fn access_guard(
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let record = app.journal.begin(api, app.clock.now());
+    let mut record = app.journal.begin(api, app.clock.now());
     let id = record.id.clone();
     let mut response = if let Some(error) = access_error(request.headers(), &app) {
+        record.model = Bytes::from_request(request, &app)
+            .await
+            .ok()
+            .and_then(|body| dialect::request_model(&body));
         refuse(&app, record, dialect, error)
     } else {
         request.extensions_mut().insert(record);
@@ -124,7 +128,10 @@ async fn turn(
     };
     let parsed = match dialect.parse(&body) {
         Ok(parsed) => parsed,
-        Err(error) => return refuse(&app, request, dialect, error),
+        Err(error) => {
+            request.model = dialect::request_model(&body);
+            return refuse(&app, request, dialect, error);
+        }
     };
     request.model = Some(parsed.turn.model.clone());
     request.unknown_fields = parsed.unknown_fields;
