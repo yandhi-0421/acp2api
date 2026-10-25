@@ -307,8 +307,12 @@ impl Core {
                 *runtime = Some(started);
                 self.unavailable = None;
             }
+            Err(crate::runtime_builds::LaunchFailure::Start(error)) => {
+                let _ = change.reply.send(Err(error));
+                return;
+            }
             Err(error) => {
-                let message = builds.unavailable(&error);
+                let message = builds.unavailable(&error.to_string());
                 self.apply(
                     Event::RuntimeUnavailable(message.clone()),
                     runtime,

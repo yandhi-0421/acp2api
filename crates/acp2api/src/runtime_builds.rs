@@ -38,6 +38,28 @@ pub(crate) enum Selection {
     Notice(&'static str),
     Start(Option<PathBuf>),
 }
+#[derive(Debug)]
+pub(crate) enum LaunchFailure {
+    NoExecutable,
+    NotAccepted,
+    Start(String),
+}
+impl std::fmt::Display for LaunchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoExecutable => {
+                f.write_str("acp2api found no executable of the official runtime")
+            }
+            Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
+            Self::Start(error) => f.write_str(error),
+        }
+    }
+}
+impl From<String> for LaunchFailure {
+    fn from(error: String) -> Self {
+        Self::Start(error)
+    }
+}
 impl Builds {
     pub(crate) fn new(
         ports: &Ports,
@@ -89,28 +111,35 @@ impl Builds {
             .iter()
             .filter(|build| build.platform == self.start.release.platform())
     }
-    fn identify(&self, folder: &Path) -> Result<Option<ListedBuild>, String> {
-        let hash = |name: &str| -> Result<Option<String>, String> {
+    fn identify(&self, folder: &Path) -> Result<ListedBuild, LaunchFailure> {
+        let hash = |name: &str| -> Result<Option<String>, LaunchFailure> {
             let path = folder.join(name);
             match fs::read(&path) {
                 Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+                Err(error) => Err(LaunchFailure::Start(format!(
+                    "cannot read {}: {error}",
+                    path.display()
+                ))),
             }
         };
         let (Some(server), Some(harness)) = (hash(SERVER)?, hash(HARNESS)?) else {
-            return Ok(None);
+            return Err(LaunchFailure::NoExecutable);
         };
-        Ok(self
-            .accepted_builds()
+        self.accepted_builds()
             .find(|build| {
                 build.agy_acp_server_sha256 == server
                     && build.localharness_external_sha256 == harness
             })
-            .cloned())
+            .cloned()
+            .ok_or(LaunchFailure::NotAccepted)
     }
-    fn accepted_copy(&self) -> Option<ListedBuild> {
-        self.identify(&self.start.data.join(COPY)).ok().flatten()
+    fn accepted_copy(&self) -> Result<Option<ListedBuild>, String> {
+        match self.identify(&self.start.data.join(COPY)) {
+            Ok(build) => Ok(Some(build)),
+            Err(LaunchFailure::NoExecutable | LaunchFailure::NotAccepted) => Ok(None),
+            Err(LaunchFailure::Start(error)) => Err(error),
+        }
     }
     fn scan_places(&self, configured: Option<&Path>) {
         let mut folders = vec![self.environment.exe_dir.clone(), self.start.data.join(COPY)];
@@ -135,8 +164,12 @@ impl Builds {
             if [SERVER, HARNESS]
                 .iter()
                 .all(|name| folder.join(name).is_file())
-                && let Ok(listed) = self.identify(&folder)
             {
+                let listed = match self.identify(&folder) {
+                    Ok(build) => Some(build),
+                    Err(LaunchFailure::NotAccepted) => None,
+                    Err(LaunchFailure::NoExecutable | LaunchFailure::Start(_)) => continue,
+                };
                 found.push(Found { listed, folder });
             }
         }
@@ -149,6 +182,22 @@ impl Builds {
         configuration: &Path,
     ) -> Result<Selection, String> {
         let initial = matches!(action, Action::Initial);
+        if initial {
+            for entry in fs::read_dir(&self.start.data).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-old-")
+                    && entry
+                        .file_type()
+                        .map_err(|error| error.to_string())?
+                        .is_dir()
+                {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
         match action {
             Action::Path(path) => {
                 if !path.is_absolute() {
@@ -181,13 +230,13 @@ impl Builds {
                     .ok_or("Choose an accepted build from the search results.")?;
                 return Ok(Selection::Start(Some(selected.folder.clone())));
             }
-            Action::Initial if self.accepted_copy().is_some() => {
+            Action::Initial if self.accepted_copy()?.is_some() => {
                 return Ok(Selection::Start(None));
             }
             Action::Initial | Action::Search => {}
         }
         self.scan_places(settings.agy_acp_server_path.as_deref());
-        if !initial && self.accepted_copy().is_some() {
+        if !initial && self.accepted_copy()?.is_some() {
             return Ok(Selection::Keep);
         }
         let found = self.found.lock().unwrap();
@@ -200,7 +249,7 @@ impl Builds {
     pub(crate) async fn launch(
         &self,
         source: Option<PathBuf>,
-    ) -> Result<(Runtime, crate::catalog::Catalog), String> {
+    ) -> Result<(Runtime, crate::catalog::Catalog), LaunchFailure> {
         if let Some(source) = source {
             let copy = self.start.data.join(COPY);
             let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
@@ -217,9 +266,7 @@ impl Builds {
                         fs::copy(source.join(name), staging.join(name))
                             .map_err(|error| error.to_string())?;
                     }
-                    if self.identify(&staging)?.is_none() {
-                        return Err("no accepted copy".into());
-                    }
+                    self.identify(&staging)?;
                     let previous = copy.exists();
                     if previous {
                         fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
@@ -228,10 +275,10 @@ impl Builds {
                         if previous {
                             fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
                         }
-                        return Err(error.to_string());
+                        return Err(LaunchFailure::Start(error.to_string()));
                     }
                     if previous {
-                        fs::remove_dir_all(backup).map_err(|error| error.to_string())?;
+                        let _ = fs::remove_dir_all(backup);
                     }
                     Ok(())
                 })();
@@ -241,8 +288,17 @@ impl Builds {
                 result?;
             }
         }
-        let build = self.accepted_copy().ok_or("no accepted copy")?;
-        Runtime::start(&self.start, &build.version).await
+        let build = self
+            .identify(&self.start.data.join(COPY))
+            .map_err(|error| match error {
+                LaunchFailure::NoExecutable if !self.found.lock().unwrap().is_empty() => {
+                    LaunchFailure::NotAccepted
+                }
+                error => error,
+            })?;
+        Runtime::start(&self.start, &build.version)
+            .await
+            .map_err(LaunchFailure::Start)
     }
     pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
         let builds = self.clone();
@@ -268,14 +324,7 @@ impl Builds {
         *settings = changed;
         result
     }
-    pub(crate) fn unavailable(&self, error: &str) -> String {
-        let reason = if error != "no accepted copy" {
-            error
-        } else if self.found.lock().unwrap().is_empty() {
-            "acp2api found no executable of the official runtime"
-        } else {
-            "no build that acp2api found is an accepted version"
-        };
+    pub(crate) fn unavailable(&self, reason: &str) -> String {
         let versions = self
             .accepted_builds()
             .map(|build| build.version.clone())
@@ -289,7 +338,7 @@ impl Builds {
         )
     }
     pub(crate) fn summary(&self) -> Result<Summary, String> {
-        let current = self.accepted_copy().map(|build| build.version);
+        let current = self.accepted_copy()?.map(|build| build.version);
         let found = self.found.lock().unwrap();
         let rows = found
             .iter()
@@ -389,6 +438,124 @@ mod tests {
             Err(crate::LaunchError::Refused {
                 program: spec.program,
             })
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_later_start_removes_each_leftover_runtime_backup() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-old-copies-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in [
+            ".official-runtime-old-first",
+            ".official-runtime-old-second",
+            "owner-files",
+        ] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            fs::write(root.join(folder).join("sentinel"), b"saved").unwrap();
+        }
+        let builds = Builds::fixture(&root, Ports::production().clock);
+        let config = root.join("config.toml");
+        let mut settings = crate::store::read(&config, 3).unwrap().settings;
+        builds
+            .select(Action::Initial, &mut settings, &config)
+            .await
+            .unwrap();
+        let actual = [
+            ".official-runtime-old-first",
+            ".official-runtime-old-second",
+            "owner-files",
+        ]
+        .map(|folder| root.join(folder).join("sentinel").is_file());
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            actual,
+            [false, false, true],
+            "startup removes leftover backups and preserves other folders"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_backup_deletion_failure_keeps_the_new_copy_launchable() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-backup-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in [COPY, "source"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(root.join(folder).join(name), folder.as_bytes()).unwrap();
+            }
+        }
+        fs::set_permissions(root.join(COPY), fs::Permissions::from_mode(0o500)).unwrap();
+        let mut builds = Builds::fixture(&root, Ports::production().clock);
+        let hash = crate::hex(&Sha256::digest(b"source"));
+        builds.start.release = Arc::new(Facts(vec![ListedBuild {
+            version: "1.4.0".into(),
+            platform: builds.start.release.platform().into(),
+            agy_acp_server_sha256: hash.clone(),
+            localharness_external_sha256: hash,
+        }]));
+        let launches = Arc::new(AtomicUsize::new(0));
+        builds.start.launcher = Arc::new(RefusingLauncher(launches.clone()));
+        let _ = builds.launch(Some(root.join("source"))).await;
+        let backups: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-old-")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        for backup in &backups {
+            fs::set_permissions(backup, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let actual = (launches.load(Ordering::SeqCst), backups.len());
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            actual,
+            (1, 1),
+            "backup cleanup must not prevent launch after a successful copy swap"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn an_unreadable_copy_fails_startup_without_selecting_a_replacement() {
+        for (unreadable, readable) in [(SERVER, Some(HARNESS)), (HARNESS, None)] {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-copy-read-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            fs::create_dir_all(root.join(COPY).join(unreadable)).unwrap();
+            if let Some(readable) = readable {
+                fs::write(root.join(COPY).join(readable), b"old companion").unwrap();
+            }
+            let ports = Ports::production();
+            let builds = Builds::fixture(&root, ports.clock);
+            let config = root.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            let actual = builds
+                .select(Action::Initial, &mut settings, &config)
+                .await
+                .err();
+            let preserved = root.join(COPY).join(unreadable).is_dir();
+            fs::remove_dir_all(&root).unwrap();
+            assert!(
+                actual
+                    .as_ref()
+                    .is_some_and(|error| error.contains("cannot read")),
+                "a copy read error must fail startup, including when the other executable is missing: {actual:?}"
+            );
+            assert!(preserved, "the unreadable copy must not be replaced");
         }
     }
 
@@ -598,7 +765,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
-    async fn an_accepted_copy_reports_the_actual_launch_failure() {
+    async fn an_accepted_copy_start_failure_is_a_startup_error() {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let root = std::env::temp_dir().join(format!(
                 "acp2api-launch-reason-{}",
@@ -644,22 +811,17 @@ mod tests {
                 config,
                 3,
             );
-            conductor
+            let result = conductor
                 .builds(Action::Initial, crate::Hold::empty())
-                .await
-                .unwrap();
-            let error = conductor
-                .model_names(crate::Hold::empty())
-                .await
-                .err()
-                .unwrap();
-            let actual = error.message.to_string();
+                .await;
             drop(conductor);
             task.await.unwrap();
             fs::remove_dir_all(root).unwrap();
             assert!(
-                actual.contains("runtime launch: Refused"),
-                "M-14 must preserve the actual accepted-copy start error: {actual}"
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.to_string().contains("runtime launch: Refused")),
+                "an accepted runtime launch failure must fail startup: {result:?}"
             );
         })
         .await
