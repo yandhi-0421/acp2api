@@ -79,6 +79,7 @@ struct Active {
     disconnected: bool,
     held: Option<String>,
     text: String,
+    thought_dropped: bool,
     input_tokens: u64,
     phase: Phase,
     tool_call: Option<crate::conversation::ToolCall>,
@@ -406,6 +407,7 @@ impl Core {
                 disconnected: false,
                 held: None,
                 text: String::new(),
+                thought_dropped: false,
                 input_tokens: request.turn.input_tokens,
                 phase,
                 tool_call: None,
@@ -435,10 +437,15 @@ impl Core {
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
-            TurnUpdate::ThoughtDropped => commands.push(Command::Diagnostic(
-                active.request.clone(),
-                crate::journal::Diagnostic::DroppedThoughtText,
-            )),
+            TurnUpdate::ThoughtDropped => {
+                if !active.thought_dropped {
+                    active.thought_dropped = true;
+                    commands.push(Command::Diagnostic(
+                        active.request.clone(),
+                        crate::journal::Diagnostic::DroppedThoughtText,
+                    ));
+                }
+            }
             TurnUpdate::PromptEnded { stop_reason } => {
                 use agent_client_protocol_schema::v1::StopReason;
                 active.phase = Phase::Settling {
@@ -878,6 +885,7 @@ mod tests {
                     disconnected: false,
                     held: Some("Before".into()),
                     text: String::new(),
+                    thought_dropped: false,
                     input_tokens: turn.input_tokens,
                     phase: Phase::Prompt,
                     tool_call: Some(crate::conversation::ToolCall {

@@ -124,6 +124,11 @@ fn runtime_thought(w: &mut World, thought: String, reply: String) {
     w.request.reply = reply;
 }
 
+#[given(expr = "the official runtime also sends the thought text {string}")]
+fn another_thought(w: &mut World, thought: String) {
+    w.request.before_reply.push(TurnStep::Thought(thought));
+}
+
 #[then(expr = "the answer holds the reply {string}")]
 fn reply(w: &mut World, expected: String) {
     let answer = w.scenario.answer.as_ref().unwrap();

@@ -278,9 +278,11 @@ Feature: Request content
   @FR-018 @issue-52
   Scenario: acp2api writes one log line when it drops thought text
     Given the official runtime sends the thought text "I think so." and then the reply "Yes."
+    And the official runtime also sends the thought text "Another thought."
     When an API client sends a valid request to "POST /v1/messages"
     Then the log has one line about the dropped thought text
     And the log holds no text "I think so."
+    And the log holds no text "Another thought."
 
   @FR-018 @issue-52
   Scenario Outline: acp2api ignores thought text in a request
