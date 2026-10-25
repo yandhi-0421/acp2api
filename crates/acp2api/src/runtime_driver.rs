@@ -80,14 +80,18 @@ impl Runtime {
         tokio::spawn(async move {
             let mut stdout = BufReader::new(child.stdout).split(b'\n');
             let mut stderr = BufReader::new(child.stderr).split(b'\n');
+            let mut stdout_open = true;
             let mut stderr_open = true;
             loop {
                 // Drain buffered reply chunks before stderr can end their prompt turn.
                 let line = tokio::select! {
                     biased;
-                    line = stdout.next_segment() => match line {
+                    line = stdout.next_segment(), if stdout_open => match line {
                         Ok(Some(line)) => Line::Stdout(serde_json::from_slice(&line).map_err(|e| format!("ACP JSON: {e}"))),
-                        Ok(None) | Err(_) => Line::Closed,
+                        Ok(None) | Err(_) => {
+                            stdout_open = false;
+                            continue;
+                        }
                     },
                     line = stderr.next_segment(), if stderr_open => match line {
                         Ok(Some(line)) => Line::Stderr(line),
@@ -96,6 +100,7 @@ impl Runtime {
                             continue;
                         }
                     },
+                    else => Line::Closed,
                 };
                 let closed = matches!(line, Line::Closed);
                 let hold = clock.hold(if closed {
