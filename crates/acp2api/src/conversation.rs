@@ -2,6 +2,7 @@ pub(crate) enum Part {
     Text(String),
     Image { media_type: String, base64: String },
     Document { title: Option<String>, text: String },
+    PdfNote,
 }
 #[derive(Clone, Copy)]
 pub(crate) enum Role {
@@ -30,6 +31,16 @@ pub(crate) enum Item {
         role: Role,
         name: Option<String>,
         parts: Vec<Part>,
+    },
+    ToolResult {
+        id: String,
+        parts: Vec<Part>,
+        error: bool,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: String,
     },
 }
 pub(crate) struct Conversation {
@@ -99,7 +110,10 @@ impl Conversation {
             .collect()
     }
 }
-pub(crate) fn prompt(input: Prompt<'_>) -> (crate::journal::SessionUse, Vec<PromptBlock>) {
+pub(crate) fn prompt(
+    input: Prompt<'_>,
+    history: &[&Item],
+) -> (crate::journal::SessionUse, Vec<PromptBlock>) {
     use crate::journal::SessionUse;
     let (kind, items) = match &input {
         Prompt::New { message } => (SessionUse::New, std::slice::from_ref(message)),
@@ -117,21 +131,68 @@ pub(crate) fn prompt(input: Prompt<'_>) -> (crate::journal::SessionUse, Vec<Prom
     );
     let mut blocks = Vec::new();
     for (index, item) in items.iter().enumerate() {
-        let Item::Message { role, name, parts } = item;
-        let mut prefix = if unnamed_user {
-            String::new()
+        let mut prefix = if rebuild && index == 0 {
+            format!("{NEUTRAL}\n\n")
         } else {
-            let separator = if index == 0 { "" } else { "\n" };
-            let name = name
-                .as_ref()
-                .map(|name| format!(": {name}"))
-                .unwrap_or_default();
-            format!("{separator}[{}{name}]\n", role.label())
+            String::new()
         };
-        if rebuild && index == 0 {
-            prefix = format!("{NEUTRAL}\n\n{prefix}");
+        if index > 0 {
+            prefix.push('\n');
         }
-        for part in parts {
+        let parts = match item {
+            Item::Message { role, name, parts } => {
+                if !unnamed_user {
+                    let name = name
+                        .as_ref()
+                        .map(|name| format!(": {name}"))
+                        .unwrap_or_default();
+                    prefix.push_str(&format!("[{}{name}]\n", role.label()));
+                }
+                parts
+            }
+            Item::ToolResult { id, parts, error } => {
+                let call = history[..history.len() - items.len() + index]
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        Item::ToolCall {
+                            id: call_id,
+                            name,
+                            arguments,
+                        } if call_id == id => Some((name, arguments)),
+                        _ => None,
+                    });
+                let line = match call {
+                    Some((name, arguments)) => {
+                        let (arguments, cut) = match arguments.char_indices().nth(1000) {
+                            Some((end, _)) => (&arguments[..end], " [arguments cut]"),
+                            None => (arguments.as_str(), ""),
+                        };
+                        let note = if *error {
+                            " (the tool reported an error)"
+                        } else {
+                            ""
+                        };
+                        format!("Result of your tool call {name} {arguments}{cut}{note}:\n")
+                    }
+                    None => format!("Result of the tool call {id}:\n"),
+                };
+                prefix.push_str(&line);
+                parts
+            }
+            Item::ToolCall {
+                name, arguments, ..
+            } => {
+                blocks.push(PromptBlock::Text(format!(
+                    "{prefix}You called the tool {name} with the arguments {arguments}."
+                )));
+                continue;
+            }
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            if part_index > 0 && matches!(parts[part_index - 1], Part::PdfNote) {
+                prefix.push('\n');
+            }
             let block = match part {
                 Part::Text(text) => {
                     PromptBlock::Text(format!("{}{text}", std::mem::take(&mut prefix)))
@@ -153,6 +214,17 @@ pub(crate) fn prompt(input: Prompt<'_>) -> (crate::journal::SessionUse, Vec<Prom
                         .map(|title| format!("[document: {title}]"))
                         .unwrap_or_else(|| "[document]".into())
                 )),
+                Part::PdfNote => {
+                    if prefix.is_empty()
+                        && matches!(blocks.last(), Some(PromptBlock::Text(text)) if !text.ends_with('\n'))
+                    {
+                        prefix.push('\n');
+                    }
+                    PromptBlock::Text(format!(
+                        "{}[A PDF document was here. acp2api cannot give PDF documents to the model.]",
+                        std::mem::take(&mut prefix)
+                    ))
+                }
             };
             blocks.push(block);
         }
@@ -211,10 +283,23 @@ impl ItemHasher {
     }
 }
 fn item_hash(item: &Item) -> ItemHash {
-    let Item::Message { role, name, parts } = item;
-    let mut hash = ItemHasher::new("message");
-    hash.field(role.label());
-    hash.name(name.as_deref());
+    let (mut hash, parts) = match item {
+        Item::Message { role, name, parts } => {
+            let mut hash = ItemHasher::new("message");
+            hash.field(role.label());
+            hash.name(name.as_deref());
+            (hash, parts)
+        }
+        Item::ToolResult { id, parts, error } => {
+            let mut hash = ItemHasher::new("tool result");
+            hash.field(id);
+            hash.field(if *error { "error" } else { "success" });
+            (hash, parts)
+        }
+        Item::ToolCall {
+            name, arguments, ..
+        } => return tool_call_hash(name, arguments),
+    };
     for part in parts {
         match part {
             Part::Text(text) => {
@@ -231,8 +316,15 @@ fn item_hash(item: &Item) -> ItemHash {
                 hash.name(title.as_deref());
                 hash.text(text);
             }
+            Part::PdfNote => hash.field("pdf note"),
         }
     }
+    ItemHash(hash.finish())
+}
+pub(crate) fn tool_call_hash(name: &str, arguments: &str) -> ItemHash {
+    let mut hash = ItemHasher::new("tool call");
+    hash.text(name);
+    hash.text(arguments);
     ItemHash(hash.finish())
 }
 pub(crate) fn record_hashes(conversation: &Conversation) -> RecordHashes {
@@ -307,14 +399,26 @@ pub(crate) fn input_tokens(conversation: &Conversation, tool_text: &str) -> u64 
         text.push_str(&part.text);
     }
     for item in conversation.items() {
-        let Item::Message { name, parts, .. } = item;
-        if let Some(name) = name {
-            text.push_str(name);
-        }
+        let parts = match item {
+            Item::Message { name, parts, .. } => {
+                if let Some(name) = name {
+                    text.push_str(name);
+                }
+                parts
+            }
+            Item::ToolResult { parts, .. } => parts,
+            Item::ToolCall {
+                name, arguments, ..
+            } => {
+                text.push_str(name);
+                text.push_str(arguments);
+                continue;
+            }
+        };
         for part in parts {
             match part {
                 Part::Text(value) | Part::Document { text: value, .. } => text.push_str(value),
-                Part::Image { .. } => {}
+                Part::Image { .. } | Part::PdfNote => {}
             }
         }
     }

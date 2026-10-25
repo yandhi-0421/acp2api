@@ -19,7 +19,20 @@ pub(super) fn select<'a>(
             record.tools == tools
                 && hashes.system == record.hashes.system
                 && hashes.messages.starts_with(&record.hashes.messages)
-                && conversation::user_suffix(&items[record.hashes.messages.len()..])
+                && match (
+                    &items[record.hashes.messages.len() - 1],
+                    &items[record.hashes.messages.len()..],
+                ) {
+                    (
+                        Item::ToolCall { id, .. },
+                        [Item::ToolResult { id: result_id, .. }, following @ ..],
+                    ) => {
+                        id == result_id
+                            && (following.is_empty() || conversation::user_suffix(following))
+                    }
+                    (Item::ToolCall { .. }, _) => false,
+                    (_, following) => conversation::user_suffix(following),
+                }
         })
         .max_by_key(|(_, record)| (record.hashes.messages.len(), record.used))
         .map(|(index, record)| (index, &items[record.hashes.messages.len()..]))

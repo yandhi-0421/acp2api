@@ -346,7 +346,7 @@ impl Core {
                     conversation_items: &items,
                 },
             };
-            let (kind, prompt) = crate::conversation::prompt(prompt);
+            let (kind, prompt) = crate::conversation::prompt(prompt, &items);
             let ready = match matched {
                 Some((index, _)) => Some(self.records.remove(index).session),
                 None if settings.system.is_none() && settings.tools.is_empty() => {
@@ -479,6 +479,7 @@ impl Core {
         let mut active = self.active.remove(index);
         let ends_turn = matches!(active.phase, Phase::Settling { end_turn: true, .. })
             && active.tool_call.is_none();
+        let calls_tool = active.tool_call.is_some();
         let end = result.map(|()| {
             if let Some(text) = active.held.take() {
                 active.text.push_str(&text);
@@ -486,6 +487,19 @@ impl Core {
             }
             let mut output = active.text.clone();
             if let Some(call) = active.tool_call.take() {
+                if !active.text.is_empty() {
+                    active
+                        .hashes
+                        .messages
+                        .push(crate::conversation::reply_hash(&active.text));
+                }
+                active
+                    .hashes
+                    .messages
+                    .push(crate::conversation::tool_call_hash(
+                        &call.name,
+                        &call.arguments,
+                    ));
                 output.push_str(&call.arguments);
                 commands.push(Command::Emit(
                     active.output.clone(),
@@ -498,11 +512,13 @@ impl Core {
             }
         });
         if let Some(session) = &active.session {
-            if end.is_ok() && !active.disconnected && ends_turn {
-                active
-                    .hashes
-                    .messages
-                    .push(crate::conversation::reply_hash(&active.text));
+            if end.is_ok() && !active.disconnected && (ends_turn || calls_tool) {
+                if ends_turn {
+                    active
+                        .hashes
+                        .messages
+                        .push(crate::conversation::reply_hash(&active.text));
+                }
                 self.records.push(records::Record {
                     session: session.clone(),
                     hashes: active.hashes,
