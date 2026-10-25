@@ -86,6 +86,7 @@ pub(crate) struct ToolCall {
     pub arguments: String,
 }
 pub(crate) struct TurnRequest {
+    pub stop: Vec<String>,
     pub conversation: Conversation,
     pub model: String,
     pub effort: EffortAsk,
@@ -482,7 +483,21 @@ pub(crate) struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
+pub(crate) enum Stop {
+    EndTurn,
+    MaxTokens,
+    Sequence(String),
+}
+impl Stop {
+    pub(crate) fn sequence(&self) -> Option<&str> {
+        match self {
+            Self::Sequence(sequence) => Some(sequence),
+            Self::EndTurn | Self::MaxTokens => None,
+        }
+    }
+}
 pub(crate) enum TurnEvent {
+    Stop(Stop),
     Text(String),
     ToolCall(ToolCall),
     End(Result<Usage, crate::messages::Message>),

@@ -49,7 +49,7 @@ impl WireDialect for Messages {
             "model": w.model,
             "content": content,
             "stop_reason": stop_reason(w),
-            "stop_sequence": null,
+            "stop_sequence": w.stop.sequence(),
             "usage": {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
         })
     }
@@ -95,7 +95,7 @@ impl WireDialect for Messages {
             "message_delta",
             json!({
                 "type": "message_delta",
-                "delta": {"stop_reason": stop_reason(w), "stop_sequence": null},
+                "delta": {"stop_reason": stop_reason(w), "stop_sequence": w.stop.sequence()},
                 "usage": {"input_tokens": u.input_tokens, "output_tokens": u.output_tokens}
             }),
         ));
@@ -107,6 +107,10 @@ fn stop_reason(w: &Encoding) -> &'static str {
     if w.tool_call.is_some() {
         "tool_use"
     } else {
-        "end_turn"
+        match w.stop {
+            Stop::EndTurn => "end_turn",
+            Stop::MaxTokens => "max_tokens",
+            Stop::Sequence(_) => "stop_sequence",
+        }
     }
 }

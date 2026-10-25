@@ -88,6 +88,72 @@ struct Active {
     input_tokens: u64,
     phase: Phase,
     tool_call: Option<crate::conversation::ToolCall>,
+    stop: crate::conversation::Stop,
+    stops: Vec<String>,
+    stop_prefix: String,
+}
+impl Active {
+    fn release_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) -> bool {
+        let complete = next.is_none();
+        if !complete && self.stop.sequence().is_some() {
+            return false;
+        }
+        let mut text = std::mem::take(&mut self.stop_prefix);
+        if let Some(held) = self.held.take() {
+            text.push_str(&held);
+        }
+        let previous = text.len();
+        if let Some(next) = next {
+            self.held = Some(next);
+        }
+        let matched = self
+            .stops
+            .iter()
+            .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
+            .min_by_key(|(at, _)| *at);
+        let end = if let Some((at, _)) = &matched {
+            *at
+        } else if complete {
+            text.len()
+        } else {
+            let partial = self
+                .stops
+                .iter()
+                .flat_map(|stop| {
+                    stop.char_indices()
+                        .skip(1)
+                        .map(move |(end, _)| &stop[..end])
+                })
+                .filter(|prefix| text.ends_with(prefix))
+                .map(str::len)
+                .max()
+                .unwrap_or(0);
+            previous - partial
+        };
+        let remaining = text.split_off(end);
+        if !text.is_empty() {
+            self.text.push_str(&text);
+            commands.push(Command::Emit(self.output.clone(), TurnEvent::Text(text)));
+        }
+        if !complete {
+            self.stop_prefix = remaining;
+        }
+        let matched = matched.or_else(|| {
+            let combined = format!("{}{}", self.stop_prefix, self.held.as_deref().unwrap_or(""));
+            self.stops
+                .iter()
+                .filter_map(|stop| combined.find(stop).map(|at| (at, stop.clone())))
+                .min_by_key(|(at, _)| *at)
+        });
+        if let Some((_, stop)) = matched
+            && self.stop.sequence().is_none()
+        {
+            self.stop = crate::conversation::Stop::Sequence(stop);
+            true
+        } else {
+            false
+        }
+    }
 }
 struct Core {
     catalog: Option<crate::catalog::Catalog>,
@@ -100,7 +166,7 @@ struct Core {
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
-    Accepted(Accepted),
+    Accepted(Box<Accepted>),
     Runtime(RuntimeEvent),
     Deadline,
     Disconnected(String),
@@ -231,12 +297,12 @@ impl Core {
             request: work.request,
             output,
         };
-        Some((Event::Accepted(accepted), work.hold))
+        Some((Event::Accepted(Box::new(accepted)), work.hold))
     }
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         match event {
-            Event::Accepted(request) => self.waiting.push_back(request),
+            Event::Accepted(request) => self.waiting.push_back(*request),
             Event::DismissNotice(id) => {
                 self.notices.send_if_modified(|notices| {
                     let count = notices.len();
@@ -254,6 +320,9 @@ impl Core {
                     .find(|active| active.request.id == work)
                 {
                     active.disconnected = true;
+                    if let Some(session) = &active.session {
+                        commands.push(Command::Cancel(session.clone()));
+                    }
                 }
             }
             Event::StartFailed(work, error) => {
@@ -455,6 +524,9 @@ impl Core {
                 input_tokens: request.turn.input_tokens,
                 phase,
                 tool_call: None,
+                stop: crate::conversation::Stop::EndTurn,
+                stops: request.turn.stop,
+                stop_prefix: String::new(),
             });
         }
         commands
@@ -470,14 +542,8 @@ impl Core {
         let active = &mut self.active[index];
         match update {
             TurnUpdate::Text(text) => {
-                if active.tool_call.is_none()
-                    && let Some(previous) = active.held.replace(text)
-                {
-                    active.text.push_str(&previous);
-                    commands.push(Command::Emit(
-                        active.output.clone(),
-                        TurnEvent::Text(previous),
-                    ));
+                if active.tool_call.is_none() && active.release_reply(Some(text), commands) {
+                    commands.push(Command::Cancel(session));
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
@@ -492,10 +558,14 @@ impl Core {
             }
             TurnUpdate::PromptEnded { stop_reason } => {
                 use agent_client_protocol_schema::v1::StopReason;
+                if stop_reason == Some(StopReason::MaxTokens) && active.stop.sequence().is_none() {
+                    active.stop = crate::conversation::Stop::MaxTokens;
+                }
                 active.phase = Phase::Settling {
                     at: now.saturating_add(200),
                     result: Ok(()),
                     can_continue: stop_reason == Some(StopReason::EndTurn)
+                        || stop_reason == Some(StopReason::MaxTokens)
                         || stop_reason == Some(StopReason::Cancelled) && active.tool_call.is_some(),
                 };
             }
@@ -570,11 +640,16 @@ impl Core {
             .tool_call
             .as_ref()
             .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
+        if result.is_err() {
+            active.held = None;
+        }
+        if active.release_reply(None, commands)
+            && let Some(session) = &active.session
+        {
+            commands.push(Command::Cancel(session.clone()));
+        }
+        let can_continue = can_continue && active.stop.sequence().is_none();
         let end = result.map(|()| {
-            if let Some(text) = active.held.take() {
-                active.text.push_str(&text);
-                commands.push(Command::Emit(active.output.clone(), TurnEvent::Text(text)));
-            }
             let mut output = active.text.clone();
             if let Some(call) = active.tool_call.take() {
                 output.push_str(&call.arguments);
@@ -630,6 +705,12 @@ impl Core {
             session_use: Some(active.kind),
             outcome,
         }));
+        if end.is_ok() {
+            commands.push(Command::Emit(
+                active.output.clone(),
+                TurnEvent::Stop(active.stop),
+            ));
+        }
         commands.push(Command::Emit(active.output, TurnEvent::End(end)));
     }
 }
@@ -928,7 +1009,7 @@ mod tests {
                 notices: watch::channel(Arc::new(Vec::new())).0,
             };
             core.handle(
-                Event::Accepted(Accepted {
+                Event::Accepted(Box::new(Accepted {
                     turn,
                     model: crate::catalog::SelectedModel {
                         model: "m".into(),
@@ -937,7 +1018,7 @@ mod tests {
                     },
                     request: journal.begin(crate::journal::Api::Chat, 0),
                     output,
-                }),
+                })),
                 0,
             );
             let ended = core.handle(
@@ -1034,6 +1115,9 @@ mod tests {
                         kind: crate::conversation::ToolKind::Function,
                         namespace: None,
                     }),
+                    stop: crate::conversation::Stop::EndTurn,
+                    stops: Vec::new(),
+                    stop_prefix: String::new(),
                 }],
                 waiting: VecDeque::new(),
                 records: Vec::new(),
@@ -1058,7 +1142,7 @@ mod tests {
             ]}"#).ok().unwrap().turn;
             selected.extend(
                 core.handle(
-                    Event::Accepted(Accepted {
+                    Event::Accepted(Box::new(Accepted {
                         model: crate::catalog::SelectedModel {
                             model: "m".into(),
                             level: None,
@@ -1067,7 +1151,7 @@ mod tests {
                         turn: next,
                         request: journal.begin(crate::journal::Api::Chat, 200),
                         output,
-                    }),
+                    })),
                     200,
                 )
                 .into_iter()
@@ -1164,7 +1248,7 @@ mod tests {
             let (output, ticket) = mpsc::unbounded_channel();
             outputs.push(ticket);
             let mut commands = core.handle(
-                Event::Accepted(Accepted {
+                Event::Accepted(Box::new(Accepted {
                     model: crate::catalog::SelectedModel {
                         model: "m".into(),
                         level: None,
@@ -1173,7 +1257,7 @@ mod tests {
                     turn,
                     request,
                     output,
-                }),
+                })),
                 0,
             );
             let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
@@ -1280,7 +1364,7 @@ mod tests {
         let request = journal.begin(crate::journal::Api::Chat, 0);
         let work = request.id.clone();
         let (output, _ticket) = mpsc::unbounded_channel();
-        let accepted = Event::Accepted(Accepted {
+        let accepted = Event::Accepted(Box::new(Accepted {
             model: crate::catalog::SelectedModel {
                 model: "m".into(),
                 level: None,
@@ -1289,7 +1373,7 @@ mod tests {
             turn,
             request,
             output,
-        });
+        }));
         assert!(matches!(
             &core.handle(accepted, 0)[..],
             [Command::Prepare { .. }]

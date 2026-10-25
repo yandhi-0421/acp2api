@@ -132,6 +132,21 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         last,
     };
     let turn = TurnRequest {
+        stop: match api {
+            Api::Messages => value.get("stop_sequences"),
+            Api::Chat => value.get("stop"),
+            Api::Responses => None,
+        }
+        .map(|stop| {
+            if let Some(text) = stop.as_str() {
+                Ok(vec![text.to_owned()])
+            } else {
+                serde_json::from_value::<Vec<String>>(stop.clone())
+                    .map_err(|_| Refusal::invalid("acp2api: stop sequences must be strings."))
+            }
+        })
+        .transpose()?
+        .unwrap_or_default(),
         input_tokens: crate::conversation::input_tokens(&conversation, &tool_text),
         conversation,
         model: model.clone(),

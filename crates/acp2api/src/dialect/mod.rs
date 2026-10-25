@@ -1,6 +1,6 @@
 use crate::{
     BoxFuture, Clock, Hold,
-    conversation::{ReplyForm, Ticket, ToolChoice, TurnEvent, TurnRequest, Usage},
+    conversation::{ReplyForm, Stop, Ticket, ToolChoice, TurnEvent, TurnRequest, Usage},
     messages::{Message, Refusal, Row},
 };
 use axum::{
@@ -121,6 +121,7 @@ impl<T: WireDialect + 'static> Dialect for T {
                         let (event, hold) = state.ticket.recv().await?;
                         state.hold = Some(hold);
                         match event {
+                            TurnEvent::Stop(stop) => state.wire.stop = stop,
                             TurnEvent::Text(text) => {
                                 state.pending.extend(self.text(&mut state.wire, &text))
                             }
@@ -142,6 +143,7 @@ impl<T: WireDialect + 'static> Dialect for T {
             } else {
                 while let Some((event, _hold)) = ticket.recv().await {
                     match event {
+                        TurnEvent::Stop(stop) => wire.stop = stop,
                         TurnEvent::Text(chunk) => wire.text.push_str(&chunk),
                         TurnEvent::ToolCall(call) => wire.tool_call = Some(call),
                         TurnEvent::End(Ok(usage)) => {
@@ -165,6 +167,7 @@ struct StreamState {
     ended: bool,
 }
 struct Encoding {
+    stop: Stop,
     id: String,
     item_id: String,
     model: String,
@@ -187,6 +190,7 @@ impl Encoding {
         wall: std::time::SystemTime,
     ) -> Result<Self, String> {
         Ok(Self {
+            stop: Stop::EndTurn,
             id: identifier(prefix)?,
             item_id: identifier("msg_")?,
             model: form.model_name,

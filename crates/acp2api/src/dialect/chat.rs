@@ -8,6 +8,16 @@ fn usage(u: &Usage) -> Value {
     })
 }
 impl Chat {
+    fn finish_reason(&self, w: &Encoding) -> &'static str {
+        if w.tool_call.is_some() {
+            "tool_calls"
+        } else {
+            match w.stop {
+                Stop::EndTurn | Stop::Sequence(_) => "stop",
+                Stop::MaxTokens => "length",
+            }
+        }
+    }
     fn envelope(&self, w: &Encoding, choices: Value) -> Value {
         json!({"id":w.id,"object":"chat.completion.chunk","created":w.created,"model":w.model,"choices":choices})
     }
@@ -39,11 +49,7 @@ impl WireDialect for Chat {
                 "function": {"name": call.name, "arguments": call.arguments}
             }]);
         }
-        let finish_reason = if w.tool_call.is_some() {
-            "tool_calls"
-        } else {
-            "stop"
-        };
+        let finish_reason = self.finish_reason(w);
         json!({
             "id": w.id,
             "object": "chat.completion",
@@ -89,18 +95,7 @@ impl WireDialect for Chat {
         } else if w.text.is_empty() {
             events.push(self.chunk(w, json!({"role":"assistant","content":""}), Value::Null));
         }
-        events.push(
-            self.chunk(
-                w,
-                json!({}),
-                if w.tool_call.is_some() {
-                    "tool_calls"
-                } else {
-                    "stop"
-                }
-                .into(),
-            ),
-        );
+        events.push(self.chunk(w, json!({}), self.finish_reason(w).into()));
         if w.include_usage {
             let mut chunk = self.envelope(w, json!([]));
             chunk["usage"] = usage(u);

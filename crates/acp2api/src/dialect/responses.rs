@@ -36,7 +36,10 @@ impl Responses {
     }
     fn response(&self, w: &Encoding, usage: Option<&Usage>) -> Value {
         let status = if usage.is_some() {
-            "completed"
+            match w.stop {
+                Stop::MaxTokens => "incomplete",
+                Stop::EndTurn | Stop::Sequence(_) => "completed",
+            }
         } else {
             "in_progress"
         };
@@ -55,8 +58,7 @@ impl Responses {
             "object": "response",
             "created_at": w.created,
             "status": status,
-            "error": null,
-            "incomplete_details": null,
+            "incomplete_details": match w.stop { Stop::MaxTokens => json!({"reason":"max_output_tokens"}), Stop::EndTurn | Stop::Sequence(_) => Value::Null },
             "instructions": null,
             "max_output_tokens": null,
             "model": w.model,
@@ -175,7 +177,10 @@ impl WireDialect for Responses {
             ));
         }
         events.push(w.event(
-            "response.completed",
+            match w.stop {
+                Stop::MaxTokens => "response.incomplete",
+                Stop::EndTurn | Stop::Sequence(_) => "response.completed",
+            },
             json!({"response":self.response(w,Some(usage))}),
         ));
         events
