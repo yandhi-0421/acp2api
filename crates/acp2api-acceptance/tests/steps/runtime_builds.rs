@@ -119,6 +119,7 @@ fn absent_copy(w: &mut World) {
     "the only found build is a build for macOS x64 whose hashes are on the list of the release"
 )]
 async fn other_arch(w: &mut World) {
+    w.startup.run.as_mut().unwrap().release.builds.clear();
     build::install(w, "a folder of PATH", "1.4.0", true);
     w.startup
         .run
