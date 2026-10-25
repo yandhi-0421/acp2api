@@ -135,6 +135,7 @@ Feature: Data folder and settings
     Given acp2api is stopped
     And the owner removed the local API key "K1" from the configuration file
     And the configuration file still has the hash of the management password "P1"
+    And an accepted runtime build is available for the credential check
     When the owner starts acp2api
     Then the terminal shows a new random local API key
     And the configuration file holds that new key

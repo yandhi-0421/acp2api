@@ -25,7 +25,7 @@ pub(super) fn settings(
     highest: u8,
     notice: Option<&str>,
     notices: &[crate::conductor::Notice],
-    builds: &crate::runtime_builds::Builds,
+    builds: Result<crate::runtime_builds::Summary, String>,
 ) -> String {
     let key = escape(&settings.local_api_key);
     let options = (1..=highest)
@@ -53,8 +53,15 @@ pub(super) fn settings(
     ))
 }
 
-fn runtime(builds: &crate::runtime_builds::Builds, settings: &crate::store::Settings) -> String {
-    let crate::runtime_builds::Summary { found, newer } = match builds.summary() {
+fn runtime(
+    builds: Result<crate::runtime_builds::Summary, String>,
+    settings: &crate::store::Settings,
+) -> String {
+    let crate::runtime_builds::Summary {
+        found,
+        newer,
+        choices,
+    } = match builds {
         Ok(summary) => summary,
         Err(error) => {
             return format!(
@@ -69,13 +76,19 @@ fn runtime(builds: &crate::runtime_builds::Builds, settings: &crate::store::Sett
             format!(
                 "<li><code>{}</code> — {}</li>",
                 escape(&path.display().to_string()),
-                escape(version)
+                escape(version.as_deref().unwrap_or("Not an accepted version"))
             )
         })
         .collect::<String>();
-    let options = found
+    let options = choices
         .iter()
-        .map(|(_, version)| format!("<option>{}</option>", escape(version)))
+        .map(|(identity, version)| {
+            format!(
+                "<option value=\"{}\">{}</option>",
+                escape(identity),
+                escape(version)
+            )
+        })
         .collect::<String>();
     let newer = newer
         .map(|version| {
@@ -91,6 +104,6 @@ fn runtime(builds: &crate::runtime_builds::Builds, settings: &crate::store::Sett
         .map(|path| escape(&path.display().to_string()))
         .unwrap_or_default();
     format!(
-        r#"<section><h2>Official runtime</h2>{newer}<form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="version">{options}</select><button type="submit">Use this build</button></form></section>"#
+        r#"<section><h2>Official runtime</h2>{newer}<form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
     )
 }

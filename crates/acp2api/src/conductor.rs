@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub(crate) struct Conductor {
     send: mpsc::Sender<Input>,
     stopping: watch::Sender<bool>,
+    builds: crate::runtime_builds::Builds,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
     notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
@@ -36,20 +37,12 @@ impl Notice {
         )
     }
 }
-struct BuildRequest {
-    builds: Box<crate::runtime_builds::Builds>,
-    action: crate::runtime_builds::Action,
-    reply: oneshot::Sender<Result<String, String>>,
-}
 struct Replacement {
-    builds: Box<crate::runtime_builds::Builds>,
     reply: oneshot::Sender<Result<String, String>>,
     source: Option<std::path::PathBuf>,
-    notice: String,
 }
 enum Input {
     Builds {
-        builds: Box<crate::runtime_builds::Builds>,
         action: crate::runtime_builds::Action,
         reply: oneshot::Sender<Result<String, String>>,
         hold: Hold,
@@ -229,6 +222,12 @@ enum RuntimeState {
 }
 struct Core {
     runtime_state: RuntimeState,
+    unavailable: Option<String>,
+    changes: VecDeque<(
+        crate::runtime_builds::Action,
+        oneshot::Sender<Result<String, String>>,
+    )>,
+    replacement: Option<Replacement>,
     catalog: Option<crate::catalog::Catalog>,
     work: WorkTable,
     next_work: WorkId,
@@ -277,6 +276,55 @@ enum Command {
     Forget(String),
 }
 impl Core {
+    async fn apply(
+        &mut self,
+        event: Event,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+    ) {
+        let mut commands = self.handle(event, clock.now()).into();
+        Conductor::commands(self, runtime, read_open, clock, journal, &mut commands).await;
+    }
+    async fn replace(
+        &mut self,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+        publish: &watch::Sender<Arc<crate::store::Settings>>,
+    ) {
+        let change = self.replacement.take().unwrap();
+        if let Some(old) = runtime.take() {
+            old.stop().await;
+        }
+        self.replaced(None, None);
+        match builds.launch(change.source).await {
+            Ok((started, catalog)) => {
+                self.replaced(Some(started.session_id().into()), Some(catalog));
+                *runtime = Some(started);
+                self.unavailable = None;
+            }
+            Err(error) => {
+                let message = builds.unavailable(&error);
+                self.apply(
+                    Event::RuntimeUnavailable(message.clone()),
+                    runtime,
+                    read_open,
+                    clock,
+                    journal,
+                )
+                .await;
+                self.unavailable = Some(message);
+            }
+        }
+        *read_open = runtime.is_some();
+        let configured = publish.borrow().agy_acp_server_path.clone();
+        let result = builds.discover(configured).await.map(|()| String::new());
+        let _ = change.reply.send(result);
+    }
     fn replacement_ready(&self) -> bool {
         matches!(self.runtime_state, RuntimeState::Retiring)
             && !self.work.values().any(Work::occupies_place)
@@ -438,7 +486,9 @@ impl Core {
                     }));
                     commands.push(Command::Emit(
                         request.output,
-                        TurnEvent::End(Err(crate::messages::Message::Unavailable(message.clone()))),
+                        TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(
+                            message.clone(),
+                        ))),
                     ));
                 }
             }
@@ -980,7 +1030,7 @@ impl Core {
 }
 impl Conductor {
     pub(crate) fn start(
-        started: Option<(Runtime, crate::catalog::Catalog)>,
+        mut builds: crate::runtime_builds::Builds,
         clock: Arc<dyn Clock>,
         journal: crate::journal::Journal,
         settings: crate::store::Settings,
@@ -989,16 +1039,20 @@ impl Conductor {
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Input>(32);
         let (stopping, mut stopped) = watch::channel(false);
-        let runtime_stop = stopping.clone();
+        builds.start.stopped = stopping.subscribe();
+        let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let task = tokio::spawn(async move {
-            let (mut runtime, catalog) = started.unzip();
+            let mut runtime: Option<Runtime> = None;
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
-                startup_session: runtime.as_ref().map(|runtime| runtime.session_id().into()),
-                catalog,
+                unavailable: None,
+                changes: VecDeque::new(),
+                replacement: None,
+                startup_session: None,
+                catalog: None,
                 records: Vec::new(),
                 use_sequence: 0,
                 limit,
@@ -1007,107 +1061,68 @@ impl Conductor {
                 notices,
             };
             let mut read_open = runtime.is_some();
-            let mut unavailable = None::<String>;
-            let mut changes = VecDeque::<BuildRequest>::new();
-            let mut replacement = None::<Replacement>;
             loop {
                 if *stopped.borrow() {
                     break;
                 }
-                if core.replacement_ready()
-                    && let Some(change) = replacement.take()
-                {
-                    if let Some(old) = runtime.take() {
-                        old.stop().await;
-                    }
-                    core.replaced(None, None);
-                    match change.builds.launch(change.source).await {
-                        Ok((started, catalog)) => {
-                            core.replaced(Some(started.session_id().into()), Some(catalog));
-                            runtime = Some(started);
-                            unavailable = None;
-                        }
-                        Err(error) => {
-                            let message = change.builds.unavailable(&error);
-                            let mut commands = core
-                                .handle(Event::RuntimeUnavailable(message.clone()), clock.now())
-                                .into();
-                            Self::commands(
-                                &mut core,
-                                &mut runtime,
-                                &mut read_open,
-                                &clock,
-                                &journal,
-                                &mut commands,
-                            )
-                            .await;
-                            unavailable = Some(message);
-                        }
-                    }
-                    read_open = runtime.is_some();
-                    let result = change
-                        .builds
-                        .after_start(&publish.borrow())
-                        .map(|()| change.notice);
-                    let _ = change.reply.send(result);
+                if core.replacement_ready() && core.replacement.is_some() {
+                    core.replace(
+                        &mut runtime,
+                        &mut read_open,
+                        &clock,
+                        &journal,
+                        &actor_builds,
+                        &publish,
+                    )
+                    .await;
                 }
-                if replacement.is_none() {
-                    while let Some(request) = changes.pop_front() {
+                if core.replacement.is_none() {
+                    while let Some((action, reply)) = core.changes.pop_front() {
                         let mut changed = (**publish.borrow()).clone();
-                        match request
-                            .builds
-                            .select(request.action, &mut changed, &configuration)
+                        match actor_builds
+                            .select(action, &mut changed, &configuration)
+                            .await
                         {
                             Err(error) => {
-                                let _ = request.reply.send(Err(error));
+                                let _ = reply.send(Err(error));
                             }
-                            Ok((selection, notice)) => {
+                            Ok(selection) => {
                                 publish.send_replace(Arc::new(changed));
                                 match selection {
                                     crate::runtime_builds::Selection::Keep => {
-                                        let result = request
-                                            .builds
-                                            .after_start(&publish.borrow())
-                                            .map(|()| notice);
-                                        let _ = request.reply.send(result);
+                                        let _ = reply.send(Ok(String::new()));
+                                    }
+                                    crate::runtime_builds::Selection::Notice(notice) => {
+                                        let _ = reply.send(Ok(notice.into()));
                                     }
                                     crate::runtime_builds::Selection::Start(source) => {
-                                        let mut commands =
-                                            core.handle(Event::RetireRuntime, clock.now()).into();
-                                        Self::commands(
-                                            &mut core,
+                                        core.apply(
+                                            Event::RetireRuntime,
                                             &mut runtime,
                                             &mut read_open,
                                             &clock,
                                             &journal,
-                                            &mut commands,
                                         )
                                         .await;
-                                        replacement = Some(Replacement {
-                                            builds: request.builds,
-                                            reply: request.reply,
-                                            source,
-                                            notice,
-                                        });
+                                        core.replacement = Some(Replacement { reply, source });
                                         break;
                                     }
                                 }
                             }
                         }
                     }
-                    if replacement.is_some() && core.replacement_ready() {
+                    if core.replacement.is_some() && core.replacement_ready() {
                         continue;
                     }
-                    if replacement.is_none() && matches!(core.runtime_state, RuntimeState::Retiring)
+                    if core.replacement.is_none()
+                        && matches!(core.runtime_state, RuntimeState::Retiring)
                     {
-                        let mut commands = core.handle(Event::ResumeRuntime, clock.now()).into();
-                        Self::commands(
-                            &mut core,
+                        core.apply(
+                            Event::ResumeRuntime,
                             &mut runtime,
                             &mut read_open,
                             &clock,
                             &journal,
-                            &mut commands,
                         )
                         .await;
                     }
@@ -1137,19 +1152,14 @@ impl Conductor {
                             break;
                         };
                         match work {
-                            Input::Builds { mut builds, action, reply, hold } => {
-                                builds.start.stopped = runtime_stop.subscribe();
-                                changes.push_back(BuildRequest { builds, action, reply });
+                            Input::Builds { action, reply, hold } => {
+                                core.changes.push_back((action, reply));
                                 drop(hold);
                                 continue;
                             }
                             Input::Models { reply, hold } => {
-                                let result = match &unavailable {
-                                    Some(message) => {
-                                        let mut error: crate::messages::Refusal = crate::messages::Message::Unavailable(message.clone()).into();
-                                        error.hold = clock.hold(HoldKind::TurnEvent);
-                                        Err(error)
-                                    }
+                                let result = match &core.unavailable {
+                                    Some(message) => Err(unavailable_refusal(message, clock.as_ref())),
                                     None => Ok(core.model_entries()),
                                 };
                                 let _ = reply.send(result);
@@ -1181,9 +1191,8 @@ impl Conductor {
                                 continue;
                             }
                             Input::Turn(work) => {
-                                if let Some(message) = &unavailable {
-                                    let mut error: crate::messages::Refusal = crate::messages::Message::Unavailable(message.clone()).into();
-                                    error.hold = clock.hold(HoldKind::TurnEvent);
+                                if let Some(message) = &core.unavailable {
+                                    let error = unavailable_refusal(message, clock.as_ref());
                                     if work.admission.send(Err(error)).is_err() {
                                         journal.complete(crate::journal::Completion { request: work.request, session: None, session_use: None, outcome: crate::journal::Outcome::Disconnected }, clock.as_ref());
                                     }
@@ -1206,16 +1215,8 @@ impl Conductor {
                     }
                     hold = deadline(timer) => (Event::Deadline, hold),
                 };
-                let mut commands: VecDeque<_> = core.handle(event, clock.now()).into();
-                Self::commands(
-                    &mut core,
-                    &mut runtime,
-                    &mut read_open,
-                    &clock,
-                    &journal,
-                    &mut commands,
-                )
-                .await;
+                core.apply(event, &mut runtime, &mut read_open, &clock, &journal)
+                    .await;
                 drop(hold);
             }
             if let Some(runtime) = runtime {
@@ -1226,6 +1227,7 @@ impl Conductor {
             Self {
                 send,
                 stopping,
+                builds,
                 settings: settings_watch,
                 notices: notices_watch,
                 highest,
@@ -1312,6 +1314,9 @@ impl Conductor {
             }
         }
     }
+    pub(crate) fn builds_summary(&self) -> Result<crate::runtime_builds::Summary, String> {
+        self.builds.summary()
+    }
     pub(crate) fn stop(&self) {
         self.stopping.send_replace(true);
     }
@@ -1323,7 +1328,6 @@ impl Conductor {
     }
     pub(crate) async fn builds(
         &self,
-        builds: crate::runtime_builds::Builds,
         action: crate::runtime_builds::Action,
         hold: Hold,
     ) -> Result<String, String> {
@@ -1331,7 +1335,6 @@ impl Conductor {
         let request = async {
             self.send
                 .send(Input::Builds {
-                    builds: Box::new(builds),
                     action,
                     reply,
                     hold,
@@ -1410,6 +1413,12 @@ async fn deadline(timer: Option<crate::BoxFuture<'static, Hold>>) -> Hold {
         None => std::future::pending().await,
     }
 }
+fn unavailable_refusal(message: &str, clock: &dyn Clock) -> crate::messages::Refusal {
+    let mut refusal: crate::messages::Refusal =
+        crate::messages::Message::RuntimeUnavailable(message.into()).into();
+    refusal.hold = clock.hold(HoldKind::TurnEvent);
+    refusal
+}
 fn stopped<T>(_: T) -> crate::messages::Refusal {
     crate::messages::Message::Upstream("conductor stopped".into()).into()
 }
@@ -1426,6 +1435,9 @@ mod tests {
     ) {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            unavailable: None,
+            changes: VecDeque::new(),
+            replacement: None,
             catalog: None,
             work: BTreeMap::new(),
             next_work: 0,
@@ -1539,7 +1551,7 @@ mod tests {
             let mut facts = Vec::new();
             for (label, version, folder) in [("old", "1.4.0", root.join("official-runtime")), ("new", "1.5.0", root.join("new-build"))] {
                 std::fs::create_dir_all(&folder).unwrap();
-                for name in crate::runtime_builds::names() { std::fs::write(folder.join(name), label.as_bytes()).unwrap(); }
+                for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(folder.join(name), label.as_bytes()).unwrap(); }
                 let hash = crate::hex(&Sha256::digest(label.as_bytes()));
                 facts.push(ListedBuild { version: version.into(), platform: Facts(Vec::new()).platform().into(), agy_acp_server_sha256: hash.clone(), localharness_external_sha256: hash });
                 let (product, agent) = tokio::io::duplex(65536);
@@ -1589,18 +1601,17 @@ mod tests {
             ports.launcher = Arc::new(Launcher(Mutex::new(children), trace.clone()));
             let environment = crate::Environment { account_root: root.join("account"), temp: root.join("temp"), home: None, local_app_data: None, path: vec![], exe_dir: root.join("new-build") };
             let builds = crate::runtime_builds::Builds::new(&ports, environment, root.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), 0);
-            let (runtime, catalog) = builds.launch(None).await.unwrap();
             let config = root.join("config.toml");
             let settings = crate::store::read(&config, 1).unwrap().settings;
-            builds.after_start(&settings).unwrap();
-            let journal = crate::journal::Journal::prepare().unwrap();
-            journal.open_writer(&root.join("logs"), ports.clock.wall()).unwrap();
-            let (conductor, task) = Conductor::start(Some((runtime, catalog)), ports.clock.clone(), journal.clone(), settings, config, 1);
+            let choice = crate::runtime_builds::identity(&ports.release.listed_builds()[1]);
+            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 1);
+            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
             let parse = |system: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"system","content":system},{"role":"user","content":"request"}]})).unwrap()).ok().unwrap().turn;
             let mut a = conductor.admit(parse("A"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
             prompting_a.notified().await;
             let (reply, owner) = oneshot::channel();
-            conductor.send.send(Input::Builds { builds: Box::new(builds), action: crate::runtime_builds::Action::Build("1.5.0".into()), reply, hold: Hold::empty() }).await.unwrap();
+            conductor.send.send(Input::Builds { action: crate::runtime_builds::Action::Build(choice), reply, hold: Hold::empty() }).await.unwrap();
             let mut b = conductor.admit(parse("B"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
             let waiting = trace.lock().unwrap().clone();
             let deferred = !waiting.iter().any(|event| event == "stop:old" || event == "launch:new");
@@ -1631,7 +1642,11 @@ mod tests {
 
     #[test]
     fn a_failed_replacement_ends_queued_requests_with_runtime_unavailable() {
-        let journal = crate::journal::Journal::prepare().unwrap();
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-core-build-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, _, tickets) = prompting_with_waiter(&journal);
         core.handle(Event::RetireRuntime, 1);
         let message = "acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.";
@@ -1641,7 +1656,7 @@ mod tests {
             .filter_map(|command| match command {
                 Command::Emit(
                     _,
-                    TurnEvent::End(Err(crate::messages::Message::Unavailable(text))),
+                    TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(text))),
                 ) => Some(text.as_str()),
                 _ => None,
             })
@@ -1651,12 +1666,17 @@ mod tests {
             [message],
             "queued requests must receive M-14 when a planned replacement fails"
         );
+        std::fs::remove_dir_all(folder).unwrap();
         drop(tickets);
     }
 
     #[test]
     fn a_build_change_finishes_a_before_preparing_b_on_the_new_runtime() {
-        let journal = crate::journal::Journal::prepare().unwrap();
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-core-build-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, queued, tickets) = prompting_with_waiter(&journal);
         let id = core.by_request(&queued).unwrap();
         let mut b = core.work.remove(&id).unwrap().into_queued().unwrap();
@@ -1702,6 +1722,7 @@ mod tests {
                 ),
             "after replacement B is prepared with no ACP record from the old process"
         );
+        std::fs::remove_dir_all(folder).unwrap();
         drop(tickets);
     }
 
@@ -1887,6 +1908,9 @@ mod tests {
         let (output, ticket) = mpsc::unbounded_channel();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            unavailable: None,
+            changes: VecDeque::new(),
+            replacement: None,
             catalog: None,
             work: BTreeMap::new(),
             next_work: 0,
@@ -1989,6 +2013,9 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
+                unavailable: None,
+                changes: VecDeque::new(),
+                replacement: None,
                 catalog: None,
                 work: BTreeMap::new(),
                 next_work: 0,
@@ -2084,6 +2111,9 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
+                unavailable: None,
+                changes: VecDeque::new(),
+                replacement: None,
                 catalog: None,
                 work: BTreeMap::from([(
                     0,
@@ -2176,7 +2206,7 @@ mod tests {
         };
         let configuration = folder.join("config.toml");
         Conductor::start(
-            None,
+            crate::runtime_builds::Builds::fixture(folder, clock.clone()),
             clock.clone(),
             journal.clone(),
             settings,
@@ -2190,6 +2220,9 @@ mod tests {
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            unavailable: None,
+            changes: VecDeque::new(),
+            replacement: None,
             catalog: Some(catalog),
             work: BTreeMap::new(),
             next_work: 0,
@@ -2218,6 +2251,9 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            unavailable: None,
+            changes: VecDeque::new(),
+            replacement: None,
             catalog: None,
             work: BTreeMap::new(),
             next_work: 0,
@@ -2308,6 +2344,9 @@ mod tests {
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            unavailable: None,
+            changes: VecDeque::new(),
+            replacement: None,
             catalog: None,
             work: BTreeMap::new(),
             next_work: 0,
@@ -2347,6 +2386,9 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            unavailable: None,
+            changes: VecDeque::new(),
+            replacement: None,
             catalog: None,
             work: BTreeMap::new(),
             next_work: 0,
@@ -2400,7 +2442,7 @@ mod tests {
             std::env::temp_dir().join(format!("acp2api-no-runtime-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
-        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
         let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
         let body = br#"{"model":"gemini-3.8-flash","reasoning_effort":"extreme","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
@@ -2424,7 +2466,7 @@ mod tests {
             .await
             .ok()
             .map(|entries| entries.len());
-        let lines: String = std::fs::read_dir(&folder)
+        let lines: String = std::fs::read_dir(folder.join("logs"))
             .unwrap()
             .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
             .collect();
@@ -2446,7 +2488,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("acp2api-conductor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&folder);
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
-        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
         let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = || crate::dialect::CHAT.parse(body).ok().unwrap().turn;
@@ -2466,7 +2508,7 @@ mod tests {
             .unwrap();
         let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request());
         assert!(next.await.is_ok(), "the conductor serves the next request");
-        let lines: String = std::fs::read_dir(&folder)
+        let lines: String = std::fs::read_dir(folder.join("logs"))
             .unwrap()
             .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
             .collect();

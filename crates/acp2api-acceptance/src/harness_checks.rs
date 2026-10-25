@@ -371,25 +371,10 @@ async fn initialize_reports_each_running_fake_descriptor_version() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let s = world();
     let run = s.root.seed(&s.hub, &Setup::normal());
-    let program = if cfg!(windows) {
-        "agy_acp_server.exe"
-    } else {
-        "agy_acp_server.par"
-    };
-    let descriptor = if cfg!(windows) {
-        "localharness_external.exe"
-    } else {
-        "localharness_external"
-    };
+    let program = crate::build_fixture::SERVER;
     let original = s.root.path.join("data/official-runtime");
     let other = s.root.path.join("builds/version-1.5.0");
-    std::fs::create_dir(&other).unwrap();
-    std::fs::copy(original.join(program), other.join(program)).unwrap();
-    let text = std::fs::read_to_string(original.join(descriptor))
-        .unwrap()
-        .replace("version = \"1.4.0\"", "version = \"1.5.0\"")
-        .replace("label = \"normal\"", "label = \"version-1.5.0\"");
-    std::fs::write(other.join(descriptor), text).unwrap();
+    crate::build_fixture::install(&original, &other, "1.5.0", "version-1.5.0").unwrap();
     let launcher = GuardedLauncher::new(&run.fake_program, run.hub);
     let mut children = Vec::new();
     for (folder, label, version) in [

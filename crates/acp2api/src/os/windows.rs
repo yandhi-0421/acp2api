@@ -77,22 +77,54 @@ pub(super) fn account_root() -> PathBuf {
 }
 
 pub(super) fn private_file(path: &std::path::Path) -> io::Result<std::fs::File> {
-    private_path(path, false).map(|file| file.expect("private file"))
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::{
+        Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE},
+        Storage::FileSystem::{CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL},
+    };
+    private_path(path, "", |path, attributes| unsafe {
+        let handle = CreateFileW(
+            path,
+            GENERIC_WRITE,
+            0,
+            attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            ptr::null_mut(),
+        );
+        if handle == INVALID_HANDLE_VALUE {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(std::fs::File::from_raw_handle(handle.cast()))
+        }
+    })
 }
 pub(crate) fn private_folder(path: &std::path::Path) -> io::Result<()> {
-    private_path(path, true).map(|_| ())
+    private_path(path, "OICI", |path, attributes| unsafe {
+        if windows_sys::Win32::Storage::FileSystem::CreateDirectoryW(path, attributes) == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })
 }
-fn private_path(path: &std::path::Path, directory: bool) -> io::Result<Option<std::fs::File>> {
-    use std::os::windows::{ffi::OsStrExt, io::FromRawHandle};
+fn private_path<T>(
+    path: &std::path::Path,
+    inheritance: &str,
+    create: impl FnOnce(
+        *const u16,
+        *const windows_sys::Win32::Security::SECURITY_ATTRIBUTES,
+    ) -> io::Result<T>,
+) -> io::Result<T> {
+    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::{
-        Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE, LocalFree},
+        Foundation::LocalFree,
         Security::{
             Authorization::{
                 ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
             },
             GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
         },
-        Storage::FileSystem::{CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL},
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     };
     struct Local(*mut core::ffi::c_void);
@@ -133,8 +165,7 @@ fn private_path(path: &std::path::Path, directory: bool) -> io::Result<Option<st
             len += 1;
         }
         let sid_text = String::from_utf16_lossy(std::slice::from_raw_parts(sid, len));
-        let inherit = if directory { "OICI" } else { "" };
-        let descriptor: Vec<u16> = format!("O:{sid_text}D:P(A;{inherit};FA;;;{sid_text})")
+        let descriptor: Vec<u16> = format!("O:{sid_text}D:P(A;{inheritance};FA;;;{sid_text})")
             .encode_utf16()
             .chain(Some(0))
             .collect();
@@ -156,28 +187,9 @@ fn private_path(path: &std::path::Path, directory: bool) -> io::Result<Option<st
             bInheritHandle: 0,
         };
         let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        if directory {
-            use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
-            let created = CreateDirectoryW(path.as_ptr(), &attributes);
-            let error = io::Error::last_os_error();
-            drop(allocation);
-            return if created != 0 { Ok(None) } else { Err(error) };
-        }
-        let handle = CreateFileW(
-            path.as_ptr(),
-            GENERIC_WRITE,
-            0,
-            &attributes,
-            CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL,
-            ptr::null_mut(),
-        );
-        let error = io::Error::last_os_error();
+        let result = create(path.as_ptr(), &attributes);
         drop(allocation);
-        if handle == INVALID_HANDLE_VALUE {
-            return Err(error);
-        }
-        Ok(Some(std::fs::File::from_raw_handle(handle.cast())))
+        result
     }
 }
 

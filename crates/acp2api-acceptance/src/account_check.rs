@@ -74,11 +74,11 @@ impl Instance {
             self.hub.clone(),
         )
     }
-    pub fn spawn(&mut self) {
+    pub fn spawn(&mut self, host: &str) {
         assert!(self.child.is_none());
         let path = self.root.path.join("account-run.toml");
         fs::write(&path, toml::to_string(&self.run).unwrap()).unwrap();
-        let mut command = Command::new(binary("acp2api-test-host"));
+        let mut command = Command::new(binary(host));
         command
             .env_clear()
             .env(TIME_FACTOR_ENV, time_factor().to_string());
@@ -240,18 +240,20 @@ impl AccountState {
         self.instances[index].observe().await;
     }
     fn spawn(&mut self, index: usize, temp: &str) {
+        self.spawn_host(index, temp, "acp2api-test-host");
+    }
+    fn spawn_host(&mut self, index: usize, temp: &str, host: &str) {
         let temp = self.instances[0].root.path.join("temps").join(temp);
         fs::create_dir_all(&temp).unwrap();
         self.instances[index].run.environment.temp = temp;
-        self.instances[index].spawn();
+        self.instances[index].spawn(host);
     }
     pub async fn launch_waiting(&mut self, index: usize, temp: &str) {
         self.spawn(index, temp);
         self.instances[index].observe_pending_start().await;
     }
     pub async fn hold_first(&mut self) {
-        self.instances[0].run.hold_account_first = true;
-        self.spawn(0, "T1");
+        self.spawn_host(0, "T1", "acp2api-held-test-host");
         let deadline = Instant::now() + real_limit(Duration::from_secs(8));
         while !self.instances[0]
             .hub

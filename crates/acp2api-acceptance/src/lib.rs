@@ -1,5 +1,6 @@
 #![allow(clippy::disallowed_methods)]
 pub mod adapters;
+pub mod build_fixture;
 pub mod client;
 pub mod fake;
 pub mod hub;

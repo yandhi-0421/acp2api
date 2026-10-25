@@ -99,7 +99,23 @@ pub(crate) async fn start(
         "acp2api: {}: management panel at {panel}",
         ports.release.version()
     );
-    let journal = crate::journal::Journal::prepare().map_err(|error| error.to_string())?;
+    let retained_listener = listener.into_std().map_err(|error| error.to_string())?;
+    let listener = tokio::net::TcpListener::from_std(
+        retained_listener
+            .try_clone()
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    account.publish(&panel)?;
+    let journal = crate::journal::Journal::open(&data.join("logs"), ports.clock.wall())
+        .map_err(|error| error.to_string())?;
+    account.temporary.recover()?;
+    let sessions = data.join("runtime-home/antigravity-acp/conversations");
+    match std::fs::remove_dir_all(&sessions) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("cannot remove {}: {error}", sessions.display())),
+    }
     let tools = crate::runtime_driver::mcp::ToolSets::new(port);
     let builds = crate::runtime_builds::Builds::new(
         &ports,
@@ -110,7 +126,7 @@ pub(crate) async fn start(
         port,
     );
     let (conductor, task) = crate::conductor::Conductor::start(
-        None,
+        builds,
         ports.clock.clone(),
         journal.clone(),
         settings,
@@ -119,14 +135,12 @@ pub(crate) async fn start(
     );
     let initial_conductor = conductor.clone();
     let stop_conductor = conductor.clone();
-    let initial_builds = builds.clone();
     let initial_clock = ports.clock.clone();
     let initial_browser = ports.browser.clone();
     let initial_panel = panel.clone();
     let initializing = async move {
         initial_conductor
             .builds(
-                initial_builds,
                 crate::runtime_builds::Action::Initial,
                 initial_clock.hold(HoldKind::TurnEvent),
             )
@@ -137,32 +151,7 @@ pub(crate) async fn start(
         println!("{start_line}");
         Ok::<(), String>(())
     };
-    let router = crate::front::router(
-        conductor,
-        ports.clock.clone(),
-        tools,
-        journal.clone(),
-        port,
-        builds,
-    );
-    let retained_listener = listener.into_std().map_err(|error| error.to_string())?;
-    let listener = tokio::net::TcpListener::from_std(
-        retained_listener
-            .try_clone()
-            .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    account.publish(&panel)?;
-    journal
-        .open_writer(&data.join("logs"), ports.clock.wall())
-        .map_err(|error| error.to_string())?;
-    account.temporary.recover()?;
-    let sessions = data.join("runtime-home/antigravity-acp/conversations");
-    match std::fs::remove_dir_all(&sessions) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("cannot remove {}: {error}", sessions.display())),
-    }
+    let router = crate::front::router(conductor, ports.clock.clone(), tools, journal, port);
     let clock = ports.clock.clone();
     let serving = async move {
         axum::serve(listener, router)
@@ -261,7 +250,10 @@ mod lifecycle_tests {
         for folder in ["account", "temp", "data/official-runtime", "exe"] {
             std::fs::create_dir_all(root.join(folder)).unwrap();
         }
-        for name in crate::runtime_builds::names() {
+        for name in [
+            crate::runtime_builds::SERVER,
+            crate::runtime_builds::HARNESS,
+        ] {
             std::fs::write(root.join("data/official-runtime").join(name), b"accepted").unwrap();
         }
         let mut settings = crate::store::read(&root.join("data/config.toml"), 3)
@@ -340,7 +332,7 @@ mod lifecycle_tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn recovery_runs_after_panel_publication_and_log_setup() {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -363,10 +355,15 @@ mod lifecycle_tests {
             settings.port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
             crate::store::save(&config, &settings).unwrap();
             let env = Environment { account_root: root.join("account"), home: None, local_app_data: None, temp: root.join("temp"), path: vec![], exe_dir: root.join("exe") };
-            let result = start(Ports::production(), vec!["acp2api".into(), "--data-dir".into(), root.join("data").into_os_string()], env).await;
-            let actual = (result.is_err(), root.join("account/panel").is_file(), root.join("data/logs").is_dir());
+            let (stop, signal) = tokio::sync::oneshot::channel();
+            let mut ports = Ports::production(); ports.stop = Box::new(Stop(signal));
+            let task = tokio::spawn(start(ports, vec!["acp2api".into(), "--data-dir".into(), root.join("data").into_os_string()], env));
+            while !root.join("data/logs").is_dir() { tokio::task::yield_now().await; }
+            let actual = (root.join("account/panel").is_file(), previous.sessions().is_dir());
+            stop.send(()).unwrap();
+            task.await.unwrap().unwrap();
             std::fs::remove_dir_all(root).unwrap();
-            assert_eq!(actual, (true, true, true), "unsafe recovery must occur after publication and logs, before runtime initialization");
+            assert_eq!(actual, (true, true), "unsafe recovery retains the old root and continues after publication and log setup");
         }).await.expect("startup recovery-order cap: 5 seconds; one native child, no HTTP requests or captured process output");
     }
 

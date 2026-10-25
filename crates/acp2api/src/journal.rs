@@ -241,7 +241,7 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
 #[derive(Clone)]
 pub(crate) struct Journal(std::sync::Arc<JournalState>);
 struct JournalState {
-    writer: std::sync::Mutex<Option<Writer>>,
+    writer: std::sync::Mutex<Writer>,
     prefix: String,
     sequence: std::sync::atomic::AtomicU64,
 }
@@ -404,37 +404,20 @@ impl Journal {
             .writer
             .lock()
             .map_err(|_| io::Error::other("journal writer failed"))?;
-        writer
-            .as_mut()
-            .expect("logs opened before requests")
-            .write(record)?;
+        writer.write(record)?;
         use std::io::Write;
         let mut terminal = std::io::stdout().lock();
         writeln!(terminal, "acp2api: {}", serde_json::to_string(record)?)?;
         terminal.flush()
     }
-    pub(crate) fn prepare() -> io::Result<Self> {
+    pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
+        let writer = Writer::open(folder, wall)?;
         let prefix = crate::random_hex::<8>().map_err(io::Error::other)?;
         Ok(Self(std::sync::Arc::new(JournalState {
-            writer: std::sync::Mutex::new(None),
+            writer: std::sync::Mutex::new(writer),
             prefix,
             sequence: std::sync::atomic::AtomicU64::new(1),
         })))
-    }
-    pub(crate) fn open_writer(&self, folder: &Path, wall: SystemTime) -> io::Result<()> {
-        let writer = Writer::open(folder, wall)?;
-        *self
-            .0
-            .writer
-            .lock()
-            .map_err(|_| io::Error::other("journal writer failed"))? = Some(writer);
-        Ok(())
-    }
-    #[cfg(test)]
-    pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
-        let journal = Self::prepare()?;
-        journal.open_writer(folder, wall)?;
-        Ok(journal)
     }
     pub(crate) fn begin(&self, api: Api, started: crate::Moment) -> Request {
         let n = self

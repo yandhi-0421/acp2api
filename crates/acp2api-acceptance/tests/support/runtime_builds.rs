@@ -2,7 +2,6 @@ use crate::World;
 use acp2api_acceptance::{
     client::{ApiCall, ApiClient},
     panel_check,
-    setup::binary,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -19,18 +18,10 @@ pub struct BuildState {
 pub const CHANGED_COPY_LABEL: &str = "n0rmal";
 
 pub fn program() -> &'static str {
-    if cfg!(windows) {
-        "agy_acp_server.exe"
-    } else {
-        "agy_acp_server.par"
-    }
+    acp2api_acceptance::build_fixture::SERVER
 }
 pub fn descriptor() -> &'static str {
-    if cfg!(windows) {
-        "localharness_external.exe"
-    } else {
-        "localharness_external"
-    }
+    acp2api_acceptance::build_fixture::HARNESS
 }
 pub fn hash(path: &Path) -> String {
     Sha256::digest(fs::read(path).unwrap())
@@ -87,26 +78,18 @@ pub fn place(w: &World, name: &str) -> PathBuf {
 }
 pub fn install(w: &mut World, name: &str, version: &str, listed: bool) -> PathBuf {
     let folder = place(w, name);
-    fs::create_dir_all(&folder).unwrap();
-    fs::copy(binary("fake-acp-agent"), folder.join(program())).unwrap();
-    let original = fs::read_to_string(
-        w.startup
-            .root()
-            .path
-            .join("builds/normal")
-            .join(descriptor()),
+    let label = if version == "1.4.0" {
+        "normal".into()
+    } else {
+        format!("build-{version}")
+    };
+    acp2api_acceptance::build_fixture::install(
+        &w.startup.root().path.join("builds/normal"),
+        &folder,
+        version,
+        &label,
     )
     .unwrap();
-    let text = original.replace("version = \"1.4.0\"", &format!("version = \"{version}\""));
-    let text = if version == "1.4.0" {
-        text
-    } else {
-        text.replace(
-            "label = \"normal\"",
-            &format!("label = \"build-{version}\""),
-        )
-    };
-    fs::write(folder.join(descriptor()), text).unwrap();
     if listed {
         let run = w.startup.run.as_mut().unwrap();
         run.release.builds.push(acp2api::ListedBuild {

@@ -23,7 +23,8 @@ struct Found {
     listed: Option<ListedBuild>,
 }
 pub(crate) struct Summary {
-    pub(crate) found: Vec<(PathBuf, String)>,
+    pub(crate) found: Vec<(PathBuf, Option<String>)>,
+    pub(crate) choices: Vec<(String, String)>,
     pub(crate) newer: Option<String>,
 }
 pub(crate) enum Action {
@@ -34,6 +35,7 @@ pub(crate) enum Action {
 }
 pub(crate) enum Selection {
     Keep,
+    Notice(&'static str),
     Start(Option<PathBuf>),
 }
 impl Builds {
@@ -60,37 +62,58 @@ impl Builds {
             found: Arc::default(),
         }
     }
-    fn identify(&self, folder: &Path) -> Result<Option<ListedBuild>, String> {
-        let mut hashes = Vec::new();
-        for name in names() {
-            let path = folder.join(name);
-            match fs::read(&path) {
-                Ok(bytes) => hashes.push(crate::hex(&Sha256::digest(bytes))),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
-            }
-        }
-        Ok(self
-            .start
+    #[cfg(test)]
+    pub(crate) fn fixture(root: &Path, clock: Arc<dyn crate::Clock>) -> Self {
+        let mut ports = Ports::production();
+        ports.clock = clock;
+        Self::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            },
+            root.into(),
+            crate::account::Temporary::fixture(root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            0,
+        )
+    }
+    fn accepted_builds(&self) -> impl Iterator<Item = &ListedBuild> {
+        self.start
             .release
             .listed_builds()
             .iter()
+            .filter(|build| build.platform == self.start.release.platform())
+    }
+    fn identify(&self, folder: &Path) -> Result<Option<ListedBuild>, String> {
+        let hash = |name: &str| -> Result<Option<String>, String> {
+            let path = folder.join(name);
+            match fs::read(&path) {
+                Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+            }
+        };
+        let (Some(server), Some(harness)) = (hash(SERVER)?, hash(HARNESS)?) else {
+            return Ok(None);
+        };
+        Ok(self
+            .accepted_builds()
             .find(|build| {
-                build.agy_acp_server_sha256 == hashes[0]
-                    && build.localharness_external_sha256 == hashes[1]
+                build.agy_acp_server_sha256 == server
+                    && build.localharness_external_sha256 == harness
             })
             .cloned())
     }
-    pub(crate) fn accepted_copy(&self) -> Result<Option<ListedBuild>, String> {
-        Ok(self
-            .identify(&self.start.data.join("official-runtime"))?
-            .filter(|build| build.platform == self.start.release.platform()))
+    fn accepted_copy(&self) -> Option<ListedBuild> {
+        self.identify(&self.start.data.join(COPY)).ok().flatten()
     }
-    fn discover(&self, configured: Option<&Path>) -> Result<(), String> {
-        let mut folders = vec![
-            self.environment.exe_dir.clone(),
-            self.start.data.join("official-runtime"),
-        ];
+    fn scan_places(&self, configured: Option<&Path>) {
+        let mut folders = vec![self.environment.exe_dir.clone(), self.start.data.join(COPY)];
         folders.extend(self.environment.path.iter().cloned());
         if let Some(path) = configured
             && let Some(folder) = path.parent()
@@ -109,21 +132,22 @@ impl Builds {
         folders.dedup();
         let mut found = Vec::new();
         for folder in folders {
-            if names().iter().all(|name| folder.join(name).is_file())
+            if [SERVER, HARNESS]
+                .iter()
+                .all(|name| folder.join(name).is_file())
                 && let Ok(listed) = self.identify(&folder)
             {
                 found.push(Found { listed, folder });
             }
         }
         *self.found.lock().unwrap() = found;
-        Ok(())
     }
-    pub(crate) fn select(
+    fn select_blocking(
         &self,
         action: Action,
         settings: &mut Settings,
         configuration: &Path,
-    ) -> Result<(Selection, String), String> {
+    ) -> Result<Selection, String> {
         let initial = matches!(action, Action::Initial);
         match action {
             Action::Path(path) => {
@@ -132,9 +156,11 @@ impl Builds {
                 }
                 if !path
                     .parent()
-                    .is_some_and(|folder| folder.join(names()[1]).is_file())
+                    .is_some_and(|folder| folder.join(HARNESS).is_file())
                 {
-                    return Ok((Selection::Keep, "This folder has no localharness_external, so acp2api did not use this path.".into()));
+                    return Ok(Selection::Notice(
+                        "This folder has no localharness_external, so acp2api did not use this path.",
+                    ));
                 }
                 if !path.is_file() {
                     return Err("This path has no agy_acp_server.".into());
@@ -142,52 +168,41 @@ impl Builds {
                 settings.agy_acp_server_path = Some(path);
                 crate::store::save(configuration, settings)?;
             }
-            Action::Build(version) => {
+            Action::Build(choice) => {
                 let found = self.found.lock().unwrap();
                 let selected = found
                     .iter()
                     .find(|found| {
-                        found.listed.as_ref().is_some_and(|build| {
-                            build.version == version
-                                && build.platform == self.start.release.platform()
-                        })
+                        found
+                            .listed
+                            .as_ref()
+                            .is_some_and(|build| identity(build) == choice)
                     })
                     .ok_or("Choose an accepted build from the search results.")?;
-                return Ok((
-                    Selection::Start(Some(selected.folder.clone())),
-                    String::new(),
-                ));
+                return Ok(Selection::Start(Some(selected.folder.clone())));
             }
-            Action::Initial if self.accepted_copy()?.is_some() => {
-                return Ok((Selection::Start(None), String::new()));
+            Action::Initial if self.accepted_copy().is_some() => {
+                return Ok(Selection::Start(None));
             }
             Action::Initial | Action::Search => {}
         }
-        self.discover(settings.agy_acp_server_path.as_deref())?;
-        if !initial && self.accepted_copy()?.is_some() {
-            return Ok((Selection::Keep, String::new()));
+        self.scan_places(settings.agy_acp_server_path.as_deref());
+        if !initial && self.accepted_copy().is_some() {
+            return Ok(Selection::Keep);
         }
         let found = self.found.lock().unwrap();
         let best = found
             .iter()
-            .filter(|found| {
-                found
-                    .listed
-                    .as_ref()
-                    .is_some_and(|build| build.platform == self.start.release.platform())
-            })
+            .filter(|found| found.listed.is_some())
             .max_by_key(|found| version(&found.listed.as_ref().unwrap().version));
-        Ok((
-            Selection::Start(best.map(|found| found.folder.clone())),
-            String::new(),
-        ))
+        Ok(Selection::Start(best.map(|found| found.folder.clone())))
     }
     pub(crate) async fn launch(
         &self,
         source: Option<PathBuf>,
     ) -> Result<(Runtime, crate::catalog::Catalog), String> {
         if let Some(source) = source {
-            let copy = self.start.data.join("official-runtime");
+            let copy = self.start.data.join(COPY);
             let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
             if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
                 let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
@@ -198,15 +213,11 @@ impl Builds {
                     .join(format!(".official-runtime-old-{suffix}"));
                 fs::create_dir(&staging).map_err(|error| error.to_string())?;
                 let result = (|| {
-                    for name in names() {
+                    for name in [SERVER, HARNESS] {
                         fs::copy(source.join(name), staging.join(name))
                             .map_err(|error| error.to_string())?;
                     }
-                    if self
-                        .identify(&staging)?
-                        .filter(|build| build.platform == self.start.release.platform())
-                        .is_none()
-                    {
+                    if self.identify(&staging)?.is_none() {
                         return Err("no accepted copy".into());
                     }
                     let previous = copy.exists();
@@ -230,11 +241,32 @@ impl Builds {
                 result?;
             }
         }
-        let build = self.accepted_copy()?.ok_or("no accepted copy")?;
+        let build = self.accepted_copy().ok_or("no accepted copy")?;
         Runtime::start(&self.start, &build.version).await
     }
-    pub(crate) fn after_start(&self, settings: &Settings) -> Result<(), String> {
-        self.discover(settings.agy_acp_server_path.as_deref())
+    pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
+        let builds = self.clone();
+        tokio::task::spawn_blocking(move || builds.scan_places(configured.as_deref()))
+            .await
+            .map_err(|error| error.to_string())
+    }
+    pub(crate) async fn select(
+        &self,
+        action: Action,
+        settings: &mut Settings,
+        configuration: &Path,
+    ) -> Result<Selection, String> {
+        let builds = self.clone();
+        let mut changed = settings.clone();
+        let configuration = configuration.to_path_buf();
+        let (result, changed) = tokio::task::spawn_blocking(move || {
+            let result = builds.select_blocking(action, &mut changed, &configuration);
+            (result, changed)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        *settings = changed;
+        result
     }
     pub(crate) fn unavailable(&self, error: &str) -> String {
         let reason = if error != "no accepted copy" {
@@ -245,11 +277,7 @@ impl Builds {
             "no build that acp2api found is an accepted version"
         };
         let versions = self
-            .start
-            .release
-            .listed_builds()
-            .iter()
-            .filter(|build| build.platform == self.start.release.platform())
+            .accepted_builds()
             .map(|build| build.version.clone())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -261,18 +289,14 @@ impl Builds {
         )
     }
     pub(crate) fn summary(&self) -> Result<Summary, String> {
-        let current = self.accepted_copy()?.map(|build| build.version);
+        let current = self.accepted_copy().map(|build| build.version);
         let found = self.found.lock().unwrap();
         let rows = found
             .iter()
             .map(|found| {
                 (
-                    found.folder.join(names()[0]),
-                    found
-                        .listed
-                        .as_ref()
-                        .map(|build| build.version.clone())
-                        .unwrap_or_else(|| "Not an accepted version".into()),
+                    found.folder.join(SERVER),
+                    found.listed.as_ref().map(|build| build.version.clone()),
                 )
             })
             .collect();
@@ -280,14 +304,30 @@ impl Builds {
             found
                 .iter()
                 .filter_map(|found| found.listed.as_ref())
-                .filter(|build| {
-                    build.platform == self.start.release.platform()
-                        && version(&build.version) > version(current)
-                })
+                .filter(|build| version(&build.version) > version(current))
                 .max_by_key(|build| version(&build.version))
                 .map(|build| build.version.clone())
         });
-        Ok(Summary { found: rows, newer })
+        let choices = found
+            .iter()
+            .filter_map(|found| {
+                found.listed.as_ref().map(|build| {
+                    (
+                        identity(build),
+                        format!(
+                            "{} — {}",
+                            build.version,
+                            found.folder.join(SERVER).display()
+                        ),
+                    )
+                })
+            })
+            .collect();
+        Ok(Summary {
+            found: rows,
+            newer,
+            choices,
+        })
     }
 }
 fn scan(path: &Path, folders: &mut Vec<PathBuf>) {
@@ -301,12 +341,20 @@ fn scan(path: &Path, folders: &mut Vec<PathBuf>) {
         }
     }
 }
-pub(crate) fn names() -> [&'static str; 2] {
-    if cfg!(windows) {
-        ["agy_acp_server.exe", "localharness_external.exe"]
-    } else {
-        ["agy_acp_server.par", "localharness_external"]
-    }
+pub(crate) const COPY: &str = "official-runtime";
+#[cfg(windows)]
+pub(crate) const SERVER: &str = "agy_acp_server.exe";
+#[cfg(not(windows))]
+pub(crate) const SERVER: &str = "agy_acp_server.par";
+#[cfg(windows)]
+pub(crate) const HARNESS: &str = "localharness_external.exe";
+#[cfg(not(windows))]
+pub(crate) const HARNESS: &str = "localharness_external";
+pub(crate) fn identity(build: &ListedBuild) -> String {
+    format!(
+        "{}:{}",
+        build.agy_acp_server_sha256, build.localharness_external_sha256
+    )
 }
 fn version(text: &str) -> Vec<u64> {
     text.split('.')
@@ -346,6 +394,70 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
+    async fn owner_selects_a_build_by_hashes_when_versions_match() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-build-identity-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let mut ports = Ports::production();
+        let mut listed = Vec::new();
+        for label in ["first", "second"] {
+            fs::create_dir_all(root.join(label)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(root.join(label).join(name), label.as_bytes()).unwrap();
+            }
+            let hash = crate::hex(&Sha256::digest(label.as_bytes()));
+            listed.push(ListedBuild {
+                version: "1.4.0".into(),
+                platform: ports.release.platform().into(),
+                agy_acp_server_sha256: hash.clone(),
+                localharness_external_sha256: hash,
+            });
+        }
+        let choice = format!(
+            "{}:{}",
+            listed[1].agy_acp_server_sha256, listed[1].localharness_external_sha256
+        );
+        ports.release = Arc::new(Facts(listed));
+        let builds = Builds::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![root.join("first"), root.join("second")],
+                exe_dir: root.join("exe"),
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            0,
+        );
+        let config = root.join("config.toml");
+        let mut settings = crate::store::read(&config, 3).unwrap().settings;
+        builds
+            .discover(settings.agy_acp_server_path.clone())
+            .await
+            .unwrap();
+        let selected = builds
+            .select(Action::Build(choice), &mut settings, &config)
+            .await
+            .ok()
+            .and_then(|selection| match selection {
+                Selection::Start(path) => path,
+                Selection::Keep | Selection::Notice(_) => None,
+            });
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            selected,
+            Some(root.join("second")),
+            "equal versions do not identify a build; the executable pair does"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn a_failed_copy_preserves_the_previous_executables_and_removes_staging() {
         let root = std::env::temp_dir().join(format!(
             "acp2api-staged-copy-{}",
@@ -354,11 +466,11 @@ mod tests {
         for folder in ["official-runtime", "source"] {
             fs::create_dir_all(root.join(folder)).unwrap();
         }
-        for name in names() {
-            fs::write(root.join("official-runtime").join(name), b"old").unwrap();
+        for name in [SERVER, HARNESS] {
+            fs::write(root.join(COPY).join(name), b"old").unwrap();
         }
-        fs::write(root.join("source").join(names()[0]), b"new").unwrap();
-        fs::create_dir(root.join("source").join(names()[1])).unwrap();
+        fs::write(root.join("source").join(SERVER), b"new").unwrap();
+        fs::create_dir(root.join("source").join(HARNESS)).unwrap();
         let ports = Ports::production();
         let builds = Builds::new(
             &ports,
@@ -376,7 +488,7 @@ mod tests {
             0,
         );
         let failed = builds.launch(Some(root.join("source"))).await.is_err();
-        let bytes = names().map(|name| fs::read(root.join("official-runtime").join(name)).unwrap());
+        let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
         let staging = fs::read_dir(&root)
             .unwrap()
             .flatten()
@@ -395,9 +507,54 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     #[allow(clippy::disallowed_methods)]
-    fn search_skips_an_unreadable_place_and_keeps_other_results() {
+    async fn rejected_staging_hashes_preserve_the_accepted_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-staged-hashes-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in [COPY, "source"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(
+                    root.join(folder).join(name),
+                    if folder == COPY { b"old" } else { b"new" },
+                )
+                .unwrap();
+            }
+        }
+        let mut builds = Builds::fixture(&root, Ports::production().clock);
+        let hash = crate::hex(&Sha256::digest(b"old"));
+        builds.start.release = Arc::new(Facts(vec![ListedBuild {
+            version: "1.4.0".into(),
+            platform: builds.start.release.platform().into(),
+            agy_acp_server_sha256: hash.clone(),
+            localharness_external_sha256: hash,
+        }]));
+        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
+        let staging = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-")
+            })
+            .count();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            (failed, bytes, staging),
+            (true, [b"old".to_vec(), b"old".to_vec()], 0),
+            "unaccepted replacement hashes must preserve the accepted executable pair and remove staging"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn search_skips_an_unreadable_place_and_keeps_other_results() {
         let root = std::env::temp_dir().join(format!(
             "acp2api-search-error-{}",
             crate::random_hex::<12>().unwrap()
@@ -409,7 +566,7 @@ mod tests {
         )
         .unwrap();
         fs::create_dir(root.join("exe")).unwrap();
-        for name in names() {
+        for name in [SERVER, HARNESS] {
             fs::write(root.join("exe").join(name), b"found").unwrap();
         }
         let ports = Ports::production();
@@ -430,7 +587,7 @@ mod tests {
         );
         let config = root.join("config.toml");
         let mut settings = crate::store::read(&config, 3).unwrap().settings;
-        let result = builds.select(Action::Search, &mut settings, &config);
+        let result = builds.select(Action::Search, &mut settings, &config).await;
         let found = builds.summary().unwrap().found;
         fs::remove_dir_all(root).unwrap();
         assert!(
@@ -447,9 +604,9 @@ mod tests {
                 "acp2api-launch-reason-{}",
                 crate::random_hex::<12>().unwrap()
             ));
-            fs::create_dir_all(root.join("official-runtime")).unwrap();
-            for name in names() {
-                fs::write(root.join("official-runtime").join(name), b"accepted").unwrap();
+            fs::create_dir_all(root.join(COPY)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(root.join(COPY).join(name), b"accepted").unwrap();
             }
             let hash = crate::hex(&Sha256::digest(b"accepted"));
             let mut ports = Ports::production();
@@ -480,7 +637,7 @@ mod tests {
             let journal =
                 crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
             let (conductor, task) = crate::conductor::Conductor::start(
-                None,
+                builds.clone(),
                 ports.clock.clone(),
                 journal,
                 settings,
@@ -488,7 +645,7 @@ mod tests {
                 3,
             );
             conductor
-                .builds(builds, Action::Initial, crate::Hold::empty())
+                .builds(Action::Initial, crate::Hold::empty())
                 .await
                 .unwrap();
             let error = conductor
@@ -522,13 +679,13 @@ mod tests {
                 "acp2api-own-copy-{}",
                 crate::random_hex::<12>().unwrap()
             ));
-            let copy = root.join("official-runtime");
+            let copy = root.join(COPY);
             fs::create_dir_all(&copy).unwrap();
             let original = [
                 b"official executable".as_slice(),
                 b"official companion".as_slice(),
             ];
-            for (name, bytes) in names().into_iter().zip(original) {
+            for (name, bytes) in [SERVER, HARNESS].into_iter().zip(original) {
                 fs::write(copy.join(name), bytes).unwrap();
             }
             let mut ports = Ports::production();
@@ -558,15 +715,23 @@ mod tests {
             );
             let config = root.join("config.toml");
             let mut settings = crate::store::read(&config, 3).unwrap().settings;
-            builds.after_start(&settings).unwrap();
-            let (Selection::Start(source), _) = builds
-                .select(Action::Build("1.4.0".into()), &mut settings, &config)
+            builds
+                .discover(settings.agy_acp_server_path.clone())
+                .await
+                .unwrap();
+            let Selection::Start(source) = builds
+                .select(
+                    Action::Build(identity(&builds.start.release.listed_builds()[0])),
+                    &mut settings,
+                    &config,
+                )
+                .await
                 .unwrap()
             else {
                 panic!("the listed build must be selectable")
             };
             let _ = builds.launch(source).await;
-            let observed = names().map(|name| fs::read(copy.join(name)).unwrap());
+            let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());
             fs::remove_dir_all(&root).unwrap();
             assert_eq!(
                 launches.load(Ordering::SeqCst),

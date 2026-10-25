@@ -33,6 +33,7 @@ Feature: Start of acp2api
   @FR-005 @FR-009 @issue-55
   Scenario: A first start makes a local API key and a management password and shows them
     Given the data folder "D" is empty
+    And an accepted runtime build is available for the credential check
     When the owner starts acp2api with the data folder "D"
     Then acp2api makes the configuration file in "D"
     And the terminal shows the address of the management panel, the local API key, and the management password

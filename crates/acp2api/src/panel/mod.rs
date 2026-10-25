@@ -25,19 +25,13 @@ struct Session {
 #[derive(Clone)]
 struct Panel {
     conductor: Conductor,
-    builds: crate::runtime_builds::Builds,
     clock: Arc<dyn Clock>,
     port: u16,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     logins: Arc<tokio::sync::Semaphore>,
 }
-pub(crate) fn router(
-    conductor: Conductor,
-    clock: Arc<dyn Clock>,
-    port: u16,
-    builds: crate::runtime_builds::Builds,
-) -> Router {
-    let panel = Panel::new(conductor, clock, port, builds);
+pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> Router {
+    let panel = Panel::new(conductor, clock, port);
     Router::new()
         .route("/", get(index))
         .route("/manage/login", post(login))
@@ -53,15 +47,9 @@ pub(crate) fn router(
         .with_state(panel)
 }
 impl Panel {
-    fn new(
-        conductor: Conductor,
-        clock: Arc<dyn Clock>,
-        port: u16,
-        builds: crate::runtime_builds::Builds,
-    ) -> Self {
+    fn new(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> Self {
         Self {
             conductor,
-            builds,
             clock,
             port,
             sessions: Arc::default(),
@@ -102,7 +90,7 @@ impl Panel {
             self.conductor.highest,
             Some(notice),
             &self.conductor.notices(),
-            &self.builds,
+            self.conductor.builds_summary(),
         );
         (status, Html(page)).into_response()
     }
@@ -166,7 +154,7 @@ async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
             panel.conductor.highest,
             None,
             &panel.conductor.notices(),
-            &panel.builds,
+            panel.conductor.builds_summary(),
         )
     } else {
         page::login(None)
@@ -289,11 +277,7 @@ async fn dismiss_notice(State(panel): State<Panel>, Form(form): Form<DismissNoti
 async fn runtime_action(panel: Panel, action: crate::runtime_builds::Action) -> Response {
     match panel
         .conductor
-        .builds(
-            panel.builds.clone(),
-            action,
-            panel.clock.hold(crate::HoldKind::TurnEvent),
-        )
+        .builds(action, panel.clock.hold(crate::HoldKind::TurnEvent))
         .await
     {
         Ok(notice) => panel.page(StatusCode::OK, &notice),
@@ -316,29 +300,16 @@ async fn runtime_path(State(panel): State<Panel>, Form(form): Form<RuntimePath>)
 }
 #[derive(Deserialize)]
 struct Build {
-    version: String,
+    build: String,
 }
 async fn build(State(panel): State<Panel>, Form(form): Form<Build>) -> Response {
-    runtime_action(panel, crate::runtime_builds::Action::Build(form.version)).await
+    runtime_action(panel, crate::runtime_builds::Action::Build(form.build)).await
 }
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    fn test_panel(conductor: Conductor, clock: Arc<dyn Clock>, folder: &std::path::Path) -> Panel {
-        let mut ports = crate::Ports::production();
-        ports.clock = clock.clone();
-        let builds = crate::runtime_builds::Builds::new(
-            &ports,
-            crate::Environment::from_process(),
-            folder.into(),
-            crate::account::Temporary::fixture(folder),
-            crate::runtime_driver::mcp::ToolSets::new(8329),
-            8329,
-        );
-        Panel::new(conductor, clock, 8329, builds)
-    }
     #[tokio::test]
     async fn a_failed_save_and_an_unusable_value_keep_the_settings_page() {
         let folder = std::env::temp_dir().join(format!("acp2api-save-{}", std::process::id()));
@@ -355,14 +326,14 @@ mod tests {
         let unsaveable_configuration = folder.join("config.toml");
         std::fs::create_dir(&unsaveable_configuration).unwrap();
         let (conductor, _task) = Conductor::start(
-            None,
+            crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
             clock.clone(),
             journal,
             settings,
             unsaveable_configuration,
             1,
         );
-        let panel = test_panel(conductor, clock, &folder);
+        let panel = Panel::new(conductor, clock, 8329);
         let empty = Password {
             password: String::new(),
         };
@@ -398,9 +369,15 @@ mod tests {
             agy_acp_server_path: None,
         };
         let configuration = folder.join("config.toml");
-        let (conductor, _task) =
-            Conductor::start(None, clock.clone(), journal, settings, configuration, 1);
-        let panel = test_panel(conductor, clock, &folder);
+        let (conductor, _task) = Conductor::start(
+            crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
+            clock.clone(),
+            journal,
+            settings,
+            configuration,
+            1,
+        );
+        let panel = Panel::new(conductor, clock, 8329);
         let ticks = Arc::new(AtomicUsize::new(0));
         let counter = ticks.clone();
         tokio::spawn(async move {

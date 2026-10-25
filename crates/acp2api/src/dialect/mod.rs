@@ -86,15 +86,11 @@ impl<T: WireDialect + 'static> Dialect for T {
                     .headers_mut()
                     .insert("retry-after", axum::http::HeaderValue::from_static("10"));
             }
-            Row::Other502 => {
-                response.headers_mut().insert(
-                    "x-should-retry",
-                    axum::http::HeaderValue::from_static("false"),
-                );
-            }
-            Row::Key | Row::Rejected | Row::TooLarge => {}
+            Row::Key | Row::Rejected | Row::TooLarge | Row::Other502 => {}
         }
-        if matches!(refusal.message, Message::Unavailable(_)) {
+        if matches!(refusal.row(), Row::Other502)
+            || matches!(refusal.message, Message::RuntimeUnavailable(_))
+        {
             response.headers_mut().insert(
                 "x-should-retry",
                 axum::http::HeaderValue::from_static("false"),
@@ -259,7 +255,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
 
 pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
     match refusal.message {
-        Message::Unavailable(_) => "runtime_unavailable",
+        Message::RuntimeUnavailable(_) => "runtime_unavailable",
         Message::Model { .. } => "model_not_found",
         Message::Field { .. } => "unsupported_parameter",
         Message::Content(_) => "unsupported_content_type",
@@ -289,7 +285,7 @@ mod tests {
     use super::*;
     #[test]
     fn runtime_unavailable_refusals_tell_each_client_not_to_retry() {
-        let refusal = Message::Unavailable("acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.".into()).into();
+        let refusal = Message::RuntimeUnavailable("acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.".into()).into();
         for dialect in [CHAT, MESSAGES, RESPONSES] {
             let response = dialect.refusal(&refusal);
             assert_eq!(

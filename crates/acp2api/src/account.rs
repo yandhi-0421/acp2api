@@ -9,8 +9,8 @@ use std::{
 
 pub(super) struct Account {
     root: PathBuf,
-    gate: Option<File>,
     instance: File,
+    gate: Option<File>,
     pub(crate) temporary: Temporary,
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,7 +45,10 @@ fn open_lock(path: &Path) -> Result<File, String> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        options.share_mode(1 | 2);
+        options.share_mode(
+            windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ
+                | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+        );
     }
     let file = options.open(path).map_err(|_| failed(path))?;
     let meta = file.metadata().map_err(|_| failed(path))?;
@@ -60,15 +63,22 @@ async fn lock(
     clock: &dyn Clock,
     stop: &mut dyn StopSignal,
 ) -> Result<bool, String> {
-    let stopped = stop.stopped();
-    tokio::pin!(stopped);
+    let mut stopped = stop.stopped();
+    poll_lock(file, path, clock, &mut stopped).await
+}
+async fn poll_lock(
+    file: &File,
+    path: &Path,
+    clock: &dyn Clock,
+    stopped: &mut (impl std::future::Future<Output = ()> + Unpin),
+) -> Result<bool, String> {
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(true),
             Err(fs::TryLockError::WouldBlock) => {
                 tokio::select! {
                     biased;
-                    _ = &mut stopped => return Ok(false),
+                    _ = &mut *stopped => return Ok(false),
                     hold = clock.sleep_until(clock.now() + 1_000) => drop(hold),
                 }
             }
@@ -157,15 +167,8 @@ impl Account {
         self.temporary.finish()?;
         let gate_path = self.root.join("startup.lock");
         let gate = open_lock(&gate_path)?;
-        loop {
-            match gate.try_lock() {
-                Ok(()) => break,
-                Err(fs::TryLockError::WouldBlock) => {
-                    drop(clock.sleep_until(clock.now() + 1_000).await)
-                }
-                Err(_) => return Err(failed(&gate_path)),
-            }
-        }
+        let mut stop = std::future::pending::<()>();
+        poll_lock(&gate, &gate_path, clock, &mut stop).await?;
         drop(listener);
         let path = self.root.join("panel");
         let cleared = fs::remove_file(&path).map_err(|_| failed(&path));
@@ -189,7 +192,9 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 pub(crate) struct Temporary {
     account: PathBuf,
     root: PathBuf,
+    index: usize,
 }
+const OWNERSHIP: &str = "owned-temporary-files.json";
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Ownership {
@@ -212,9 +217,9 @@ struct OwnedProcess {
 }
 impl Ownership {
     fn load(account: &Path) -> Result<Self, String> {
-        let path = account.join("owned-temporary-files.json");
+        let path = account.join(OWNERSHIP);
         match fs::symlink_metadata(&path) {
-            Ok(_) => validate_private(&path, false, true)?,
+            Ok(_) => validate_private_record(&path)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self {
                     format: 1,
@@ -241,8 +246,7 @@ impl Ownership {
                     .path
                     .components()
                     .any(|part| matches!(part, std::path::Component::ParentDir))
-                || name.len() != 32
-                || !name.bytes().all(|c| c.is_ascii_hexdigit())
+                || !run_name(name)
                 || parent.file_name().and_then(|name| name.to_str()) != Some(&id)
                 || parent
                     .parent()
@@ -259,8 +263,7 @@ impl Ownership {
                     .and_then(|name| name.to_str())
                     .ok_or_else(|| failed(&process.path))?;
                 if process.path.parent() != Some(root.path.join("processes").as_path())
-                    || name.len() != 32
-                    || !name.bytes().all(|c| c.is_ascii_hexdigit())
+                    || !run_name(name)
                     || process
                         .path
                         .components()
@@ -273,7 +276,7 @@ impl Ownership {
         Ok(record)
     }
     fn save(&self, account: &Path) -> Result<(), String> {
-        let path = account.join("owned-temporary-files.json");
+        let path = account.join(OWNERSHIP);
         write(&path, &serde_json::to_vec(self).map_err(|_| failed(&path))?)
     }
 }
@@ -312,15 +315,19 @@ impl Temporary {
             Err(_) => return Err(failed(&shared)),
         }
         match fs::symlink_metadata(&container) {
-            Ok(_) => validate_private(&container, true, true)?,
+            Ok(_) => validate_private_directory(&container)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 private_folder(&container)?
             }
             Err(_) => return Err(failed(&container)),
         }
         let root = container.join(crate::random_hex::<16>().map_err(|_| failed(&container))?);
-        let files = Self { account, root };
-        let mut record = Ownership::load(&files.account)?;
+        let mut record = Ownership::load(&account)?;
+        let files = Self {
+            account,
+            root,
+            index: record.roots.len(),
+        };
         record.roots.push(OwnedRoot {
             path: files.root.clone(),
             process: identity(std::process::id()).ok_or_else(|| failed(&files.account))?,
@@ -332,10 +339,13 @@ impl Temporary {
         private_folder(&files.root.join("processes"))?;
         Ok(files)
     }
-    pub(crate) fn recover(&self) -> Result<(), String> {
+    pub(crate) fn recover(&mut self) -> Result<(), String> {
         let mut record = Ownership::load(&self.account)?;
         let mut retained = Vec::new();
-        for root in record.roots {
+        for (index, root) in record.roots.into_iter().enumerate() {
+            if index == self.index {
+                self.index = retained.len();
+            }
             match fs::symlink_metadata(&root.path) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(_) => {
@@ -357,18 +367,24 @@ impl Temporary {
     pub(crate) fn sessions(&self) -> PathBuf {
         self.root.join("sessions")
     }
+    fn ownership(&self) -> Result<Ownership, String> {
+        let record = Ownership::load(&self.account)?;
+        if record
+            .roots
+            .get(self.index)
+            .is_none_or(|root| root.path != self.root)
+        {
+            return Err(failed(&self.account.join(OWNERSHIP)));
+        }
+        Ok(record)
+    }
     pub(crate) fn prepare_launch(&self) -> Result<(PathBuf, usize), String> {
         let path = self
             .root
             .join("processes")
             .join(crate::random_hex::<16>().map_err(|_| failed(&self.root))?);
-        let mut record = Ownership::load(&self.account)?;
-        let processes = &mut record
-            .roots
-            .iter_mut()
-            .find(|root| root.path == self.root)
-            .ok_or_else(|| failed(&self.account.join("owned-temporary-files.json")))?
-            .processes;
+        let mut record = self.ownership()?;
+        let processes = &mut record.roots[self.index].processes;
         let index = processes.len();
         processes.push(OwnedProcess {
             path: path.clone(),
@@ -379,30 +395,20 @@ impl Temporary {
         Ok((path, index))
     }
     pub(crate) fn record_launch(&self, index: usize, pid: u32) -> Result<(), String> {
-        let mut record = Ownership::load(&self.account)?;
-        record
-            .roots
-            .iter_mut()
-            .find(|root| root.path == self.root)
-            .ok_or_else(|| failed(&self.account.join("owned-temporary-files.json")))?
-            .processes[index]
-            .process = identity(pid);
+        let mut record = self.ownership()?;
+        record.roots[self.index].processes[index].process = identity(pid);
         record.save(&self.account)
     }
     fn finish(&self) -> Result<(), String> {
-        let mut record = Ownership::load(&self.account)?;
-        let current = record
-            .roots
-            .iter()
-            .find(|root| root.path == self.root)
-            .ok_or_else(|| failed(&self.account.join("owned-temporary-files.json")))?;
+        let mut record = self.ownership()?;
+        let current = &record.roots[self.index];
         if !current.processes.iter().all(process_tree_ended) {
             return Ok(());
         }
         if remove_root(&self.root).is_err() {
             return Ok(());
         }
-        record.roots.retain(|root| root.path != self.root);
+        record.roots.remove(self.index);
         record.save(&self.account)
     }
 }
@@ -418,27 +424,55 @@ fn private_folder(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     crate::os::private_folder(path).map_err(|_| failed(path))
 }
-fn validate_private(path: &Path, directory: bool, private: bool) -> Result<(), String> {
+enum Access {
+    Private,
+    Owned,
+}
+fn validate_owner(path: &Path, access: Access) -> Result<fs::Metadata, String> {
     let meta = fs::symlink_metadata(path).map_err(|_| failed(path))?;
-    if meta.file_type().is_symlink()
-        || (directory && !meta.is_dir())
-        || (!directory && !meta.is_file())
-    {
+    if meta.file_type().is_symlink() {
         return Err(failed(path));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let mask = if private { 0o077 } else { 0o022 };
+        let mask = match access {
+            Access::Private => 0o077,
+            Access::Owned => 0o022,
+        };
         if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & mask != 0 {
             return Err(failed(path));
         }
     }
     #[cfg(windows)]
-    {
-        crate::os::validate_private(path, private).map_err(|_| failed(path))?;
+    crate::os::validate_private(path, matches!(access, Access::Private))
+        .map_err(|_| failed(path))?;
+    Ok(meta)
+}
+fn validate_private_record(path: &Path) -> Result<(), String> {
+    if validate_owner(path, Access::Private)?.is_file() {
+        Ok(())
+    } else {
+        Err(failed(path))
     }
-    Ok(())
+}
+fn validate_private_directory(path: &Path) -> Result<(), String> {
+    if validate_owner(path, Access::Private)?.is_dir() {
+        Ok(())
+    } else {
+        Err(failed(path))
+    }
+}
+fn validate_owned_entry(path: &Path) -> Result<(), String> {
+    let meta = validate_owner(path, Access::Owned)?;
+    if meta.is_dir() || meta.is_file() {
+        Ok(())
+    } else {
+        Err(failed(path))
+    }
+}
+fn run_name(name: &str) -> bool {
+    name.len() == 32 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 fn remove_root(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
@@ -449,7 +483,7 @@ fn remove_root(path: &Path) -> Result<(), String> {
     if fs::canonicalize(path).map_err(|_| failed(path))? != path {
         return Err(failed(path));
     }
-    validate_private(path, true, true)?;
+    validate_private_directory(path)?;
     fn children(path: &Path, root: &Path) -> Result<(), String> {
         for entry in fs::read_dir(path).map_err(|_| failed(path))? {
             let entry = entry.map_err(|_| failed(path))?;
@@ -460,7 +494,7 @@ fn remove_root(path: &Path) -> Result<(), String> {
                     return Err(failed(&entry.path()));
                 }
             } else {
-                validate_private(&entry.path(), kind.is_dir(), false)?;
+                validate_owned_entry(&entry.path())?;
                 if kind.is_dir() {
                     children(&entry.path(), root)?;
                 }
@@ -479,7 +513,7 @@ fn process_tree_ended(process: &OwnedProcess) -> bool {
     let Some(identity) = &process.process else {
         return false;
     };
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
         unsafe {
             libc::killpg(identity.pid as i32, 0) == -1
@@ -496,7 +530,7 @@ fn process_ended(process: &Identity) -> bool {
     if let Some(current) = identity(process.pid) {
         return current != *process;
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
         unsafe {
             libc::kill(process.pid as i32, 0) == -1
@@ -518,7 +552,8 @@ fn process_ended(process: &Identity) -> bool {
                     == Some(ERROR_INVALID_PARAMETER as i32);
             }
             let mut code = 0;
-            let ended = GetExitCodeProcess(handle, &mut code) != 0 && code != 259;
+            let ended = GetExitCodeProcess(handle, &mut code) != 0
+                && code != windows_sys::Win32::Foundation::STILL_ACTIVE as u32;
             CloseHandle(handle);
             ended
         }
@@ -537,7 +572,7 @@ fn identity(pid: u32) -> Option<Identity> {
             size,
         )
     };
-    (read == size && info.pbi_status != 5).then_some(Identity {
+    (read == size && info.pbi_status != libc::SZOMB).then_some(Identity {
         pid,
         created: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
     })
@@ -563,7 +598,7 @@ fn identity(pid: u32) -> Option<Identity> {
         let valid = GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user)
             != 0
             && GetExitCodeProcess(process, &mut code) != 0
-            && code == 259;
+            && code == windows_sys::Win32::Foundation::STILL_ACTIVE as u32;
         CloseHandle(process);
         valid.then_some(Identity {
             pid,
@@ -579,7 +614,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     fn start_temporary(account: &Path, temp: &Path) -> Result<Temporary, String> {
-        let files = Temporary::create(account, temp)?;
+        let mut files = Temporary::create(account, temp)?;
         files.recover()?;
         Ok(files)
     }
@@ -764,7 +799,7 @@ mod tests {
         .expect("descendant recovery cap: 5 seconds; one shell and one sleep, no captured output");
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn recovery_keeps_a_live_runtime_tree_when_its_owner_has_ended() {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -824,7 +859,7 @@ mod tests {
         .expect("live-tree recovery cap: 5 seconds; two native children, no captured output");
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn cleanup_keeps_unsafe_roots_but_rejects_nonprivate_coordination_records() {
         use std::os::unix::{
@@ -864,7 +899,7 @@ mod tests {
                     .any(|entry| entry.path == old.root);
             let _ = fs::remove_file(old.sessions().join("escape"));
             fs::set_permissions(
-                old.account.join("owned-temporary-files.json"),
+                old.account.join(OWNERSHIP),
                 fs::Permissions::from_mode(0o644),
             )
             .unwrap();
@@ -982,7 +1017,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let record = fs::read(env.account_root.join("owned-temporary-files.json"))
+            let record = fs::read(env.account_root.join(OWNERSHIP))
                 .ok()
                 .map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).unwrap());
             let canonical = fs::canonicalize(&env.account_root).unwrap();

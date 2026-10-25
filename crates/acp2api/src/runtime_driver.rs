@@ -600,12 +600,9 @@ impl Runtime {
     }
 }
 
-pub(crate) fn program(data: &std::path::Path) -> PathBuf {
-    data.join("official-runtime").join(if cfg!(windows) {
-        "agy_acp_server.exe"
-    } else {
-        "agy_acp_server.par"
-    })
+pub(crate) fn program(data: &std::path::Path) -> std::path::PathBuf {
+    data.join(crate::runtime_builds::COPY)
+        .join(crate::runtime_builds::SERVER)
 }
 async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
     let mut line = Vec::new();

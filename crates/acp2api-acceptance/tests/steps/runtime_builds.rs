@@ -168,12 +168,21 @@ async fn search(w: &mut World) {
 }
 #[when("the owner changes the build to 1.5.0 in the management panel")]
 async fn use_new(w: &mut World) {
-    build::action(
-        w,
-        "/manage/build",
-        json!({"version":"1.5.0", "path":build::place(w, "the install folder of Zed")}),
-    )
-    .await;
+    let selected = w
+        .startup
+        .run
+        .as_ref()
+        .unwrap()
+        .release
+        .builds
+        .iter()
+        .find(|build| build.version == "1.5.0")
+        .unwrap();
+    let identity = format!(
+        "{}:{}",
+        selected.agy_acp_server_sha256, selected.localharness_external_sha256
+    );
+    build::action(w, "/manage/build", json!({"build":identity})).await;
 }
 #[then(
     regex = r"^the result of the search lists the build in (the folder of the acp2api executable|a folder of PATH|the install folder of Zed|the install folder of a JetBrains IDE)$"
