@@ -339,7 +339,7 @@ impl Temporary {
         private_folder(&files.root.join("processes"))?;
         Ok(files)
     }
-    pub(crate) fn recover(&mut self) -> Result<(), String> {
+    pub(crate) fn recover(&mut self) -> Result<bool, String> {
         let mut record = Ownership::load(&self.account)?;
         let mut retained = Vec::new();
         for (index, root) in record.roots.into_iter().enumerate() {
@@ -362,7 +362,13 @@ impl Temporary {
             }
         }
         record.roots = retained;
-        record.save(&self.account)
+        let earlier_trees_ended = record
+            .roots
+            .iter()
+            .filter(|root| root.path != self.root)
+            .all(|root| root.processes.iter().all(process_tree_ended));
+        record.save(&self.account)?;
+        Ok(earlier_trees_ended)
     }
     pub(crate) fn sessions(&self) -> PathBuf {
         self.root.join("sessions")

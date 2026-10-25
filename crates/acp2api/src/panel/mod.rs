@@ -281,7 +281,7 @@ async fn runtime_action(panel: Panel, action: crate::runtime_builds::Action) -> 
         .await
     {
         Ok(notice) => panel.page(StatusCode::OK, &notice),
-        Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
+        Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
     }
 }
 async fn search(State(panel): State<Panel>) -> Response {

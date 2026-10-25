@@ -12,7 +12,6 @@ use tokio::sync::{mpsc, oneshot, watch};
 #[derive(Clone)]
 pub(crate) struct Conductor {
     send: mpsc::Sender<Input>,
-    stopping: watch::Sender<bool>,
     builds: crate::runtime_builds::Builds,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
     notices: watch::Receiver<Arc<Vec<Notice>>>,
@@ -38,13 +37,13 @@ impl Notice {
     }
 }
 struct Replacement {
-    reply: oneshot::Sender<Result<String, String>>,
+    reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
     source: Option<std::path::PathBuf>,
 }
 enum Input {
     Builds {
         action: crate::runtime_builds::Action,
-        reply: oneshot::Sender<Result<String, String>>,
+        reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
         hold: Hold,
     },
     Owner {
@@ -225,7 +224,7 @@ struct Core {
     unavailable: Option<String>,
     changes: VecDeque<(
         crate::runtime_builds::Action,
-        oneshot::Sender<Result<String, String>>,
+        oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
     )>,
     replacement: Option<Replacement>,
     catalog: Option<crate::catalog::Catalog>,
@@ -307,11 +306,17 @@ impl Core {
                 *runtime = Some(started);
                 self.unavailable = None;
             }
-            Err(crate::runtime_builds::LaunchFailure::Start(error)) => {
+            Err(
+                error @ (crate::runtime_builds::LaunchFailure::Start(_)
+                | crate::runtime_builds::LaunchFailure::Stopped),
+            ) => {
                 let _ = change.reply.send(Err(error));
                 return;
             }
-            Err(error) => {
+            Err(
+                error @ (crate::runtime_builds::LaunchFailure::NoExecutable
+                | crate::runtime_builds::LaunchFailure::NotAccepted),
+            ) => {
                 let message = builds.unavailable(&error.to_string());
                 self.apply(
                     Event::RuntimeUnavailable(message.clone()),
@@ -326,7 +331,11 @@ impl Core {
         }
         *read_open = runtime.is_some();
         let configured = publish.borrow().agy_acp_server_path.clone();
-        let result = builds.discover(configured).await.map(|()| String::new());
+        let result = builds
+            .discover(configured)
+            .await
+            .map(|()| String::new())
+            .map_err(Into::into);
         let _ = change.reply.send(result);
     }
     fn replacement_ready(&self) -> bool {
@@ -1034,7 +1043,7 @@ impl Core {
 }
 impl Conductor {
     pub(crate) fn start(
-        mut builds: crate::runtime_builds::Builds,
+        builds: crate::runtime_builds::Builds,
         clock: Arc<dyn Clock>,
         journal: crate::journal::Journal,
         settings: crate::store::Settings,
@@ -1042,8 +1051,6 @@ impl Conductor {
         highest: u8,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Input>(32);
-        let (stopping, mut stopped) = watch::channel(false);
-        builds.start.stopped = stopping.subscribe();
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
@@ -1064,11 +1071,8 @@ impl Conductor {
                 next_work: 0,
                 notices,
             };
-            let mut read_open = runtime.is_some();
+            let mut read_open = false;
             loop {
-                if *stopped.borrow() {
-                    break;
-                }
                 if core.replacement_ready() && core.replacement.is_some() {
                     core.replace(
                         &mut runtime,
@@ -1088,7 +1092,7 @@ impl Conductor {
                             .await
                         {
                             Err(error) => {
-                                let _ = reply.send(Err(error));
+                                let _ = reply.send(Err(error.into()));
                             }
                             Ok(selection) => {
                                 publish.send_replace(Arc::new(changed));
@@ -1147,7 +1151,6 @@ impl Conductor {
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
                 let (event, hold) = tokio::select! {
                     biased;
-                    Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => break,
                     work = first_closed(&connected), if !connected.is_empty() => {
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
                     }
@@ -1230,7 +1233,6 @@ impl Conductor {
         (
             Self {
                 send,
-                stopping,
                 builds,
                 settings: settings_watch,
                 notices: notices_watch,
@@ -1321,9 +1323,6 @@ impl Conductor {
     pub(crate) fn builds_summary(&self) -> Result<crate::runtime_builds::Summary, String> {
         self.builds.summary()
     }
-    pub(crate) fn stop(&self) {
-        self.stopping.send_replace(true);
-    }
     pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
         self.notices.borrow().clone()
     }
@@ -1334,25 +1333,19 @@ impl Conductor {
         &self,
         action: crate::runtime_builds::Action,
         hold: Hold,
-    ) -> Result<String, String> {
+    ) -> Result<String, crate::runtime_builds::LaunchFailure> {
         let (reply, result) = oneshot::channel();
-        let request = async {
-            self.send
-                .send(Input::Builds {
-                    action,
-                    reply,
-                    hold,
-                })
-                .await
-                .map_err(|_| "conductor stopped".to_owned())?;
-            result.await.map_err(|_| "conductor stopped".to_owned())?
-        }
-        .await;
-        if *self.stopping.borrow() {
-            Ok(String::new())
-        } else {
-            request
-        }
+        self.send
+            .send(Input::Builds {
+                action,
+                reply,
+                hold,
+            })
+            .await
+            .map_err(|_| crate::runtime_builds::LaunchFailure::Start("conductor stopped".into()))?;
+        result
+            .await
+            .map_err(|_| crate::runtime_builds::LaunchFailure::Start("conductor stopped".into()))?
     }
     pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
         let (reply, result) = oneshot::channel();
@@ -1604,7 +1597,7 @@ mod tests {
             ports.release = Arc::new(Facts(facts));
             ports.launcher = Arc::new(Launcher(Mutex::new(children), trace.clone()));
             let environment = crate::Environment { account_root: root.join("account"), temp: root.join("temp"), home: None, local_app_data: None, path: vec![], exe_dir: root.join("new-build") };
-            let builds = crate::runtime_builds::Builds::new(&ports, environment, root.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), 0);
+            let builds = crate::runtime_builds::Builds::new(&ports, environment, root.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
             let config = root.join("config.toml");
             let settings = crate::store::read(&config, 1).unwrap().settings;
             let choice = crate::runtime_builds::identity(&ports.release.listed_builds()[1]);

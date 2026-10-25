@@ -39,6 +39,7 @@ fn folders(w: &mut World) {
 }
 #[when(expr = "the same computer account starts acp2api with the data folder {string}")]
 fn duplicate(w: &mut World, data: String) {
+    w.account.keep_folders();
     w.account.second(&data, false);
 }
 #[when(expr = "that start uses the system temporary folder {string}")]
@@ -52,6 +53,7 @@ fn account_b(w: &mut World, name: String, data: String, port: u16) {
 }
 #[then(expr = "the second start fails with the message {string}")]
 fn rejected(w: &mut World, message: String) {
+    w.account.preserved();
     let actual = &w.account.instances[1];
     assert_eq!(
         actual.exited,

@@ -109,20 +109,24 @@ pub(crate) async fn start(
     account.publish(&panel)?;
     let journal = crate::journal::Journal::open(&data.join("logs"), ports.clock.wall())
         .map_err(|error| error.to_string())?;
-    account.temporary.recover()?;
-    let sessions = data.join("runtime-home/antigravity-acp/conversations");
-    match std::fs::remove_dir_all(&sessions) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("cannot remove {}: {error}", sessions.display())),
+    let earlier_trees_ended = account.temporary.recover()?;
+    if earlier_trees_ended {
+        let sessions = data.join("runtime-home/antigravity-acp/conversations");
+        match std::fs::remove_dir_all(&sessions) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("cannot remove {}: {error}", sessions.display())),
+        }
     }
     let tools = crate::runtime_driver::mcp::ToolSets::new(port);
+    let (stopping, stopped) = tokio::sync::watch::channel(false);
     let builds = crate::runtime_builds::Builds::new(
         &ports,
         env.clone(),
         data.clone(),
         account.temporary.clone(),
         tools.clone(),
+        stopped.clone(),
         port,
     );
     let (conductor, task) = crate::conductor::Conductor::start(
@@ -134,17 +138,24 @@ pub(crate) async fn start(
         ports.release.highest_concurrency_limit(),
     );
     let initial_conductor = conductor.clone();
-    let stop_conductor = conductor.clone();
     let initial_clock = ports.clock.clone();
     let initial_browser = ports.browser.clone();
     let initial_panel = panel.clone();
     let initializing = async move {
-        initial_conductor
+        match initial_conductor
             .builds(
                 crate::runtime_builds::Action::Initial,
                 initial_clock.hold(HoldKind::TurnEvent),
             )
-            .await?;
+            .await
+        {
+            Ok(_) => {}
+            Err(crate::runtime_builds::LaunchFailure::Stopped) => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        }
+        if *stopped.borrow() {
+            return Ok(());
+        }
         if opened.first_start {
             initial_browser.open(&initial_panel);
         }
@@ -157,7 +168,7 @@ pub(crate) async fn start(
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {
                 ports.stop.stopped().await;
-                stop_conductor.stop();
+                stopping.send_replace(true);
             })
             .await
             .map_err(|error| error.to_string())
@@ -203,6 +214,40 @@ mod lifecycle_tests {
 
     #[tokio::test]
     async fn stop_ends_a_runtime_whose_first_initialize_never_answers() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stop_runtime_during(StopPoint::Initialize),
+        )
+        .await
+        .expect("stop-initialize cap: 5 seconds, one fake launch");
+    }
+
+    #[tokio::test]
+    async fn a_stop_during_a_running_prompt_turn_allows_a_normal_reply() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stop_runtime_during(StopPoint::Prompt),
+        )
+        .await
+        .expect("stop-prompt cap: 5 seconds, one HTTP request, eight ACP requests");
+    }
+
+    #[tokio::test]
+    async fn stop_after_initialize_waits_for_the_initial_session_result() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stop_runtime_during(StopPoint::Session),
+        )
+        .await
+        .expect("stop-session cap: 5 seconds, one fake launch");
+    }
+
+    enum StopPoint {
+        Initialize,
+        Session,
+        Prompt,
+    }
+    async fn stop_runtime_during(point: StopPoint) {
         use sha2::{Digest, Sha256};
         use std::sync::{
             Mutex,
@@ -265,12 +310,23 @@ mod lifecycle_tests {
             .unwrap()
             .port();
         crate::store::save(&root.join("data/config.toml"), &settings).unwrap();
+        if !matches!(point, StopPoint::Prompt) {
+            std::fs::remove_file(root.join("data/config.toml")).unwrap();
+        }
         let hash = crate::hex(&Sha256::digest(b"accepted"));
         let stopped = Arc::new(AtomicBool::new(false));
         let (product, agent) = tokio::io::duplex(65536);
         let (stdout, stdin) = tokio::io::split(product);
         let (stop, signal) = tokio::sync::oneshot::channel();
+        struct RecordingBrowser(Arc<AtomicBool>);
+        impl Browser for RecordingBrowser {
+            fn open(&self, _: &str) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let browser_opened = Arc::new(AtomicBool::new(false));
         let mut ports = Ports::production();
+        ports.browser = Arc::new(RecordingBrowser(browser_opened.clone()));
         ports.release = Arc::new(Facts(vec![ListedBuild {
             version: "1.4.0".into(),
             platform: ports.release.platform().into(),
@@ -283,13 +339,31 @@ mod lifecycle_tests {
             stderr: Box::pin(tokio::io::empty()),
             tree: Box::new(Tree(stopped.clone())),
         }))));
-        ports.stop = Box::new(Stop(signal));
-        let task = tokio::spawn(start(
+        struct AcknowledgedStop {
+            signal: tokio::sync::oneshot::Receiver<()>,
+            observed: Option<tokio::sync::oneshot::Sender<()>>,
+        }
+        impl StopSignal for AcknowledgedStop {
+            fn stopped(&mut self) -> BoxFuture<'_, ()> {
+                Box::pin(async {
+                    let _ = (&mut self.signal).await;
+                    self.observed.take().unwrap().send(()).unwrap();
+                })
+            }
+        }
+        let (observed, stop_observed) = tokio::sync::oneshot::channel();
+        ports.stop = Box::new(AcknowledgedStop {
+            signal,
+            observed: Some(observed),
+        });
+        let mut task = tokio::spawn(start(
             ports,
             vec![
                 "acp2api".into(),
                 "--data-dir".into(),
                 root.join("data").into_os_string(),
+                "--port".into(),
+                settings.port.to_string().into(),
             ],
             Environment {
                 account_root: root.join("account"),
@@ -318,18 +392,144 @@ mod lifecycle_tests {
             serde_json::from_slice::<serde_json::Value>(&initialize).unwrap()["method"],
             "initialize"
         );
-        stop.send(()).unwrap();
+        let mut response = None;
+        if !matches!(point, StopPoint::Initialize) {
+            let initialize: serde_json::Value = serde_json::from_slice(&initialize).unwrap();
+            agent.write_all(format!("{}\n", serde_json::json!({"jsonrpc":"2.0", "id":initialize["id"], "result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}})).as_bytes()).await.unwrap();
+            let mut request = String::new();
+            agent.read_line(&mut request).await.unwrap();
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["method"], "session/new");
+            let options = serde_json::json!([{"id":"model", "name":"Model", "type":"select", "currentValue":"m", "options":[{"value":"m", "name":"M"}]}]);
+            let session_reply = format!(
+                "{}\n",
+                serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":{"sessionId":"session-1","configOptions":options}})
+            );
+            if matches!(point, StopPoint::Session) {
+                stop.send(()).unwrap();
+                stop_observed.await.unwrap();
+                let pending = tokio::time::timeout(std::time::Duration::from_millis(50), &mut task)
+                    .await
+                    .is_err();
+                if pending {
+                    agent.write_all(session_reply.as_bytes()).await.unwrap();
+                    task.await.unwrap().unwrap();
+                }
+                std::fs::remove_dir_all(root).unwrap();
+                assert!(
+                    pending,
+                    "a stop after initialize must wait for the initial session/new result"
+                );
+                assert!(
+                    !browser_opened.load(Ordering::SeqCst),
+                    "a stop during first launch must not open the browser"
+                );
+                return;
+            }
+            agent.write_all(session_reply.as_bytes()).await.unwrap();
+            let address = format!("127.0.0.1:{}", settings.port);
+            let key = settings.local_api_key.clone();
+            response = Some(tokio::spawn(async move {
+                let mut client = tokio::net::TcpStream::connect(&address).await.unwrap();
+                let body =
+                    r#"{"model":"m","messages":[{"role":"user","content":"finish normally"}]}"#;
+                client.write_all(format!("POST /v1/chat/completions HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                let mut bytes = Vec::new();
+                client.take(65537).read_to_end(&mut bytes).await.unwrap();
+                assert!(bytes.len() <= 65536, "HTTP response cap: 64 KiB");
+                String::from_utf8(bytes).unwrap()
+            }));
+            let mut prompting = None;
+            for _ in 0..8 {
+                let mut bytes = Vec::new();
+                (&mut agent)
+                    .take(65537)
+                    .read_until(b'\n', &mut bytes)
+                    .await
+                    .unwrap();
+                assert!(bytes.len() <= 65536, "ACP request cap: 64 KiB");
+                let request: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                match request["method"].as_str().unwrap() {
+                    "session/prompt" => {
+                        prompting = Some(request);
+                        break;
+                    }
+                    "session/set_config_option" => {
+                        agent.write_all(format!("{}\n", serde_json::json!({"jsonrpc":"2.0", "id":request["id"], "result":{"configOptions":options}})).as_bytes()).await.unwrap();
+                    }
+                    method => panic!("unexpected ACP request: {method}"),
+                }
+            }
+            let prompting = prompting.expect("eight ACP request cap");
+            stop.send(()).unwrap();
+            stop_observed.await.unwrap();
+            let reply = serde_json::json!({"jsonrpc":"2.0", "id":prompting["id"], "result":{"stopReason":"end_turn"}});
+            let _ = agent.write_all(format!("{reply}\n").as_bytes()).await;
+        } else {
+            stop.send(()).unwrap();
+        }
         let finished = matches!(
             tokio::time::timeout(std::time::Duration::from_secs(1), task).await,
             Ok(Ok(Ok(())))
         );
+        let normal_reply = if let Some(response) = response {
+            response.await.unwrap().starts_with("HTTP/1.1 200 OK")
+        } else {
+            true
+        };
         let actual = (finished, stopped.load(Ordering::SeqCst));
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(
             actual,
             (true, true),
-            "a terminal stop must finish startup and stop the initializing runtime tree"
+            "a terminal stop must finish startup and stop its runtime tree"
         );
+        assert!(
+            !browser_opened.load(Ordering::SeqCst),
+            "a stop during first launch must not open the browser"
+        );
+        assert!(
+            normal_reply,
+            "a stop during a running prompt turn must allow its normal HTTP reply"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn startup_preserves_session_files_while_an_earlier_runtime_tree_is_alive() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!("acp2api-live-sessions-{}", crate::random_hex::<12>().unwrap()));
+            let previous = crate::account::Temporary::fixture(&root);
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let child = launch(&previous, &crate::os::OsLauncher, clock.clone(), LaunchSpec {
+                program: "/bin/cat".into(), args: vec![], env_set: vec![], cwd: previous.sessions(), own_temp: None,
+            }).await.unwrap();
+            let session = root.join("data/runtime-home/antigravity-acp/conversations/earlier.db");
+            std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+            std::fs::write(&session, b"live runtime session").unwrap();
+            let config = root.join("data/config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            settings.port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            crate::store::save(&config, &settings).unwrap();
+            let (stop, signal) = tokio::sync::oneshot::channel();
+            let mut ports = Ports::production(); ports.stop = Box::new(Stop(signal));
+            let environment = Environment { account_root: root.join("account"), home: None, local_app_data: None, temp: root.join("temp"), path: vec![], exe_dir: root.join("exe") };
+            let task = tokio::spawn(start(ports, vec!["acp2api".into(), "--data-dir".into(), root.join("data").into_os_string()], environment));
+            let mut client = loop {
+                if let Ok(client) = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, settings.port)).await { break client; }
+                tokio::task::yield_now().await;
+            };
+            client.write_all(format!("GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nx-api-key: {}\r\nConnection: close\r\n\r\n", settings.port, settings.local_api_key).as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            client.take(65537).read_to_end(&mut response).await.unwrap();
+            assert!(response.len() <= 65536, "one models response, 64 KiB cap");
+            stop.send(()).unwrap();
+            task.await.unwrap().unwrap();
+            let actual = std::fs::read(&session).ok();
+            drop(child.stdin); child.tree.stop(clock).await;
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual.as_deref(), Some(b"live runtime session".as_slice()), "startup must preserve persistent session files while an earlier runtime tree remains alive");
+        }).await.expect("live session recovery cap: 5 seconds, one native child, one HTTP request, 64 KiB response");
     }
 
     #[cfg(target_os = "macos")]

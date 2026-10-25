@@ -43,6 +43,7 @@ pub(crate) enum LaunchFailure {
     NoExecutable,
     NotAccepted,
     Start(String),
+    Stopped,
 }
 impl std::fmt::Display for LaunchFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -52,6 +53,7 @@ impl std::fmt::Display for LaunchFailure {
             }
             Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
             Self::Start(error) => f.write_str(error),
+            Self::Stopped => f.write_str("acp2api is exiting"),
         }
     }
 }
@@ -67,12 +69,13 @@ impl Builds {
         data: PathBuf,
         temporary: crate::account::Temporary,
         tools: crate::runtime_driver::mcp::ToolSets,
+        stopped: tokio::sync::watch::Receiver<bool>,
         port: u16,
     ) -> Self {
         Self {
             start: RuntimeStart {
                 clock: ports.clock.clone(),
-                stopped: tokio::sync::watch::channel(false).1,
+                stopped,
                 launcher: ports.launcher.clone(),
                 release: ports.release.clone(),
                 data,
@@ -101,6 +104,7 @@ impl Builds {
             root.into(),
             crate::account::Temporary::fixture(root),
             crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
             0,
         )
     }
@@ -138,7 +142,9 @@ impl Builds {
         match self.identify(&self.start.data.join(COPY)) {
             Ok(build) => Ok(Some(build)),
             Err(LaunchFailure::NoExecutable | LaunchFailure::NotAccepted) => Ok(None),
-            Err(LaunchFailure::Start(error)) => Err(error),
+            Err(error @ (LaunchFailure::Start(_) | LaunchFailure::Stopped)) => {
+                Err(error.to_string())
+            }
         }
     }
     fn scan_places(&self, configured: Option<&Path>) {
@@ -168,7 +174,11 @@ impl Builds {
                 let listed = match self.identify(&folder) {
                     Ok(build) => Some(build),
                     Err(LaunchFailure::NotAccepted) => None,
-                    Err(LaunchFailure::NoExecutable | LaunchFailure::Start(_)) => continue,
+                    Err(
+                        LaunchFailure::NoExecutable
+                        | LaunchFailure::Start(_)
+                        | LaunchFailure::Stopped,
+                    ) => continue,
                 };
                 found.push(Found { listed, folder });
             }
@@ -296,9 +306,7 @@ impl Builds {
                 }
                 error => error,
             })?;
-        Runtime::start(&self.start, &build.version)
-            .await
-            .map_err(LaunchFailure::Start)
+        Runtime::start(&self.start, &build.version).await
     }
     pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
         let builds = self.clone();
@@ -599,6 +607,7 @@ mod tests {
             root.clone(),
             crate::account::Temporary::fixture(&root),
             crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
             0,
         );
         let config = root.join("config.toml");
@@ -652,6 +661,7 @@ mod tests {
             root.clone(),
             crate::account::Temporary::fixture(&root),
             crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
             0,
         );
         let failed = builds.launch(Some(root.join("source"))).await.is_err();
@@ -750,6 +760,7 @@ mod tests {
             root.clone(),
             crate::account::Temporary::fixture(&root),
             crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
             0,
         );
         let config = root.join("config.toml");
@@ -797,6 +808,7 @@ mod tests {
                 root.clone(),
                 crate::account::Temporary::fixture(&root),
                 crate::runtime_driver::mcp::ToolSets::new(0),
+                tokio::sync::watch::channel(false).1,
                 0,
             );
             let config = root.join("config.toml");
@@ -873,6 +885,7 @@ mod tests {
                 root.clone(),
                 crate::account::Temporary::fixture(&root),
                 crate::runtime_driver::mcp::ToolSets::new(0),
+                tokio::sync::watch::channel(false).1,
                 0,
             );
             let config = root.join("config.toml");

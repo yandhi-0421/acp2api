@@ -4,6 +4,7 @@ pub(crate) mod mcp;
 #[cfg(test)]
 mod rpc_request_ids;
 mod safety;
+use crate::runtime_builds::LaunchFailure;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
@@ -53,7 +54,7 @@ impl Runtime {
     pub(crate) async fn start(
         start: &RuntimeStart,
         expected_version: &str,
-    ) -> Result<(Self, crate::catalog::Catalog), String> {
+    ) -> Result<(Self, crate::catalog::Catalog), LaunchFailure> {
         let data = &start.data;
         let cwd = start.temporary.sessions();
         let tool_sets = start.tool_sets.clone();
@@ -122,21 +123,23 @@ impl Runtime {
             "version": start.release.version()
         });
         let mut stopped = start.stopped.clone();
-        let initialization =
-            async {
-                let initialized = runtime.call(
-                "initialize",
-                json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}}),
-            ).await?;
-                if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
-                    return Err("initialize version differs from the accepted build".into());
-                }
-                runtime.new_session(&[], None).await
-            };
         let result = tokio::select! {
-            result = initialization => result,
-            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err("acp2api is exiting".into()),
+            result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Start),
+            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
         };
+        let result = async {
+            let initialized = result?;
+            if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
+                return Err(LaunchFailure::Start(
+                    "initialize version differs from the accepted build".into(),
+                ));
+            }
+            runtime
+                .new_session(&[], None)
+                .await
+                .map_err(LaunchFailure::Start)
+        }
+        .await;
         let catalog = match result {
             Ok(catalog) => catalog,
             Err(error) => {
