@@ -78,6 +78,7 @@ pub(crate) struct TurnRequest {
     pub conversation: Conversation,
     pub model: String,
     pub tools: Vec<ClientTool>,
+    pub tool_text: String,
     pub tool_choice: ToolChoice,
 }
 pub(crate) enum PromptBlock {
@@ -317,11 +318,7 @@ pub(crate) fn input_tokens(turn: &TurnRequest) -> u64 {
             }
         }
     }
-    for tool in &turn.tools {
-        text.push_str(&tool.name);
-        text.push_str(&tool.description);
-        text.push_str(&tool.schema.to_string());
-    }
+    text.push_str(&turn.tool_text);
     output_tokens(&text)
 }
 

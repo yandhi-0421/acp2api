@@ -28,7 +28,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
     }
     fields::check(api, &value)?;
     let model = required(&value, "model")?.to_owned();
-    let client_tools = tools(api, &value["tools"])?;
+    let (client_tools, tool_text) = tools(api, &value["tools"])?;
     let input = &value[if matches!(api, Api::Responses) {
         "input"
     } else {
@@ -123,6 +123,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         },
         model: model.clone(),
         tools: client_tools,
+        tool_text,
         tool_choice,
     };
     let input_tokens = crate::conversation::input_tokens(&turn);
@@ -404,11 +405,15 @@ fn validate_media(media: &str, kind: &str) -> Result<(), Refusal> {
     }
 }
 
-fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>, Refusal> {
+fn tools(
+    api: Api,
+    value: &Value,
+) -> Result<(Vec<crate::conversation::ClientTool>, String), Refusal> {
     if value.is_null() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), String::new()));
     }
     let mut normalized = Vec::new();
+    let mut text = String::new();
     for tool in value
         .as_array()
         .ok_or_else(|| Refusal::invalid("tools must be an array"))?
@@ -420,24 +425,27 @@ fn tools(api: Api, value: &Value) -> Result<Vec<crate::conversation::ClientTool>
                 .as_array()
                 .ok_or_else(|| Refusal::invalid("namespace tools must be an array"))?
             {
-                let mut member_tool = client_tool(api, member, Some(namespace))?;
+                let (mut member_tool, member_text) = client_tool(api, member, Some(namespace))?;
                 member_tool.description = format!(
                     "Namespace {namespace}:\n{namespace_description}\n\n{}",
                     member_tool.description
                 );
                 normalized.push(member_tool);
+                text.push_str(&member_text);
             }
         } else {
-            normalized.push(client_tool(api, tool, None)?);
+            let (tool, tool_text) = client_tool(api, tool, None)?;
+            normalized.push(tool);
+            text.push_str(&tool_text);
         }
     }
-    Ok(normalized)
+    Ok((normalized, text))
 }
 fn client_tool(
     api: Api,
     tool: &Value,
     namespace: Option<&str>,
-) -> Result<crate::conversation::ClientTool, Refusal> {
+) -> Result<(crate::conversation::ClientTool, String), Refusal> {
     use crate::conversation::{ClientTool, ToolKind};
     let kind = tool["type"].as_str().unwrap_or("function");
     if matches!(api, Api::Messages) && server_tool(kind) {
@@ -487,12 +495,15 @@ fn client_tool(
         return Err(Message::ToolName(name.into()).into());
     }
     let mut description = function["description"].as_str().unwrap_or("").to_owned();
+    let mut text = name.to_owned();
+    text.push_str(&description);
     let schema = match kind {
         ToolKind::Custom => {
             match tool["format"]["type"].as_str() {
                 Some("grammar") => {
                     let definition = required(&tool["format"], "definition")?;
                     let syntax = required(&tool["format"], "syntax")?;
+                    text.push_str(definition);
                     description.push_str(&format!("\n\nGrammar ({syntax}):\n{definition}"));
                 }
                 None | Some("text") => {}
@@ -510,18 +521,24 @@ fn client_tool(
                 Value::Null if !matches!(api, Api::Messages) => {
                     serde_json::json!({"type":"object","properties":{}})
                 }
-                Value::Object(_) => schema.clone(),
+                Value::Object(_) => {
+                    text.push_str(&schema.to_string());
+                    schema.clone()
+                }
                 _ => return Err(Refusal::invalid("tool schema must be an object")),
             }
         }
     };
-    Ok(ClientTool {
-        name: name.into(),
-        description,
-        schema,
-        kind,
-        namespace: namespace.map(str::to_owned),
-    })
+    Ok((
+        ClientTool {
+            name: name.into(),
+            description,
+            schema,
+            kind,
+            namespace: namespace.map(str::to_owned),
+        },
+        text,
+    ))
 }
 fn server_tool(kind: &str) -> bool {
     matches!(
@@ -544,6 +561,43 @@ fn server_tool(kind: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    fn input_estimate(body: &str) -> u64 {
+        let parsed = parse(Api::Responses, body.as_bytes())
+            .unwrap_or_else(|refusal| panic!("refused: {}", refusal.message));
+        crate::conversation::input_tokens(&parsed.turn)
+    }
+    #[test]
+    fn input_estimate_counts_the_declared_custom_tool_grammar() {
+        let body = r#"{"model":"m","input":"","tools":[{"type":"custom","name":"edit","description":"Edit","format":{"type":"grammar","syntax":"lark","definition":"start: \"é\""}}]}"#;
+        assert_eq!(input_estimate(body), 6);
+    }
+    #[test]
+    fn input_estimate_counts_the_declared_namespace_member() {
+        let body = r#"{"model":"m","input":"","tools":[{"type":"namespace","name":"files","description":"Files","tools":[{"type":"function","name":"read","description":"Read","parameters":{}}]}]}"#;
+        assert_eq!(input_estimate(body), 3);
+    }
+    #[test]
+    fn input_estimate_counts_no_schema_when_parameters_are_absent() {
+        let body = r#"{"model":"m","input":"","tools":[{"type":"function","name":"now","description":"Time"}]}"#;
+        assert_eq!(input_estimate(body), 2);
+    }
+    #[test]
+    fn input_estimate_keeps_compact_schema_in_request_key_order() {
+        let body = r#"{
+            "model": "m", "input": "",
+            "tools": [{"type": "function", "name": "read",
+                "parameters": { "z": "é", "a": 1 }}]
+        }"#;
+        let parsed = parse(Api::Responses, body.as_bytes())
+            .unwrap_or_else(|refusal| panic!("refused: {}", refusal.message));
+        assert_eq!(
+            (
+                crate::conversation::input_tokens(&parsed.turn),
+                parsed.turn.tool_text.as_str(),
+            ),
+            (6, r#"read{"z":"é","a":1}"#),
+        );
+    }
     fn text_of(api: Api, v: Value) -> String {
         match document(api, &v, "document") {
             Ok(Part::Document { text, .. }) => text,
@@ -573,7 +627,7 @@ mod tests {
     #[test]
     fn a_function_tool_without_parameters_gets_an_empty_object_schema() {
         let schema = |api, tools_value| match tools(api, &tools_value) {
-            Ok(tools) => tools[0].schema.to_string(),
+            Ok((tools, _)) => tools[0].schema.to_string(),
             Err(refusal) => panic!("refused: {}", refusal.message),
         };
         let empty = r#"{"type":"object","properties":{}}"#;
