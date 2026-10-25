@@ -479,6 +479,7 @@ fn result_parts(
         match push_part(api, block, tools, &mut parts) {
             Err(Refusal {
                 message: Message::Pdf(_),
+                ..
             }) => parts.push(Part::PdfNote),
             result => result?,
         }

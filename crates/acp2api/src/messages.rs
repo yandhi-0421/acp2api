@@ -41,6 +41,7 @@ pub(crate) enum Message {
     Invalid(String),
     Key,
     TooLarge,
+    QueueFull,
     Upstream(String),
     UpstreamHttp(HttpError),
     UpstreamAcp(AcpError),
@@ -50,15 +51,20 @@ pub(crate) enum Row {
     Key,
     Rejected,
     TooLarge,
+    QueueFull,
     Other502,
     Temporary503,
 }
 pub(crate) struct Refusal {
     pub message: Message,
+    pub hold: crate::Hold,
 }
 impl From<Message> for Refusal {
     fn from(message: Message) -> Self {
-        Self { message }
+        Self {
+            message,
+            hold: crate::Hold::empty(),
+        }
     }
 }
 impl Refusal {
@@ -76,6 +82,7 @@ impl Refusal {
         match self.message {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
+            Message::QueueFull => Row::QueueFull,
             Message::UpstreamHttp(ref error) if (500..600).contains(&error.code) => {
                 Row::Temporary503
             }
@@ -158,6 +165,7 @@ impl fmt::Display for Message {
             Self::UpstreamHttp(error) => write!(f, "acp2api: upstream error {} {}: {}", error.code, error.status, error.message),
             Self::UpstreamAcp(error) => write!(f, "acp2api: upstream ACP error {}: {}", error.code, error.message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
+            Self::QueueFull => f.write_str("acp2api: the queue is full (32 requests). Send the request again later."),
             Self::TooLarge => f.write_str("acp2api: the request body is larger than 32 MB."),
         }
     }

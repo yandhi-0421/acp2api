@@ -37,10 +37,9 @@ pub(crate) struct Runtime {
 }
 struct ConfiguringPrompt {
     session: String,
-    prompt: crate::conversation::PromptRequest,
     option: String,
     value: String,
-    sent: Vec<&'static str>,
+    continuation: Option<(crate::conversation::PromptRequest, Vec<&'static str>)>,
 }
 impl Runtime {
     pub(crate) async fn start(
@@ -249,6 +248,13 @@ impl Runtime {
             .await
     }
     pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), String> {
+        for pending in self
+            .configuring
+            .values_mut()
+            .filter(|pending| pending.session == session)
+        {
+            pending.continuation = None;
+        }
         self.write(
             json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}),
         )
@@ -326,10 +332,9 @@ impl Runtime {
                 id,
                 ConfiguringPrompt {
                     session: session.into(),
-                    prompt,
                     option,
                     value,
-                    sent,
+                    continuation: Some((prompt, sent)),
                 },
             );
             Ok(())
@@ -413,10 +418,10 @@ impl Runtime {
                 self.config
                     .insert((session.clone(), pending.option), pending.value);
                 self.remember_config(&session, &value["result"]);
-                return match self
-                    .configure_prompt(pending.prompt, &session, pending.sent)
-                    .await
-                {
+                let Some((prompt, sent)) = pending.continuation else {
+                    return RuntimeEvent::Retired { session };
+                };
+                return match self.configure_prompt(prompt, &session, sent).await {
                     Ok(()) => RuntimeEvent::Other,
                     Err(error) => RuntimeEvent::Turn {
                         session,
@@ -626,6 +631,9 @@ pub(crate) enum RuntimeEvent {
     Prepared {
         work: String,
         result: Result<(String, crate::catalog::Catalog), String>,
+    },
+    Retired {
+        session: String,
     },
     Turn {
         session: String,
