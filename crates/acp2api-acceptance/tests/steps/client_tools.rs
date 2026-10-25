@@ -12,6 +12,7 @@ pub struct ToolState {
 }
 #[given(expr = "the request has the client tool {string}")]
 fn one(w: &mut World, name: String) {
+    w.usage.tools = vec![t::tool(&name)];
     w.scenario.plan(acp2api_acceptance::Setup::normal());
     w.tools.tools = vec![t::tool(&name)];
 }
@@ -70,6 +71,12 @@ async fn send(w: &mut World, endpoint: String, choice: &str, pair: bool) {
 }
 #[when(expr = "an API client sends that request to {string}")]
 async fn send_pair(w: &mut World, endpoint: String) {
+    if w.usage.active {
+        w.usage
+            .send(&mut w.scenario, w.usage.request(&endpoint, false))
+            .await;
+        return;
+    }
     if crate::server_tools::has_request(w) {
         crate::server_tools::combined(w, endpoint).await;
         return;

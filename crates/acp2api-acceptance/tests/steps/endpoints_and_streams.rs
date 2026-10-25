@@ -31,6 +31,12 @@ fn chunks(w: &mut World, first: String, last: String) {
     w.endpoint.incremental = true;
 }
 async fn send(w: &mut World, path: String, stream: bool) {
+    if w.usage.active {
+        w.usage
+            .send(&mut w.scenario, w.usage.request(&path, stream))
+            .await;
+        return;
+    }
     w.endpoint.path = path.clone();
     w.endpoint.stream = stream;
     let call = w

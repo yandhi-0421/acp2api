@@ -3,6 +3,13 @@ use acp2api_acceptance::client::ApiCall;
 use cucumber::{then, when};
 #[when(expr = "an API client sends a valid request to {string}")]
 async fn send(world: &mut World, endpoint: String) {
+    if world.usage.active {
+        world
+            .usage
+            .send(&mut world.scenario, world.usage.request(&endpoint, false))
+            .await;
+        return;
+    }
     if endpoint == "POST /v1/messages/count_tokens" {
         let call = world
             .scenario

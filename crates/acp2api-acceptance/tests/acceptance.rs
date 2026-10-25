@@ -5,8 +5,13 @@ mod panel;
 mod selection;
 #[path = "support/timed_steps.rs"]
 mod timed_steps;
+#[path = "support/usage_contract.rs"]
+mod usage_contract;
+#[path = "steps/usage_contract.rs"]
+mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    usage: usage_contract::UsageCase,
     conversation: conversation::ConversationState,
     fields: request_fields::FieldState,
     safety: runtime_safety::SafetyState,

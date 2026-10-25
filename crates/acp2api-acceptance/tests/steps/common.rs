@@ -10,6 +10,10 @@ fn model(world: &mut World, name: String) {
 }
 #[given(expr = "the official runtime replies {string} to the next prompt")]
 fn reply(world: &mut World, text: String) {
+    if world.usage.active {
+        world.usage.reply = text;
+        return;
+    }
     world.scenario.fake().next_prompt(
         acp2api_acceptance::TurnPlan::new()
             .chunk(&text)
