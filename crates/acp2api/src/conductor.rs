@@ -105,6 +105,7 @@ enum Event {
 enum Command {
     Complete(crate::journal::Completion),
     Safety(crate::journal::SafetyReport),
+    Diagnostic(crate::journal::Request, crate::journal::Diagnostic),
     Cancel(String),
     Prepare {
         work: String,
@@ -434,6 +435,10 @@ impl Core {
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
+            TurnUpdate::ThoughtDropped => commands.push(Command::Diagnostic(
+                active.request.clone(),
+                crate::journal::Diagnostic::DroppedThoughtText,
+            )),
             TurnUpdate::PromptEnded { stop_reason } => {
                 use agent_client_protocol_schema::v1::StopReason;
                 active.phase = Phase::Settling {
@@ -710,6 +715,9 @@ impl Conductor {
                     }
                 }
                 Command::Safety(report) => journal.safety(report, clock.as_ref()),
+                Command::Diagnostic(request, diagnostic) => {
+                    journal.diagnostic(&request, diagnostic, clock.as_ref())
+                }
                 Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
                 Command::Prepare { work, settings } => {
                     let result = match readable(runtime, *read_open) {

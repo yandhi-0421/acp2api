@@ -144,6 +144,7 @@ async fn next(runtime: &mut Runtime) -> String {
     match event {
         RuntimeEvent::Turn { update, .. } => match update {
             TurnUpdate::Text(text) => format!("text {text}"),
+            TurnUpdate::ThoughtDropped => "thought dropped".into(),
             TurnUpdate::Usage(used) => format!("usage {used}"),
             TurnUpdate::Permission { call, .. } => format!("permission {call:?}"),
             TurnUpdate::RefusedPermission { name, .. } => format!("permission of {name}"),

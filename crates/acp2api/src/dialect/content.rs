@@ -63,6 +63,9 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             .as_array()
             .ok_or_else(|| Refusal::invalid("message array required"))?
         {
+            if matches!(api, Api::Responses) && item["type"] == "reasoning" {
+                continue;
+            }
             if matches!(api, Api::Chat) && item["role"] == "tool" {
                 at_start = false;
                 items.push(Item::ToolResult {
@@ -406,6 +409,14 @@ fn push_part(
     tools: &[crate::conversation::ClientTool],
     parts: &mut Vec<Part>,
 ) -> Result<(), Refusal> {
+    if matches!(api, Api::Messages)
+        && matches!(
+            block["type"].as_str(),
+            Some("thinking" | "redacted_thinking")
+        )
+    {
+        return Ok(());
+    }
     if matches!(api, Api::Messages) && block["type"] == "tool_addition" {
         let tool = &block["tool"];
         if tool["type"] != "tool_reference"

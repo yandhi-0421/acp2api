@@ -459,6 +459,7 @@ impl Runtime {
                     _ => None,
                 },
                 SessionUpdate::UsageUpdate(usage) => Some(TurnUpdate::Usage(usage.used)),
+                SessionUpdate::AgentThoughtChunk(_) => Some(TurnUpdate::ThoughtDropped),
                 SessionUpdate::ToolCall(call) => self
                     .tool_calls
                     .update(
@@ -581,6 +582,7 @@ pub(crate) enum RuntimeEvent {
 }
 pub(crate) enum TurnUpdate {
     Text(String),
+    ThoughtDropped,
     Usage(u64),
     Permission {
         request: PermissionRequest,

@@ -260,6 +260,13 @@ pub(crate) fn prompt(
             blocks.push(PromptBlock::Text(prefix));
         }
     }
+    if let Some(PromptBlock::Text(text)) = blocks
+        .iter_mut()
+        .find(|block| matches!(block, PromptBlock::Text(_)))
+        && text.trim_start().starts_with('/')
+    {
+        text.insert_str(0, "[user]\n");
+    }
     (kind, blocks)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

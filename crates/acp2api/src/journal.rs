@@ -283,6 +283,7 @@ pub(crate) struct SafetyReport {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub(crate) enum Diagnostic {
     UnknownEffort { value: String },
+    DroppedThoughtText,
 }
 impl Journal {
     pub(crate) fn diagnostic(
