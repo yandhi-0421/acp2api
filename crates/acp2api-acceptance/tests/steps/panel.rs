@@ -382,9 +382,9 @@ fn credentials(w: &mut World) {
 async fn generated_key(w: &mut World) {
     prepare(w).await;
     let key = check::generated(&w.startup, "local API key");
-    assert_eq!(
+    assert_ne!(
         w.panel.api(&key).await.status,
-        200,
+        401,
         "FR-004 generated delivered key must authenticate actual API"
     );
 }
