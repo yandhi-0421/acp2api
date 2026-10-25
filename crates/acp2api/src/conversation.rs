@@ -177,12 +177,8 @@ pub(crate) fn prompt(
         [Item::Message {
             role: Role::User,
             name: None,
-            parts,
+            ..
         }]
-        if !parts.iter().find_map(|part| match part {
-            Part::Text(text) => Some(text),
-            _ => None,
-        }).is_some_and(|text| text.trim_start().starts_with('/'))
     );
     let mut blocks = Vec::new();
     for (index, item) in items.iter().enumerate() {
@@ -263,6 +259,13 @@ pub(crate) fn prompt(
         if !prefix.is_empty() {
             blocks.push(PromptBlock::Text(prefix));
         }
+    }
+    if let Some(PromptBlock::Text(text)) = blocks
+        .iter_mut()
+        .find(|block| matches!(block, PromptBlock::Text(_)))
+        && text.trim_start().starts_with('/')
+    {
+        text.insert_str(0, "[user]\n");
     }
     (kind, blocks)
 }
@@ -489,6 +492,59 @@ pub(crate) type Ticket = tokio::sync::mpsc::UnboundedReceiver<(TurnEvent, crate:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_image_before_slash_text_keeps_the_label_with_that_text() {
+        let message = Item::Message {
+            role: Role::User,
+            name: None,
+            parts: vec![
+                Part::Image {
+                    media_type: "image/png".into(),
+                    base64: "aW1hZ2U=".into(),
+                },
+                Part::Text("/x".into()),
+            ],
+        };
+        let (_, blocks) = prompt(Prompt::New { message: &message }, &[&message]);
+        assert_eq!(
+            blocks.len(),
+            2,
+            "FR-016 adds no label block before the image"
+        );
+        assert!(
+            matches!(&blocks[..], [PromptBlock::Image { media_type, base64 }, PromptBlock::Text(text)] if media_type == "image/png" && base64 == "aW1hZ2U=" && text == "[user]\n/x"),
+            "FR-016 keeps the image first and labels the first text"
+        );
+    }
+
+    #[test]
+    fn a_document_before_slash_text_keeps_its_prompt_without_a_label() {
+        let message = Item::Message {
+            role: Role::User,
+            name: None,
+            parts: vec![
+                Part::Document {
+                    title: None,
+                    text: "Document text".into(),
+                },
+                Part::Text("/x".into()),
+            ],
+        };
+        let (_, blocks) = prompt(Prompt::New { message: &message }, &[&message]);
+        let texts: Vec<_> = blocks
+            .into_iter()
+            .map(|block| match block {
+                PromptBlock::Text(text) => text,
+                PromptBlock::Image { .. } => panic!("no image in this message"),
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            ["[document]\nDocument text\n[end of document]", "/x"],
+            "FR-016 uses the first prompt text, including document text"
+        );
+    }
 
     #[test]
     fn an_empty_tool_result_has_no_blank_line_before_the_next_item() {
