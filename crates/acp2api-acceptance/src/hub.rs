@@ -55,7 +55,7 @@ impl Counts {
 }
 pub(crate) struct Sleeper {
     pub at: u64,
-    pub writer: Arc<Mutex<TcpStream>>,
+    pub writer: Option<Arc<Mutex<TcpStream>>>,
 }
 pub(crate) struct ClientSocket {
     pub socket: TcpStream,
@@ -338,19 +338,13 @@ impl Hub {
                     state.next_sleep += 1;
                     let id = state.next_sleep;
                     let at = message["at"].as_u64().unwrap().max(state.now);
-                    state.sleepers.insert(
-                        id,
-                        Sleeper {
-                            at,
-                            writer: writer.clone(),
-                        },
-                    );
+                    state.sleepers.insert(id, Sleeper { at, writer: None });
                     json!({"id":id,"now":state.now})
                 }
                 "wait" => {
                     let id = message["id"].as_u64().unwrap();
                     if let Some(s) = state.sleepers.get_mut(&id) {
-                        s.writer = writer.clone();
+                        s.writer = Some(writer.clone());
                     }
                     if state.wake_pending.contains(&id) {
                         let _ = send(
@@ -406,6 +400,7 @@ impl Hub {
             }
             self.shared.1.notify_all();
         }
+        let _ = reader.get_ref().shutdown(Shutdown::Both);
     }
     pub fn entries(&self) -> Vec<Entry> {
         self.shared.0.lock().unwrap().entries.clone()
@@ -475,8 +470,8 @@ impl Hub {
     pub fn close(&self) {
         self.alive.store(false, Ordering::SeqCst);
         let s = self.shared.0.lock().unwrap();
-        for sleeper in s.sleepers.values() {
-            let _ = sleeper.writer.lock().unwrap().shutdown(Shutdown::Both);
+        for writer in s.sleepers.values().filter_map(|s| s.writer.as_ref()) {
+            let _ = writer.lock().unwrap().shutdown(Shutdown::Both);
         }
         for server in s.servers.values() {
             let _ = server.lock().unwrap().shutdown(Shutdown::Both);
@@ -521,15 +516,35 @@ impl HubLink {
         Ok(BufReader::new(stream))
     }
     pub fn call(&self, mut message: Value) -> Value {
-        let mut connection = self.connection.lock().unwrap();
-        let reader =
-            connection.get_or_insert_with(|| BufReader::new(self.open().expect("hub RPC connect")));
         message["token"] = json!(self.token);
         message["role"] = json!("rpc_stream");
-        send(reader.get_mut(), &message).expect("hub RPC request");
+        let mut connection = self.connection.lock().unwrap();
+        let result = (|| -> std::io::Result<String> {
+            let mut reader = match connection.take() {
+                Some(reader) => reader,
+                None => BufReader::new(self.open()?),
+            };
+            let mut result = Self::exchange(&mut reader, &message);
+            if result.is_err() {
+                drop(reader);
+                reader = BufReader::new(self.open()?);
+                result = Self::exchange(&mut reader, &message);
+            }
+            if result.is_ok() {
+                *connection = Some(reader);
+            }
+            result
+        })();
+        drop(connection);
+        serde_json::from_str(&result.expect("hub RPC response")).expect("hub RPC JSON")
+    }
+    fn exchange(reader: &mut BufReader<TcpStream>, message: &Value) -> std::io::Result<String> {
+        send(reader.get_mut(), message)?;
         let mut line = String::new();
-        reader.read_line(&mut line).expect("hub RPC response");
-        serde_json::from_str(&line).expect("hub RPC JSON")
+        if reader.read_line(&mut line)? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        Ok(line)
     }
 }
 
@@ -580,6 +595,151 @@ impl Hub {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn ended_shared_handler_closes_its_socket() {
+        let hub = Hub::new("local-handler-test".into());
+        let stream = TcpStream::connect(&hub.address).unwrap();
+        stream
+            .set_read_timeout(Some(real_limit(Duration::from_secs(2))))
+            .unwrap();
+        let mut reader = BufReader::new(stream);
+        send(
+            reader.get_mut(),
+            &json!({"token":hub.token,"role":"rpc_stream","op":"now"}),
+        )
+        .unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            json!({"now":0})
+        );
+        reader.get_mut().write_all(b"invalid-json\n").unwrap();
+        line.clear();
+        let ended = reader.read_line(&mut line);
+        hub.close();
+        assert_eq!(
+            ended.unwrap(),
+            0,
+            "the peer sees EOF after the handler ends"
+        );
+    }
+
+    #[test]
+    fn shared_rpc_recovers_from_eof_and_write_failure() {
+        let mut replies = Vec::new();
+        for fault in [Shutdown::Read, Shutdown::Write] {
+            let hub = Hub::new("local-reconnect-test".into());
+            let link = HubLink::new(&hub);
+            assert_eq!(link.call(json!({"op":"now"})), json!({"now":0}));
+            link.connection
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_ref()
+                .shutdown(fault)
+                .unwrap();
+            for caller in [link.clone(), link] {
+                replies.push(std::panic::catch_unwind(|| caller.call(json!({"op":"now"}))).ok());
+            }
+            hub.close();
+        }
+        assert_eq!(replies, vec![Some(json!({"now":0})); 4]);
+    }
+
+    #[test]
+    fn shared_rpc_stops_after_one_retry_and_can_be_used_after_the_panic() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let link: HubLink = serde_json::from_value(json!({
+            "address":listener.local_addr().unwrap().to_string(),
+            "token":"local-retry-limit-test"
+        }))
+        .unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        let peer_running = running.clone();
+        let peer = thread::spawn(move || {
+            let deadline = Instant::now() + real_limit(Duration::from_secs(5));
+            let mut requests = Vec::new();
+            for attempt in 0..3 {
+                let stream = loop {
+                    if !peer_running.load(Ordering::SeqCst) {
+                        return requests;
+                    }
+                    assert!(Instant::now() < deadline, "retry peer cap: 5 s");
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("retry peer accept: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(real_limit(Duration::from_secs(2))))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(real_limit(Duration::from_secs(2))))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                let size = reader.by_ref().take(4097).read_line(&mut line).unwrap();
+                assert!((1..=4096).contains(&size), "retry peer frame cap: 4 KiB");
+                let request: Value = serde_json::from_str(&line).unwrap();
+                requests.push(request["value"].clone());
+                if attempt == 2 {
+                    send(reader.get_mut(), &json!({"answer":request["value"]})).unwrap();
+                }
+            }
+            requests
+        });
+        let failed = std::panic::catch_unwind(|| link.call(json!({"op":"echo","value":0})));
+        let later = std::panic::catch_unwind(|| link.call(json!({"op":"echo","value":1})));
+        running.store(false, Ordering::SeqCst);
+        let requests = peer.join().unwrap();
+        assert!(failed.is_err(), "two failed exchanges end the call");
+        assert_eq!(later.ok(), Some(json!({"answer":1})));
+        assert_eq!(requests, vec![json!(0), json!(0), json!(1)]);
+        assert!(
+            std::panic::catch_unwind(|| link.call(json!({"op":"echo","value":2}))).is_err(),
+            "a stopped peer ends the call"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wake_before_wait_does_not_take_a_shared_rpc_reply() {
+        let hub = Hub::new("local-wake-test".into());
+        let link = HubLink::new(&hub);
+        assert_eq!(link.call(json!({"op":"sleep","at":0}))["id"], 1);
+        let mut time = crate::timeline::TimeLine::new(hub.clone());
+        let advancing = tokio::spawn(async move { time.advance_to(1).await });
+        let deadline = Instant::now() + real_limit(Duration::from_secs(2));
+        while hub.counts().wake_pending == 0 {
+            assert!(Instant::now() < deadline, "early wake cap: 2 s");
+            hub.wait_change(deadline);
+        }
+        let before_wait = link.call(json!({"op":"now"}));
+        let mut waiting = link.connect(json!({"op":"wait","id":1})).unwrap();
+        waiting
+            .get_ref()
+            .set_read_timeout(Some(real_limit(Duration::from_secs(2))))
+            .unwrap();
+        let mut wake = String::new();
+        waiting.read_line(&mut wake).unwrap();
+        link.call(json!({"op":"sleep_done","id":1}));
+        advancing.await.unwrap();
+        let after_wait = link.call(json!({"op":"now"}));
+        hub.close();
+        assert_eq!(before_wait, json!({"now":0}));
+        assert_eq!(
+            serde_json::from_str::<Value>(&wake).unwrap(),
+            json!({"wake":1,"now":0})
+        );
+        assert_eq!(after_wait, json!({"now":1}));
+    }
 
     #[test]
     fn repeated_rpc_calls_share_a_client_port_and_keep_their_responses() {

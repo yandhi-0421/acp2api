@@ -1,10 +1,7 @@
 use crate::hub::{Hub, HubLink, send};
 use crate::real_limit;
 use serde_json::json;
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 #[derive(Clone, Debug)]
 pub struct TimeLine {
     pub hub: Hub,
@@ -53,12 +50,14 @@ impl TimeLine {
                     .sleepers
                     .iter()
                     .filter(|(id, sleep)| sleep.at <= at && !s.wake_pending.contains(id))
-                    .map(|(id, sleep)| (*id, Arc::clone(&sleep.writer)))
+                    .map(|(id, sleep)| (*id, sleep.writer.clone()))
                     .collect();
                 for (id, writer) in due {
                     s.wake_pending.push(id);
-                    send(&mut writer.lock().unwrap(), &json!({"wake":id,"now":at}))
-                        .expect("timer wake");
+                    if let Some(writer) = writer {
+                        send(&mut writer.lock().unwrap(), &json!({"wake":id,"now":at}))
+                            .expect("timer wake");
+                    }
                 }
                 s.counts.wake_pending = s.wake_pending.len() as u64;
             }
