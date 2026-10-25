@@ -98,22 +98,21 @@ impl Builds {
             folders.push(folder.into());
         }
         if let Some(home) = &self.environment.home {
-            scan(&home.join("Library/Application Support/Zed"), &mut folders)?;
-            scan(&home.join("Library/Caches/JetBrains"), &mut folders)?;
+            scan(&home.join("Library/Application Support/Zed"), &mut folders);
+            scan(&home.join("Library/Caches/JetBrains"), &mut folders);
         }
         if let Some(local) = &self.environment.local_app_data {
-            scan(&local.join("Zed"), &mut folders)?;
-            scan(&local.join("JetBrains"), &mut folders)?;
+            scan(&local.join("Zed"), &mut folders);
+            scan(&local.join("JetBrains"), &mut folders);
         }
         folders.sort();
         folders.dedup();
         let mut found = Vec::new();
         for folder in folders {
-            if names().iter().all(|name| folder.join(name).is_file()) {
-                found.push(Found {
-                    listed: self.identify(&folder)?,
-                    folder,
-                });
+            if names().iter().all(|name| folder.join(name).is_file())
+                && let Ok(listed) = self.identify(&folder)
+            {
+                found.push(Found { listed, folder });
             }
         }
         *self.found.lock().unwrap() = found;
@@ -189,14 +188,46 @@ impl Builds {
     ) -> Result<(Runtime, crate::catalog::Catalog), String> {
         if let Some(source) = source {
             let copy = self.start.data.join("official-runtime");
-            fs::create_dir_all(&copy).map_err(|error| error.to_string())?;
-            if fs::canonicalize(&source).map_err(|error| error.to_string())?
-                != fs::canonicalize(&copy).map_err(|error| error.to_string())?
-            {
-                for name in names() {
-                    fs::copy(source.join(name), copy.join(name))
-                        .map_err(|error| error.to_string())?;
+            let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
+            if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
+                let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
+                let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
+                let backup = self
+                    .start
+                    .data
+                    .join(format!(".official-runtime-old-{suffix}"));
+                fs::create_dir(&staging).map_err(|error| error.to_string())?;
+                let result = (|| {
+                    for name in names() {
+                        fs::copy(source.join(name), staging.join(name))
+                            .map_err(|error| error.to_string())?;
+                    }
+                    if self
+                        .identify(&staging)?
+                        .filter(|build| build.platform == self.start.release.platform())
+                        .is_none()
+                    {
+                        return Err("no accepted copy".into());
+                    }
+                    let previous = copy.exists();
+                    if previous {
+                        fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
+                    }
+                    if let Err(error) = fs::rename(&staging, &copy) {
+                        if previous {
+                            fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
+                        }
+                        return Err(error.to_string());
+                    }
+                    if previous {
+                        fs::remove_dir_all(backup).map_err(|error| error.to_string())?;
+                    }
+                    Ok(())
+                })();
+                if staging.exists() {
+                    fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
                 }
+                result?;
             }
         }
         let build = self.accepted_copy()?.ok_or("no accepted copy")?;
@@ -205,8 +236,10 @@ impl Builds {
     pub(crate) fn after_start(&self, settings: &Settings) -> Result<(), String> {
         self.discover(settings.agy_acp_server_path.as_deref())
     }
-    pub(crate) fn unavailable(&self) -> String {
-        let reason = if self.found.lock().unwrap().is_empty() {
+    pub(crate) fn unavailable(&self, error: &str) -> String {
+        let reason = if error != "no accepted copy" {
+            error
+        } else if self.found.lock().unwrap().is_empty() {
             "acp2api found no executable of the official runtime"
         } else {
             "no build that acp2api found is an accepted version"
@@ -257,24 +290,16 @@ impl Builds {
         Ok(Summary { found: rows, newer })
     }
 }
-fn scan(path: &Path, folders: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = match fs::read_dir(path) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(format!("cannot search {}: {error}", path.display())),
+fn scan(path: &Path, folders: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
     };
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_dir()
-        {
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             folders.push(entry.path());
-            scan(&entry.path(), folders)?;
+            scan(&entry.path(), folders);
         }
     }
-    Ok(())
 }
 pub(crate) fn names() -> [&'static str; 2] {
     if cfg!(windows) {
@@ -317,6 +342,173 @@ mod tests {
                 program: spec.program,
             })
         }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_failed_copy_preserves_the_previous_executables_and_removes_staging() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-staged-copy-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in ["official-runtime", "source"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        for name in names() {
+            fs::write(root.join("official-runtime").join(name), b"old").unwrap();
+        }
+        fs::write(root.join("source").join(names()[0]), b"new").unwrap();
+        fs::create_dir(root.join("source").join(names()[1])).unwrap();
+        let ports = Ports::production();
+        let builds = Builds::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            0,
+        );
+        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let bytes = names().map(|name| fs::read(root.join("official-runtime").join(name)).unwrap());
+        let staging = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-")
+            })
+            .count();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            (failed, bytes, staging),
+            (true, [b"old".to_vec(), b"old".to_vec()], 0),
+            "failed replacement must leave the accepted copy unchanged and no staging folder"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn search_skips_an_unreadable_place_and_keeps_other_results() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-search-error-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        fs::create_dir_all(root.join("home/Library/Application Support")).unwrap();
+        fs::write(
+            root.join("home/Library/Application Support/Zed"),
+            b"not a directory",
+        )
+        .unwrap();
+        fs::create_dir(root.join("exe")).unwrap();
+        for name in names() {
+            fs::write(root.join("exe").join(name), b"found").unwrap();
+        }
+        let ports = Ports::production();
+        let builds = Builds::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: Some(root.join("home")),
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            0,
+        );
+        let config = root.join("config.toml");
+        let mut settings = crate::store::read(&config, 3).unwrap().settings;
+        let result = builds.select(Action::Search, &mut settings, &config);
+        let found = builds.summary().unwrap().found;
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            result.is_ok() && found.len() == 1,
+            "a bad search place must not hide a readable build"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn an_accepted_copy_reports_the_actual_launch_failure() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-launch-reason-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            fs::create_dir_all(root.join("official-runtime")).unwrap();
+            for name in names() {
+                fs::write(root.join("official-runtime").join(name), b"accepted").unwrap();
+            }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            let mut ports = Ports::production();
+            ports.release = Arc::new(Facts(vec![ListedBuild {
+                version: "1.4.0".into(),
+                platform: ports.release.platform().into(),
+                agy_acp_server_sha256: hash.clone(),
+                localharness_external_sha256: hash,
+            }]));
+            ports.launcher = Arc::new(RefusingLauncher(Arc::new(AtomicUsize::new(0))));
+            let builds = Builds::new(
+                &ports,
+                Environment {
+                    account_root: root.join("account"),
+                    home: None,
+                    local_app_data: None,
+                    temp: root.join("temp"),
+                    path: vec![],
+                    exe_dir: root.join("exe"),
+                },
+                root.clone(),
+                crate::account::Temporary::fixture(&root),
+                crate::runtime_driver::mcp::ToolSets::new(0),
+                0,
+            );
+            let config = root.join("config.toml");
+            let settings = crate::store::read(&config, 3).unwrap().settings;
+            let journal =
+                crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = crate::conductor::Conductor::start(
+                None,
+                ports.clock.clone(),
+                journal,
+                settings,
+                config,
+                3,
+            );
+            conductor
+                .builds(builds, Action::Initial, crate::Hold::empty())
+                .await
+                .unwrap();
+            let error = conductor
+                .model_names(crate::Hold::empty())
+                .await
+                .err()
+                .unwrap();
+            let actual = error.message.to_string();
+            drop(conductor);
+            task.await.unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                actual.contains("runtime launch: Refused"),
+                "M-14 must preserve the actual accepted-copy start error: {actual}"
+            );
+        })
+        .await
+        .expect(
+            "launch failure cap: 5 seconds; one refused launch, no child process or HTTP requests",
+        );
     }
 
     #[tokio::test]

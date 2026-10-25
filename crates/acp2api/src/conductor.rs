@@ -240,6 +240,7 @@ struct Core {
 }
 enum Event {
     RetireRuntime,
+    RuntimeUnavailable(String),
     ResumeRuntime,
     Accepted(Box<Accepted>),
     Runtime(RuntimeEvent),
@@ -421,6 +422,26 @@ impl Core {
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         match event {
+            Event::RuntimeUnavailable(message) => {
+                let queued: Vec<_> = self
+                    .work
+                    .iter()
+                    .filter_map(|(id, work)| matches!(work, Work::AcceptedQueued(_)).then_some(*id))
+                    .collect();
+                for id in queued {
+                    let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+                    commands.push(Command::Complete(crate::journal::Completion {
+                        request: request.request,
+                        session: None,
+                        session_use: None,
+                        outcome: crate::journal::Outcome::Refused("runtime_unavailable"),
+                    }));
+                    commands.push(Command::Emit(
+                        request.output,
+                        TurnEvent::End(Err(crate::messages::Message::Unavailable(message.clone()))),
+                    ));
+                }
+            }
             Event::RetireRuntime => self.runtime_state = RuntimeState::Retiring,
             Event::ResumeRuntime => self.runtime_state = RuntimeState::Serving,
             Event::Accepted(request) => {
@@ -1006,7 +1027,22 @@ impl Conductor {
                             runtime = Some(started);
                             unavailable = None;
                         }
-                        Err(_) => unavailable = Some(change.builds.unavailable()),
+                        Err(error) => {
+                            let message = change.builds.unavailable(&error);
+                            let mut commands = core
+                                .handle(Event::RuntimeUnavailable(message.clone()), clock.now())
+                                .into();
+                            Self::commands(
+                                &mut core,
+                                &mut runtime,
+                                &mut read_open,
+                                &clock,
+                                &journal,
+                                &mut commands,
+                            )
+                            .await;
+                            unavailable = Some(message);
+                        }
                     }
                     read_open = runtime.is_some();
                     let result = change
@@ -1591,6 +1627,31 @@ mod tests {
             std::fs::remove_dir_all(root).unwrap();
             assert!(normal == [true, true] && ordered, "A and B must end normally around the planned replacement: {actual:?}");
         }).await.expect("planned build replacement cap: 5 seconds; two fake agents, 8 requests and 64 KiB per line each, 32 trace events");
+    }
+
+    #[test]
+    fn a_failed_replacement_ends_queued_requests_with_runtime_unavailable() {
+        let journal = crate::journal::Journal::prepare().unwrap();
+        let (mut core, _, tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::RetireRuntime, 1);
+        let message = "acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.";
+        let commands = core.handle(Event::RuntimeUnavailable(message.into()), 2);
+        let ends: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Emit(
+                    _,
+                    TurnEvent::End(Err(crate::messages::Message::Unavailable(text))),
+                ) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ends,
+            [message],
+            "queued requests must receive M-14 when a planned replacement fails"
+        );
+        drop(tickets);
     }
 
     #[test]

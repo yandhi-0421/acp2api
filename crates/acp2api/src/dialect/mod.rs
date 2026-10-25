@@ -94,6 +94,12 @@ impl<T: WireDialect + 'static> Dialect for T {
             }
             Row::Key | Row::Rejected | Row::TooLarge => {}
         }
+        if matches!(refusal.message, Message::Unavailable(_)) {
+            response.headers_mut().insert(
+                "x-should-retry",
+                axum::http::HeaderValue::from_static("false"),
+            );
+        }
         response
     }
     fn respond(
@@ -275,5 +281,28 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
             "upstream_error"
         }
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn runtime_unavailable_refusals_tell_each_client_not_to_retry() {
+        let refusal = Message::Unavailable("acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.".into()).into();
+        for dialect in [CHAT, MESSAGES, RESPONSES] {
+            let response = dialect.refusal(&refusal);
+            assert_eq!(
+                (
+                    response.status().as_u16(),
+                    response
+                        .headers()
+                        .get("x-should-retry")
+                        .and_then(|value| value.to_str().ok())
+                ),
+                (400, Some("false")),
+                "FR-033 marks M-14 as non-retryable"
+            );
+        }
     }
 }
