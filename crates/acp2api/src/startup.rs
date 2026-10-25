@@ -59,6 +59,11 @@ pub(crate) async fn start(
         println!("acp2api {}", ports.release.version());
         return Ok(());
     }
+    let Some(mut account) =
+        crate::account::Account::claim(&env, ports.clock.as_ref(), ports.stop.as_mut()).await?
+    else {
+        return Ok(());
+    };
     let data = if let Some(data) = options.data {
         data
     } else if ports.release.platform().starts_with("windows-") {
@@ -94,8 +99,18 @@ pub(crate) async fn start(
         "acp2api: {}: management panel at {panel}",
         ports.release.version()
     );
-    let journal = crate::journal::Journal::open(&data.join("logs"), ports.clock.wall())
-        .map_err(|e| e.to_string())?;
+    let retained_listener = listener.into_std().map_err(|error| error.to_string())?;
+    let listener = tokio::net::TcpListener::from_std(
+        retained_listener
+            .try_clone()
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    account.publish(&panel)?;
+    let journal = crate::journal::Journal::prepare().map_err(|error| error.to_string())?;
+    journal
+        .open_writer(&data.join("logs"), ports.clock.wall())
+        .map_err(|error| error.to_string())?;
     let tools = crate::runtime_driver::mcp::ToolSets::new(port);
     let runtime = if crate::runtime_driver::program(&data)
         .try_exists()
@@ -126,6 +141,7 @@ pub(crate) async fn start(
         ports.browser.open(&panel);
     }
     println!("{start_line}");
+    let clock = ports.clock.clone();
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             ports.stop.stopped().await;
@@ -133,5 +149,6 @@ pub(crate) async fn start(
         .await
         .map_err(|e| e.to_string())?;
     task.await.map_err(|e| e.to_string())?;
+    account.finish(clock.as_ref(), retained_listener).await?;
     Ok(())
 }

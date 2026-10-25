@@ -11,6 +11,7 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+mod account;
 mod catalog;
 mod conductor;
 mod conversation;
