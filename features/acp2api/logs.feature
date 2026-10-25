@@ -65,7 +65,7 @@ Feature: Logs
     Then the log holds the code 503, the status "UNAVAILABLE", and the message "The service is currently unavailable."
     And the log does not hold "MARKER-STDERR"
 
-  @FR-056 @issue-50 @wip
+  @FR-056 @issue-50
   Scenario Outline: acp2api replaces each email address in an error text with the redaction mark
     Given the stderr of the official runtime has an error line with the message "Account <address> is not valid"
     When an API client sends a valid request
@@ -77,7 +77,7 @@ Feature: Logs
       | name@example.com   | Account <REDACTED> is not valid |
       | name%40example.com | Account <REDACTED> is not valid |
 
-  @FR-056 @issue-50 @wip
+  @FR-056 @issue-50
   Scenario Outline: acp2api replaces each value with the form of a token with the redaction mark
     Given the stderr of the official runtime has an error line with the message "<message>"
     When an API client sends a valid request

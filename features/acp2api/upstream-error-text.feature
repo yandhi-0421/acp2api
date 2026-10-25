@@ -8,7 +8,7 @@ Feature: No text of an upstream error as reply text
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-028 @issue-50 @wip
+  @FR-028 @issue-50
   Scenario Outline: An error line drops the held chunk and ends the response with the error
     Given the official runtime sends the text chunks "Sure, " and "503 The service is unavailable."
     And the prompt turn ends
@@ -25,7 +25,7 @@ Feature: No text of an upstream error as reply text
       | 150 ms after the end of the prompt turn |
       | 200 ms after the end of the prompt turn |
 
-  @FR-028 @issue-50 @wip
+  @FR-028 @issue-50
   Scenario Outline: A non-reply update does not release the held error text
     Given the official runtime sends "Sure, " and then "503 The service is unavailable." as reply text chunks
     And the official runtime then sends <update>
@@ -40,7 +40,7 @@ Feature: No text of an upstream error as reply text
       | a usage update            |
       | a chunk of thought text   |
 
-  @FR-028 @issue-50 @wip
+  @FR-028 @issue-50
   Scenario: The wait ends early when both error lines are there
     Given the official runtime sends the text chunks "Sure, " and "503 The service is unavailable."
     And the prompt turn ends
@@ -55,7 +55,7 @@ Feature: No text of an upstream error as reply text
     When an API client sends a valid request to "POST /v1/chat/completions"
     Then the reply text of the response is "Sure, here it is."
 
-  @FR-028 @issue-50 @wip
+  @FR-028 @issue-50
   Scenario: An error line after the wait stops the ACP session and gives a log line
     Given an API client got the reply "Done." from a prompt turn in the ACP session "S1"
     And the error line of that ACP session came 201 ms after the end of the prompt turn
