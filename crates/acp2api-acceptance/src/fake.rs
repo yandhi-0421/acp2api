@@ -683,12 +683,16 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
                 true,
             );
             for line in lines {
-                emit(
-                    s,
-                    label,
-                    at + delay.as_millis() as u64,
-                    json!({"op":"Err","line":line.replace("{session}", &session)}),
-                );
+                let command = json!({"op":"Err","line":line.replace("{session}", &session)});
+                let at = at + delay.as_millis() as u64;
+                if at <= s.now {
+                    s.out(label, command);
+                } else {
+                    s.external
+                        .entry(at)
+                        .or_default()
+                        .push(json!({"label":label,"command":command}));
+                }
             }
             return;
         }
