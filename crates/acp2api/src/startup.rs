@@ -187,10 +187,14 @@ pub(crate) async fn launch(
 ) -> Result<Launched, String> {
     let (path, index) = temporary.prepare_launch()?;
     spec.own_temp = Some(path);
-    let child = launcher
-        .launch(spec)
-        .map_err(|error| format!("runtime launch: {error:?}"))?;
-    if let Err(error) = temporary.record_launch(index, child.tree.pid()) {
+    let child = match launcher.launch(spec) {
+        Ok(child) => child,
+        Err(error) => {
+            temporary.record_launch(index, None)?;
+            return Err(format!("runtime launch: {error:?}"));
+        }
+    };
+    if let Err(error) = temporary.record_launch(index, Some(child.tree.pid())) {
         child.tree.stop(clock).await;
         return Err(error);
     }
@@ -565,6 +569,63 @@ mod lifecycle_tests {
             std::fs::remove_dir_all(root).unwrap();
             assert_eq!(actual, (true, true), "unsafe recovery retains the old root and continues after publication and log setup");
         }).await.expect("startup recovery-order cap: 5 seconds; one native child, no HTTP requests or captured process output");
+    }
+
+    #[tokio::test]
+    async fn a_failed_launch_does_not_disable_cleanup_on_later_starts() {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-failed-launch-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let previous = crate::account::Temporary::fixture(&root);
+            let owned = previous.sessions().parent().unwrap().to_path_buf();
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let child = launch(&previous, &crate::os::OsLauncher, clock.clone(), LaunchSpec {
+                program: if cfg!(windows) { "cmd.exe" } else { "/bin/cat" }.into(),
+                args: vec![], env_set: vec![], cwd: previous.sessions(), own_temp: None,
+            }).await.unwrap();
+            let failed = launch(&previous, &crate::os::OsLauncher, clock.clone(), LaunchSpec {
+                program: root.join("missing-executable"), args: vec![], env_set: vec![],
+                cwd: previous.sessions(), own_temp: None,
+            }).await.is_err();
+            let record_path = root.join("account/owned-temporary-files.json");
+            let mut record: serde_json::Value = serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+            record["roots"][0]["process"] = record["roots"][0]["processes"][0]["process"].clone();
+            std::fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+            drop(child.stdin);
+            child.tree.stop(clock).await;
+            let data = root.join("data");
+            let config = data.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            settings.port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            crate::store::save(&config, &settings).unwrap();
+            let session = data.join("runtime-home/antigravity-acp/conversations/earlier.db");
+            let mut deleted = Vec::new();
+            for _ in 0..3 {
+                std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+                std::fs::write(&session, b"earlier session").unwrap();
+                let env = Environment { account_root: root.join("account"), home: None, local_app_data: None, temp: root.join("temp"), path: vec![], exe_dir: root.join("exe") };
+                let (stop, signal) = tokio::sync::oneshot::channel();
+                let mut ports = Ports::production();
+                ports.stop = Box::new(Stop(signal));
+                let task = tokio::spawn(start(ports, vec!["acp2api".into(), "--data-dir".into(), data.clone().into_os_string()], env));
+                let mut client = loop {
+                    if let Ok(client) = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, settings.port)).await { break client; }
+                    tokio::task::yield_now().await;
+                };
+                client.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").await.unwrap();
+                let mut response = Vec::new();
+                client.take(65537).read_to_end(&mut response).await.unwrap();
+                assert!(response.len() <= 65536, "three panel responses, 64 KiB each");
+                deleted.push(!session.exists());
+                stop.send(()).unwrap();
+                task.await.unwrap().unwrap();
+            }
+            let actual = (failed, deleted, owned.exists());
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, (true, vec![true, true, true], false), "a failed spawn must not retain the run root or block session-file cleanup at later starts");
+        }).await.expect("failed-launch recovery cap: 10 seconds; two launch attempts, three panel requests, 64 KiB per response");
     }
 
     #[tokio::test]

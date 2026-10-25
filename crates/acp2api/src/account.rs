@@ -17,7 +17,7 @@ pub(super) struct Account {
 #[serde(deny_unknown_fields)]
 struct Identity {
     pid: u32,
-    created: u64,
+    created: Option<u64>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -401,9 +401,18 @@ impl Temporary {
         private_folder(&path)?;
         Ok((path, index))
     }
-    pub(crate) fn record_launch(&self, index: usize, pid: u32) -> Result<(), String> {
+    pub(crate) fn record_launch(&self, index: usize, pid: Option<u32>) -> Result<(), String> {
         let mut record = self.ownership()?;
-        record.roots[self.index].processes[index].process = identity(pid);
+        let processes = &mut record.roots[self.index].processes;
+        match pid {
+            Some(pid) => {
+                processes[index].process =
+                    Some(identity(pid).unwrap_or(Identity { pid, created: None }));
+            }
+            None => {
+                processes.remove(index);
+            }
+        }
         record.save(&self.account)
     }
     fn finish(&self) -> Result<(), String> {
@@ -520,6 +529,9 @@ fn process_tree_ended(process: &OwnedProcess) -> bool {
     let Some(identity) = &process.process else {
         return false;
     };
+    if identity.created.is_none() {
+        return process_ended(identity);
+    }
     #[cfg(target_os = "macos")]
     {
         unsafe {
@@ -534,7 +546,9 @@ fn process_tree_ended(process: &OwnedProcess) -> bool {
     }
 }
 fn process_ended(process: &Identity) -> bool {
-    if let Some(current) = identity(process.pid) {
+    if process.created.is_some()
+        && let Some(current) = identity(process.pid)
+    {
         return current != *process;
     }
     #[cfg(target_os = "macos")]
@@ -581,7 +595,7 @@ fn identity(pid: u32) -> Option<Identity> {
     };
     (read == size && info.pbi_status != libc::SZOMB).then_some(Identity {
         pid,
-        created: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
+        created: Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec),
     })
 }
 #[cfg(windows)]
@@ -609,7 +623,9 @@ fn identity(pid: u32) -> Option<Identity> {
         CloseHandle(process);
         valid.then_some(Identity {
             pid,
-            created: (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime),
+            created: Some(
+                (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime),
+            ),
         })
     }
 }
@@ -732,6 +748,72 @@ mod tests {
             (1, true),
             "proof of an absent root removes its entry before a new run"
         );
+    }
+
+    #[tokio::test]
+    async fn an_already_exited_launch_keeps_its_pid_and_allows_recovery() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-exited-launch-{}", crate::random_hex::<12>().unwrap()
+            ));
+            let old = Temporary::fixture(&root);
+            let mut owner = tokio::process::Command::new(if cfg!(windows) { "cmd.exe" } else { "/bin/cat" })
+                .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+                .kill_on_drop(true).spawn().unwrap();
+            let pid = owner.id().unwrap();
+            let owner_identity = identity(pid).unwrap();
+            owner.kill().await.unwrap();
+            let (_, index) = old.prepare_launch().unwrap();
+            old.record_launch(index, Some(pid)).unwrap();
+            let mut record = Ownership::load(&old.account).unwrap();
+            let process = serde_json::to_value(&record.roots[0].processes[index].process).unwrap();
+            record.roots[0].process = owner_identity;
+            record.save(&old.account).unwrap();
+            let mut next = Temporary::create(&old.account, &root.join("temp")).unwrap();
+            let ended = next.recover().unwrap();
+            let actual = (process["pid"].as_u64(), process["created"].is_null(), ended, old.root.exists());
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, (Some(u64::from(pid)), true, true, false), "a launch that exits before its creation time is read still has a pid and cannot prevent later cleanup");
+        }).await.expect("exited-launch recovery cap: 5 seconds; one native child, no captured output");
+    }
+
+    #[tokio::test]
+    async fn a_live_pid_without_a_creation_time_cannot_authorize_cleanup() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-live-pid-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let old = Temporary::fixture(&root);
+            let (_, index) = old.prepare_launch().unwrap();
+            let mut next = Temporary::create(&old.account, &root.join("temp")).unwrap();
+            let mut owner =
+                tokio::process::Command::new(if cfg!(windows) { "cmd.exe" } else { "/bin/cat" })
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap();
+            let owner_identity = identity(owner.id().unwrap()).unwrap();
+            owner.kill().await.unwrap();
+            let path = old.account.join(OWNERSHIP);
+            let mut record: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            record["roots"][0]["process"] = serde_json::to_value(owner_identity).unwrap();
+            record["roots"][0]["processes"][index]["process"] =
+                serde_json::json!({"pid":std::process::id(),"created":null});
+            fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+            let actual = (next.recover().ok(), old.root.exists(), next.root.exists());
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                actual,
+                (Some(false), true, true),
+                "a live pid without a creation time must retain its files without refusing startup"
+            );
+        })
+        .await
+        .expect("live-pid recovery cap: 5 seconds; one native child, no captured output");
     }
 
     #[tokio::test]
