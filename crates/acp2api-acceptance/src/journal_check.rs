@@ -20,16 +20,22 @@ pub fn files(folder: &Path) -> Vec<PathBuf> {
     files.sort();
     files
 }
-pub fn records(s: &Scenario) -> Vec<Value> {
+pub fn lines(s: &Scenario) -> Vec<String> {
     files(&s.root.path.join("data/logs"))
         .into_iter()
         .flat_map(|p| {
             fs::read_to_string(p)
                 .unwrap()
                 .lines()
-                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
         })
+        .collect()
+}
+pub fn records(s: &Scenario) -> Vec<Value> {
+    lines(s)
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
         .collect()
 }
 pub fn terminal(s: &Scenario) -> Vec<Value> {

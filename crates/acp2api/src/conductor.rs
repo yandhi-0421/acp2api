@@ -1,7 +1,7 @@
 mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
-    conversation::{Prompt, Ticket, TurnEvent, TurnRequest, Usage},
+    conversation::{EffortAsk, Prompt, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use std::{collections::VecDeque, sync::Arc};
@@ -54,6 +54,7 @@ const UNAVAILABLE: &str = "official runtime is not available";
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
+    model: crate::catalog::SelectedModel,
     request: crate::journal::Request,
     output: Output,
 }
@@ -63,7 +64,7 @@ struct Session {
     system: Option<String>,
 }
 enum Phase {
-    Preparing(Vec<crate::conversation::PromptBlock>),
+    Preparing(PromptRequest),
     Prompt,
     Settling { at: Moment, can_continue: bool },
 }
@@ -79,6 +80,7 @@ struct Active {
     disconnected: bool,
     held: Option<String>,
     text: String,
+    thought_dropped: bool,
     input_tokens: u64,
     phase: Phase,
     tool_call: Option<crate::conversation::ToolCall>,
@@ -105,6 +107,7 @@ enum Event {
 enum Command {
     Complete(crate::journal::Completion),
     Safety(crate::journal::SafetyReport),
+    Diagnostic(crate::journal::Request, crate::journal::Diagnostic),
     Cancel(String),
     Prepare {
         work: String,
@@ -113,7 +116,7 @@ enum Command {
     Prompt {
         work: String,
         session: String,
-        prompt: Vec<crate::conversation::PromptBlock>,
+        prompt: PromptRequest,
     },
     Emit(Output, TurnEvent),
     Permission {
@@ -133,10 +136,20 @@ impl Core {
             .chain(self.records.iter().map(|record| record.expires))
             .min()
     }
-    fn check_model(&self, model: &str) -> Result<(), crate::messages::Refusal> {
-        self.catalog
-            .as_ref()
-            .map_or(Ok(()), |catalog| catalog.check(model))
+    fn check_model(
+        &self,
+        turn: &TurnRequest,
+    ) -> Result<crate::catalog::SelectedModel, crate::messages::Refusal> {
+        self.catalog.as_ref().map_or_else(
+            || {
+                Ok(crate::catalog::SelectedModel {
+                    model: turn.model.clone(),
+                    level: None,
+                    level_from_name: false,
+                })
+            },
+            |catalog| catalog.resolve(turn),
+        )
     }
     fn model_entries(&self) -> Vec<crate::catalog::ModelEntry> {
         self.catalog
@@ -172,9 +185,25 @@ impl Core {
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let (output, ticket) = mpsc::unbounded_channel();
-        let admitted = self.check_model(&work.turn.model).map(|()| ticket);
-        let refused = admitted.is_err();
-        if work.admission.send(admitted).is_err() {
+        let (model, admitted) = match self.check_model(&work.turn) {
+            Ok(model) => {
+                if self.catalog.is_some()
+                    && !model.level_from_name
+                    && let EffortAsk::Unknown(value) = &work.turn.effort
+                {
+                    journal.diagnostic(
+                        &work.request,
+                        crate::journal::Diagnostic::UnknownEffort {
+                            value: value.clone(),
+                        },
+                        clock,
+                    );
+                }
+                (Some(model), work.admission.send(Ok(ticket)))
+            }
+            Err(error) => (None, work.admission.send(Err(error))),
+        };
+        if admitted.is_err() {
             journal.complete(
                 crate::journal::Completion {
                     request: work.request,
@@ -186,11 +215,10 @@ impl Core {
             );
             return None;
         }
-        if refused {
-            return None;
-        }
+        let model = model?;
         let accepted = Accepted {
             turn: work.turn,
+            model,
             request: work.request,
             output,
         };
@@ -347,6 +375,11 @@ impl Core {
                 },
             };
             let (kind, prompt) = crate::conversation::prompt(prompt, &items);
+            let prompt = PromptRequest {
+                blocks: prompt,
+                model: request.model.model,
+                level: request.model.level,
+            };
             let ready = match matched {
                 Some((index, _)) => Some(self.records.remove(index).session),
                 None if settings.system.is_none() && settings.tools.is_empty() => {
@@ -385,6 +418,7 @@ impl Core {
                 disconnected: false,
                 held: None,
                 text: String::new(),
+                thought_dropped: false,
                 input_tokens: request.turn.input_tokens,
                 phase,
                 tool_call: None,
@@ -414,6 +448,15 @@ impl Core {
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
+            TurnUpdate::ThoughtDropped => {
+                if !active.thought_dropped {
+                    active.thought_dropped = true;
+                    commands.push(Command::Diagnostic(
+                        active.request.clone(),
+                        crate::journal::Diagnostic::DroppedThoughtText,
+                    ));
+                }
+            }
             TurnUpdate::PromptEnded { stop_reason } => {
                 use agent_client_protocol_schema::v1::StopReason;
                 active.phase = Phase::Settling {
@@ -690,6 +733,9 @@ impl Conductor {
                     }
                 }
                 Command::Safety(report) => journal.safety(report, clock.as_ref()),
+                Command::Diagnostic(request, diagnostic) => {
+                    journal.diagnostic(&request, diagnostic, clock.as_ref())
+                }
                 Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
                 Command::Prepare { work, settings } => {
                     let result = match readable(runtime, *read_open) {
@@ -714,7 +760,7 @@ impl Conductor {
                     prompt,
                 } => {
                     let result = match readable(runtime, *read_open) {
-                        Ok(runtime) => runtime.start_prompt(prompt, &session).await,
+                        Ok(runtime) => runtime.start_configured_prompt(prompt, &session).await,
                         Err(error) => Err(error),
                     };
                     if let Err(error) = result {
@@ -850,6 +896,7 @@ mod tests {
                     disconnected: false,
                     held: Some("Before".into()),
                     text: String::new(),
+                    thought_dropped: false,
                     input_tokens: turn.input_tokens,
                     phase: Phase::Prompt,
                     tool_call: Some(crate::conversation::ToolCall {
@@ -883,6 +930,11 @@ mod tests {
             selected.extend(
                 core.handle(
                     Event::Accepted(Accepted {
+                        model: crate::catalog::SelectedModel {
+                            model: "m".into(),
+                            level: None,
+                            level_from_name: false,
+                        },
                         turn: next,
                         request: journal.begin(crate::journal::Api::Chat, 200),
                         output,
@@ -941,10 +993,15 @@ mod tests {
             notices: watch::channel(Arc::new(Vec::new())).0,
         };
         assert_eq!(core.model_entries().len(), 1);
-        assert!(core.check_model("missing").is_err());
+        let missing = crate::dialect::CHAT
+            .parse(br#"{"model":"missing","messages":[{"role":"user","content":"Hi"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        assert!(core.check_model(&missing).is_err());
         core.handle(Event::Runtime(RuntimeEvent::Closed), 0);
         assert_eq!(core.model_entries().len(), 0, "GET /v1/models");
-        assert!(core.check_model("missing").is_ok());
+        assert!(core.check_model(&missing).is_ok());
     }
     #[test]
     fn a_session_that_leaves_for_good_is_forgotten() {
@@ -979,6 +1036,11 @@ mod tests {
             outputs.push(ticket);
             let mut commands = core.handle(
                 Event::Accepted(Accepted {
+                    model: crate::catalog::SelectedModel {
+                        model: "m".into(),
+                        level: None,
+                        level_from_name: false,
+                    },
                     turn,
                     request,
                     output,
@@ -1085,6 +1147,11 @@ mod tests {
         let work = request.id.clone();
         let (output, _ticket) = mpsc::unbounded_channel();
         let accepted = Event::Accepted(Accepted {
+            model: crate::catalog::SelectedModel {
+                model: "m".into(),
+                level: None,
+                level_from_name: false,
+            },
             turn,
             request,
             output,
@@ -1120,7 +1187,7 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let (conductor, _task) = start_without_runtime(&clock, &journal, &folder);
-        let body = br#"{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"Hi"}]}"#;
+        let body = br#"{"model":"gemini-3.8-flash","reasoning_effort":"extreme","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let request = journal.begin(crate::journal::Api::Chat, clock.now());
         let admitted = conductor
@@ -1139,10 +1206,22 @@ mod tests {
             .await
             .ok()
             .map(|entries| entries.len());
+        let lines: String = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
         std::fs::remove_dir_all(&folder).unwrap();
         let unavailable = Some("official runtime is not available".to_owned());
         assert_eq!(end, unavailable, "answer to a request");
         assert_eq!(listed, Some(0), "GET /v1/models lists no model");
+        assert!(
+            lines.contains(r#""result":"failed""#),
+            "request log control: {lines}"
+        );
+        assert!(
+            !lines.contains(r#""event":"unknown_effort""#),
+            "61ee383 emits no effort diagnostic without a catalog: {lines}"
+        );
     }
     #[tokio::test]
     async fn a_client_gone_before_admission_still_has_its_request_line() {

@@ -63,6 +63,9 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             .as_array()
             .ok_or_else(|| Refusal::invalid("message array required"))?
         {
+            if matches!(api, Api::Responses) && item["type"] == "reasoning" {
+                continue;
+            }
             if matches!(api, Api::Chat) && item["role"] == "tool" {
                 at_start = false;
                 items.push(Item::ToolResult {
@@ -132,6 +135,7 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
         input_tokens: crate::conversation::input_tokens(&conversation, &tool_text),
         conversation,
         model: model.clone(),
+        effort: effort(api, &value),
         tools: client_tools,
         tool_choice,
     };
@@ -153,6 +157,39 @@ pub(super) fn parse(api: Api, body: &[u8]) -> Result<Parsed, Refusal> {
             .cloned()
             .collect(),
     })
+}
+fn effort(api: Api, value: &Value) -> crate::conversation::EffortAsk {
+    use crate::conversation::{EffortAsk, ThinkingLevel};
+    let field = match api {
+        Api::Chat => value.get("reasoning_effort"),
+        Api::Responses => value["reasoning"].get("effort"),
+        Api::Messages if value["output_config"]["effort"].is_null() => {
+            return if value["thinking"]["type"] == "disabled" {
+                EffortAsk::Level(ThinkingLevel::Low)
+            } else {
+                EffortAsk::Absent
+            };
+        }
+        Api::Messages => value["output_config"].get("effort"),
+    };
+    match field {
+        Some(Value::String(value)) => match value.as_str() {
+            "none" | "minimal" | "low" => EffortAsk::Level(ThinkingLevel::Low),
+            "medium" => EffortAsk::Level(ThinkingLevel::Medium),
+            "high" | "xhigh" | "max" | "ultra" => EffortAsk::Level(ThinkingLevel::High),
+            _ => EffortAsk::Unknown(if value.len() <= 256 {
+                value.clone().into()
+            } else {
+                Value::Null
+            }),
+        },
+        Some(Value::Null) => EffortAsk::Absent,
+        Some(Value::Bool(_)) => EffortAsk::Unknown("boolean".into()),
+        Some(Value::Number(_)) => EffortAsk::Unknown("number".into()),
+        Some(Value::Array(_)) => EffortAsk::Unknown("array".into()),
+        Some(Value::Object(_)) => EffortAsk::Unknown("object".into()),
+        None => EffortAsk::Absent,
+    }
 }
 fn message(role: Role, name: Option<&str>, parts: Vec<Part>) -> Item {
     Item::Message {
@@ -380,6 +417,14 @@ fn push_part(
     tools: &[crate::conversation::ClientTool],
     parts: &mut Vec<Part>,
 ) -> Result<(), Refusal> {
+    if matches!(api, Api::Messages)
+        && matches!(
+            block["type"].as_str(),
+            Some("thinking" | "redacted_thinking")
+        )
+    {
+        return Ok(());
+    }
     if matches!(api, Api::Messages) && block["type"] == "tool_addition" {
         let tool = &block["tool"];
         if tool["type"] != "tool_reference"

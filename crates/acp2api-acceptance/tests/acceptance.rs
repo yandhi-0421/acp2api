@@ -3,6 +3,14 @@ use cucumber::{World as _, event::ScenarioFinished};
 #[path = "steps/panel.rs"]
 mod panel;
 mod selection;
+#[path = "steps/slash_and_thought.rs"]
+mod slash_and_thought;
+#[path = "support/slash_and_thought.rs"]
+mod slash_and_thought_support;
+#[path = "steps/thinking_levels.rs"]
+mod thinking_levels;
+#[path = "support/thinking_levels.rs"]
+mod thinking_support;
 #[path = "support/timed_steps.rs"]
 mod timed_steps;
 #[path = "support/tool_results.rs"]

@@ -31,6 +31,15 @@ pub(crate) struct Runtime {
     tool_sets: mcp::ToolSets,
     tools: std::collections::HashMap<String, SessionTools>,
     tool_calls: safety::ToolCalls,
+    config: std::collections::HashMap<(String, String), String>,
+    configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
+}
+struct ConfiguringPrompt {
+    session: String,
+    prompt: crate::conversation::PromptRequest,
+    option: String,
+    value: String,
+    sent: Vec<&'static str>,
 }
 impl Runtime {
     pub(crate) async fn start(
@@ -113,6 +122,8 @@ impl Runtime {
             tool_sets,
             tools: std::collections::HashMap::new(),
             tool_calls: safety::ToolCalls::default(),
+            config: std::collections::HashMap::new(),
+            configuring: std::collections::HashMap::new(),
         };
         let client = json!({
             "name": "acp2api",
@@ -136,12 +147,24 @@ impl Runtime {
         let (params, tools) = self.session_parameters(tools, system)?;
         let session = self.call("session/new", params).await?;
         let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
-        self.session = session["sessionId"]
+        let session_id = session["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?
             .to_owned();
-        self.tools.insert(self.session.clone(), tools);
+        self.remember_config(&session_id, &session);
+        self.tools.insert(session_id.clone(), tools);
+        self.session = session_id;
         Ok(catalog)
+    }
+    fn remember_config(&mut self, session: &str, result: &Value) {
+        for option in result["configOptions"].as_array().into_iter().flatten() {
+            if let (Some(id), Some(value)) =
+                (option["id"].as_str(), option["currentValue"].as_str())
+            {
+                self.config
+                    .insert((session.into(), id.into()), value.into());
+            }
+        }
     }
     fn session_parameters(
         &self,
@@ -187,6 +210,7 @@ impl Runtime {
     }
     pub(crate) fn forget(&mut self, session: &str) {
         self.tool_calls.clear(session);
+        self.config.retain(|(id, _), _| id != session);
         if let Some(tools) = self.tools.remove(session) {
             self.tool_sets.remove(&tools.mcp_url);
         }
@@ -255,6 +279,62 @@ impl Runtime {
         }
         Err("runtime stdout closed".into())
     }
+    pub(crate) async fn start_configured_prompt(
+        &mut self,
+        prompt: crate::conversation::PromptRequest,
+        session: &str,
+    ) -> Result<(), String> {
+        self.configure_prompt(prompt, session, Vec::new()).await
+    }
+    async fn configure_prompt(
+        &mut self,
+        prompt: crate::conversation::PromptRequest,
+        session: &str,
+        mut sent: Vec<&'static str>,
+    ) -> Result<(), String> {
+        let desired = [
+            ("model", Some(prompt.model.as_str())),
+            ("thinking_level", prompt.level.map(|level| level.as_str())),
+        ];
+        let changed = desired
+            .into_iter()
+            .filter_map(|(id, value)| value.map(|value| (id, value)))
+            .find(|(id, value)| {
+                self.config
+                    .get(&(session.into(), (*id).into()))
+                    .map(String::as_str)
+                    != Some(*value)
+            });
+        if let Some((option, value)) = changed {
+            if sent.contains(&option) {
+                return Err(format!(
+                    "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."
+                ));
+            }
+            sent.push(option);
+            let option = option.to_owned();
+            let value = value.to_owned();
+            let id = self
+                .send(
+                    "session/set_config_option",
+                    json!({"sessionId":session,"configId":option,"value":value}),
+                )
+                .await?;
+            self.configuring.insert(
+                id,
+                ConfiguringPrompt {
+                    session: session.into(),
+                    prompt,
+                    option,
+                    value,
+                    sent,
+                },
+            );
+            Ok(())
+        } else {
+            self.start_prompt(prompt.blocks, session).await
+        }
+    }
     pub(crate) async fn start_prompt(
         &mut self,
         prompt: Vec<crate::conversation::PromptBlock>,
@@ -297,11 +377,34 @@ impl Runtime {
         if value.get("method").is_none()
             && let Some(id) = value["id"].as_u64()
         {
+            if let Some(pending) = self.configuring.remove(&id) {
+                let session = pending.session;
+                if let Some(error) = value.get("error") {
+                    return RuntimeEvent::Turn {
+                        session,
+                        update: TurnUpdate::Failed(error.to_string()),
+                    };
+                }
+                self.config
+                    .insert((session.clone(), pending.option), pending.value);
+                self.remember_config(&session, &value["result"]);
+                return match self
+                    .configure_prompt(pending.prompt, &session, pending.sent)
+                    .await
+                {
+                    Ok(()) => RuntimeEvent::Other,
+                    Err(error) => RuntimeEvent::Turn {
+                        session,
+                        update: TurnUpdate::Failed(error),
+                    },
+                };
+            }
             if let Some((work, tools)) = self.creating.remove(&id) {
                 let result = self.created_session(&value);
                 match &result {
                     Ok((session, _)) => {
                         self.tools.insert(session.clone(), tools);
+                        self.remember_config(session, &value["result"]);
                     }
                     Err(_) => {
                         self.tool_sets.remove(&tools.mcp_url);
@@ -375,6 +478,7 @@ impl Runtime {
                     _ => None,
                 },
                 SessionUpdate::UsageUpdate(usage) => Some(TurnUpdate::Usage(usage.used)),
+                SessionUpdate::AgentThoughtChunk(_) => Some(TurnUpdate::ThoughtDropped),
                 SessionUpdate::ToolCall(call) => self
                     .tool_calls
                     .update(
@@ -497,6 +601,7 @@ pub(crate) enum RuntimeEvent {
 }
 pub(crate) enum TurnUpdate {
     Text(String),
+    ThoughtDropped,
     Usage(u64),
     Permission {
         request: PermissionRequest,

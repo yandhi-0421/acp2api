@@ -1,3 +1,4 @@
+use crate::conversation::{EffortAsk, ThinkingLevel, TurnRequest};
 use agent_client_protocol_schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
 };
@@ -25,7 +26,17 @@ pub(crate) struct Catalog {
 struct OfferedModel {
     value: String,
     name: String,
-    levels: Vec<String>,
+    levels: Vec<ThinkingLevel>,
+}
+impl OfferedModel {
+    fn name_with_level(&self, level: ThinkingLevel) -> String {
+        format!("{}-{}", self.value, level.as_str())
+    }
+}
+pub(crate) struct SelectedModel {
+    pub model: String,
+    pub level: Option<ThinkingLevel>,
+    pub level_from_name: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,16 +68,20 @@ impl Catalog {
             .into_iter()
             .map(|option| {
                 let value = option.value.to_string();
-                let levels = ["low", "medium", "high"]
-                    .into_iter()
-                    .filter(|level| available.contains(&format!("{value}-{level}")))
-                    .map(str::to_owned)
-                    .collect();
-                OfferedModel {
+                let mut model = OfferedModel {
                     value,
                     name: option.name,
-                    levels,
-                }
+                    levels: Vec::new(),
+                };
+                model.levels = [
+                    ThinkingLevel::Low,
+                    ThinkingLevel::Medium,
+                    ThinkingLevel::High,
+                ]
+                .into_iter()
+                .filter(|level| available.contains(&model.name_with_level(*level)))
+                .collect();
+                model
             })
             .collect();
         if models.is_empty() {
@@ -85,7 +100,7 @@ impl Catalog {
                     model
                         .levels
                         .iter()
-                        .map(|level| format!("{}-{level}", model.value)),
+                        .map(|level| model.name_with_level(*level)),
                 )
                 .map(|id| (id, model.name.as_str()))
         })
@@ -103,16 +118,43 @@ impl Catalog {
             })
             .collect()
     }
-    pub(crate) fn check(&self, requested: &str) -> Result<(), crate::messages::Refusal> {
-        if self.names().any(|(id, _)| id == requested) {
-            Ok(())
-        } else {
-            Err(crate::messages::Message::Model {
-                requested: requested.into(),
-                names: self.names().map(|(id, _)| id).collect(),
+    pub(crate) fn resolve(
+        &self,
+        turn: &TurnRequest,
+    ) -> Result<SelectedModel, crate::messages::Refusal> {
+        let found = self.models.iter().find_map(|model| {
+            if model.value == turn.model {
+                Some((model, None))
+            } else {
+                model
+                    .levels
+                    .iter()
+                    .copied()
+                    .find(|level| turn.model == model.name_with_level(*level))
+                    .map(|level| (model, Some(level)))
             }
-            .into())
-        }
+        });
+        let (model, suffix) = found.ok_or_else(|| {
+            crate::messages::Refusal::from(crate::messages::Message::Model {
+                requested: turn.model.clone(),
+                names: self.names().map(|(id, _)| id).collect(),
+            })
+        })?;
+        let wanted = suffix.unwrap_or(match &turn.effort {
+            EffortAsk::Level(level) => *level,
+            EffortAsk::Absent | EffortAsk::Unknown(_) => ThinkingLevel::High,
+        });
+        let level = model
+            .levels
+            .iter()
+            .find(|level| **level >= wanted)
+            .or_else(|| model.levels.last())
+            .copied();
+        Ok(SelectedModel {
+            model: model.value.clone(),
+            level,
+            level_from_name: suffix.is_some(),
+        })
     }
 }
 fn model_options(config: &[serde_json::Value]) -> Result<Vec<SessionConfigSelectOption>, String> {

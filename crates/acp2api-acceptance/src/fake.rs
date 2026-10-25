@@ -147,6 +147,9 @@ pub struct ModelSpec {
     pub levels: Vec<String>,
 }
 impl FakeRuntime {
+    pub fn signed_in(&self) -> bool {
+        self.hub.shared.0.lock().unwrap().fake.signed_in
+    }
     pub fn hold_next_session_result(&self) {
         let mut state = self.hub.shared.0.lock().unwrap();
         assert!(matches!(
@@ -322,11 +325,29 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
             );
         }
         "session/prompt" => {
+            let command = call["params"]["prompt"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|block| block["type"] == "text")
+                .and_then(|block| block["text"].as_str())
+                .map(str::trim_start);
+            let plan = match command {
+                Some(command @ "/logout") => {
+                    s.record(json!({"kind":"slash-command","name":command}));
+                    s.fake.signed_in = false;
+                    TurnPlan::new().chunk("Signed out.")
+                }
+                Some(command @ "/usage") => {
+                    s.record(json!({"kind":"slash-command","name":command}));
+                    TurnPlan::new().chunk("Quota information.")
+                }
+                _ => s.fake.plans.pop_front().unwrap_or_default(),
+            };
             let session = call["params"]["sessionId"]
                 .as_str()
                 .unwrap_or("")
                 .to_owned();
-            let plan = s.fake.plans.pop_front().unwrap_or_default();
             run_plan(s, label, id, session, plan);
         }
 

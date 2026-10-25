@@ -115,7 +115,7 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     agent
         .stdout(result(
             2,
-            json!({"sessionId":"s1","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}),
+            json!({"sessionId":"s1","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"},{"value":"other","name":"Other"}]}]}),
         ))
         .await;
     let mut ports = Ports::production();
@@ -144,6 +144,7 @@ async fn next(runtime: &mut Runtime) -> String {
     match event {
         RuntimeEvent::Turn { update, .. } => match update {
             TurnUpdate::Text(text) => format!("text {text}"),
+            TurnUpdate::ThoughtDropped => "thought dropped".into(),
             TurnUpdate::Usage(used) => format!("usage {used}"),
             TurnUpdate::Permission { call, .. } => format!("permission {call:?}"),
             TurnUpdate::RefusedPermission { name, .. } => format!("permission of {name}"),
@@ -173,6 +174,67 @@ async fn capped(test: impl std::future::Future<Output = ()>) {
     tokio::time::timeout(RUN_CAP, test)
         .await
         .expect("fake ACP run cap: 30 s");
+}
+
+#[tokio::test]
+async fn a_config_option_that_stays_different_fails_without_a_retry() {
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime.start_configured_prompt(crate::conversation::PromptRequest {
+            blocks: vec![PromptBlock::Text("Hello".into())],
+            model: "other".into(),
+            level: None,
+        }, "s1").await.unwrap();
+        let option = agent.stdin().await;
+        assert_eq!(option["method"], "session/set_config_option");
+        assert_eq!(option["params"], json!({"sessionId":"s1","configId":"model","value":"other"}));
+        agent.stdout(result(option["id"].as_u64().unwrap(), json!({"configOptions":[
+            {"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"},{"value":"other","name":"Other"}]}
+        ]}))).await;
+        let event = next(&mut runtime).await;
+        assert_eq!(event, "failed acp2api: the official runtime did not apply the model value other, so acp2api ended the prompt turn.", "M-29 names the unapplied option and requested value");
+    }).await;
+}
+
+#[tokio::test]
+async fn model_configuration_uses_the_returned_level_without_losing_another_turn() {
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime.start_prompt(vec![PromptBlock::Text("Other turn".into())], "s1").await.unwrap();
+        let other = agent.stdin().await;
+        runtime.request_session("target".into(), &[], None).await.unwrap();
+        let create = agent.stdin().await;
+        agent.stdout(result(create["id"].as_u64().unwrap(), json!({"sessionId":"s2","models":{"currentModelId":"m-high","availableModels":[{"modelId":"m-high","name":"M high"},{"modelId":"other-high","name":"Other high"},{"modelId":"other-medium","name":"Other medium"}]},"configOptions":[
+            {"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"},{"value":"other","name":"Other"}]},
+            {"id":"thinking_level","name":"Thinking level","type":"select","currentValue":"high","options":[{"value":"medium","name":"Medium"},{"value":"high","name":"High"}]}
+        ]}))).await;
+        assert_eq!(next(&mut runtime).await, "prepared");
+        runtime.start_configured_prompt(crate::conversation::PromptRequest {
+            blocks: vec![PromptBlock::Text("Next".into())],
+            model: "other".into(),
+            level: Some(crate::conversation::ThinkingLevel::High),
+        }, "s2").await.unwrap();
+        let model = agent.stdin().await;
+        assert_eq!(model["params"], json!({"sessionId":"s2","configId":"model","value":"other"}));
+        agent.stdout(chunk("Other reply")).await;
+        assert_eq!(next(&mut runtime).await, "text Other reply");
+        agent.stdout(result(model["id"].as_u64().unwrap(), json!({"configOptions":[
+            {"id":"thinking_level","name":"Thinking level","type":"select","currentValue":"medium","options":[{"value":"medium","name":"Medium"},{"value":"high","name":"High"}]}
+        ]}))).await;
+        assert_eq!(next(&mut runtime).await, "other");
+        let level = agent.stdin().await;
+        assert_eq!(level["method"], "session/set_config_option", "FR-013 applies the requested level after the model changes it");
+        assert_eq!(level["params"], json!({"sessionId":"s2","configId":"thinking_level","value":"high"}));
+        agent.stdout(result(level["id"].as_u64().unwrap(), json!({}))).await;
+        assert_eq!(next(&mut runtime).await, "other");
+        let prompt = agent.stdin().await;
+        assert_eq!(prompt["method"], "session/prompt");
+        assert_eq!(prompt["params"], json!({"sessionId":"s2","prompt":[{"type":"text","text":"Next"}]}));
+        agent.stdout(result(other["id"].as_u64().unwrap(), json!({"stopReason":"end_turn"}))).await;
+        agent.stdout(result(prompt["id"].as_u64().unwrap(), json!({"stopReason":"end_turn"}))).await;
+        assert_eq!(turn(&mut runtime).await, ["prompt ended"]);
+        assert_eq!(turn(&mut runtime).await, ["prompt ended"]);
+    }).await;
 }
 
 #[tokio::test]
