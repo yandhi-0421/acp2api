@@ -155,6 +155,7 @@ async fn next(runtime: &mut Runtime) -> String {
         RuntimeEvent::Prepared { .. } => "prepared".into(),
         RuntimeEvent::Failed(error) => format!("failed {error}"),
         RuntimeEvent::Stderr => "stderr".into(),
+        RuntimeEvent::UpstreamError { error, .. } => format!("upstream {}", error.code),
         RuntimeEvent::Other => "other".into(),
         RuntimeEvent::Closed => "closed".into(),
     }

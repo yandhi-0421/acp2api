@@ -50,10 +50,8 @@ trait WireDialect: Sync {
             "code": refusal_code(refusal)
         }})
     }
-    fn built_in_tool_ran_events(&self, _wire: &mut Encoding, message: String) -> Vec<Event> {
-        vec![data(
-            json!({"error":{"message":message,"type":"server_error","param":null,"code":"built_in_tool_ran"}}),
-        )]
+    fn error_events(&self, _wire: &mut Encoding, refusal: &Refusal) -> Vec<Event> {
+        vec![data(self.refusal_body(refusal))]
     }
     fn prefix(&self) -> &'static str;
     fn call_prefix(&self) -> &'static str {
@@ -71,11 +69,19 @@ impl<T: WireDialect + 'static> Dialect for T {
     fn refusal(&self, refusal: &Refusal) -> Response {
         let mut response =
             (refusal_status(refusal), Json(self.refusal_body(refusal))).into_response();
-        if matches!(refusal.message, Message::BuiltInToolRan(_)) {
-            response.headers_mut().insert(
-                "x-should-retry",
-                axum::http::HeaderValue::from_static("false"),
-            );
+        match refusal.row() {
+            Row::Temporary503 => {
+                response
+                    .headers_mut()
+                    .insert("retry-after", axum::http::HeaderValue::from_static("30"));
+            }
+            Row::Other502 => {
+                response.headers_mut().insert(
+                    "x-should-retry",
+                    axum::http::HeaderValue::from_static("false"),
+                );
+            }
+            Row::Key | Row::Rejected | Row::TooLarge => {}
         }
         response
     }
@@ -124,14 +130,9 @@ impl<T: WireDialect + 'static> Dialect for T {
                                 state.ended = true;
                             }
                             TurnEvent::End(Err(error)) => {
-                                if matches!(error, Message::BuiltInToolRan(_)) {
-                                    state.pending.extend(self.built_in_tool_ran_events(
-                                        &mut state.wire,
-                                        error.to_string(),
-                                    ));
-                                } else {
-                                    state.pending.push_back(named("error",json!({"type":"error","error":{"type":"api_error","message":error.to_string()}})));
-                                }
+                                state
+                                    .pending
+                                    .extend(self.error_events(&mut state.wire, &error.into()));
                                 state.ended = true;
                             }
                         }
@@ -229,6 +230,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
         Row::Rejected => StatusCode::BAD_REQUEST,
         Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
+        Row::Temporary503 => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -251,6 +253,8 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::Key => "invalid_api_key",
         Message::TooLarge => "request_too_large",
         Message::Upstream(_) => "upstream_error",
+        Message::UpstreamHttp(_) => "upstream_error",
+        Message::UpstreamAcp(_) => "upstream_error",
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
     }
 }

@@ -279,7 +279,7 @@ async fn a_rejected_session_removes_only_its_empty_folder() {
                 (work.as_str(), error.as_str(), folder.is_dir(), accepted_folder.is_dir()),
                 (
                     "rejected",
-                    r#"{"code":-32000,"message":"session creation refused"}"#,
+                    "acp2api: upstream ACP error -32000: session creation refused",
                     nonempty,
                     true,
                 ),

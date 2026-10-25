@@ -10,10 +10,11 @@ impl WireDialect for Messages {
             Row::Rejected => "invalid_request_error",
             Row::TooLarge => "request_too_large",
             Row::Other502 => "api_error",
+            Row::Temporary503 => "api_error",
         };
         json!({"type":"error","error":{"type":kind,"message":refusal.message.to_string()}})
     }
-    fn built_in_tool_ran_events(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn error_events(&self, wire: &mut Encoding, refusal: &Refusal) -> Vec<Event> {
         let mut events = Vec::new();
         if !wire.text.is_empty() {
             events.push(named(
@@ -23,7 +24,7 @@ impl WireDialect for Messages {
         }
         events.push(named(
             "error",
-            json!({"type":"error","error":{"type":"invalid_request_error","message":message}}),
+            json!({"type":"error","error":{"type": if matches!(refusal.row(), Row::Temporary503) {"api_error"} else {"invalid_request_error"},"message":refusal.message.to_string()}}),
         ));
         events
     }

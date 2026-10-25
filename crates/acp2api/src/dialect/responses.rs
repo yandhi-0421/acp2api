@@ -84,7 +84,7 @@ impl WireDialect for Responses {
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal> {
         content::parse(content::Api::Responses, body)
     }
-    fn built_in_tool_ran_events(&self, wire: &mut Encoding, message: String) -> Vec<Event> {
+    fn error_events(&self, wire: &mut Encoding, refusal: &Refusal) -> Vec<Event> {
         let mut response = self.body(
             wire,
             &Usage {
@@ -93,7 +93,10 @@ impl WireDialect for Responses {
             },
         );
         response["status"] = json!("failed");
-        response["error"] = json!({"code":"invalid_prompt","message":message});
+        response["error"] = json!({"code": if matches!(refusal.row(), Row::Temporary503) {"server_error"} else {"invalid_prompt"},"message":refusal.message.to_string()});
+        if matches!(refusal.row(), Row::Temporary503) {
+            response["error"]["headers"] = json!({"retry-after":"30"});
+        }
         response["usage"] = Value::Null;
         vec![wire.event("response.failed", json!({"response":response}))]
     }

@@ -33,6 +33,7 @@ pub(crate) struct Runtime {
     tool_calls: safety::ToolCalls,
     config: std::collections::HashMap<(String, String), String>,
     configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
+    stderr_session: Option<String>,
 }
 struct ConfiguringPrompt {
     session: String,
@@ -102,9 +103,9 @@ impl Runtime {
         let clock = ports.clock.clone();
         tokio::spawn(async move {
             let mut stderr = BufReader::new(child.stderr);
-            while read_line(&mut stderr).await.is_some() {
+            while let Some(line) = read_line(&mut stderr).await {
                 let hold = clock.hold(HoldKind::RuntimeLine);
-                if tx.send((Line::Stderr, hold)).await.is_err() {
+                if tx.send((Line::Stderr(line), hold)).await.is_err() {
                     return;
                 }
             }
@@ -124,6 +125,7 @@ impl Runtime {
             tool_calls: safety::ToolCalls::default(),
             config: std::collections::HashMap::new(),
             configuring: std::collections::HashMap::new(),
+            stderr_session: None,
         };
         let client = json!({
             "name": "acp2api",
@@ -261,7 +263,7 @@ impl Runtime {
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
                 Line::Stdout(value) => value?,
-                Line::Stderr => continue,
+                Line::Stderr(_) => continue,
                 Line::Closed => return Err("runtime stdout closed".into()),
             };
             if value.get("method").is_some() {
@@ -274,7 +276,7 @@ impl Runtime {
                 return value
                     .get("result")
                     .cloned()
-                    .ok_or_else(|| value["error"].to_string());
+                    .ok_or_else(|| acp_error(&value["error"]).to_string());
             }
         }
         Err("runtime stdout closed".into())
@@ -367,11 +369,34 @@ impl Runtime {
         };
         let event = match line {
             Line::Closed => RuntimeEvent::Closed,
-            Line::Stderr => RuntimeEvent::Stderr,
+            Line::Stderr(line) => self.stderr(&String::from_utf8_lossy(&line)),
             Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
             Line::Stdout(Ok(value)) => self.decode(value).await,
         };
         (event, hold)
+    }
+    fn stderr(&mut self, line: &str) -> RuntimeEvent {
+        if let Some((_, session)) =
+            line.split_once("Antigravity SDK error processing prompt for session ")
+        {
+            self.stderr_session = Some(session.trim().to_owned());
+        } else if let Some((_, error)) = line.split_once("Error ")
+            && let Some((code, rest)) = error.split_once(", Message: ")
+            && let Ok(code) = code.parse::<u16>()
+            && let Some((message, rest)) = rest.rsplit_once(", Status: ")
+            && let Some((status, _)) = rest.split_once(", Details:")
+            && let Some(session) = self.stderr_session.take()
+        {
+            return RuntimeEvent::UpstreamError {
+                session,
+                error: crate::messages::HttpError {
+                    code,
+                    status: status.into(),
+                    message: message.into(),
+                },
+            };
+        }
+        RuntimeEvent::Stderr
     }
     async fn decode(&mut self, value: Value) -> RuntimeEvent {
         if value.get("method").is_none()
@@ -382,7 +407,7 @@ impl Runtime {
                 if let Some(error) = value.get("error") {
                     return RuntimeEvent::Turn {
                         session,
-                        update: TurnUpdate::Failed(error.to_string()),
+                        update: TurnUpdate::Failed(acp_error(error)),
                     };
                 }
                 self.config
@@ -395,7 +420,7 @@ impl Runtime {
                     Ok(()) => RuntimeEvent::Other,
                     Err(error) => RuntimeEvent::Turn {
                         session,
-                        update: TurnUpdate::Failed(error),
+                        update: TurnUpdate::Failed(crate::messages::Message::Upstream(error)),
                     },
                 };
             }
@@ -417,7 +442,7 @@ impl Runtime {
             }
             if let Some(session) = self.prompts.remove(&id) {
                 let update = match value.get("error") {
-                    Some(error) => TurnUpdate::Failed(error.to_string()),
+                    Some(error) => TurnUpdate::Failed(acp_error(error)),
                     None => TurnUpdate::PromptEnded {
                         stop_reason: serde_json::from_value(value["result"]["stopReason"].clone())
                             .ok(),
@@ -517,7 +542,7 @@ impl Runtime {
     fn created_session(&self, value: &Value) -> Result<(String, crate::catalog::Catalog), String> {
         let response = value
             .get("result")
-            .ok_or_else(|| value["error"].to_string())?;
+            .ok_or_else(|| acp_error(&value["error"]).to_string())?;
         let session = response["sessionId"]
             .as_str()
             .ok_or("missing sessionId")?
@@ -575,6 +600,14 @@ async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
         Ok(_) => Some(line),
     }
 }
+fn acp_error(value: &Value) -> crate::messages::Message {
+    match serde_json::from_value(value.clone()) {
+        Ok(error) => crate::messages::Message::UpstreamAcp(error),
+        Err(error) => {
+            crate::messages::Message::Upstream(format!("acp2api: invalid ACP error: {error}"))
+        }
+    }
+}
 struct SessionTools {
     cwd: PathBuf,
     mcp_url: String,
@@ -582,10 +615,14 @@ struct SessionTools {
 }
 enum Line {
     Stdout(Result<Value, String>),
-    Stderr,
+    Stderr(Vec<u8>),
     Closed,
 }
 pub(crate) enum RuntimeEvent {
+    UpstreamError {
+        session: String,
+        error: crate::messages::HttpError,
+    },
     Prepared {
         work: String,
         result: Result<(String, crate::catalog::Catalog), String>,
@@ -615,5 +652,5 @@ pub(crate) enum TurnUpdate {
     PromptEnded {
         stop_reason: Option<StopReason>,
     },
-    Failed(String),
+    Failed(crate::messages::Message),
 }

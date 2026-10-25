@@ -66,7 +66,11 @@ struct Session {
 enum Phase {
     Preparing(PromptRequest),
     Prompt,
-    Settling { at: Moment, can_continue: bool },
+    Settling {
+        at: Moment,
+        can_continue: bool,
+        result: Result<(), crate::messages::Message>,
+    },
 }
 struct Active {
     output: Output,
@@ -105,6 +109,11 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
+    UpstreamLog {
+        session: String,
+        error: crate::messages::HttpError,
+        late: bool,
+    },
     Complete(crate::journal::Completion),
     Safety(crate::journal::SafetyReport),
     Diagnostic(crate::journal::Request, crate::journal::Diagnostic),
@@ -305,6 +314,30 @@ impl Core {
                     });
                 }
             }
+            Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
+                let index = self
+                    .active
+                    .iter()
+                    .position(|active| active.session.as_ref() == Some(&session));
+                commands.push(Command::UpstreamLog {
+                    session: session.clone(),
+                    error: error.clone(),
+                    late: index.is_none(),
+                });
+                if let Some(index) = index {
+                    self.finish(
+                        index,
+                        Err(crate::messages::Message::UpstreamHttp(error)),
+                        &mut commands,
+                    );
+                } else {
+                    self.records.retain(|record| record.session != session);
+                    if self.startup_session.as_ref() == Some(&session) {
+                        self.startup_session = None;
+                    }
+                    commands.push(Command::Forget(session));
+                }
+            }
             Event::Runtime(RuntimeEvent::Failed(error)) => {
                 self.forget_idle(&mut commands);
                 while !self.active.is_empty() {
@@ -461,15 +494,18 @@ impl Core {
                 use agent_client_protocol_schema::v1::StopReason;
                 active.phase = Phase::Settling {
                     at: now.saturating_add(200),
+                    result: Ok(()),
                     can_continue: stop_reason == Some(StopReason::EndTurn)
                         || stop_reason == Some(StopReason::Cancelled) && active.tool_call.is_some(),
                 };
             }
-            TurnUpdate::Failed(error) => self.finish(
-                index,
-                Err(crate::messages::Message::Upstream(error)),
-                commands,
-            ),
+            TurnUpdate::Failed(error) => {
+                active.phase = Phase::Settling {
+                    at: now.saturating_add(200),
+                    can_continue: false,
+                    result: Err(error),
+                }
+            }
             TurnUpdate::UnpermittedTool(name) => {
                 let notice = Notice {
                     id: active.request.id.clone(),
@@ -522,13 +558,14 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let mut active = self.active.remove(index);
-        let can_continue = matches!(
-            active.phase,
+        let (can_continue, result) = match std::mem::replace(&mut active.phase, Phase::Prompt) {
             Phase::Settling {
-                can_continue: true,
+                can_continue,
+                result: pending,
                 ..
-            }
-        );
+            } => (can_continue, result.and(pending)),
+            Phase::Preparing(_) | Phase::Prompt => (false, result),
+        };
         let tool_hash = active
             .tool_call
             .as_ref()
@@ -723,6 +760,11 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::UpstreamLog {
+                    session,
+                    error,
+                    late,
+                } => journal.upstream(&session, &error, late, clock.as_ref()),
                 Command::Cancel(session) => {
                     if let Some(runtime) = runtime.as_mut()
                         && let Err(error) = runtime.cancel(&session).await
@@ -863,6 +905,93 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_prompt_rpc_error_waits_for_the_http_error_lines() {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-error-wait-{}", std::process::id()));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for with_http in [false, true] {
+            let turn = crate::dialect::CHAT
+                .parse(br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#)
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, _ticket) = mpsc::unbounded_channel();
+            let mut core = Core {
+                catalog: None,
+                active: Vec::new(),
+                waiting: VecDeque::new(),
+                records: Vec::new(),
+                startup_session: Some("session".into()),
+                use_sequence: 0,
+                limit: 1,
+                notices: watch::channel(Arc::new(Vec::new())).0,
+            };
+            core.handle(
+                Event::Accepted(Accepted {
+                    turn,
+                    model: crate::catalog::SelectedModel {
+                        model: "m".into(),
+                        level: None,
+                        level_from_name: false,
+                    },
+                    request: journal.begin(crate::journal::Api::Chat, 0),
+                    output,
+                }),
+                0,
+            );
+            let ended = core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session: "session".into(),
+                    update: TurnUpdate::Failed(crate::messages::Message::UpstreamAcp(
+                        crate::messages::AcpError {
+                            code: -32099,
+                            message: "RPC failure".into(),
+                        },
+                    )),
+                }),
+                0,
+            );
+            assert!(
+                !ended
+                    .iter()
+                    .any(|command| matches!(command, Command::Emit(_, TurnEvent::End(_)))),
+                "FR-028 waits for error lines after a prompt RPC failure"
+            );
+            assert!(core.handle(Event::Deadline, 199).is_empty());
+            let ended = if with_http {
+                core.handle(
+                    Event::Runtime(RuntimeEvent::UpstreamError {
+                        session: "session".into(),
+                        error: crate::messages::HttpError {
+                            code: 503,
+                            status: "UNAVAILABLE".into(),
+                            message: "HTTP failure".into(),
+                        },
+                    }),
+                    200,
+                )
+            } else {
+                core.handle(Event::Deadline, 200)
+            };
+            let message = ended
+                .into_iter()
+                .find_map(|command| match command {
+                    Command::Emit(_, TurnEvent::End(Err(error))) => Some(error.to_string()),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                message,
+                if with_http {
+                    "acp2api: upstream error 503 UNAVAILABLE: HTTP failure"
+                } else {
+                    "acp2api: upstream ACP error -32099: RPC failure"
+                }
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
     #[test]
     fn a_tool_call_does_not_make_a_refused_turn_reusable() {
         let folder =
@@ -1078,7 +1207,12 @@ mod tests {
                 agent_client_protocol_schema::v1::StopReason::Refusal
             }),
         };
-        turn(&mut core, "A", "s1", TurnUpdate::Failed("x".into()));
+        turn(
+            &mut core,
+            "A",
+            "s1",
+            TurnUpdate::Failed(crate::messages::Message::Upstream("x".into())),
+        );
         turn(&mut core, "B", "s2", ended(false));
         turn(&mut core, "C", "s3", ended(true));
         turn(&mut core, "D", "s4", ended(true));
