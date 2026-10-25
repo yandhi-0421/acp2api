@@ -7,7 +7,7 @@ Feature: Token usage
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario Outline: The input tokens are the used field of the last usage update
     Given the prompt turn has the usage updates with "used" 4000 and then "used" 5183
     When an API client sends a valid request to "<endpoint>" with "stream" set to false
@@ -30,21 +30,21 @@ Feature: Token usage
       | abcdefghéü  | 4             |
       | abcdefghiéü | 5             |
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario: The output tokens include the tool call arguments
     Given the request has the client tool "read_file"
     And the model calls "read_file" with the 8 ASCII characters {"a":12} as arguments and sends no text
     When an API client sends that request to "POST /v1/chat/completions"
     Then the usage of the response has "completion_tokens" set to 2
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario: The total tokens are the sum of the input tokens and the output tokens
     Given the prompt turn has the last usage update with "used" 5183
     And the official runtime replies "abcdefghéü" to the next prompt
     When an API client sends a valid request to "POST /v1/chat/completions"
     Then the usage of the response has "total_tokens" set to 5187
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario Outline: No response has a cache count or a reasoning count other than 0
     Given the prompt turn has the last usage update with "used" 5183
     When an API client sends a valid request to "<endpoint>"
@@ -56,14 +56,14 @@ Feature: Token usage
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario: A prompt turn with no usage update gives the local estimate of the input tokens
     Given the prompt turn ends with no usage update
     When an API client sends only the user text "abcdefghiéü" with a stream to "POST /v1/messages"
     Then the "input_tokens" of the "message_start" event are 5
     And the "input_tokens" of the last "message_delta" event are 5
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario Outline: The input estimate counts the full normalized conversation and the declared tools
     Given the request has the system prompt "SYS!"
     And the request has the user text "ABCD", assistant text "EFGH", and new user text "你IJKL"
@@ -93,7 +93,7 @@ Feature: Token usage
       | the object {"a": "é", "b": 1}        | POST /v1/messages         | input_tokens  | 8      |
       | the JSON string { "a": "é", "b": 1 } | POST /v1/chat/completions | prompt_tokens | 9      |
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario: An Anthropic stream carries a local estimate in message_start and the values in the last message_delta
     Given the prompt turn has the last usage update with "used" 5183
     And the official runtime replies "abcdefghéü" to the next prompt
@@ -101,13 +101,13 @@ Feature: Token usage
     Then the "message_start" event carries "input_tokens"
     And the last "message_delta" event carries "input_tokens" 5183 and "output_tokens" 4
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario: A Responses stream carries the usage in response.completed
     Given the prompt turn has the last usage update with "used" 5183
     When an API client sends a valid request with a stream to "POST /v1/responses"
     Then the "response.completed" event carries the usage with "input_tokens" 5183
 
-  @FR-025 @issue-44 @wip
+  @FR-025 @issue-44
   Scenario Outline: A Chat Completions stream carries the usage only with include_usage
     Given the prompt turn has the last usage update with "used" 5183
     When an API client sends a valid request with a stream to "POST /v1/chat/completions" with "stream_options.include_usage" set to <include usage>

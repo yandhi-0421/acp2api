@@ -49,7 +49,7 @@ Feature: Request content
       | POST /v1/responses        | "reasoning.summary"                     | "auto"                                 |
       | POST /v1/messages         | "thinking.display"                      | "summarized"                           |
 
-  @FR-014 @issue-44 @wip
+  @FR-014 @issue-44
   Scenario: acp2api uses the fields stream, stream_options.include_usage, and n with the value 1
     When an API client sends a valid request to "POST /v1/chat/completions" with "stream" set to true, "stream_options.include_usage" set to true, and "n" set to 1
     Then acp2api answers with a stream
