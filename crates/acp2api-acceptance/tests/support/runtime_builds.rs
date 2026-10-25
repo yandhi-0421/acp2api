@@ -1,0 +1,245 @@
+use crate::World;
+use acp2api_acceptance::{
+    client::{ApiCall, ApiClient},
+    panel_check,
+    setup::binary,
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug, Default)]
+pub struct BuildState {
+    pub action: Option<acp2api_acceptance::client::Answer>,
+    bound: bool,
+}
+pub const CHANGED_COPY_LABEL: &str = "n0rmal";
+
+pub fn program() -> &'static str {
+    if cfg!(windows) {
+        "agy_acp_server.exe"
+    } else {
+        "agy_acp_server.par"
+    }
+}
+pub fn descriptor() -> &'static str {
+    if cfg!(windows) {
+        "localharness_external.exe"
+    } else {
+        "localharness_external"
+    }
+}
+pub fn hash(path: &Path) -> String {
+    Sha256::digest(fs::read(path).unwrap())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+pub async fn prepare(w: &mut World) {
+    w.startup.initialize().await;
+    w.startup.seed_config();
+    if !w.builds.bound {
+        w.scenario.hub.close();
+        w.scenario.hub = w.startup.panel_hub();
+        w.scenario.time = acp2api_acceptance::timeline::TimeLine::new(w.scenario.hub.clone());
+        w.builds.bound = true;
+    }
+}
+pub fn place(w: &World, name: &str) -> PathBuf {
+    let run = w.startup.run.as_ref().unwrap();
+    match name {
+        "the folder of the acp2api executable" => run.environment.exe_dir.clone(),
+        "a folder of PATH" => run.environment.path[0].clone(),
+        "the install folder of Zed" => {
+            let base = if cfg!(windows) {
+                run.environment.local_app_data.as_ref().unwrap().join("Zed")
+            } else {
+                run.environment
+                    .home
+                    .as_ref()
+                    .unwrap()
+                    .join("Library/Application Support/Zed")
+            };
+            base.join("external_agents/registry/antigravity-acp/1.4.0")
+        }
+        "the install folder of a JetBrains IDE" => {
+            let base = if cfg!(windows) {
+                run.environment
+                    .local_app_data
+                    .as_ref()
+                    .unwrap()
+                    .join("JetBrains")
+            } else {
+                run.environment
+                    .home
+                    .as_ref()
+                    .unwrap()
+                    .join("Library/Caches/JetBrains")
+            };
+            base.join("IntelliJIdea2026.2/acp-agents/antigravity-acp/1.4.0")
+        }
+        "copy" => w.startup.data.join("official-runtime"),
+        other => w.startup.root().path.join(other),
+    }
+}
+pub fn install(w: &mut World, name: &str, version: &str, listed: bool) -> PathBuf {
+    let folder = place(w, name);
+    fs::create_dir_all(&folder).unwrap();
+    fs::copy(binary("fake-acp-agent"), folder.join(program())).unwrap();
+    let original = fs::read_to_string(
+        w.startup
+            .root()
+            .path
+            .join("builds/normal")
+            .join(descriptor()),
+    )
+    .unwrap();
+    let text = original.replace("version = \"1.4.0\"", &format!("version = \"{version}\""));
+    let text = if version == "1.4.0" {
+        text
+    } else {
+        text.replace(
+            "label = \"normal\"",
+            &format!("label = \"build-{version}\""),
+        )
+    };
+    fs::write(folder.join(descriptor()), text).unwrap();
+    if listed {
+        let run = w.startup.run.as_mut().unwrap();
+        run.release.builds.push(acp2api::ListedBuild {
+            version: version.into(),
+            platform: run.release.platform.clone(),
+            agy_acp_server_sha256: hash(&folder.join(program())),
+            localharness_external_sha256: hash(&folder.join(descriptor())),
+        });
+    }
+    folder
+}
+pub async fn panel(w: &mut World) {
+    if w.panel.address.is_empty() {
+        // Bind directly: Panel::startup seeds a normal copy, which would alter a search fixture.
+        w.panel.bind(
+            w.startup.root(),
+            &w.startup.data,
+            w.startup.panel_hub(),
+            format!("127.0.0.1:{}", w.startup.root().port),
+        );
+        w.panel.login_initial("build-owner").await;
+        assert_eq!(
+            w.panel.login_answer.as_ref().unwrap().status,
+            303,
+            "authenticated build panel"
+        );
+    }
+}
+pub async fn page(w: &mut World) -> String {
+    panel(w).await;
+    let answer = w.panel.page("build-owner").await;
+    assert_eq!(answer.status, 200, "real authenticated management page");
+    panel_check::text(&answer)
+}
+pub async fn action(w: &mut World, path: &str, body: Value) {
+    panel(w).await;
+    let answer = w.panel.submit("build-owner", path, body).await;
+    w.builds.action = Some(answer);
+}
+pub async fn search(w: &mut World) {
+    action(w, "/manage/search", json!({})).await;
+}
+pub async fn request(w: &mut World) -> acp2api_acceptance::client::Answer {
+    let hub = w.startup.panel_hub();
+    let mut time = acp2api_acceptance::timeline::TimeLine::new(hub.clone());
+    w.request.queue_next(&w.scenario);
+    ApiClient::new(
+        format!("127.0.0.1:{}", w.startup.root().port),
+        w.startup.root().key.clone(),
+        hub,
+    )
+    .send(ApiCall::one_user_message(
+        "POST /v1/messages",
+        "build availability",
+    ))
+    .finish(&mut time)
+    .await
+}
+pub fn launches(w: &World) -> Vec<PathBuf> {
+    w.startup
+        .panel_hub()
+        .entries()
+        .iter()
+        .filter(|e| e.event["kind"] == "launch")
+        .map(|e| PathBuf::from(e.event["program"].as_str().unwrap()))
+        .collect()
+}
+pub async fn assert_found(w: &mut World, name: &str) {
+    let path = place(w, name).join(program());
+    assert!(
+        page(w).await.contains(path.to_str().unwrap()),
+        "FR-042 search result must list the actual discovered path in {name}"
+    );
+}
+pub fn assert_copy_launch(w: &World) {
+    let path = place(w, "copy").join(program());
+    assert_eq!(
+        launches(w),
+        vec![path.clone()],
+        "ADR-0006 actual launch comes only from the accepted copy"
+    );
+    let entries = w.startup.panel_hub().entries();
+    let servers: Vec<_> = entries
+        .iter()
+        .filter(|e| e.event["hello"]["role"] == "server")
+        .collect();
+    assert_eq!(servers.len(), 1, "one actual runtime process starts");
+    assert_eq!(
+        PathBuf::from(servers[0].event["hello"]["argv"][0].as_str().unwrap()),
+        path
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e.event["kind"] == "process_end" && e.event["role"] == "server"),
+        "the selected runtime process is still running"
+    );
+}
+pub fn copied(w: &World, version: &str) {
+    let copy = place(w, "copy");
+    assert!(
+        copy.join(program()).is_file() && copy.join(descriptor()).is_file(),
+        "FR-043 data folder must hold the selected accepted copy {version}"
+    );
+    let text = fs::read_to_string(copy.join(descriptor())).unwrap();
+    assert!(
+        text.contains(&format!("version = \"{version}\"")),
+        "FR-043 copied build must be {version}"
+    );
+    let actual = [hash(&copy.join(program())), hash(&copy.join(descriptor()))];
+    assert!(
+        w.startup
+            .run
+            .as_ref()
+            .unwrap()
+            .release
+            .builds
+            .iter()
+            .any(|b| b.version == version
+                && actual
+                    == [
+                        b.agy_acp_server_sha256.clone(),
+                        b.localharness_external_sha256.clone()
+                    ]),
+        "FR-043 both copied hashes must identify the selected build"
+    );
+    let directories: Vec<_> = fs::read_dir(&copy)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        directories.len(),
+        2,
+        "FR-043 one pair of copied executables"
+    );
+}

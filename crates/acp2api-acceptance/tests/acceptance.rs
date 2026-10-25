@@ -1,5 +1,7 @@
 use acp2api_acceptance::Scenario;
 use cucumber::{World as _, event::ScenarioFinished};
+#[path = "support/runtime_builds.rs"]
+mod build_support;
 #[path = "steps/panel.rs"]
 mod panel;
 #[path = "steps/places_and_queue.rs"]
@@ -12,6 +14,8 @@ mod prompt_turn;
 mod queue_errors;
 #[path = "steps/response_ends.rs"]
 mod response_ends;
+#[path = "steps/runtime_builds.rs"]
+mod runtime_builds;
 mod selection;
 #[path = "steps/slash_and_thought.rs"]
 mod slash_and_thought;
@@ -35,6 +39,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    builds: build_support::BuildState,
     places: places_support::PlacesState,
     ends: response_ends::EndState,
     upstream: upstream_error::ErrorState,
