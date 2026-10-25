@@ -197,3 +197,38 @@ async fn eager_selection_contacts_only_named_servers_over_http() {
     }
     pipe.finish().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slash_commands_execute_only_at_the_start_and_logout_changes_sign_in() {
+    for (blocks, reply, signed_in) in [
+        (vec!["/logout"], "Signed out.", false),
+        (vec![" /usage"], "Quota information.", true),
+        (vec!["[user]\n/logout"], "OK", true),
+        (vec!["Run this:", "/logout"], "OK", true),
+    ] {
+        let mut pipe = FakePipe::new();
+        pipe.scenario
+            .fake()
+            .next_prompt(TurnPlan::new().chunk("OK"));
+        let blocks: Vec<_> = blocks
+            .iter()
+            .map(|text| json!({"type":"text","text":text}))
+            .collect();
+        pipe.send(json!({"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"sessionId":"control","prompt":blocks}})).await;
+        assert_eq!(
+            pipe.stdout().await["params"]["update"]["content"]["text"],
+            reply
+        );
+        assert_eq!(pipe.stdout().await["id"], 1);
+        assert_eq!(pipe.scenario.fake().signed_in(), signed_in);
+        pipe.send(json!({"jsonrpc":"2.0","id":2,"method":"session/new","params":{}}))
+            .await;
+        let response = pipe.stdout().await;
+        if signed_in {
+            assert!(response["result"]["sessionId"].is_string());
+        } else {
+            assert_eq!(response["error"]["message"], "Authentication required");
+        }
+        pipe.finish().await;
+    }
+}

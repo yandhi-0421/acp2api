@@ -13,6 +13,7 @@ const CONTEXT_SIZE: u64 = 1_048_576;
 
 #[derive(Debug)]
 pub struct RequestCase {
+    pub before_reply: Vec<TurnStep>,
     pub updates: Vec<u64>,
     pub reply: String,
     pub system: Option<String>,
@@ -28,6 +29,7 @@ pub struct RequestCase {
 impl Default for RequestCase {
     fn default() -> Self {
         Self {
+            before_reply: Vec::new(),
             updates: vec![DEFAULT_USED],
             reply: DEFAULT_REPLY.into(),
             system: None,
@@ -83,6 +85,8 @@ impl RequestCase {
         } else {
             plan = plan.chunk(&std::mem::replace(&mut self.reply, DEFAULT_REPLY.into()));
         }
+        plan.steps
+            .splice(0..0, std::mem::take(&mut self.before_reply));
         self.with_usage(plan)
     }
 
