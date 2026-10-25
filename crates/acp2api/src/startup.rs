@@ -118,6 +118,7 @@ pub(crate) async fn start(
         ports.release.highest_concurrency_limit(),
     );
     let initial_conductor = conductor.clone();
+    let stop_conductor = conductor.clone();
     let initial_builds = builds.clone();
     let initial_clock = ports.clock.clone();
     let initial_browser = ports.browser.clone();
@@ -156,11 +157,18 @@ pub(crate) async fn start(
         .open_writer(&data.join("logs"), ports.clock.wall())
         .map_err(|error| error.to_string())?;
     account.temporary.recover()?;
+    let sessions = data.join("runtime-home/antigravity-acp/conversations");
+    match std::fs::remove_dir_all(&sessions) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("cannot remove {}: {error}", sessions.display())),
+    }
     let clock = ports.clock.clone();
     let serving = async move {
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {
                 ports.stop.stopped().await;
+                stop_conductor.stop();
             })
             .await
             .map_err(|error| error.to_string())
@@ -169,6 +177,24 @@ pub(crate) async fn start(
     task.await.map_err(|e| e.to_string())?;
     account.finish(clock.as_ref(), retained_listener).await?;
     Ok(())
+}
+
+pub(crate) async fn launch(
+    temporary: &crate::account::Temporary,
+    launcher: &dyn ProcessLauncher,
+    clock: Arc<dyn Clock>,
+    mut spec: LaunchSpec,
+) -> Result<Launched, String> {
+    let (path, index) = temporary.prepare_launch()?;
+    spec.own_temp = Some(path);
+    let child = launcher
+        .launch(spec)
+        .map_err(|error| format!("runtime launch: {error:?}"))?;
+    if let Err(error) = temporary.record_launch(index, child.tree.pid()) {
+        child.tree.stop(clock).await;
+        return Err(error);
+    }
+    Ok(child)
 }
 
 #[cfg(test)]
@@ -186,6 +212,134 @@ mod lifecycle_tests {
         }
     }
 
+    #[tokio::test]
+    async fn stop_ends_a_runtime_whose_first_initialize_never_answers() {
+        use sha2::{Digest, Sha256};
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Tree(Arc<AtomicBool>);
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                0
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async move {
+                    self.0.store(true, Ordering::SeqCst);
+                })
+            }
+        }
+        struct Launcher(Mutex<Option<Launched>>);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: LaunchSpec) -> Result<Launched, LaunchError> {
+                Ok(self.0.lock().unwrap().take().expect("one launch cap"))
+            }
+        }
+        struct Facts(Vec<ListedBuild>);
+        impl ReleaseFacts for Facts {
+            fn version(&self) -> &str {
+                "test"
+            }
+            fn platform(&self) -> &str {
+                &self.0[0].platform
+            }
+            fn listed_builds(&self) -> &[ListedBuild] {
+                &self.0
+            }
+            fn highest_concurrency_limit(&self) -> u8 {
+                3
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-stop-initialize-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in ["account", "temp", "data/official-runtime", "exe"] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        for name in crate::runtime_builds::names() {
+            std::fs::write(root.join("data/official-runtime").join(name), b"accepted").unwrap();
+        }
+        let mut settings = crate::store::read(&root.join("data/config.toml"), 3)
+            .unwrap()
+            .settings;
+        settings.port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        crate::store::save(&root.join("data/config.toml"), &settings).unwrap();
+        let hash = crate::hex(&Sha256::digest(b"accepted"));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let (product, agent) = tokio::io::duplex(65536);
+        let (stdout, stdin) = tokio::io::split(product);
+        let (stop, signal) = tokio::sync::oneshot::channel();
+        let mut ports = Ports::production();
+        ports.release = Arc::new(Facts(vec![ListedBuild {
+            version: "1.4.0".into(),
+            platform: ports.release.platform().into(),
+            agy_acp_server_sha256: hash.clone(),
+            localharness_external_sha256: hash,
+        }]));
+        ports.launcher = Arc::new(Launcher(Mutex::new(Some(Launched {
+            stdin: Box::pin(stdin),
+            stdout: Box::pin(stdout),
+            stderr: Box::pin(tokio::io::empty()),
+            tree: Box::new(Tree(stopped.clone())),
+        }))));
+        ports.stop = Box::new(Stop(signal));
+        let task = tokio::spawn(start(
+            ports,
+            vec![
+                "acp2api".into(),
+                "--data-dir".into(),
+                root.join("data").into_os_string(),
+            ],
+            Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            },
+        ));
+        use tokio::io::AsyncBufReadExt;
+        let mut agent = tokio::io::BufReader::new(agent);
+        let mut initialize = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            (&mut agent).take(65537).read_until(b'\n', &mut initialize),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            initialize.len() <= 65536,
+            "one initialize request, 64 KiB cap"
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&initialize).unwrap()["method"],
+            "initialize"
+        );
+        stop.send(()).unwrap();
+        let finished = matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), task).await,
+            Ok(Ok(Ok(())))
+        );
+        let actual = (finished, stopped.load(Ordering::SeqCst));
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            actual,
+            (true, true),
+            "a terminal stop must finish startup and stop the initializing runtime tree"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn recovery_runs_after_panel_publication_and_log_setup() {
@@ -193,7 +347,7 @@ mod lifecycle_tests {
             let root = std::env::temp_dir().join(format!("acp2api-recovery-order-{}", crate::random_hex::<12>().unwrap()));
             let previous = crate::account::Temporary::fixture(&root);
             let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
-            let child = previous.launch(&crate::os::OsLauncher, clock.clone(), LaunchSpec {
+            let child = launch(&previous, &crate::os::OsLauncher, clock.clone(), LaunchSpec {
                 program: "/bin/cat".into(), args: vec![], env_set: vec![], cwd: previous.sessions(), own_temp: None,
             }).await.unwrap();
             let record_path = root.join("account/owned-temporary-files.json");

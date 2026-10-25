@@ -292,9 +292,24 @@ impl Temporary {
         let id = crate::hex(&Sha256::digest(account.as_os_str().as_encoded_bytes()));
         let container = temp.join("acp2api").join(id);
         let shared = temp.join("acp2api");
-        fs::create_dir_all(&shared).map_err(|_| failed(&shared))?;
-        if fs::canonicalize(&shared).map_err(|_| failed(&shared))? != shared {
-            return Err(failed(&shared));
+        match fs::create_dir(&shared) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&shared, fs::Permissions::from_mode(0o1777))
+                        .map_err(|_| failed(&shared))?;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if !fs::symlink_metadata(&shared)
+                    .map_err(|_| failed(&shared))?
+                    .is_dir()
+                {
+                    return Err(failed(&shared));
+                }
+            }
+            Err(_) => return Err(failed(&shared)),
         }
         match fs::symlink_metadata(&container) {
             Ok(_) => validate_private(&container, true, true)?,
@@ -323,12 +338,16 @@ impl Temporary {
         for root in record.roots {
             match fs::symlink_metadata(&root.path) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(_) => return Err(failed(&root.path)),
+                Err(_) => {
+                    retained.push(root);
+                    continue;
+                }
                 Ok(_) => {}
             }
-            if process_ended(&root.process) && root.processes.iter().all(process_tree_ended) {
-                remove_root(&root.path)?;
-            } else {
+            if !process_ended(&root.process)
+                || !root.processes.iter().all(process_tree_ended)
+                || remove_root(&root.path).is_err()
+            {
                 retained.push(root);
             }
         }
@@ -338,48 +357,37 @@ impl Temporary {
     pub(crate) fn sessions(&self) -> PathBuf {
         self.root.join("sessions")
     }
-    pub(crate) async fn launch(
-        &self,
-        launcher: &dyn crate::ProcessLauncher,
-        clock: std::sync::Arc<dyn Clock>,
-        mut spec: crate::LaunchSpec,
-    ) -> Result<crate::Launched, String> {
+    pub(crate) fn prepare_launch(&self) -> Result<(PathBuf, usize), String> {
         let path = self
             .root
             .join("processes")
             .join(crate::random_hex::<16>().map_err(|_| failed(&self.root))?);
+        let mut record = Ownership::load(&self.account)?;
+        let processes = &mut record
+            .roots
+            .iter_mut()
+            .find(|root| root.path == self.root)
+            .ok_or_else(|| failed(&self.account.join("owned-temporary-files.json")))?
+            .processes;
+        let index = processes.len();
+        processes.push(OwnedProcess {
+            path: path.clone(),
+            process: None,
+        });
+        record.save(&self.account)?;
+        private_folder(&path)?;
+        Ok((path, index))
+    }
+    pub(crate) fn record_launch(&self, index: usize, pid: u32) -> Result<(), String> {
         let mut record = Ownership::load(&self.account)?;
         record
             .roots
             .iter_mut()
             .find(|root| root.path == self.root)
             .ok_or_else(|| failed(&self.account.join("owned-temporary-files.json")))?
-            .processes
-            .push(OwnedProcess {
-                path: path.clone(),
-                process: None,
-            });
-        record.save(&self.account)?;
-        private_folder(&path)?;
-        spec.own_temp = Some(path);
-        let child = launcher
-            .launch(spec)
-            .map_err(|error| format!("runtime launch: {error:?}"))?;
-        let process = identity(child.tree.pid());
-        record
-            .roots
-            .iter_mut()
-            .find(|root| root.path == self.root)
-            .expect("registered current run")
-            .processes
-            .last_mut()
-            .expect("registered launch")
-            .process = process;
-        if let Err(error) = record.save(&self.account) {
-            child.tree.stop(clock).await;
-            return Err(error);
-        }
-        Ok(child)
+            .processes[index]
+            .process = identity(pid);
+        record.save(&self.account)
     }
     fn finish(&self) -> Result<(), String> {
         let mut record = Ownership::load(&self.account)?;
@@ -391,7 +399,9 @@ impl Temporary {
         if !current.processes.iter().all(process_tree_ended) {
             return Ok(());
         }
-        remove_root(&self.root)?;
+        if remove_root(&self.root).is_err() {
+            return Ok(());
+        }
         record.roots.retain(|root| root.path != self.root);
         record.save(&self.account)
     }
@@ -440,21 +450,25 @@ fn remove_root(path: &Path) -> Result<(), String> {
         return Err(failed(path));
     }
     validate_private(path, true, true)?;
-    fn children(path: &Path) -> Result<(), String> {
+    fn children(path: &Path, root: &Path) -> Result<(), String> {
         for entry in fs::read_dir(path).map_err(|_| failed(path))? {
             let entry = entry.map_err(|_| failed(path))?;
-            let folder = entry
-                .file_type()
-                .map_err(|_| failed(&entry.path()))?
-                .is_dir();
-            validate_private(&entry.path(), folder, false)?;
-            if folder {
-                children(&entry.path())?;
+            let kind = entry.file_type().map_err(|_| failed(&entry.path()))?;
+            if kind.is_symlink() {
+                let target = fs::canonicalize(entry.path()).map_err(|_| failed(&entry.path()))?;
+                if !target.starts_with(root) {
+                    return Err(failed(&entry.path()));
+                }
+            } else {
+                validate_private(&entry.path(), kind.is_dir(), false)?;
+                if kind.is_dir() {
+                    children(&entry.path(), root)?;
+                }
             }
         }
         Ok(())
     }
-    children(path)?;
+    children(path, path)?;
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -570,6 +584,56 @@ mod tests {
         Ok(files)
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn shared_temporary_parent_is_sticky_and_account_subtrees_are_private() {
+        use std::os::unix::fs::MetadataExt;
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-shared-temp-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let files = Temporary::fixture(&root);
+        let modes = [
+            root.join("temp/acp2api"),
+            files.root.parent().unwrap().to_path_buf(),
+            files.root.clone(),
+        ]
+        .map(|path| fs::metadata(path).unwrap().mode() & 0o7777);
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            modes,
+            [0o1777, 0o700, 0o700],
+            "different computer accounts share only the sticky parent"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_unlinks_an_internal_symlink_without_following_it() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-internal-link-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let files = Temporary::fixture(&root);
+        fs::write(files.sessions().join("target"), b"session").unwrap();
+        std::os::unix::fs::symlink(
+            files.sessions().join("target"),
+            files.sessions().join("link"),
+        )
+        .unwrap();
+        files.finish().unwrap();
+        let result = (
+            files.root.exists(),
+            Ownership::load(&files.account).unwrap().roots.len(),
+        );
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            result,
+            (false, 0),
+            "a link within an owned run must be removed as a link"
+        );
+    }
+
     #[test]
     fn normal_cleanup_forgets_a_registered_root_that_is_already_absent() {
         let root = std::env::temp_dir().join(format!(
@@ -663,20 +727,20 @@ mod tests {
             let old = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
             let clock: std::sync::Arc<dyn Clock> =
                 std::sync::Arc::new(crate::os::SystemClock::default());
-            let mut launched = old
-                .launch(
-                    &crate::os::OsLauncher,
-                    clock.clone(),
-                    crate::LaunchSpec {
-                        program: "/bin/sh".into(),
-                        args: vec!["-c".into(), "read line; sleep 30 &".into()],
-                        env_set: vec![],
-                        cwd: old.sessions(),
-                        own_temp: None,
-                    },
-                )
-                .await
-                .unwrap();
+            let mut launched = crate::startup::launch(
+                &old,
+                &crate::os::OsLauncher,
+                clock.clone(),
+                crate::LaunchSpec {
+                    program: "/bin/sh".into(),
+                    args: vec!["-c".into(), "read line; sleep 30 &".into()],
+                    env_set: vec![],
+                    cwd: old.sessions(),
+                    own_temp: None,
+                },
+            )
+            .await
+            .unwrap();
             let group = launched.tree.pid();
             launched.stdin.write_all(b"go\n").await.unwrap();
             launched.tree.exited().await;
@@ -714,20 +778,20 @@ mod tests {
             let old = start_temporary(&root.join("account"), &root.join("temp")).unwrap();
             let clock: std::sync::Arc<dyn Clock> =
                 std::sync::Arc::new(crate::os::SystemClock::default());
-            let launched = old
-                .launch(
-                    &crate::os::OsLauncher,
-                    clock.clone(),
-                    crate::LaunchSpec {
-                        program: "/bin/cat".into(),
-                        args: vec![],
-                        env_set: vec![],
-                        cwd: old.sessions(),
-                        own_temp: None,
-                    },
-                )
-                .await
-                .unwrap();
+            let launched = crate::startup::launch(
+                &old,
+                &crate::os::OsLauncher,
+                clock.clone(),
+                crate::LaunchSpec {
+                    program: "/bin/cat".into(),
+                    args: vec![],
+                    env_set: vec![],
+                    cwd: old.sessions(),
+                    own_temp: None,
+                },
+            )
+            .await
+            .unwrap();
             let mut owner = tokio::process::Command::new("/bin/cat")
                 .stdin(std::process::Stdio::piped())
                 .kill_on_drop(true)
@@ -762,7 +826,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn cleanup_rejects_symlink_escapes_and_nonprivate_ownership_records() {
+    async fn cleanup_keeps_unsafe_roots_but_rejects_nonprivate_coordination_records() {
         use std::os::unix::{
             fs::{PermissionsExt, symlink},
             process::CommandExt,
@@ -790,8 +854,14 @@ mod tests {
             record.roots[0].process = process;
             record.save(&old.account).unwrap();
             symlink(root.join("outside"), old.sessions().join("escape")).unwrap();
-            let symlink_rejected =
-                start_temporary(&root.join("account"), &root.join("temp")).is_err();
+            let next = start_temporary(&root.join("account"), &root.join("temp"));
+            let symlink_retained = next.is_ok()
+                && old.root.exists()
+                && Ownership::load(&old.account)
+                    .unwrap()
+                    .roots
+                    .iter()
+                    .any(|entry| entry.path == old.root);
             let _ = fs::remove_file(old.sessions().join("escape"));
             fs::set_permissions(
                 old.account.join("owned-temporary-files.json"),
@@ -803,7 +873,7 @@ mod tests {
             let preserved = fs::read(root.join("outside/marker")).unwrap();
             fs::remove_dir_all(root).unwrap();
             assert_eq!(
-                (symlink_rejected, record_rejected, preserved),
+                (symlink_retained, record_rejected, preserved),
                 (true, true, b"keep".to_vec()),
                 "unsafe coordination files and escaping links cannot authorize cleanup"
             );

@@ -19,6 +19,7 @@ pub(crate) struct PermissionRequest {
 #[derive(Clone)]
 pub(crate) struct RuntimeStart {
     pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) stopped: tokio::sync::watch::Receiver<bool>,
     pub(crate) launcher: Arc<dyn ProcessLauncher>,
     pub(crate) release: Arc<dyn ReleaseFacts>,
     pub(crate) data: PathBuf,
@@ -57,23 +58,22 @@ impl Runtime {
         let cwd = start.temporary.sessions();
         let tool_sets = start.tool_sets.clone();
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
-        let child = start
-            .temporary
-            .launch(
-                start.launcher.as_ref(),
-                start.clock.clone(),
-                LaunchSpec {
-                    program: program(data),
-                    args: Vec::new(),
-                    env_set: vec![(
-                        "GEMINI_HOME".into(),
-                        data.join("runtime-home").into_os_string(),
-                    )],
-                    cwd: cwd.clone(),
-                    own_temp: None,
-                },
-            )
-            .await?;
+        let child = crate::startup::launch(
+            &start.temporary,
+            start.launcher.as_ref(),
+            start.clock.clone(),
+            LaunchSpec {
+                program: program(data),
+                args: Vec::new(),
+                env_set: vec![(
+                    "GEMINI_HOME".into(),
+                    data.join("runtime-home").into_os_string(),
+                )],
+                cwd: cwd.clone(),
+                own_temp: None,
+            },
+        )
+        .await?;
         let (tx, lines) = mpsc::channel(128);
         let (stdout_tx, clock) = (tx.clone(), start.clock.clone());
         tokio::spawn(async move {
@@ -121,17 +121,29 @@ impl Runtime {
             "title": "acp2api",
             "version": start.release.version()
         });
-        let initialized = runtime
-            .call(
+        let mut stopped = start.stopped.clone();
+        let initialization =
+            async {
+                let initialized = runtime.call(
                 "initialize",
                 json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}}),
-            )
-            .await?;
-        if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
-            runtime.stop().await;
-            return Err("initialize version differs from the accepted build".into());
-        }
-        let catalog = runtime.new_session(&[], None).await?;
+            ).await?;
+                if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
+                    return Err("initialize version differs from the accepted build".into());
+                }
+                runtime.new_session(&[], None).await
+            };
+        let result = tokio::select! {
+            result = initialization => result,
+            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err("acp2api is exiting".into()),
+        };
+        let catalog = match result {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                runtime.stop().await;
+                return Err(error);
+            }
+        };
         Ok((runtime, catalog))
     }
     pub(crate) async fn new_session(

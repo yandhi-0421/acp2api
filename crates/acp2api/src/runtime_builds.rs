@@ -48,6 +48,7 @@ impl Builds {
         Self {
             start: RuntimeStart {
                 clock: ports.clock.clone(),
+                stopped: tokio::sync::watch::channel(false).1,
                 launcher: ports.launcher.clone(),
                 release: ports.release.clone(),
                 data,

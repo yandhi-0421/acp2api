@@ -134,6 +134,7 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
         DEADLINE,
         Runtime::start(
             &RuntimeStart {
+                stopped: tokio::sync::watch::channel(false).1,
                 clock: ports.clock.clone(),
                 launcher: ports.launcher.clone(),
                 release: ports.release.clone(),

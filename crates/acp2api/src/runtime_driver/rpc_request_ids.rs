@@ -115,6 +115,7 @@ async fn start(root: &Root) -> (Runtime, Agent) {
     let temporary =
         crate::account::Temporary::create(&root.0.join("account"), &root.0.join("temp")).unwrap();
     let start = RuntimeStart {
+        stopped: tokio::sync::watch::channel(false).1,
         clock: ports.clock.clone(),
         launcher: ports.launcher.clone(),
         release: ports.release.clone(),

@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 #[derive(Clone)]
 pub(crate) struct Conductor {
     send: mpsc::Sender<Input>,
+    stopping: watch::Sender<bool>,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
     notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
@@ -966,6 +967,8 @@ impl Conductor {
         highest: u8,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Input>(32);
+        let (stopping, mut stopped) = watch::channel(false);
+        let runtime_stop = stopping.clone();
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
@@ -987,6 +990,9 @@ impl Conductor {
             let mut changes = VecDeque::<BuildRequest>::new();
             let mut replacement = None::<Replacement>;
             loop {
+                if *stopped.borrow() {
+                    break;
+                }
                 if core.replacement_ready()
                     && let Some(change) = replacement.take()
                 {
@@ -1086,6 +1092,7 @@ impl Conductor {
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
                 let (event, hold) = tokio::select! {
                     biased;
+                    Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => break,
                     work = first_closed(&connected), if !connected.is_empty() => {
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
                     }
@@ -1094,7 +1101,8 @@ impl Conductor {
                             break;
                         };
                         match work {
-                            Input::Builds { builds, action, reply, hold } => {
+                            Input::Builds { mut builds, action, reply, hold } => {
+                                builds.start.stopped = runtime_stop.subscribe();
                                 changes.push_back(BuildRequest { builds, action, reply });
                                 drop(hold);
                                 continue;
@@ -1181,6 +1189,7 @@ impl Conductor {
         (
             Self {
                 send,
+                stopping,
                 settings: settings_watch,
                 notices: notices_watch,
                 highest,
@@ -1267,6 +1276,9 @@ impl Conductor {
             }
         }
     }
+    pub(crate) fn stop(&self) {
+        self.stopping.send_replace(true);
+    }
     pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
         self.notices.borrow().clone()
     }
@@ -1280,16 +1292,24 @@ impl Conductor {
         hold: Hold,
     ) -> Result<String, String> {
         let (reply, result) = oneshot::channel();
-        self.send
-            .send(Input::Builds {
-                builds: Box::new(builds),
-                action,
-                reply,
-                hold,
-            })
-            .await
-            .map_err(|_| "conductor stopped")?;
-        result.await.map_err(|_| "conductor stopped")?
+        let request = async {
+            self.send
+                .send(Input::Builds {
+                    builds: Box::new(builds),
+                    action,
+                    reply,
+                    hold,
+                })
+                .await
+                .map_err(|_| "conductor stopped".to_owned())?;
+            result.await.map_err(|_| "conductor stopped".to_owned())?
+        }
+        .await;
+        if *self.stopping.borrow() {
+            Ok(String::new())
+        } else {
+            request
+        }
     }
     pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
         let (reply, result) = oneshot::channel();
