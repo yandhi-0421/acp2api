@@ -549,12 +549,20 @@ An expired quota deadline has no effect on admission, even before its timer even
 The admission future owns one cancellation lease. Acceptance transfers it to the ticket, and a lost handoff acts as a disconnect.
 The shell sends acceptance before its dependent prompt command. A failed acceptance handoff suppresses that command.
 A disconnect during a prompt uses the existing cancel path. A disconnect during a non-prompt ACP call cannot release capacity early.
+An early error ends the response and discards its reply route.
+`Retiring` retains request and session metadata, with no reply route, until its ACP call or process ends.
+A disconnected request retains its pending journal completion. An early error has already written that completion.
 
 No work entry, unresolved admission, or external wait owns a `Hold`. The shell registers continuations and deadlines before it releases the incoming hold.
+
+A completed admission reply carries a short `Hold` in its `Ticket` or `Refusal`.
+The HTTP task retains it through response construction. A stream retains it through the initial events.
+
 A completion or disconnect carries a new short hold through the next core transition. An occupied place can therefore wait while virtual time advances.
 Only an accepted stream has a keep-alive timer. Its first deadline starts at acceptance (FR-011).
 
-Transitional state (#47): the conductor keeps a list of active requests and the records of the idle ACP sessions (ADR-0003). The count of records has no limit, because the drop of ADR-0003 does not exist yet. When a turn writes no record, acp2api forgets its ACP session. #60 replaces this state with the work table above.
+Implementation after #60: the conductor uses the three accepted and retiring variants.
+The records of ADR-0003 describe idle ACP sessions outside that table.
 
 ### The runtime driver
 
