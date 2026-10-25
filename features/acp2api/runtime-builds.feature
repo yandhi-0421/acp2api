@@ -100,7 +100,7 @@ Feature: Builds of the official runtime
       | the install folder of Zed holds the accepted build 1.4.0 | acp2api copies the build 1.4.0 from the install folder of Zed, and the runtime process runs from the new copy     |
       | no other place holds a build of the official runtime     | acp2api is in the state "runtime unavailable" with the reason "no build that acp2api found is an accepted version" |
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario: A build for another CPU architecture is not accepted
     Given acp2api for macOS arm64 runs
     And it has no copy of an accepted version and no usable runtime process
