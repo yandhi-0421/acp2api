@@ -55,7 +55,7 @@ impl WireDialect for Messages {
     fn start(&self, w: &mut Encoding) -> Vec<Event> {
         vec![named(
             "message_start",
-            json!({"type":"message_start","message":{"id":w.id,"type":"message","role":"assistant","model":w.model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}),
+            json!({"type":"message_start","message":{"id":w.id,"type":"message","role":"assistant","model":w.model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":w.input_tokens,"output_tokens":0}}}),
         )]
     }
     fn text(&self, w: &mut Encoding, text: &str) -> Vec<Event> {

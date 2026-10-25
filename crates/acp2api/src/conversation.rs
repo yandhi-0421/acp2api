@@ -78,6 +78,7 @@ pub(crate) struct TurnRequest {
     pub conversation: Conversation,
     pub model: String,
     pub tools: Vec<ClientTool>,
+    pub input_tokens: u64,
     pub tool_choice: ToolChoice,
 }
 pub(crate) enum PromptBlock {
@@ -291,14 +292,40 @@ pub(crate) fn user_suffix(items: &[&Item]) -> bool {
         })
 }
 
-pub(crate) fn output_tokens(text: &str) -> u64 {
+pub(crate) fn estimate_tokens(text: &str) -> u64 {
     let ascii = text.chars().filter(char::is_ascii).count() as u64;
     let other = text.chars().filter(|ch| !ch.is_ascii()).count() as u64;
     ascii.div_ceil(4) + other
 }
 
+pub(crate) fn input_tokens(conversation: &Conversation, tool_text: &str) -> u64 {
+    let mut text = String::new();
+    for part in &conversation.system {
+        if let Some(name) = &part.name {
+            text.push_str(name);
+        }
+        text.push_str(&part.text);
+    }
+    for item in conversation.items() {
+        let Item::Message { name, parts, .. } = item;
+        if let Some(name) = name {
+            text.push_str(name);
+        }
+        for part in parts {
+            match part {
+                Part::Text(value) | Part::Document { text: value, .. } => text.push_str(value),
+                Part::Image { .. } => {}
+            }
+        }
+    }
+    text.push_str(tool_text);
+    estimate_tokens(&text)
+}
+
 pub(crate) struct ReplyForm {
     pub stream: bool,
+    pub include_usage: bool,
+    pub input_tokens: u64,
     pub model_name: String,
     pub tools: Vec<serde_json::Value>,
     pub tool_choice: ToolChoice,

@@ -385,7 +385,7 @@ impl Core {
                 disconnected: false,
                 held: None,
                 text: String::new(),
-                input_tokens: 0,
+                input_tokens: request.turn.input_tokens,
                 phase,
                 tool_call: None,
             });
@@ -484,7 +484,9 @@ impl Core {
                 active.text.push_str(&text);
                 commands.push(Command::Emit(active.output.clone(), TurnEvent::Text(text)));
             }
+            let mut output = active.text.clone();
             if let Some(call) = active.tool_call.take() {
+                output.push_str(&call.arguments);
                 commands.push(Command::Emit(
                     active.output.clone(),
                     TurnEvent::ToolCall(call),
@@ -492,7 +494,7 @@ impl Core {
             }
             Usage {
                 input_tokens: active.input_tokens,
-                output_tokens: crate::conversation::output_tokens(&active.text),
+                output_tokens: crate::conversation::estimate_tokens(&output),
             }
         });
         if let Some(session) = &active.session {

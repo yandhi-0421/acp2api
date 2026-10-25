@@ -1,10 +1,21 @@
 use super::*;
 pub(super) struct Chat;
+fn usage(u: &Usage) -> Value {
+    json!({
+        "prompt_tokens": u.input_tokens,
+        "completion_tokens": u.output_tokens,
+        "total_tokens": u.input_tokens + u.output_tokens
+    })
+}
 impl Chat {
+    fn envelope(&self, w: &Encoding, choices: Value) -> Value {
+        json!({"id":w.id,"object":"chat.completion.chunk","created":w.created,"model":w.model,"choices":choices})
+    }
     fn chunk(&self, w: &Encoding, delta: Value, finish: Value) -> Event {
-        data(
-            json!({"id":w.id,"object":"chat.completion.chunk","created":w.created,"model":w.model,"choices":[{"index":0,"delta":delta,"logprobs":null,"finish_reason":finish}]}),
-        )
+        data(self.envelope(
+            w,
+            json!([{"index":0,"delta":delta,"logprobs":null,"finish_reason":finish}]),
+        ))
     }
 }
 impl WireDialect for Chat {
@@ -44,11 +55,7 @@ impl WireDialect for Chat {
                 "logprobs": null,
                 "finish_reason": finish_reason
             }],
-            "usage": {
-                "prompt_tokens": u.input_tokens,
-                "completion_tokens": u.output_tokens,
-                "total_tokens": u.input_tokens + u.output_tokens
-            }
+            "usage": usage(u)
         })
     }
     fn start(&self, _: &mut Encoding) -> Vec<Event> {
@@ -66,7 +73,7 @@ impl WireDialect for Chat {
         w.text.push_str(text);
         vec![self.chunk(w, delta, Value::Null)]
     }
-    fn end(&self, w: &mut Encoding, _: &Usage) -> Vec<Event> {
+    fn end(&self, w: &mut Encoding, u: &Usage) -> Vec<Event> {
         let mut events = Vec::new();
         if let Some(call) = &w.tool_call {
             let mut header = json!({"tool_calls":[{"index":0,"id":w.call_id,"type":"function","function":{"name":call.name,"arguments":""}}]});
@@ -94,6 +101,11 @@ impl WireDialect for Chat {
                 .into(),
             ),
         );
+        if w.include_usage {
+            let mut chunk = self.envelope(w, json!([]));
+            chunk["usage"] = usage(u);
+            events.push(data(chunk));
+        }
         events.push(Event::default().data("[DONE]"));
         events
     }

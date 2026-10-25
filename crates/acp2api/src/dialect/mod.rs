@@ -85,20 +85,15 @@ impl<T: WireDialect + 'static> Dialect for T {
         clock: Arc<dyn Clock>,
     ) -> BoxFuture<'static, Response> {
         Box::pin(async move {
-            let mut wire = match Encoding::new(
-                self.prefix(),
-                self.call_prefix(),
-                form.model_name,
-                form.tools,
-                form.tool_choice,
-                clock.wall(),
-            ) {
-                Ok(wire) => wire,
-                Err(error) => {
-                    return self.refusal(&Message::Upstream(error).into());
-                }
-            };
-            if form.stream {
+            let stream = form.stream;
+            let mut wire =
+                match Encoding::new(self.prefix(), self.call_prefix(), form, clock.wall()) {
+                    Ok(wire) => wire,
+                    Err(error) => {
+                        return self.refusal(&Message::Upstream(error).into());
+                    }
+                };
+            if stream {
                 let initial = self.start(&mut wire).into();
                 let state = StreamState {
                     ticket,
@@ -173,6 +168,8 @@ struct Encoding {
     model: String,
     tools: Vec<Value>,
     tool_choice: ToolChoice,
+    include_usage: bool,
+    input_tokens: u64,
     created: u64,
     sequence: u64,
     text: String,
@@ -184,17 +181,17 @@ impl Encoding {
     fn new(
         prefix: &str,
         call_prefix: &str,
-        model: String,
-        tools: Vec<Value>,
-        tool_choice: ToolChoice,
+        form: ReplyForm,
         wall: std::time::SystemTime,
     ) -> Result<Self, String> {
         Ok(Self {
             id: identifier(prefix)?,
             item_id: identifier("msg_")?,
-            model,
-            tools,
-            tool_choice,
+            model: form.model_name,
+            tools: form.tools,
+            tool_choice: form.tool_choice,
+            include_usage: form.include_usage,
+            input_tokens: form.input_tokens,
             created: wall
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| e.to_string())?

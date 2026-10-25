@@ -371,8 +371,8 @@ pub fn prompt(kind: SessionUse, items: &[Item]) -> Vec<PromptBlock>;   // FR-016
 pub fn system_prompt_addition(system: &[SystemPart]) -> Option<String>; // FR-019
 pub fn record_hashes(conversation: &Conversation) -> Vec<ItemHash>;    // ADR-0003
 pub fn tool_set_hash(tools: &ClientTools) -> ToolSetHash;              // ADR-0003
-pub fn output_tokens(text: &str) -> u64;                               // FR-025
-pub fn input_tokens(turn: &TurnRequest) -> u64;                        // FR-025: full normalized input, not only new items
+pub fn estimate_tokens(text: &str) -> u64;                             // FR-025
+pub fn input_tokens(conversation: &Conversation, tool_text: &str) -> u64; // FR-025: full normalized input, not only new items
 ```
 
 - `dialect::messages` removes the attribution block of Claude Code before it builds `system` (section "Decided values"). The block changes with each request, so the hash of the system prompt must never hold it.
