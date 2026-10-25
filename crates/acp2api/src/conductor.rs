@@ -36,6 +36,12 @@ impl Notice {
     }
 }
 enum Input {
+    Builds {
+        builds: Box<crate::runtime_builds::Builds>,
+        action: crate::runtime_builds::Action,
+        reply: oneshot::Sender<Result<String, String>>,
+        hold: Hold,
+    },
     Owner {
         action: OwnerAction,
         reply: oneshot::Sender<Result<(), String>>,
@@ -944,6 +950,7 @@ impl Conductor {
                 notices,
             };
             let mut read_open = runtime.is_some();
+            let mut unavailable = None::<String>;
             loop {
                 let connected: Vec<_> = core
                     .work
@@ -969,8 +976,47 @@ impl Conductor {
                             break;
                         };
                         match work {
+                            Input::Builds { builds, action, reply, hold } => {
+                                let mut changed = (**publish.borrow()).clone();
+                                let result = match builds.select(action, &mut changed, &configuration) {
+                                    Err(error) => Err(error),
+                                    Ok((selection, notice)) => {
+                                        publish.send_replace(Arc::new(changed));
+                                        if let crate::runtime_builds::Selection::Start(source) = selection {
+                                            if let Some(old) = runtime.take() {
+                                                old.stop().await;
+                                            }
+                                            core.records.clear();
+                                            core.startup_session = None;
+                                            core.catalog = None;
+                                            match builds.launch(source).await {
+                                                Ok((started, catalog)) => {
+                                                    core.startup_session = Some(started.session_id().into());
+                                                    core.catalog = Some(catalog);
+                                                    runtime = Some(started);
+                                                    unavailable = None;
+                                                }
+                                                Err(_) => unavailable = Some(builds.unavailable()),
+                                            }
+                                            read_open = runtime.is_some();
+                                        }
+                                        builds.after_start(&publish.borrow()).map(|()| notice)
+                                    }
+                                };
+                                let _ = reply.send(result);
+                                drop(hold);
+                                continue;
+                            }
                             Input::Models { reply, hold } => {
-                                let _ = reply.send(Ok(core.model_entries()));
+                                let result = match &unavailable {
+                                    Some(message) => {
+                                        let mut error: crate::messages::Refusal = crate::messages::Message::Unavailable(message.clone()).into();
+                                        error.hold = clock.hold(HoldKind::TurnEvent);
+                                        Err(error)
+                                    }
+                                    None => Ok(core.model_entries()),
+                                };
+                                let _ = reply.send(result);
                                 drop(hold);
                                 continue;
                             }
@@ -999,6 +1045,14 @@ impl Conductor {
                                 continue;
                             }
                             Input::Turn(work) => {
+                                if let Some(message) = &unavailable {
+                                    let mut error: crate::messages::Refusal = crate::messages::Message::Unavailable(message.clone()).into();
+                                    error.hold = clock.hold(HoldKind::TurnEvent);
+                                    if work.admission.send(Err(error)).is_err() {
+                                        journal.complete(crate::journal::Completion { request: work.request, session: None, session_use: None, outcome: crate::journal::Outcome::Disconnected }, clock.as_ref());
+                                    }
+                                    continue;
+                                }
                                 match core.admit(*work, &journal, clock.as_ref()) {
                                     Some(accepted) => accepted,
                                     None => continue,
@@ -1126,6 +1180,24 @@ impl Conductor {
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
+    }
+    pub(crate) async fn builds(
+        &self,
+        builds: crate::runtime_builds::Builds,
+        action: crate::runtime_builds::Action,
+        hold: Hold,
+    ) -> Result<String, String> {
+        let (reply, result) = oneshot::channel();
+        self.send
+            .send(Input::Builds {
+                builds: Box::new(builds),
+                action,
+                reply,
+                hold,
+            })
+            .await
+            .map_err(|_| "conductor stopped")?;
+        result.await.map_err(|_| "conductor stopped")?
     }
     pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
         let (reply, result) = oneshot::channel();

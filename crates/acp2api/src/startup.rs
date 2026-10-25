@@ -99,6 +99,51 @@ pub(crate) async fn start(
         "acp2api: {}: management panel at {panel}",
         ports.release.version()
     );
+    let journal = crate::journal::Journal::prepare().map_err(|error| error.to_string())?;
+    let tools = crate::runtime_driver::mcp::ToolSets::new(port);
+    let builds = crate::runtime_builds::Builds::new(
+        &ports,
+        env.clone(),
+        data.clone(),
+        crate::runtime_driver::session_root(&env)?,
+        tools.clone(),
+        port,
+    );
+    let (conductor, task) = crate::conductor::Conductor::start(
+        None,
+        ports.clock.clone(),
+        journal.clone(),
+        settings,
+        data.join("config.toml"),
+        ports.release.highest_concurrency_limit(),
+    );
+    let initial_conductor = conductor.clone();
+    let initial_builds = builds.clone();
+    let initial_clock = ports.clock.clone();
+    let initial_browser = ports.browser.clone();
+    let initial_panel = panel.clone();
+    let initializing = async move {
+        initial_conductor
+            .builds(
+                initial_builds,
+                crate::runtime_builds::Action::Initial,
+                initial_clock.hold(HoldKind::TurnEvent),
+            )
+            .await?;
+        if opened.first_start {
+            initial_browser.open(&initial_panel);
+        }
+        println!("{start_line}");
+        Ok::<(), String>(())
+    };
+    let router = crate::front::router(
+        conductor,
+        ports.clock.clone(),
+        tools,
+        journal.clone(),
+        port,
+        builds,
+    );
     let retained_listener = listener.into_std().map_err(|error| error.to_string())?;
     let listener = tokio::net::TcpListener::from_std(
         retained_listener
@@ -107,47 +152,19 @@ pub(crate) async fn start(
     )
     .map_err(|error| error.to_string())?;
     account.publish(&panel)?;
-    let journal = crate::journal::Journal::prepare().map_err(|error| error.to_string())?;
     journal
         .open_writer(&data.join("logs"), ports.clock.wall())
         .map_err(|error| error.to_string())?;
-    let tools = crate::runtime_driver::mcp::ToolSets::new(port);
-    let runtime = if crate::runtime_driver::program(&data)
-        .try_exists()
-        .map_err(|e| e.to_string())?
-    {
-        Some(
-            crate::runtime_driver::Runtime::start(
-                &ports,
-                &data,
-                crate::runtime_driver::session_root(&env)?,
-                tools.clone(),
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let (conductor, task) = crate::conductor::Conductor::start(
-        runtime,
-        ports.clock.clone(),
-        journal.clone(),
-        settings,
-        data.join("config.toml"),
-        ports.release.highest_concurrency_limit(),
-    );
-    let router = crate::front::router(conductor, ports.clock.clone(), tools, journal, port);
-    if opened.first_start {
-        ports.browser.open(&panel);
-    }
-    println!("{start_line}");
     let clock = ports.clock.clone();
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            ports.stop.stopped().await;
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+    let serving = async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move {
+                ports.stop.stopped().await;
+            })
+            .await
+            .map_err(|error| error.to_string())
+    };
+    tokio::try_join!(initializing, serving)?;
     task.await.map_err(|e| e.to_string())?;
     account.finish(clock.as_ref(), retained_listener).await?;
     Ok(())

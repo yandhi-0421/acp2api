@@ -18,6 +18,15 @@ pub(crate) struct PermissionRequest {
     id: Value,
     session: String,
 }
+#[derive(Clone)]
+pub(crate) struct RuntimeStart {
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) launcher: Arc<dyn ProcessLauncher>,
+    pub(crate) release: Arc<dyn ReleaseFacts>,
+    pub(crate) data: PathBuf,
+    pub(crate) cwd: PathBuf,
+    pub(crate) tool_sets: mcp::ToolSets,
+}
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
@@ -43,11 +52,12 @@ struct ConfiguringPrompt {
 }
 impl Runtime {
     pub(crate) async fn start(
-        ports: &Ports,
-        data: &std::path::Path,
-        cwd: PathBuf,
-        tool_sets: mcp::ToolSets,
+        start: &RuntimeStart,
+        expected_version: &str,
     ) -> Result<(Self, crate::catalog::Catalog), String> {
+        let data = &start.data;
+        let cwd = start.cwd.clone();
+        let tool_sets = start.tool_sets.clone();
         if let Err(error) =
             std::fs::remove_dir_all(data.join("runtime-home/antigravity-acp/conversations"))
             && error.kind() != std::io::ErrorKind::NotFound
@@ -71,7 +81,7 @@ impl Runtime {
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
         let program = program(data);
         std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
-        let child = ports
+        let child = start
             .launcher
             .launch(LaunchSpec {
                 program,
@@ -85,7 +95,7 @@ impl Runtime {
             })
             .map_err(|e| format!("runtime launch: {e:?}"))?;
         let (tx, lines) = mpsc::channel(128);
-        let (stdout_tx, clock) = (tx.clone(), ports.clock.clone());
+        let (stdout_tx, clock) = (tx.clone(), start.clock.clone());
         tokio::spawn(async move {
             let mut stdout = BufReader::new(child.stdout);
             while let Some(line) = read_line(&mut stdout).await {
@@ -99,7 +109,7 @@ impl Runtime {
                 .send((Line::Closed, clock.hold(HoldKind::TurnEvent)))
                 .await;
         });
-        let clock = ports.clock.clone();
+        let clock = start.clock.clone();
         tokio::spawn(async move {
             let mut stderr = BufReader::new(child.stderr);
             while let Some(line) = read_line(&mut stderr).await {
@@ -115,7 +125,7 @@ impl Runtime {
             prompts: std::collections::HashMap::new(),
             creating: std::collections::HashMap::new(),
             tree: child.tree,
-            clock: ports.clock.clone(),
+            clock: start.clock.clone(),
             next_id: 0,
             session: String::new(),
             cwd: cwd.clone(),
@@ -129,14 +139,18 @@ impl Runtime {
         let client = json!({
             "name": "acp2api",
             "title": "acp2api",
-            "version": ports.release.version()
+            "version": start.release.version()
         });
-        runtime
+        let initialized = runtime
             .call(
                 "initialize",
                 json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}}),
             )
             .await?;
+        if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
+            runtime.stop().await;
+            return Err("initialize version differs from the accepted build".into());
+        }
         let catalog = runtime.new_session(&[], None).await?;
         Ok((runtime, catalog))
     }

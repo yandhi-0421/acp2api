@@ -28,6 +28,7 @@ pub(crate) fn router(
     tools: crate::runtime_driver::mcp::ToolSets,
     journal: crate::journal::Journal,
     port: u16,
+    builds: crate::runtime_builds::Builds,
 ) -> Router {
     let app = App {
         conductor: conductor.clone(),
@@ -59,7 +60,7 @@ pub(crate) fn router(
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(app)
         .merge(tools.router())
-        .merge(crate::panel::router(conductor, clock.clone(), port))
+        .merge(crate::panel::router(conductor, clock.clone(), port, builds))
         .layer(axum::middleware::from_fn_with_state(
             clock.clone(),
             input_hold,

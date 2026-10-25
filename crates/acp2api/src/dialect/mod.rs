@@ -253,6 +253,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
 
 pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
     match refusal.message {
+        Message::Unavailable(_) => "runtime_unavailable",
         Message::Model { .. } => "model_not_found",
         Message::Field { .. } => "unsupported_parameter",
         Message::Content(_) => "unsupported_content_type",

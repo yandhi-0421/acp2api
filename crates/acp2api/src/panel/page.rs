@@ -25,6 +25,7 @@ pub(super) fn settings(
     highest: u8,
     notice: Option<&str>,
     notices: &[crate::conductor::Notice],
+    builds: &crate::runtime_builds::Builds,
 ) -> String {
     let key = escape(&settings.local_api_key);
     let options = (1..=highest)
@@ -46,7 +47,50 @@ pub(super) fn settings(
         r#"<section><h2>Runtime notice</h2><p role="status">{}</p><form method="post" action="/manage/notice"><input type="hidden" name="notice_id" value="{}"><button type="submit">Dismiss notice</button></form></section>"#,
         escape(&notice.text()),escape(&notice.id)
     )).collect::<String>();
+    let runtime = runtime(builds, settings);
     document(&format!(
-        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{runtime_notices}{notice}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Concurrency limit</h2><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{runtime_notices}{notice}{runtime}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Concurrency limit</h2><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
     ))
+}
+
+fn runtime(builds: &crate::runtime_builds::Builds, settings: &crate::store::Settings) -> String {
+    let crate::runtime_builds::Summary { found, newer } = match builds.summary() {
+        Ok(summary) => summary,
+        Err(error) => {
+            return format!(
+                "<section><h2>Official runtime</h2><p role=\"status\">{}</p></section>",
+                escape(&error)
+            );
+        }
+    };
+    let rows = found
+        .iter()
+        .map(|(path, version)| {
+            format!(
+                "<li><code>{}</code> — {}</li>",
+                escape(&path.display().to_string()),
+                escape(version)
+            )
+        })
+        .collect::<String>();
+    let options = found
+        .iter()
+        .map(|(_, version)| format!("<option>{}</option>", escape(version)))
+        .collect::<String>();
+    let newer = newer
+        .map(|version| {
+            format!(
+                "<p role=\"status\">New build found: {}</p>",
+                escape(&version)
+            )
+        })
+        .unwrap_or_default();
+    let path = settings
+        .agy_acp_server_path
+        .as_ref()
+        .map(|path| escape(&path.display().to_string()))
+        .unwrap_or_default();
+    format!(
+        r#"<section><h2>Official runtime</h2>{newer}<form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="version">{options}</select><button type="submit">Use this build</button></form></section>"#
+    )
 }

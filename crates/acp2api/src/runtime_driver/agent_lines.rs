@@ -108,7 +108,12 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
         stdin: BufReader::new(stdin_agent),
         writes: 0,
     };
-    agent.stdout(result(1, json!({"protocolVersion":1}))).await;
+    agent
+        .stdout(result(
+            1,
+            json!({"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}),
+        ))
+        .await;
     for line in before_session {
         agent.stdout(line).await;
     }
@@ -127,7 +132,17 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     }))));
     let runtime = tokio::time::timeout(
         DEADLINE,
-        Runtime::start(&ports, &root.0, root.0.join("cwd"), mcp::ToolSets::new(1)),
+        Runtime::start(
+            &RuntimeStart {
+                clock: ports.clock.clone(),
+                launcher: ports.launcher.clone(),
+                release: ports.release.clone(),
+                data: root.0.clone(),
+                cwd: root.0.join("cwd"),
+                tool_sets: mcp::ToolSets::new(1),
+            },
+            "1.4.0",
+        ),
     )
     .await
     .expect("runtime start")

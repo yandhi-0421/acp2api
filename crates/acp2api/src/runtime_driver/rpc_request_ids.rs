@@ -109,17 +109,25 @@ async fn start(root: &Root) -> (Runtime, Agent) {
             tree: Box::new(AgentTree),
         })),
     });
-    let (started, ()) = tokio::join!(
-        Runtime::start(&ports, &root.0, root.0.join("cwd"), mcp::ToolSets::new(0)),
-        async {
-            let initialize = agent.receive("initialize").await;
-            agent
-                .result(&initialize["id"], json!({"protocolVersion":1}))
-                .await;
-            let session = agent.receive("session/new").await;
-            agent.result(&session["id"], session_result("alpha")).await;
-        }
-    );
+    let start = RuntimeStart {
+        clock: ports.clock.clone(),
+        launcher: ports.launcher.clone(),
+        release: ports.release.clone(),
+        data: root.0.clone(),
+        cwd: root.0.join("cwd"),
+        tool_sets: mcp::ToolSets::new(0),
+    };
+    let (started, ()) = tokio::join!(Runtime::start(&start, "1.4.0"), async {
+        let initialize = agent.receive("initialize").await;
+        agent
+            .result(
+                &initialize["id"],
+                json!({"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}),
+            )
+            .await;
+        let session = agent.receive("session/new").await;
+        agent.result(&session["id"], session_result("alpha")).await;
+    });
     (started.unwrap().0, agent)
 }
 async fn ended(runtime: &mut Runtime, expected: &str) {
