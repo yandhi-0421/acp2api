@@ -1,4 +1,4 @@
-use crate::{World, prompt_turn as turn};
+use crate::{World, places_support as queue, prompt_turn as turn};
 use acp2api_acceptance::{
     TurnPlan, TurnStep, client::Call, conversation_check as conversation, endpoint_check,
     fake::TurnEndPlan,
@@ -247,15 +247,7 @@ fn no_uncut(w: &mut World, text: String) {
 
 #[when("the API client of the first request in the queue disconnects")]
 async fn queued_disconnect(w: &mut World) {
-    let live = w
-        .places
-        .calls
-        .iter_mut()
-        .find(|(name, _)| name == "Q0")
-        .unwrap()
-        .1
-        .take()
-        .unwrap();
+    let live = queue::take(w, "Q0");
     assert_eq!(
         live.status(),
         Some(200),
@@ -267,14 +259,10 @@ async fn queued_disconnect(w: &mut World) {
 
 #[then(expr = "the count of the requests in the queue is {int}")]
 async fn queue_count(w: &mut World, count: usize) {
-    crate::places_support::queued(w, 31 - count).await;
+    queue::queued(w, 31 - count).await;
     for (name, expected) in [("freed queue position", 200), ("full queue control", 529)] {
         w.request.plan = Some(TurnPlan::new().chunk("capacity probe"));
-        let live = crate::places_support::send(
-            w,
-            endpoint_check::request("POST /v1/messages", name, true),
-        )
-        .await;
+        let live = queue::send(w, endpoint_check::request("POST /v1/messages", name, true)).await;
         assert_eq!(
             live.status(),
             Some(expected),
@@ -286,24 +274,16 @@ async fn queue_count(w: &mut World, count: usize) {
 
 #[then("the official runtime never gets a prompt for the request of that API client")]
 async fn no_disconnected_prompt(w: &mut World) {
-    crate::places_support::end(w, "A").await;
-    let live = w
-        .places
-        .calls
-        .iter_mut()
-        .find(|(name, _)| name == "Q1")
-        .unwrap()
-        .1
-        .take()
-        .unwrap();
+    queue::end(w, "A").await;
+    let live = queue::take(w, "Q1");
     let answer = live.finish(&mut w.scenario.time).await;
     assert_eq!(
         answer.status, 200,
         "the other queued request still completes"
     );
-    assert!(crate::places_support::has_prompt(w, "Q1"));
+    assert!(queue::has_prompt(w, "Q1"));
     assert!(
-        !crate::places_support::has_prompt(w, "Q0"),
+        !queue::has_prompt(w, "Q0"),
         "FR-031 disconnected queued request never reaches ACP"
     );
 }

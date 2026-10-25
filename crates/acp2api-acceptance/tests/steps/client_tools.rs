@@ -1,5 +1,5 @@
-use crate::World;
-use acp2api_acceptance::{client::Answer, tool_check as t};
+use crate::{World, places_support as queue};
+use acp2api_acceptance::{TurnPlan, client::Answer, tool_check as t};
 use cucumber::{given, then, when};
 use serde_json::{Value, json};
 #[derive(Debug, Default)]
@@ -231,9 +231,6 @@ fn call(w: &mut World, name: String) {
         &w.tools.args,
     );
 }
-
-use crate::places_support as queue;
-use acp2api_acceptance::TurnPlan;
 
 #[given(expr = "a request of the conversation {string} got a response with a tool call")]
 async fn tool_response(w: &mut World, name: String) {

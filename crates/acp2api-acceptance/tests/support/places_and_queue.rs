@@ -119,19 +119,22 @@ pub fn has_prompt(w: &World, name: &str) -> bool {
     prompts(w).iter().any(|text| text.contains(&marker(name)))
 }
 
-pub async fn end(w: &mut World, name: &str) {
-    w.scenario.fake().open_gate(&format!("queue-{name}"));
-    w.scenario.time.settle().await;
-    w.scenario.time.advance_to(w.scenario.hub.now() + 200).await;
-    let live = w
-        .places
+pub fn take(w: &mut World, name: &str) -> Call {
+    w.places
         .calls
         .iter_mut()
         .find(|(n, _)| n == name)
         .unwrap()
         .1
         .take()
-        .unwrap();
+        .unwrap()
+}
+
+pub async fn end(w: &mut World, name: &str) {
+    w.scenario.fake().open_gate(&format!("queue-{name}"));
+    w.scenario.time.settle().await;
+    w.scenario.time.advance_to(w.scenario.hub.now() + 200).await;
+    let live = take(w, name);
     let answer = live.finish(&mut w.scenario.time).await;
     assert_eq!(answer.status, 200, "held prompt finishes through HTTP");
     assert_eq!(
@@ -141,7 +144,6 @@ pub async fn end(w: &mut World, name: &str) {
 }
 
 pub async fn full_places(w: &mut World) {
-    w.places.limit = 2;
     held(w, "A", false).await;
     held(w, "B", false).await;
     assert_eq!(

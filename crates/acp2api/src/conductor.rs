@@ -53,6 +53,7 @@ struct TurnWork {
     hold: Hold,
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
 }
+pub(crate) const QUEUE_CAPACITY: usize = 32;
 const UNAVAILABLE: &str = "official runtime is not available";
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
@@ -91,6 +92,12 @@ impl Work {
         match self {
             Self::AcceptedWorking(active) => Some(active),
             Self::AcceptedQueued(_) | Self::Retiring(_) => None,
+        }
+    }
+    fn into_queued(self) -> Option<Accepted> {
+        match self {
+            Self::AcceptedQueued(request) => Some(request),
+            Self::AcceptedWorking(_) | Self::Retiring(_) => None,
         }
     }
     fn into_active(self) -> Option<Active> {
@@ -320,19 +327,16 @@ impl Core {
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let (output, ticket) = mpsc::unbounded_channel();
-        let checked = self.check_model(&work.turn).and_then(|model| {
-            if self
-                .work
-                .values()
-                .filter(|work| matches!(work, Work::AcceptedQueued(_)))
-                .count()
-                == 32
-            {
-                Err(crate::messages::Message::QueueFull.into())
-            } else {
-                Ok(model)
-            }
-        });
+        let mut checked = self.check_model(&work.turn);
+        if self
+            .work
+            .values()
+            .filter(|work| matches!(work, Work::AcceptedQueued(_)))
+            .count()
+            == QUEUE_CAPACITY
+        {
+            checked = checked.and(Err(crate::messages::Message::QueueFull.into()));
+        }
         let (model, admitted) = match checked {
             Ok(model) => {
                 if self.catalog.is_some()
@@ -400,7 +404,8 @@ impl Core {
             Event::Disconnected(request_id) => {
                 let id = self.by_request(&request_id).unwrap();
                 if matches!(self.work[&id], Work::AcceptedQueued(_)) {
-                    self.drop_queued(id, &mut commands);
+                    let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+                    Self::drop_queued(request, &mut commands);
                 } else {
                     let active = self.work.remove(&id).unwrap().into_active().unwrap();
                     let ended = matches!(active.phase, Phase::Settling { .. });
@@ -421,23 +426,23 @@ impl Core {
                 }
             }
             Event::StartFailed(work, error) => {
-                if let Some(index) = self.by_request(&work) {
+                if let Some(id) = self.by_request(&work) {
                     self.finish(
-                        index,
+                        id,
                         Err(crate::messages::Message::Upstream(error)),
                         &mut commands,
                     );
                 }
             }
             Event::Runtime(RuntimeEvent::Prepared { work, result }) => {
-                if let Some(index) = self.by_request(&work) {
+                if let Some(id) = self.by_request(&work) {
                     match result {
                         Ok((session, catalog)) => {
                             self.catalog = Some(catalog);
-                            match self.work.get_mut(&index).unwrap() {
+                            match self.work.get_mut(&id).unwrap() {
                                 Work::Retiring(outstanding) => {
                                     outstanding.session = Some(session);
-                                    self.finish(index, Ok(()), &mut commands);
+                                    self.finish(id, Ok(()), &mut commands);
                                 }
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
@@ -456,7 +461,7 @@ impl Core {
                         }
                         Err(error) => {
                             self.finish(
-                                index,
+                                id,
                                 Err(crate::messages::Message::Upstream(error)),
                                 &mut commands,
                             );
@@ -470,8 +475,8 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
-                if let Some(index) = self.by_session(&session) {
-                    self.update(index, session, update, now, &mut commands);
+                if let Some(id) = self.by_session(&session) {
+                    self.update(id, session, update, now, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } = update
                 {
@@ -482,16 +487,16 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
-                let index = self.by_session(&session);
+                let id = self.by_session(&session);
                 commands.push(Command::UpstreamLog {
                     session: session.clone(),
                     error: error.clone(),
-                    late: index.is_none(),
+                    late: id.is_none(),
                 });
-                if let Some(index) = index {
-                    if !matches!(self.work[&index], Work::Retiring(_)) {
+                if let Some(id) = id {
+                    if !matches!(self.work[&id], Work::Retiring(_)) {
                         self.retire(
-                            index,
+                            id,
                             session,
                             crate::messages::Message::UpstreamHttp(error),
                             &mut commands,
@@ -561,120 +566,116 @@ impl Core {
                 true
             }
         });
-        let ids: Vec<_> = self.work.keys().copied().collect();
-        for id in ids {
-            if self
+        let mut places = self
+            .work
+            .values()
+            .filter(|work| work.occupies_place())
+            .count();
+        while places < usize::from(self.limit) {
+            let Some(id) = self
                 .work
-                .values()
-                .filter(|work| work.occupies_place())
-                .count()
-                >= usize::from(self.limit)
-            {
+                .iter()
+                .find_map(|(id, work)| matches!(work, Work::AcceptedQueued(_)).then_some(*id))
+            else {
                 break;
+            };
+            let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+            if request.output.is_closed() {
+                Self::drop_queued(request, &mut commands);
+                continue;
             }
-            match self.work.remove(&id).unwrap() {
-                work @ (Work::AcceptedWorking(_) | Work::Retiring(_)) => {
-                    self.work.insert(id, work);
+            let settings = Session {
+                system: crate::conversation::system_prompt_addition(
+                    &request.turn.conversation.system,
+                ),
+                tools: match request.turn.tool_choice {
+                    crate::conversation::ToolChoice::Off => Vec::new(),
+                    crate::conversation::ToolChoice::Auto => request.turn.tools,
+                },
+            };
+            let hashes = crate::conversation::record_hashes(&request.turn.conversation);
+            let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
+            let items = request.turn.conversation.items();
+            let matched = records::select(&self.records, &hashes, tools_hash, &items);
+            let prompt = match matched {
+                Some((_, new_items)) => Prompt::Continue { new_items },
+                None if request.turn.conversation.earlier.is_empty() => Prompt::New {
+                    message: &request.turn.conversation.last,
+                },
+                None => Prompt::Rebuild {
+                    conversation_items: &items,
+                },
+            };
+            let (kind, prompt) = crate::conversation::prompt(prompt, &items);
+            let prompt = PromptRequest {
+                blocks: prompt,
+                model: request.model.model,
+                level: request.model.level,
+            };
+            let ready = match matched {
+                Some((index, _)) => Some(self.records.remove(index).session),
+                None if settings.system.is_none() && settings.tools.is_empty() => {
+                    self.startup_session.take()
                 }
-                Work::AcceptedQueued(request) => {
-                    if request.output.is_closed() {
-                        self.work.insert(id, Work::AcceptedQueued(request));
-                        self.drop_queued(id, &mut commands);
-                        continue;
-                    }
-                    let settings = Session {
-                        system: crate::conversation::system_prompt_addition(
-                            &request.turn.conversation.system,
-                        ),
-                        tools: match request.turn.tool_choice {
-                            crate::conversation::ToolChoice::Off => Vec::new(),
-                            crate::conversation::ToolChoice::Auto => request.turn.tools,
-                        },
-                    };
-                    let hashes = crate::conversation::record_hashes(&request.turn.conversation);
-                    let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
-                    let items = request.turn.conversation.items();
-                    let matched = records::select(&self.records, &hashes, tools_hash, &items);
-                    let prompt = match matched {
-                        Some((_, new_items)) => Prompt::Continue { new_items },
-                        None if request.turn.conversation.earlier.is_empty() => Prompt::New {
-                            message: &request.turn.conversation.last,
-                        },
-                        None => Prompt::Rebuild {
-                            conversation_items: &items,
-                        },
-                    };
-                    let (kind, prompt) = crate::conversation::prompt(prompt, &items);
-                    let prompt = PromptRequest {
-                        blocks: prompt,
-                        model: request.model.model,
-                        level: request.model.level,
-                    };
-                    let ready = match matched {
-                        Some((index, _)) => Some(self.records.remove(index).session),
-                        None if settings.system.is_none() && settings.tools.is_empty() => {
-                            self.startup_session.take()
-                        }
-                        None => None,
-                    };
-                    self.use_sequence += 1;
-                    let work = request.request.id.clone();
-                    let (session, phase) = match ready {
-                        Some(id) => {
-                            commands.push(Command::Prompt {
-                                work: work.clone(),
-                                session: id.clone(),
-                                prompt,
-                            });
-                            (Some(id), Phase::Prompt)
-                        }
-                        None => {
-                            commands.push(Command::Prepare {
-                                work,
-                                settings: settings.clone(),
-                            });
-                            (None, Phase::Preparing(prompt))
-                        }
-                    };
-                    self.work.insert(
-                        id,
-                        Work::AcceptedWorking(Active {
-                            output: request.output,
-                            request: request.request,
-                            session,
-                            hashes,
-                            tools_hash,
-                            kind,
-                            used: self.use_sequence,
-                            expires: now.saturating_add(24 * 60 * 60 * 1000),
-                            held: None,
-                            text: String::new(),
-                            thought_dropped: false,
-                            input_tokens: request.turn.input_tokens,
-                            phase,
-                            tool_call: None,
-                            stop: crate::conversation::Stop::EndTurn,
-                            stops: request.turn.stop,
-                            stop_prefix: String::new(),
-                        }),
-                    );
+                None => None,
+            };
+            self.use_sequence += 1;
+            let work = request.request.id.clone();
+            let (session, phase) = match ready {
+                Some(id) => {
+                    commands.push(Command::Prompt {
+                        work: work.clone(),
+                        session: id.clone(),
+                        prompt,
+                    });
+                    (Some(id), Phase::Prompt)
                 }
-            }
+                None => {
+                    commands.push(Command::Prepare {
+                        work,
+                        settings: settings.clone(),
+                    });
+                    (None, Phase::Preparing(prompt))
+                }
+            };
+            self.work.insert(
+                id,
+                Work::AcceptedWorking(Active {
+                    output: request.output,
+                    request: request.request,
+                    session,
+                    hashes,
+                    tools_hash,
+                    kind,
+                    used: self.use_sequence,
+                    expires: now.saturating_add(24 * 60 * 60 * 1000),
+                    held: None,
+                    text: String::new(),
+                    thought_dropped: false,
+                    input_tokens: request.turn.input_tokens,
+                    phase,
+                    tool_call: None,
+                    stop: crate::conversation::Stop::EndTurn,
+                    stops: request.turn.stop,
+                    stop_prefix: String::new(),
+                }),
+            );
+            places += 1;
         }
         commands
     }
     fn update(
         &mut self,
-        index: WorkId,
+        id: WorkId,
         session: String,
         update: TurnUpdate,
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        if matches!(self.work[&index], Work::Retiring(_)) {
+        if matches!(self.work[&id], Work::Retiring(_)) {
             match update {
                 TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
-                    self.finish(index, Ok(()), commands);
+                    self.finish(id, Ok(()), commands);
                 }
                 TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } => {
@@ -690,7 +691,7 @@ impl Core {
             }
             return;
         }
-        let active = self.work.get_mut(&index).unwrap().execution_mut().unwrap();
+        let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
         match update {
             TurnUpdate::Text(text) => {
                 if active.tool_call.is_none() {
@@ -741,7 +742,7 @@ impl Core {
                     tool: name.clone(),
                 }));
                 self.retire(
-                    index,
+                    id,
                     session,
                     crate::messages::Message::BuiltInToolRan(name),
                     commands,
@@ -772,10 +773,9 @@ impl Core {
         let idle = self.records.drain(..).map(|record| record.session);
         commands.extend(idle.chain(self.startup_session.take()).map(Command::Forget));
     }
-    fn drop_queued(&mut self, id: WorkId, commands: &mut Vec<Command>) {
-        let request = self.work.remove(&id).unwrap();
+    fn drop_queued(request: Accepted, commands: &mut Vec<Command>) {
         commands.push(Command::Complete(crate::journal::Completion {
-            request: request.request().clone(),
+            request: request.request,
             session: None,
             session_use: None,
             outcome: crate::journal::Outcome::Disconnected,

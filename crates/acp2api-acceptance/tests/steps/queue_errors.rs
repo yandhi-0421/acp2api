@@ -1,5 +1,5 @@
 use crate::{World, places_support as queue};
-use acp2api_acceptance::endpoint_check;
+use acp2api_acceptance::{client::Answer, endpoint_check};
 use cucumber::{given, then};
 
 #[given("the queue holds 32 requests")]
@@ -8,21 +8,26 @@ async fn full_queue(w: &mut World) {
     queue::queued(w, 32).await;
 }
 
-#[then(expr = "acp2api answers with HTTP {int} and the header {string}")]
-async fn refused(w: &mut World, status: u16, header: String) {
+async fn refusal(w: &mut World, status: u16, header: &str) -> Answer {
     let live = w.endpoint.take_live();
     assert_eq!(
         live.status(),
         Some(status),
-        "FR-033 a full queue refuses at acceptance"
+        "FR-033/FR-050 a full queue refuses at acceptance"
     );
     let answer = live.finish(&mut w.scenario.time).await;
     let (name, value) = header.split_once(": ").unwrap();
     assert_eq!(
         answer.headers.get(name).map(String::as_str),
         Some(value),
-        "FR-033 full-queue retry header"
+        "FR-033/FR-050 full-queue retry header"
     );
+    answer
+}
+
+#[then(expr = "acp2api answers with HTTP {int} and the header {string}")]
+async fn refused(w: &mut World, status: u16, header: String) {
+    let answer = refusal(w, status, &header).await;
     assert!(
         answer.json()["error"].is_object(),
         "FR-033 OpenAI error envelope"
@@ -34,15 +39,7 @@ async fn refused(w: &mut World, status: u16, header: String) {
     expr = "acp2api refuses the request at once with HTTP {int}, the header {string}, and the message {string}"
 )]
 async fn anthropic_full(w: &mut World, status: u16, header: String, message: String) {
-    let live = w.endpoint.take_live();
-    assert_eq!(
-        live.status(),
-        Some(status),
-        "FR-050 the 33rd queued request is refused at once"
-    );
-    let answer = live.finish(&mut w.scenario.time).await;
-    let (name, value) = header.split_once(": ").unwrap();
-    assert_eq!(answer.headers.get(name).map(String::as_str), Some(value));
+    let answer = refusal(w, status, &header).await;
     assert_eq!(answer.json()["error"]["type"], "overloaded_error");
     assert_eq!(answer.json()["error"]["message"], message);
     w.scenario.answer = Some(answer);

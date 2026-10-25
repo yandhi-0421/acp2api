@@ -165,7 +165,7 @@ impl fmt::Display for Message {
             Self::UpstreamHttp(error) => write!(f, "acp2api: upstream error {} {}: {}", error.code, error.status, error.message),
             Self::UpstreamAcp(error) => write!(f, "acp2api: upstream ACP error {}: {}", error.code, error.message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
-            Self::QueueFull => f.write_str("acp2api: the queue is full (32 requests). Send the request again later."),
+            Self::QueueFull => write!(f, "acp2api: the queue is full ({} requests). Send the request again later.", crate::conductor::QUEUE_CAPACITY),
             Self::TooLarge => f.write_str("acp2api: the request body is larger than 32 MB."),
         }
     }
