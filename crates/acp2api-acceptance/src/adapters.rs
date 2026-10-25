@@ -237,6 +237,8 @@ impl StopSignal for HubStop {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RunFile {
+    #[serde(default)]
+    pub hold_account_first: bool,
     pub hub: HubLink,
     pub fake_program: std::path::PathBuf,
     pub release: RunFileReleaseFacts,

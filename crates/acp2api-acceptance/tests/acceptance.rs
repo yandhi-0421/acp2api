@@ -1,5 +1,7 @@
 use acp2api_acceptance::Scenario;
 use cucumber::{World as _, event::ScenarioFinished};
+#[path = "steps/account_ownership.rs"]
+mod account_ownership;
 #[path = "support/runtime_builds.rs"]
 mod build_support;
 #[path = "steps/panel.rs"]
@@ -39,6 +41,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    account: acp2api_acceptance::account_check::AccountState,
     builds: build_support::BuildState,
     places: places_support::PlacesState,
     ends: response_ends::EndState,

@@ -151,6 +151,7 @@ impl TestRoot {
             .unwrap();
         }
         let mut run = RunFile {
+            hold_account_first: false,
             hub: HubLink::new(hub),
             fake_program: fake,
             release: RunFileReleaseFacts {
