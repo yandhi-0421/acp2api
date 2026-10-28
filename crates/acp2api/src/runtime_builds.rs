@@ -42,7 +42,6 @@ pub(crate) enum Selection {
 pub(crate) enum LaunchFailure {
     NoExecutable,
     NotAccepted,
-    Start(String),
     Runtime(String),
     Stopped,
 }
@@ -53,14 +52,14 @@ impl std::fmt::Display for LaunchFailure {
                 f.write_str("acp2api found no executable of the official runtime")
             }
             Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
-            Self::Start(error) | Self::Runtime(error) => f.write_str(error),
+            Self::Runtime(error) => f.write_str(error),
             Self::Stopped => f.write_str("acp2api is exiting"),
         }
     }
 }
 impl From<String> for LaunchFailure {
     fn from(error: String) -> Self {
-        Self::Start(error)
+        Self::Runtime(error)
     }
 }
 impl Builds {
@@ -122,7 +121,7 @@ impl Builds {
             match fs::read(&path) {
                 Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(LaunchFailure::Start(format!(
+                Err(error) => Err(LaunchFailure::Runtime(format!(
                     "cannot read {}: {error}",
                     path.display()
                 ))),
@@ -281,7 +280,7 @@ impl Builds {
                         if previous {
                             fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
                         }
-                        return Err(LaunchFailure::Start(error.to_string()));
+                        return Err(LaunchFailure::Runtime(error.to_string()));
                     }
                     if previous {
                         let _ = fs::remove_dir_all(backup);
@@ -308,12 +307,7 @@ impl Builds {
                 .await
                 .map_err(LaunchFailure::Runtime)?;
         }
-        Runtime::start(&self.start, &build.version)
-            .await
-            .map_err(|error| match error {
-                LaunchFailure::Start(error) => LaunchFailure::Runtime(error),
-                error => error,
-            })
+        Runtime::start(&self.start, &build.version).await
     }
     pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
         let builds = self.clone();

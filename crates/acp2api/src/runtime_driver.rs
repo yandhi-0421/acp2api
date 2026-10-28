@@ -199,22 +199,22 @@ impl Runtime {
             .sleep_until(start.clock.now().saturating_add(5 * 60 * 1000));
         let starting = async {
             let initialized = tokio::select! {
-                result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Start),
+                result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Runtime),
                 Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
             }?;
             if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
-                return Err(LaunchFailure::Start(
+                return Err(LaunchFailure::Runtime(
                     "initialize version differs from the accepted build".into(),
                 ));
             }
             runtime
                 .new_session(&[], None)
                 .await
-                .map_err(LaunchFailure::Start)
+                .map_err(LaunchFailure::Runtime)
         };
         let result = tokio::select! {
             result = starting => result,
-            _hold = timeout => Err(LaunchFailure::Start("runtime start gave no answer in 5 minutes".into())),
+            _hold = timeout => Err(LaunchFailure::Runtime("runtime start gave no answer in 5 minutes".into())),
         };
         let catalog = match result {
             Ok(catalog) => catalog,

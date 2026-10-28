@@ -6,11 +6,12 @@ pub(crate) struct HttpError {
     pub status: String,
     pub message: String,
 }
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 pub(crate) struct AcpError {
     pub code: i64,
     pub message: String,
 }
+#[derive(Clone)]
 pub(crate) enum Message {
     Field {
         path: String,

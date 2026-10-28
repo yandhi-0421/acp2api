@@ -253,6 +253,7 @@ pub(crate) struct Request {
     pub unknown_fields: Vec<String>,
     started: crate::Moment,
 }
+#[derive(Clone, Copy)]
 pub(crate) enum Outcome {
     ModelList,
     Success { input: u64, output: u64 },
