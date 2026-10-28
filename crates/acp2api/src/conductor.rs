@@ -364,6 +364,11 @@ impl Core {
                     error @ (crate::runtime_builds::LaunchFailure::NoExecutable
                     | crate::runtime_builds::LaunchFailure::NotAccepted),
                 ) => error.to_string(),
+                Err(crate::runtime_builds::LaunchFailure::Stopped) => {
+                    self.apply(Event::Stop, runtime, read_open, clock, journal)
+                        .await;
+                    return Err(crate::runtime_builds::LaunchFailure::Stopped);
+                }
                 Err(error) => return Err(error),
             };
             let message = builds.unavailable(&reason);
@@ -1203,6 +1208,9 @@ impl Conductor {
                         &publish,
                     )
                     .await;
+                    if matches!(core.runtime_state, RuntimeState::Stopping) {
+                        break;
+                    }
                 }
                 if matches!(core.runtime_state, RuntimeState::Restarting)
                     && core.replacement.is_none()
@@ -1231,6 +1239,9 @@ impl Conductor {
                         )
                         .await
                     {
+                        if matches!(error, crate::runtime_builds::LaunchFailure::Stopped) {
+                            break;
+                        }
                         let message = actor_builds.unavailable(&error.to_string());
                         core.unavailable = Some(message.clone());
                         core.apply(

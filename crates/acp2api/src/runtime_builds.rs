@@ -778,6 +778,99 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn stop_during_restart_ends_the_queued_request_with_m15() {
+        use crate::{BoxFuture, Clock, Launched, ProcessLauncher, ProcessTree};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+        struct Tree;
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async {})
+            }
+        }
+        struct Launcher(
+            Mutex<std::collections::VecDeque<Launched>>,
+            tokio::sync::watch::Sender<bool>,
+            AtomicUsize,
+        );
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                let attempt = self.2.fetch_add(1, Ordering::SeqCst);
+                assert!(attempt < 2, "two runtime starts only");
+                if attempt == 1 {
+                    self.1.send_replace(true);
+                }
+                Ok(self.0.lock().unwrap().pop_front().unwrap())
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!("acp2api-stop-restart-{}", crate::random_hex::<12>().unwrap()));
+            fs::create_dir_all(root.join(COPY)).unwrap();
+            for name in [SERVER, HARNESS] { fs::write(root.join(COPY).join(name), b"accepted").unwrap(); }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            let (stopping, stopped) = tokio::sync::watch::channel(false);
+            let (first, agent) = tokio::io::duplex(65536);
+            let (second, _silent_agent) = tokio::io::duplex(65536);
+            let mut children = std::collections::VecDeque::new();
+            for child in [first, second] {
+                let (stdout, stdin) = tokio::io::split(child);
+                children.push_back(Launched { stdin: Box::pin(stdin), stdout: Box::pin(stdout), stderr: Box::pin(tokio::io::empty()), tree: Box::new(Tree) });
+            }
+            let prompting = Arc::new(tokio::sync::Notify::new());
+            let exit = Arc::new(tokio::sync::Notify::new());
+            let agent_task = {
+                let prompting = prompting.clone(); let exit = exit.clone();
+                tokio::spawn(async move {
+                    let (input, mut output) = tokio::io::split(agent);
+                    let mut input = tokio::io::BufReader::new(input);
+                    for _ in 0..4 {
+                        let mut bytes = Vec::new();
+                        (&mut input).take(65537).read_until(b'\n', &mut bytes).await.unwrap();
+                        assert!(bytes.len() <= 65536, "ACP line cap: 64 KiB");
+                        let call: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                        let result = match call["method"].as_str().unwrap() {
+                            "initialize" => serde_json::json!({"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}),
+                            "session/new" => serde_json::json!({"sessionId":"first","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}),
+                            "session/prompt" => { prompting.notify_one(); exit.notified().await; return; },
+                            method => panic!("unexpected ACP method: {method}"),
+                        };
+                        output.write_all(format!("{}\n", serde_json::json!({"jsonrpc":"2.0","id":call["id"],"result":result})).as_bytes()).await.unwrap();
+                    }
+                    panic!("first runtime request cap: four");
+                })
+            };
+            let mut ports = Ports::production();
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:ports.release.platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            ports.launcher = Arc::new(Launcher(Mutex::new(children), stopping, AtomicUsize::new(0)));
+            let builds = Builds::new(&ports, Environment { account_root:root.join("account"), home:None, local_app_data:None, temp:root.join("temp"), path:vec![], exe_dir:root.join("exe") }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), stopped, 0);
+            let config = root.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            settings.concurrency_limit = 1;
+            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = crate::conductor::Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 3);
+            conductor.builds(Action::Initial, crate::Hold::empty()).await.unwrap();
+            let parse = |text: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":text}]})).unwrap()).ok().unwrap().turn;
+            let _a = conductor.admit(parse("A"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            prompting.notified().await;
+            let mut b = conductor.admit(parse("B"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            exit.notify_one();
+            let Some((crate::conversation::TurnEvent::End(Err(error)), _hold)) = b.events.recv().await else {
+                panic!("the queued request must end with an error");
+            };
+            let message = error.to_string();
+            drop(conductor);
+            task.await.unwrap(); agent_task.await.unwrap(); fs::remove_dir_all(root).unwrap();
+            assert_eq!(message, "acp2api: acp2api stopped before the end of this request.", "FR-045 a stop during restart must use the exit path");
+        }).await.expect("stop-restart cap: five seconds, two starts, four first-runtime requests and 64 KiB per line");
+    }
+
+    #[tokio::test]
     async fn an_accepted_copy_start_failure_retries_until_runtime_unavailable() {
         refused_starts(|_| Action::Initial).await;
     }
