@@ -1570,12 +1570,10 @@ impl Conductor {
                 hold,
             })
             .await
-            .map_err(|_| {
-                crate::runtime_builds::LaunchFailure::Runtime("conductor stopped".into())
-            })?;
-        result.await.map_err(|_| {
-            crate::runtime_builds::LaunchFailure::Runtime("conductor stopped".into())
-        })?
+            .map_err(|_| crate::runtime_builds::LaunchFailure::Stopped)?;
+        result
+            .await
+            .map_err(|_| crate::runtime_builds::LaunchFailure::Stopped)?
     }
     pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
         let (reply, result) = oneshot::channel();
@@ -2168,6 +2166,49 @@ mod tests {
             exit_without_restart,
             "FR-045 an exit cancel that finds a closed pipe must not start a replacement"
         );
+    }
+
+    #[tokio::test]
+    async fn closed_build_channels_report_stopped() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!(
+                "acp2api-closed-build-channel-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let clock = crate::Ports::production().clock;
+            for close_before_send in [true, false] {
+                let (send, mut recv) = mpsc::channel(1);
+                if close_before_send {
+                    recv.close();
+                }
+                let receiver = tokio::spawn(async move {
+                    if let Some(Input::Builds { reply, .. }) = recv.recv().await {
+                        drop(reply);
+                    }
+                });
+                let settings = crate::store::read(&folder.join("config.toml"), 1)
+                    .unwrap()
+                    .settings;
+                let conductor = Conductor {
+                    send,
+                    builds: crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
+                    settings: watch::channel(Arc::new(settings)).1,
+                    notices: watch::channel(Arc::new(Vec::new())).1,
+                    highest: 1,
+                };
+                let result = conductor
+                    .builds(crate::runtime_builds::Action::Search, Hold::empty())
+                    .await;
+                receiver.await.unwrap();
+                assert!(
+                    matches!(result, Err(crate::runtime_builds::LaunchFailure::Stopped)),
+                    "a closed conductor channel must report Stopped: {result:?}"
+                );
+            }
+            std::fs::remove_dir_all(folder).unwrap();
+        })
+        .await
+        .expect("closed-channel test cap: five seconds, two owner requests, no process launch");
     }
 
     #[test]
