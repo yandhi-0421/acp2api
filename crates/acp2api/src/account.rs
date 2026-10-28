@@ -529,6 +529,7 @@ fn process_tree_ended(process: &OwnedProcess) -> bool {
     let Some(identity) = &process.process else {
         return false;
     };
+    // Without creation time, retain live PIDs because reuse is unknown; otherwise check the tree.
     if identity.created.is_none() && !process_ended(identity) {
         return false;
     }
@@ -859,6 +860,9 @@ mod tests {
             let mut member = command.process_group(pid as i32).spawn().unwrap();
             leader.kill().await.unwrap();
             files.record_launch(index, Some(pid)).unwrap();
+            let record = Ownership::load(&files.account).unwrap();
+            let process = serde_json::to_value(&record.roots[0].processes[index].process).unwrap();
+            assert!(process["created"].is_null());
             assert_eq!(member.try_wait().unwrap(), None, "the group member is live");
 
             files.finish().unwrap();
