@@ -54,7 +54,10 @@ pub fn place(w: &World, name: &str) -> PathBuf {
                     .unwrap()
                     .join("Library/Application Support/Zed")
             };
-            base.join("external_agents/registry/antigravity-acp/1.4.0")
+            base.join("external_agents")
+                .join("registry")
+                .join("antigravity-acp")
+                .join("1.4.0")
         }
         "the install folder of a JetBrains IDE" => {
             let base = if cfg!(windows) {
@@ -70,7 +73,10 @@ pub fn place(w: &World, name: &str) -> PathBuf {
                     .unwrap()
                     .join("Library/Caches/JetBrains")
             };
-            base.join("IntelliJIdea2026.2/acp-agents/antigravity-acp/1.4.0")
+            base.join("IntelliJIdea2026.2")
+                .join("acp-agents")
+                .join("antigravity-acp")
+                .join("1.4.0")
         }
         "copy" => w.startup.data.join("official-runtime"),
         other => w.startup.root().path.join(other),
