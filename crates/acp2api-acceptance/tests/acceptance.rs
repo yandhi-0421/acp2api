@@ -171,7 +171,7 @@ async fn run() {
         .after(|_, _, _, finished, world| {
             Box::pin(async move {
                 if let Some(world) = world {
-                    world.reload.call.take();
+                    runtime_continuation::cleanup(world);
                     runtime_support::cleanup(world).await;
                     places_support::cleanup(world).await;
                     world

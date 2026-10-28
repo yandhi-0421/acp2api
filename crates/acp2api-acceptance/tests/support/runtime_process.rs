@@ -1,16 +1,13 @@
 #![allow(clippy::disallowed_methods)]
 use crate::World;
 use acp2api_acceptance::{
-    Setup, TIME_FACTOR_ENV, TurnPlan, TurnStep,
+    Setup, TurnEndPlan, TurnPlan, TurnStep,
     client::{Answer, ApiCall, Call},
     real_limit,
-    setup::binary,
-    time_factor,
 };
 use serde_json::{Value, json};
 use std::{
-    io::{BufRead, BufReader, Read},
-    process::{Child, Command, Stdio},
+    process::Child,
     time::{Duration, Instant},
 };
 
@@ -19,6 +16,7 @@ pub struct ProcessState {
     pub calls: Vec<(String, Option<Call>)>,
     pub original: Vec<u32>,
     pub cancelled_at: u64,
+    pub cancelled: Option<(String, String)>,
     pub exits: Vec<usize>,
     pub pending_start: Option<Child>,
     pub identity_starts: usize,
@@ -63,42 +61,8 @@ pub fn process_ids(w: &World) -> Vec<u32> {
         .map(|e| e.event["hello"]["pid"].as_u64().unwrap() as u32)
         .collect()
 }
-#[cfg(unix)]
 pub fn alive(pid: u32) -> bool {
-    if unsafe { libc::kill(pid as i32, 0) } == 0 {
-        return true;
-    }
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH),
-        "inspect the owned fake PID"
-    );
-    false
-}
-#[cfg(windows)]
-pub fn alive(pid: u32) -> bool {
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT},
-        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
-    };
-    unsafe {
-        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
-        if handle.is_null() {
-            assert_eq!(
-                std::io::Error::last_os_error().raw_os_error(),
-                Some(ERROR_INVALID_PARAMETER as i32),
-                "inspect the owned fake PID"
-            );
-            return false;
-        }
-        let result = WaitForSingleObject(handle, 0);
-        CloseHandle(handle);
-        assert!(
-            matches!(result, WAIT_OBJECT_0 | WAIT_TIMEOUT),
-            "inspect fake process exit"
-        );
-        result == WAIT_TIMEOUT
-    }
+    !acp2api_acceptance::setup::definitely_exited(pid)
 }
 
 pub async fn observe(w: &mut World, condition: impl Fn(&World) -> bool) {
@@ -124,16 +88,13 @@ pub async fn start(w: &mut World) {
             .collect();
     }
 }
-pub async fn held(w: &mut World, name: &str, stream: bool) {
+pub async fn held(w: &mut World, name: &str, stream: bool, end: TurnEndPlan) {
     start(w).await;
     let mut plan = TurnPlan::new();
     plan.steps
         .push(TurnStep::HoldUntil(format!("runtime-{name}")));
     plan.steps.push(TurnStep::Chunk(format!("reply {name}")));
-    // A cancelled turn remains in the fake until this scenario explicitly ends it.
-    if name == "A" {
-        plan.end = acp2api_acceptance::fake::TurnEndPlan::IgnoreCancel;
-    }
+    plan.end = end;
     w.request.plan = Some(plan);
     w.request.queue_next(&w.scenario);
     assert!(
@@ -219,42 +180,7 @@ pub async fn pending_start(w: &mut World) {
     let run = w.scenario.root.seed(&w.scenario.hub, &Setup::normal());
     let path = w.scenario.root.path.join("pending-run.toml");
     std::fs::write(&path, toml::to_string(&run).unwrap()).unwrap();
-    let mut command = Command::new(binary("acp2api-test-host"));
-    command
-        .env_clear()
-        .env(TIME_FACTOR_ENV, time_factor().to_string());
-    #[cfg(windows)]
-    command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
-    let mut host = command
-        .env("ACP2API_TEST_RUN", path)
-        .args([
-            "--data-dir",
-            w.scenario.root.path.join("data").to_str().unwrap(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    for pipe in [
-        Box::new(host.stdout.take().unwrap()) as Box<dyn Read + Send>,
-        Box::new(host.stderr.take().unwrap()),
-    ] {
-        let hub = w.scenario.hub.clone();
-        std::thread::spawn(move || {
-            let mut reader = BufReader::new(pipe);
-            loop {
-                let mut line = Vec::new();
-                match reader.by_ref().take(65537).read_until(b'\n', &mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        assert!(line.len() <= 65536, "pending start line cap: 64 KiB");
-                        hub.terminal(&line);
-                    }
-                }
-            }
-        });
-    }
+    let host = w.scenario.launch_host(&[], &path);
     w.process.pending_start = Some(host);
     observe(w, |w| calls(w, "initialize").len() == 1).await;
     assert_eq!(

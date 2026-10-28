@@ -1,5 +1,5 @@
 use crate::{World, runtime_support as process};
-use acp2api_acceptance::{Setup, client::ApiCall};
+use acp2api_acceptance::{Setup, TurnEndPlan, client::ApiCall};
 use cucumber::{given, then, when};
 use serde_json::json;
 
@@ -10,8 +10,8 @@ async fn started(w: &mut World, limit: u8) {
 }
 #[when("two API clients send requests of two conversations at the same time")]
 async fn concurrent(w: &mut World) {
-    process::held(w, "A", true).await;
-    process::held(w, "B", false).await;
+    process::held(w, "A", true, TurnEndPlan::IgnoreCancel).await;
+    process::held(w, "B", false, TurnEndPlan::Stop("end_turn".into())).await;
 }
 #[then("the two prompt turns run at the same time")]
 fn overlapping(w: &mut World) {
@@ -68,8 +68,8 @@ fn still_running(w: &mut World) {
 }
 #[given(expr = "the prompt turns of the requests {string} and {string} run in the runtime process")]
 async fn two_running(w: &mut World, a: String, b: String) {
-    process::held(w, &a, true).await;
-    process::held(w, &b, false).await;
+    process::held(w, &a, true, TurnEndPlan::IgnoreCancel).await;
+    process::held(w, &b, false, TurnEndPlan::Stop("end_turn".into())).await;
     assert_eq!(process::calls(w, "session/prompt").len(), 2);
 }
 #[when("the runtime process exits, and acp2api did not cause the exit")]
@@ -135,18 +135,31 @@ async fn disconnected(w: &mut World, a: String, cancelled: String) {
         "disconnect reaches cancel at ACP boundary"
     );
     w.process.cancelled_at = w.scenario.hub.now();
+    let session = process::calls(w, "session/cancel")[0]["params"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    w.process.cancelled = Some((a, session));
 }
 #[when(expr = "the prompt turn of {string} does not end 30 s after its cancel")]
 async fn cancel_timeout(w: &mut World, a: String) {
-    assert_eq!(a, "A");
+    assert_eq!(a, w.process.cancelled.as_ref().unwrap().0);
     w.scenario
         .time
         .advance_to(w.process.cancelled_at + 29_999)
         .await;
+    let sibling = w
+        .process
+        .calls
+        .iter()
+        .find(|(_, call)| call.is_some())
+        .unwrap()
+        .0
+        .clone();
     assert_eq!(
-        process::status(w, "B"),
+        process::status(w, &sibling),
         None,
-        "B still runs before the 30 s boundary"
+        "the sibling still runs before the 30 s boundary"
     );
     w.scenario
         .time
@@ -165,12 +178,16 @@ async fn sibling_failed(w: &mut World, b: String, message: String) {
 }
 #[when(expr = "the prompt turn of {string} ends 20 s after its cancel")]
 async fn cancelled_end(w: &mut World, a: String) {
-    assert_eq!(a, "A");
+    assert_eq!(a, w.process.cancelled.as_ref().unwrap().0);
     w.scenario
         .time
         .advance_to(w.process.cancelled_at + 20_000)
         .await;
-    let prompt = process::calls(w, "session/prompt")[0].clone();
+    let session = &w.process.cancelled.as_ref().unwrap().1;
+    let prompt = process::calls(w, "session/prompt")
+        .into_iter()
+        .find(|call| call["params"]["sessionId"] == *session)
+        .unwrap();
     w.scenario.hub.command("normal", json!({"op":"Out","line":json!({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"cancelled"}}).to_string()}));
     w.scenario.time.settle().await;
     w.scenario
@@ -215,11 +232,11 @@ async fn start_deadline(w: &mut World) {
 async fn failures(w: &mut World, times: String) {
     process::start(w).await;
     let origin = w.scenario.hub.now();
-    let minutes = if times.contains("4 minutes") {
-        [0, 4, 9]
-    } else {
-        [0, 5, 11]
-    };
+    let minutes: Vec<u64> = times
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse().unwrap())
+        .collect();
     for (index, minute) in minutes.into_iter().enumerate() {
         w.scenario.time.advance_to(origin + minute * 60_000).await;
         assert_eq!(
@@ -242,11 +259,11 @@ fn after_each(w: &mut World) {
 }
 #[given(expr = "the prompt turn of the request {string} with no stream runs")]
 async fn nonstream(w: &mut World, name: String) {
-    process::held(w, &name, false).await;
+    process::held(w, &name, false, TurnEndPlan::IgnoreCancel).await;
 }
 #[given(expr = "the request {string} with no stream waits in the queue")]
 async fn queued(w: &mut World, name: String) {
-    process::held(w, &name, false).await;
+    process::held(w, &name, false, TurnEndPlan::Stop("end_turn".into())).await;
     assert_eq!(process::calls(w, "session/prompt").len(), 1);
 }
 #[when("the owner stops acp2api in its terminal")]
@@ -262,8 +279,17 @@ async fn stop(w: &mut World) {
 }
 #[then(expr = "the official runtime gets a cancel of the prompt turn of {string}")]
 fn shutdown_cancel(w: &mut World, name: String) {
-    assert_eq!(name, "A");
-    let prompt = process::calls(w, "session/prompt")[0].clone();
+    let text = format!("runtime conversation {name}");
+    let prompt = process::calls(w, "session/prompt")
+        .into_iter()
+        .find(|call| {
+            call["params"]["prompt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|block| block["text"] == text)
+        })
+        .unwrap();
     assert!(
         process::calls(w, "session/cancel")
             .iter()

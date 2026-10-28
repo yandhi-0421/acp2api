@@ -427,12 +427,12 @@ fn wait_for_fake_processes(root: &Path) -> std::io::Result<()> {
     Ok(())
 }
 #[cfg(unix)]
-fn definitely_exited(pid: u32) -> bool {
+pub fn definitely_exited(pid: u32) -> bool {
     (unsafe { libc::kill(pid as i32, 0) != 0 })
         && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 #[cfg(windows)]
-fn definitely_exited(pid: u32) -> bool {
+pub fn definitely_exited(pid: u32) -> bool {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0},
         System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},

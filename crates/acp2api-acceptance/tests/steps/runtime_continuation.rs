@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 #[derive(Default)]
 pub struct ReloadState {
     session: String,
-    pub call: Option<Call>,
+    call: Option<Call>,
     files: Vec<std::path::PathBuf>,
     messages: Vec<Value>,
     tools: Value,
@@ -18,6 +18,9 @@ impl std::fmt::Debug for ReloadState {
             .field("session", &self.session)
             .finish_non_exhaustive()
     }
+}
+pub fn cleanup(w: &mut World) {
+    w.reload.call.take();
 }
 #[given(expr = "an ACP session holds the client tool call {string} and its result {string}")]
 async fn tool_history(w: &mut World, name: String, result: String) {
