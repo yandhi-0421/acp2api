@@ -84,7 +84,7 @@ Feature: Safety toward Google and the official runtime
     And each cwd was empty at the start of its ACP session
     And the two cwd folders are different
 
-  @FR-048 @issue-63 @wip
+  @FR-048 @issue-63
   Scenario Outline: acp2api gives the official runtime its own identity at each start
     Given the version of acp2api is "1.0.0"
     And Claude Code sends requests to acp2api
