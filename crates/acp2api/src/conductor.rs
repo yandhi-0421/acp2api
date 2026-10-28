@@ -308,21 +308,9 @@ impl Core {
             && let Err(error) = builds.copy(source)
             && !change.initial
         {
-            if matches!(self.runtime_state, RuntimeState::Retiring) {
-                if runtime.is_some() {
-                    self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
-                        .await;
-                } else {
-                    self.make_unavailable(
-                        &error.to_string(),
-                        runtime,
-                        read_open,
-                        clock,
-                        journal,
-                        builds,
-                    )
+            if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
+                self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
                     .await;
-                }
             }
             let _ = change.reply.send(Err(error));
             return;
@@ -454,7 +442,7 @@ impl Core {
     fn replacement_ready(&self) -> bool {
         matches!(
             self.runtime_state,
-            RuntimeState::Retiring | RuntimeState::Restarting
+            RuntimeState::Retiring | RuntimeState::Restarting | RuntimeState::Unavailable(_)
         ) && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
@@ -625,7 +613,11 @@ impl Core {
                     &mut commands,
                 );
             }
-            Event::RetireRuntime => self.runtime_state = RuntimeState::Retiring,
+            Event::RetireRuntime => {
+                if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+                    self.runtime_state = RuntimeState::Retiring;
+                }
+            }
             Event::ResumeRuntime => self.runtime_state = RuntimeState::Serving,
             Event::Accepted(request) => {
                 self.work
@@ -2079,6 +2071,47 @@ mod tests {
             std::fs::remove_dir_all(folder).unwrap();
             assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: no build that acp2api found is an accepted version. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
         }).await.expect("initial-copy test cap: five seconds, one copy attempt, zero process launches");
+    }
+
+    #[tokio::test]
+    async fn a_failed_owner_copy_preserves_the_existing_unavailable_reason() {
+        use crate::{ListedBuild, ProcessLauncher, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        struct NoLaunch;
+        impl ProcessLauncher for NoLaunch {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                panic!("a copy failure must launch no process")
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-unavailable-copy-{}", crate::random_hex::<12>().unwrap()));
+            let source = folder.join("source");
+            let mut ports = crate::Ports::production();
+            let hash = crate::hex(&Sha256::digest(b"accepted source"));
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            ports.launcher = Arc::new(NoLaunch);
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root:folder.join("account"), temp:folder.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:source.clone() }, folder.clone(), crate::account::Temporary::fixture(&folder), crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
+            let config = folder.join("config.toml");
+            let settings = crate::store::read(&config, 1).unwrap().settings;
+            let journal = crate::journal::Journal::open(&folder.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = Conductor::start(builds.clone(), ports.clock.clone(), journal, settings, config, 1);
+            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            let before = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string());
+            std::fs::create_dir_all(&source).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(source.join(name), b"accepted source").unwrap(); }
+            builds.discover(None).await.unwrap();
+            let choice = crate::runtime_builds::identity(&ports.release.listed_builds()[0]);
+            std::fs::remove_file(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            let copy_error = std::fs::copy(source.join(crate::runtime_builds::HARNESS), folder.join("probe")).unwrap_err().to_string();
+            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice), Hold::empty()).await.map_err(|error| error.to_string());
+            let after = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string());
+            drop(conductor);
+            task.await.unwrap();
+            std::fs::remove_dir_all(folder).unwrap();
+            let expected = "acp2api: the official runtime is unavailable: acp2api found no executable of the official runtime. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".to_string();
+            assert_eq!((owner, before, after), (Err(copy_error), Some(expected.clone()), Some(expected)), "an owner's failed copy must preserve the earlier FR-040 state and M-14 reason");
+        }).await.expect("unavailable-copy test cap: five seconds, four conductor requests, zero process launches");
     }
 
     #[tokio::test]
