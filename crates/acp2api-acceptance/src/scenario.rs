@@ -86,7 +86,7 @@ impl Scenario {
             .to_owned();
         self.spawn_host(&[], format!("127.0.0.1:{port}"), key).await;
     }
-    pub fn launch_host(&self, env: &[(&str, PathBuf)], run: &Path) -> Child {
+    pub fn launch_host(&mut self, env: &[(&str, PathBuf)], run: &Path) -> &Child {
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
         command.env(TIME_FACTOR_ENV, time_factor().to_string());
@@ -121,11 +121,10 @@ impl Scenario {
                 }
             });
         }
-        host
+        self.host.insert(host)
     }
     async fn spawn_host(&mut self, env: &[(&str, PathBuf)], address: String, key: String) {
-        let host = self.launch_host(env, &self.root.path.join("run.toml"));
-        self.host = Some(host);
+        self.launch_host(env, &self.root.path.join("run.toml"));
         let deadline = Instant::now() + real_limit(Duration::from_secs(10));
         while !self.hub.ready() {
             if let Some(status) = self.host.as_mut().unwrap().try_wait().unwrap() {

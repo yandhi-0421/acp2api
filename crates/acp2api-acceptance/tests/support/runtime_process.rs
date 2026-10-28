@@ -6,10 +6,7 @@ use acp2api_acceptance::{
     real_limit,
 };
 use serde_json::{Value, json};
-use std::{
-    process::Child,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub struct ProcessState {
@@ -18,7 +15,6 @@ pub struct ProcessState {
     pub cancelled_at: u64,
     pub cancelled: Option<(String, String)>,
     pub exits: Vec<usize>,
-    pub pending_start: Option<Child>,
     pub identity_starts: usize,
 }
 impl std::fmt::Debug for ProcessState {
@@ -28,15 +24,6 @@ impl std::fmt::Debug for ProcessState {
             .finish_non_exhaustive()
     }
 }
-impl Drop for ProcessState {
-    fn drop(&mut self) {
-        if let Some(mut host) = self.pending_start.take() {
-            let _ = host.kill();
-            let _ = host.wait();
-        }
-    }
-}
-
 pub fn servers(w: &World) -> Vec<Value> {
     w.scenario
         .hub
@@ -180,8 +167,7 @@ pub async fn pending_start(w: &mut World) {
     let run = w.scenario.root.seed(&w.scenario.hub, &Setup::normal());
     let path = w.scenario.root.path.join("pending-run.toml");
     std::fs::write(&path, toml::to_string(&run).unwrap()).unwrap();
-    let host = w.scenario.launch_host(&[], &path);
-    w.process.pending_start = Some(host);
+    w.scenario.launch_host(&[], &path);
     observe(w, |w| calls(w, "initialize").len() == 1).await;
     assert_eq!(
         calls(w, "initialize").len(),
