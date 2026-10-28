@@ -5,7 +5,7 @@ Feature: Runtime process
   N is the number of ACP sessions after which acp2api replaces the runtime process. OD-1 of the PRD decides its value.
   In a quoted message, a value in angle brackets is a value that acp2api fills in, as the section "Message texts" of the PRD gives.
 
-  @FR-040 @FR-042 @issue-58 @wip
+  @FR-040 @FR-042 @issue-58
   Scenario: With no build anywhere, acp2api is in the state runtime unavailable
     Given no place that acp2api searches holds a build of the official runtime
     When the owner starts acp2api

@@ -257,15 +257,28 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
     let id = call["id"].clone();
     let method = call["method"].as_str().unwrap_or("");
     match method {
-        "initialize" => emit_stdout(
-            s,
-            label,
-            s.now,
-            result(
-                id,
-                json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[],"agentInfo":{"name":"fake-acp-agent","version":"1.4.0"}}),
-            ),
-        ),
+        "initialize" => {
+            let version = s
+                .entries
+                .iter()
+                .rev()
+                .find(|entry| {
+                    entry.event["hello"]["role"] == "server"
+                        && entry.event["hello"]["label"] == label
+                })
+                .and_then(|entry| entry.event["hello"]["version"].as_str())
+                .unwrap_or("1.4.0")
+                .to_owned();
+            emit_stdout(
+                s,
+                label,
+                s.now,
+                result(
+                    id,
+                    json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[],"agentInfo":{"name":"fake-acp-agent","version":version}}),
+                ),
+            );
+        }
         "session/new" | "session/load" => {
             if !s.fake.signed_in {
                 emit_stdout(

@@ -223,15 +223,16 @@ impl StopSignal for HubStop {
     fn stopped(&mut self) -> BoxFuture<'_, ()> {
         let link = self.0.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                let mut reader = link
-                    .connect(json!({"op":"stop_wait"}))
-                    .expect("stop registration");
-                let mut line = String::new();
-                reader.read_line(&mut line).expect("stop signal");
-            })
-            .await
-            .unwrap();
+            use tokio::io::AsyncReadExt;
+            let socket = link
+                .connect(json!({"op":"stop_wait"}))
+                .expect("stop registration")
+                .into_inner();
+            socket
+                .set_nonblocking(true)
+                .expect("nonblocking stop socket");
+            let mut socket = tokio::net::TcpStream::from_std(socket).expect("stop socket");
+            socket.read_u8().await.expect("stop signal");
         })
     }
 }
@@ -255,5 +256,55 @@ impl RunFile {
             browser: Arc::new(RecordingBrowser(self.hub.clone())),
             stop: Box::new(HubStop(self.hub.clone())),
         }
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+
+    #[tokio::test]
+    async fn cancelled_stop_subscription_closes_its_socket() {
+        tokio::time::timeout(crate::real_limit(Duration::from_secs(5)), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let link = serde_json::from_value(json!({
+                "address": listener.local_addr().unwrap().to_string(),
+                "token": "bounded-stop-unit-test"
+            }))
+            .unwrap();
+            let mut stop = HubStop(link);
+            let mut waiting = stop.stopped();
+            let (peer, _) = tokio::select! {
+                peer = listener.accept() => peer.unwrap(),
+                _ = &mut waiting => panic!("stop must wait for its one signal"),
+            };
+            let mut peer = tokio::io::BufReader::new(peer);
+            let mut message = String::new();
+            (&mut peer)
+                .take(1025)
+                .read_line(&mut message)
+                .await
+                .unwrap();
+            assert!(message.len() < 1024, "one subscription, 1 KiB message cap");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&message).unwrap()["op"],
+                "stop_wait"
+            );
+            drop(waiting);
+            let mut byte = [0];
+            let closed = tokio::time::timeout(
+                crate::real_limit(Duration::from_millis(300)),
+                peer.read(&mut byte),
+            )
+            .await;
+            drop(peer);
+            assert!(
+                matches!(closed, Ok(Ok(0))),
+                "cancellation must close the socket without a stop command"
+            );
+        })
+        .await
+        .expect("stop subscription cap: 5 seconds");
     }
 }

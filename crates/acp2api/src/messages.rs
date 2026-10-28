@@ -42,6 +42,7 @@ pub(crate) enum Message {
     Key,
     TooLarge,
     QueueFull,
+    RuntimeUnavailable(String),
     Upstream(String),
     UpstreamHttp(HttpError),
     UpstreamAcp(AcpError),
@@ -90,7 +91,8 @@ impl Refusal {
             | Message::UpstreamAcp(_)
             | Message::Upstream(_)
             | Message::BuiltInToolRan(_) => Row::Other502,
-            Message::Model { .. }
+            Message::RuntimeUnavailable(_)
+            | Message::Model { .. }
             | Message::Field { .. }
             | Message::Content(_)
             | Message::Media(_)
@@ -118,6 +120,7 @@ impl Refusal {
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RuntimeUnavailable(message) => f.write_str(message),
             Self::Model { requested, names } => write!(
                 f,
                 "acp2api: the model name {requested} is not available. The model names are: {}.",

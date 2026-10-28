@@ -373,6 +373,12 @@ impl Hub {
                     }
                     json!({"stop":true})
                 }
+                "account_hold" => {
+                    state.servers.insert("account-first".into(), writer.clone());
+                    state.record(json!({"kind":"account_held","pid":message["pid"]}));
+                    self.shared.1.notify_all();
+                    continue;
+                }
                 "launch" => {
                     state.record(json!({"kind":"launch","allowed":message["allowed"],"program":message["program"]}));
                     json!({"ok":true})
