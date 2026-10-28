@@ -749,6 +749,8 @@ impl Core {
                     );
                 }
             }
+            Event::Runtime(RuntimeEvent::Closed)
+                if matches!(self.runtime_state, RuntimeState::Restarting) => {}
             Event::Runtime(RuntimeEvent::Closed) | Event::RuntimeFailure => {
                 self.runtime_state = RuntimeState::Restarting;
                 self.cancels.clear();
@@ -1055,6 +1057,9 @@ impl Core {
         error: crate::runtime_driver::CommandError,
         now: Moment,
     ) -> Vec<Command> {
+        if matches!(self.runtime_state, RuntimeState::Restarting) {
+            return Vec::new();
+        }
         let event = match error {
             crate::runtime_driver::CommandError::Io(_)
                 if matches!(self.runtime_state, RuntimeState::Stopping) =>
@@ -1940,7 +1945,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_broken_cancel_pipe_before_closed_preserves_records_and_returns_m20() {
+    async fn a_broken_stdin_counts_once_for_a_command_batch_and_later_closed() {
         use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
         use tokio::io::AsyncWriteExt;
         struct Tree;
@@ -1970,19 +1975,30 @@ mod tests {
             let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
             let replies = [serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}), serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"running","configOptions":options["configOptions"]}})];
             for reply in replies { let line = format!("{reply}\n"); assert!(line.len() <= 65536); agent_output.write_all(line.as_bytes()).await.unwrap(); }
+            let permission = serde_json::json!({"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"running","toolCall":{"toolCallId":"call","title":"Run view_file?"},"options":[]}});
+            agent_output.write_all(format!("{permission}\n").as_bytes()).await.unwrap();
             builds.start.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(Launched { stdin:Box::pin(stdin), stdout:Box::pin(stdout), stderr:Box::pin(tokio::io::empty()), tree:Box::new(Tree) }))));
-            let (runtime, _) = Runtime::start(&builds.start, "1.4.0").await.unwrap();
+            let (mut runtime, _) = Runtime::start(&builds.start, "1.4.0").await.unwrap();
+            let (RuntimeEvent::Turn { update:TurnUpdate::RefusedPermission { request, .. }, .. }, _hold) = runtime.next().await else { panic!("the fake must send its permission request"); };
             let mut runtime = Some(runtime);
             let mut read_open = true;
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let (mut core, _, [ _a, mut b ]) = prompting_with_waiter(&journal);
-            let a = core.work[&0].request().id.clone();
             let active = core.work[&0].execution().unwrap();
             core.records.push(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), hashes:crate::conversation::RecordHashes { system:active.hashes.system, messages:active.hashes.messages.clone() }, tools:active.tools_hash, used:0, expires:86_400_000 });
             core.startup_session = Some("sibling".into());
             core.handle(Event::Limit(2), 0);
             drop(agent_input);
-            core.apply(Event::Disconnected(a), &mut runtime, &mut read_open, &clock, &journal).await;
+            let mut batch = Vec::new();
+            core.cancel("running".into(), 0, &mut batch);
+            batch.push(Command::Permission(request));
+            let mut batch: VecDeque<_> = batch.into();
+            Conductor::commands(&mut core, &mut runtime, &mut read_open, &clock, &journal, &mut batch).await;
+            assert_eq!(core.failures.len(), 1, "two writes to one closed stdin are one runtime failure");
+            let closed = core.handle(Event::Runtime(RuntimeEvent::Closed), 1);
+            let deadline = core.handle(Event::Deadline, 30_000);
+            assert_eq!(core.failures.len(), 1, "Closed and the old deadline must not count the failed runtime again");
+            assert!(closed.is_empty() && deadline.is_empty(), "the failed runtime must emit no second M-20");
             let mut message = None;
             while let Ok((event, _hold)) = b.try_recv() { if let TurnEvent::End(Err(error)) = event { message = Some(error.to_string()); } }
             let retained: Vec<_> = core.records.iter().map(|record| record.session.as_str()).collect();
@@ -1990,7 +2006,7 @@ mod tests {
             runtime.take().unwrap().stop().await;
             std::fs::remove_dir_all(folder).unwrap();
             assert_eq!(actual, (Some("acp2api: the runtime process failed, so acp2api ended the prompt turn.".into()), true), "a closed stdin is a runtime failure before stdout Closed arrives");
-        }).await.expect("broken pipe cap: five seconds, one fake launch, two reply lines of at most 64 KiB");
+        }).await.expect("broken pipe cap: five seconds, one fake launch, three messages of at most 64 KiB");
     }
 
     #[tokio::test]
