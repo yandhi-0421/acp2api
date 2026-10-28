@@ -529,8 +529,8 @@ fn process_tree_ended(process: &OwnedProcess) -> bool {
     let Some(identity) = &process.process else {
         return false;
     };
-    if identity.created.is_none() {
-        return process_ended(identity);
+    if identity.created.is_none() && !process_ended(identity) {
+        return false;
     }
     #[cfg(target_os = "macos")]
     {
@@ -834,6 +834,48 @@ mod tests {
             fs::remove_dir_all(root).unwrap();
             assert_eq!(actual, (true, true, 2), "a crash before process identity persistence cannot authorize deletion or refuse startup");
         }).await.expect("unproven-launch cap: 5 seconds; one child, no captured output");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn cleanup_keeps_a_live_group_without_a_leader_creation_time() {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-unidentified-group-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let files = Temporary::fixture(&root);
+            let (_, index) = files.prepare_launch().unwrap();
+            let mut command = tokio::process::Command::new("/bin/sleep");
+            command
+                .arg("10")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .process_group(0);
+            let mut leader = command.spawn().unwrap();
+            let pid = leader.id().unwrap();
+            let mut member = command.process_group(pid as i32).spawn().unwrap();
+            leader.kill().await.unwrap();
+            files.record_launch(index, Some(pid)).unwrap();
+            assert_eq!(member.try_wait().unwrap(), None, "the group member is live");
+
+            files.finish().unwrap();
+            let retained = (
+                files.root.exists(),
+                Ownership::load(&files.account).unwrap().roots.len(),
+            );
+            member.kill().await.unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                retained,
+                (true, 1),
+                "a missing creation time cannot authorize cleanup before the group ends"
+            );
+        })
+        .await
+        .expect("unidentified-group cap: 10 seconds; two children, no captured output");
     }
 
     #[cfg(target_os = "macos")]
