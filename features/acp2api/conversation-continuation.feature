@@ -144,7 +144,7 @@ Feature: The conversation in each prompt
     When the owner restarts acp2api
     Then the session files and ACP session folders are gone and the sign-in files are unchanged
 
-  @FR-021 @FR-047 @issue-113 @wip
+  @FR-021 @FR-047 @issue-113
   Scenario: A match loads its ACP session after the earlier runtime process stops
     Given an ACP session holds the client tool call "lookup" and its result "sunny"
     And the official runtime kept a session file for that ACP session
