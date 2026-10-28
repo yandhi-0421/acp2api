@@ -220,7 +220,7 @@ async fn model_configuration_uses_the_returned_level_without_losing_another_turn
         let (mut runtime, mut agent, _root) = start(Vec::new()).await;
         runtime.start_prompt(vec![PromptBlock::Text("Other turn".into())], "s1").await.unwrap();
         let other = agent.stdin().await;
-        runtime.request_session("target".into(), &[], None).await.unwrap();
+        runtime.request_session("target".into(), &[], None, None).await.unwrap();
         let create = agent.stdin().await;
         agent.stdout(result(create["id"].as_u64().unwrap(), json!({"sessionId":"s2","models":{"currentModelId":"m-high","availableModels":[{"modelId":"m-high","name":"M high"},{"modelId":"other-high","name":"Other high"},{"modelId":"other-medium","name":"Other medium"}]},"configOptions":[
             {"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"},{"value":"other","name":"Other"}]},
@@ -604,5 +604,74 @@ async fn a_stderr_error_is_delivered_before_both_closed_streams() {
             observed.push(next(&mut runtime).await);
         }
         assert_eq!(observed, ["text Sure, ", "stderr", "upstream 503", "closed"], "stdout EOF must not discard a final stderr error, and buffered reply text must still precede that error");
+    }).await;
+}
+
+#[tokio::test]
+async fn session_cleanup_keeps_only_recorded_files_and_folders() {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let root = Root(Environment::from_process().temp.join(format!(
+            "acp2api-session-cleanup-{}",
+            crate::random_hex::<12>().unwrap()
+        )));
+        let builds = crate::runtime_builds::Builds::fixture(&root.0, Ports::production().clock);
+        let kept = builds.start.temporary.sessions().join("kept");
+        let orphan = builds.start.temporary.sessions().join("orphan");
+        for folder in [&kept, &orphan] {
+            crate::account::private_folder(folder).unwrap();
+        }
+        let home = root.0.join("runtime-home");
+        let files = home.join("antigravity-acp/conversations");
+        std::fs::create_dir_all(&files).unwrap();
+        std::fs::write(home.join("settings.json"), b"sign-in").unwrap();
+        let suffixes = ["db", "db-wal", "db-shm", "meta"];
+        for session in ["kept", "orphan"] {
+            for suffix in suffixes {
+                std::fs::write(files.join(format!("{session}.{suffix}")), b"history").unwrap();
+            }
+        }
+        builds
+            .start
+            .clean_sessions(vec![("kept".into(), kept.clone())])
+            .await
+            .unwrap();
+        assert!(
+            kept.is_dir()
+                && !orphan.exists()
+                && suffixes
+                    .iter()
+                    .all(|suffix| files.join(format!("kept.{suffix}")).is_file()
+                        && !files.join(format!("orphan.{suffix}")).exists()),
+            "ADR-0005 a later start removes only unrecorded sessions"
+        );
+        builds.start.clean_sessions(Vec::new()).await.unwrap();
+        assert!(
+            !kept.exists()
+                && std::fs::read_dir(&files).unwrap().next().is_none()
+                && std::fs::read(home.join("settings.json")).unwrap() == b"sign-in",
+            "ADR-0005 a first start removes all session data and keeps sign-in files"
+        );
+    })
+    .await
+    .expect("session cleanup cap: 5 seconds, eight tiny session files, no requests or processes");
+}
+
+#[tokio::test]
+async fn load_uses_the_requested_session_id_and_recreates_its_missing_cwd() {
+    capped(async {
+        let (mut runtime, mut agent, root) = start(Vec::new()).await;
+        let cwd = root.0.join("missing-cwd");
+        runtime.request_session("resume".into(), &[], Some("Be kind."), Some(("saved-session".into(), cwd.clone()))).await.unwrap();
+        let load = agent.stdin().await;
+        assert_eq!(load["method"], "session/load");
+        assert_eq!(load["params"]["sessionId"], "saved-session");
+        assert_eq!(load["params"]["cwd"], json!(cwd));
+        assert!(cwd.is_dir());
+        assert_eq!(load["params"]["_meta"]["antigravity"]["enabledTools"], json!([]));
+        assert_eq!(load["params"]["_meta"]["antigravity"]["systemPrompt"]["append"], "Be kind.");
+        agent.stdout(result(load["id"].as_u64().unwrap(), json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}))).await;
+        let (event, _hold) = runtime.next().await;
+        assert!(matches!(event, RuntimeEvent::Prepared { work, result: Ok((session, _)) } if work == "resume" && session == "saved-session"),
+            "ACP session/load returns the catalog without a sessionId; the request identifies the loaded session");
     }).await;
 }

@@ -13,9 +13,26 @@ use agent_client_protocol_schema::v1::{
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+#[derive(Debug)]
+pub(crate) enum CommandError {
+    Io(std::io::Error),
+    Session(String),
+}
+impl From<String> for CommandError {
+    fn from(error: String) -> Self {
+        Self::Session(error)
+    }
+}
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Session(error) => error.fmt(f),
+        }
+    }
+}
 pub(crate) struct PermissionRequest {
     id: Value,
-    session: String,
 }
 #[derive(Clone)]
 pub(crate) struct RuntimeStart {
@@ -27,11 +44,47 @@ pub(crate) struct RuntimeStart {
     pub(crate) temporary: crate::account::Temporary,
     pub(crate) tool_sets: mcp::ToolSets,
 }
+impl RuntimeStart {
+    pub(crate) async fn clean_sessions(
+        &self,
+        retained: Vec<(String, PathBuf)>,
+    ) -> Result<(), String> {
+        let folders = self.temporary.sessions();
+        let files = self.data.join("runtime-home/antigravity-acp/conversations");
+        tokio::task::spawn_blocking(move || {
+            for entry in std::fs::read_dir(folders).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                if !retained.iter().any(|(_, cwd)| cwd == &entry.path()) {
+                    std::fs::remove_dir_all(entry.path()).map_err(|error| error.to_string())?;
+                }
+            }
+            match std::fs::read_dir(files) {
+                Ok(files) => {
+                    for file in files {
+                        let file = file.map_err(|error| error.to_string())?;
+                        let name = file.file_name();
+                        let name = name.to_string_lossy();
+                        if !retained.iter().any(|(session, _)| {
+                            name == *session || name.starts_with(&format!("{session}."))
+                        }) {
+                            std::fs::remove_file(file.path()).map_err(|error| error.to_string())?;
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+}
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
     prompts: std::collections::HashMap<u64, String>,
-    creating: std::collections::HashMap<u64, (String, SessionTools)>,
+    creating: std::collections::HashMap<u64, CreatingSession>,
     tree: Box<dyn ProcessTree>,
     clock: Arc<dyn Clock>,
     next_id: u64,
@@ -43,6 +96,11 @@ pub(crate) struct Runtime {
     config: std::collections::HashMap<(String, String), String>,
     configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
     stderr_session: Option<String>,
+}
+struct CreatingSession {
+    work: String,
+    tools: SessionTools,
+    session: Option<String>,
 }
 struct ConfiguringPrompt {
     session: String,
@@ -136,23 +194,28 @@ impl Runtime {
             "version": start.release.version()
         });
         let mut stopped = start.stopped.clone();
-        let result = tokio::select! {
-            result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Start),
-            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
-        };
-        let result = async {
-            let initialized = result?;
+        let timeout = start
+            .clock
+            .sleep_until(start.clock.now().saturating_add(5 * 60 * 1000));
+        let starting = async {
+            let initialized = tokio::select! {
+                result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Runtime),
+                Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
+            }?;
             if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
-                return Err(LaunchFailure::Start(
+                return Err(LaunchFailure::Runtime(
                     "initialize version differs from the accepted build".into(),
                 ));
             }
             runtime
                 .new_session(&[], None)
                 .await
-                .map_err(LaunchFailure::Start)
-        }
-        .await;
+                .map_err(LaunchFailure::Runtime)
+        };
+        let result = tokio::select! {
+            result = starting => result,
+            _hold = timeout => Err(LaunchFailure::Runtime("runtime start gave no answer in 5 minutes".into())),
+        };
         let catalog = match result {
             Ok(catalog) => catalog,
             Err(error) => {
@@ -167,7 +230,7 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
     ) -> Result<crate::catalog::Catalog, String> {
-        let (params, tools) = self.session_parameters(tools, system)?;
+        let (params, tools) = self.session_parameters(tools, system, None)?;
         let session = self.call("session/new", params).await?;
         let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
         let session_id = session["sessionId"]
@@ -193,13 +256,20 @@ impl Runtime {
         &self,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
+        cwd: Option<PathBuf>,
     ) -> Result<(Value, SessionTools), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
-        let cwd = self.cwd.join(format!(
-            "session-{}",
-            crate::random_hex::<16>().map_err(|error| error.to_string())?
-        ));
-        crate::account::private_folder(&cwd)?;
+        let new = cwd.is_none();
+        let cwd = match cwd {
+            Some(cwd) => cwd,
+            None => self.cwd.join(format!(
+                "session-{}",
+                crate::random_hex::<16>().map_err(|error| error.to_string())?
+            )),
+        };
+        if new || !cwd.exists() {
+            crate::account::private_folder(&cwd)?;
+        }
         let mut params = json!({
             "cwd": cwd,
             "mcpServers": [{
@@ -228,11 +298,32 @@ impl Runtime {
         work: String,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
-    ) -> Result<(), String> {
-        let (params, tools) = self.session_parameters(tools, system)?;
-        let id = self.send("session/new", params).await?;
-        self.creating.insert(id, (work, tools));
+        load: Option<(String, PathBuf)>,
+    ) -> Result<(), CommandError> {
+        let (session, cwd) = match load {
+            Some((id, cwd)) => (Some(id), Some(cwd)),
+            None => (None, None),
+        };
+        let (mut params, tools) = self.session_parameters(tools, system, cwd)?;
+        let method = if let Some(session) = &session {
+            params["sessionId"] = json!(session);
+            "session/load"
+        } else {
+            "session/new"
+        };
+        let id = self.send(method, params).await?;
+        self.creating.insert(
+            id,
+            CreatingSession {
+                work,
+                tools,
+                session,
+            },
+        );
         Ok(())
+    }
+    pub(crate) fn session_cwd(&self, session: &str) -> &std::path::Path {
+        &self.tools[session].cwd
     }
     pub(crate) fn forget(&mut self, session: &str) {
         self.tool_calls.clear(session);
@@ -241,7 +332,7 @@ impl Runtime {
             self.tool_sets.remove(&tools.mcp_url);
         }
     }
-    async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
+    async fn send(&mut self, method: &str, params: Value) -> Result<u64, CommandError> {
         self.next_id += 1;
         let id = self.next_id;
         self.write(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
@@ -251,28 +342,25 @@ impl Runtime {
     pub(crate) fn session_id(&self) -> &str {
         &self.session
     }
-    async fn write(&mut self, value: Value) -> Result<(), String> {
-        let mut bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+    async fn write(&mut self, value: Value) -> Result<(), CommandError> {
+        let mut bytes =
+            serde_json::to_vec(&value).map_err(|e| CommandError::Session(e.to_string()))?;
         bytes.push(b'\n');
         self.input
             .write_all(&bytes)
             .await
-            .map_err(|e| e.to_string())?;
-        self.input.flush().await.map_err(|e| e.to_string())
+            .map_err(CommandError::Io)?;
+        self.input.flush().await.map_err(CommandError::Io)
     }
     pub(crate) async fn permission(
         &mut self,
         request: PermissionRequest,
-        cancel: bool,
-    ) -> Result<(), String> {
-        if cancel {
-            self.cancel(&request.session).await?;
-        }
+    ) -> Result<(), CommandError> {
         let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
         self.write(json!({"jsonrpc":"2.0","id":request.id,"result":outcome}))
             .await
     }
-    pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), String> {
+    pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), CommandError> {
         for pending in self
             .configuring
             .values_mut()
@@ -285,12 +373,15 @@ impl Runtime {
         )
         .await
     }
-    async fn refuse(&mut self, request: &Value) -> Result<(), String> {
+    async fn refuse(&mut self, request: &Value) -> Result<(), CommandError> {
         self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
             .await
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.send(method, params).await?;
+        let id = self
+            .send(method, params)
+            .await
+            .map_err(|error| error.to_string())?;
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
                 Line::Stdout(value) => value?,
@@ -299,7 +390,9 @@ impl Runtime {
             };
             if value.get("method").is_some() {
                 if value.get("id").is_some() {
-                    self.refuse(&value).await?;
+                    self.refuse(&value)
+                        .await
+                        .map_err(|error| error.to_string())?;
                 }
                 continue;
             }
@@ -316,7 +409,7 @@ impl Runtime {
         &mut self,
         prompt: crate::conversation::PromptRequest,
         session: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), CommandError> {
         self.configure_prompt(prompt, session, Vec::new()).await
     }
     async fn configure_prompt(
@@ -324,7 +417,7 @@ impl Runtime {
         prompt: crate::conversation::PromptRequest,
         session: &str,
         mut sent: Vec<&'static str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CommandError> {
         let desired = [
             ("model", Some(prompt.model.as_str())),
             ("thinking_level", prompt.level.map(|level| level.as_str())),
@@ -342,7 +435,7 @@ impl Runtime {
             if sent.contains(&option) {
                 return Err(format!(
                     "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."
-                ));
+                ).into());
             }
             sent.push(option);
             let option = option.to_owned();
@@ -371,7 +464,7 @@ impl Runtime {
         &mut self,
         prompt: Vec<crate::conversation::PromptBlock>,
         session: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), CommandError> {
         self.tool_calls.clear(session);
         let blocks: Vec<ContentBlock> = prompt
             .into_iter()
@@ -448,14 +541,20 @@ impl Runtime {
                 };
                 return match self.configure_prompt(prompt, &session, sent).await {
                     Ok(()) => RuntimeEvent::Other,
-                    Err(error) => RuntimeEvent::Turn {
+                    Err(CommandError::Io(_)) => RuntimeEvent::Closed,
+                    Err(CommandError::Session(error)) => RuntimeEvent::Turn {
                         session,
                         update: TurnUpdate::Failed(crate::messages::Message::Upstream(error)),
                     },
                 };
             }
-            if let Some((work, tools)) = self.creating.remove(&id) {
-                let result = self.created_session(&value);
+            if let Some(CreatingSession {
+                work,
+                tools,
+                session,
+            }) = self.creating.remove(&id)
+            {
+                let result = self.created_session(&value, session);
                 match &result {
                     Ok((session, _)) => {
                         self.tools.insert(session.clone(), tools);
@@ -496,7 +595,6 @@ impl Runtime {
                 .permission(&session, &request.tool_call.tool_call_id.to_string());
             let permission = PermissionRequest {
                 id: value["id"].clone(),
-                session: session.clone(),
             };
             let update = match self.client_tool_call(&session, &request) {
                 Some(call) => TurnUpdate::Permission {
@@ -563,20 +661,28 @@ impl Runtime {
         } else if value.get("method").is_some() && value.get("id").is_some() {
             match self.refuse(&value).await {
                 Ok(()) => RuntimeEvent::Other,
-                Err(error) => RuntimeEvent::Failed(error),
+                Err(CommandError::Io(_)) => RuntimeEvent::Closed,
+                Err(CommandError::Session(error)) => RuntimeEvent::Failed(error),
             }
         } else {
             RuntimeEvent::Other
         }
     }
-    fn created_session(&self, value: &Value) -> Result<(String, crate::catalog::Catalog), String> {
+    fn created_session(
+        &self,
+        value: &Value,
+        loaded: Option<String>,
+    ) -> Result<(String, crate::catalog::Catalog), String> {
         let response = value
             .get("result")
             .ok_or_else(|| acp_error(&value["error"]).to_string())?;
-        let session = response["sessionId"]
-            .as_str()
-            .ok_or("missing sessionId")?
-            .to_owned();
+        let session = match loaded {
+            Some(id) => id,
+            None => response["sessionId"]
+                .as_str()
+                .ok_or("missing sessionId")?
+                .to_owned(),
+        };
         let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
         Ok((session, catalog))
     }
@@ -613,6 +719,13 @@ impl Runtime {
         let _ = self.input.shutdown().await;
         drop(self.input);
         self.tree.stop(self.clock).await;
+        for tools in self
+            .tools
+            .into_values()
+            .chain(self.creating.into_values().map(|creating| creating.tools))
+        {
+            self.tool_sets.remove(&tools.mcp_url);
+        }
     }
 }
 

@@ -39,6 +39,7 @@ impl Notice {
 struct Replacement {
     reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
     source: Option<std::path::PathBuf>,
+    initial: bool,
 }
 enum Input {
     Builds {
@@ -64,6 +65,9 @@ struct TurnWork {
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
 }
 pub(crate) const QUEUE_CAPACITY: usize = 32;
+const MAX_RUNTIME_FAILURES: usize = 3;
+const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
+const REPEATED_FAILURES: &str = "the runtime process failed 3 times in 10 minutes";
 const UNAVAILABLE: &str = "official runtime is not available";
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
@@ -160,10 +164,10 @@ impl Active {
             .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
             .min_by_key(|(at, _)| *at)
     }
-    fn release_or_cut_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) {
+    fn release_or_cut_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) -> bool {
         let complete = next.is_none();
         if !complete && self.stop.sequence().is_some() {
-            return;
+            return false;
         }
         let mut text = std::mem::take(&mut self.stop_prefix);
         if let Some(held) = self.held.take() {
@@ -209,19 +213,23 @@ impl Active {
             && self.stop.sequence().is_none()
         {
             self.stop = crate::conversation::Stop::Sequence(stop);
-            if let Some(session) = &self.session {
-                commands.push(Command::Cancel(session.clone()));
-            }
+            return !complete;
         }
+        false
     }
 }
 enum RuntimeState {
     Serving,
     Retiring,
+    Restarting,
+    Unavailable(String),
+    Stopping,
 }
 struct Core {
     runtime_state: RuntimeState,
-    unavailable: Option<String>,
+    failures: VecDeque<Moment>,
+    cleanup_before_start: bool,
+    cancels: BTreeMap<String, Moment>,
     changes: VecDeque<(
         crate::runtime_builds::Action,
         oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
@@ -238,6 +246,8 @@ struct Core {
 }
 enum Event {
     RetireRuntime,
+    RuntimeFailure,
+    Stop,
     RuntimeUnavailable(String),
     ResumeRuntime,
     Accepted(Box<Accepted>),
@@ -261,6 +271,7 @@ enum Command {
     Prepare {
         work: String,
         settings: Session,
+        load: Option<(String, std::path::PathBuf)>,
     },
     Prompt {
         work: String,
@@ -268,10 +279,7 @@ enum Command {
         prompt: PromptRequest,
     },
     Emit(Output, TurnEvent),
-    Permission {
-        request: crate::runtime_driver::PermissionRequest,
-        cancel: bool,
-    },
+    Permission(crate::runtime_driver::PermissionRequest),
     Forget(String),
 }
 impl Core {
@@ -296,40 +304,26 @@ impl Core {
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) {
         let change = self.replacement.take().unwrap();
-        if let Some(old) = runtime.take() {
-            old.stop().await;
+        if let Some(source) = change.source
+            && let Err(error) = builds.copy(source)
+            && !change.initial
+        {
+            if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
+                self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
+                    .await;
+            }
+            let _ = change.reply.send(Err(error));
+            return;
         }
-        self.replaced(None, None);
-        match builds.launch(change.source).await {
-            Ok((started, catalog)) => {
-                self.replaced(Some(started.session_id().into()), Some(catalog));
-                *runtime = Some(started);
-                self.unavailable = None;
-            }
-            Err(
-                error @ (crate::runtime_builds::LaunchFailure::Start(_)
-                | crate::runtime_builds::LaunchFailure::Stopped),
-            ) => {
-                let _ = change.reply.send(Err(error));
-                return;
-            }
-            Err(
-                error @ (crate::runtime_builds::LaunchFailure::NoExecutable
-                | crate::runtime_builds::LaunchFailure::NotAccepted),
-            ) => {
-                let message = builds.unavailable(&error.to_string());
-                self.apply(
-                    Event::RuntimeUnavailable(message.clone()),
-                    runtime,
-                    read_open,
-                    clock,
-                    journal,
-                )
-                .await;
-                self.unavailable = Some(message);
-            }
+        self.stop_runtime(runtime, read_open).await;
+        self.launch(runtime, read_open, clock, journal, builds)
+            .await;
+        if matches!(self.runtime_state, RuntimeState::Stopping) {
+            let _ = change
+                .reply
+                .send(Err(crate::runtime_builds::LaunchFailure::Stopped));
+            return;
         }
-        *read_open = runtime.is_some();
         let configured = publish.borrow().agy_acp_server_path.clone();
         let result = builds
             .discover(configured)
@@ -338,12 +332,120 @@ impl Core {
             .map_err(Into::into);
         let _ = change.reply.send(result);
     }
+    async fn launch(
+        &mut self,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+    ) {
+        *read_open = false;
+        loop {
+            if matches!(self.runtime_state, RuntimeState::Restarting)
+                && self.failures.len() >= MAX_RUNTIME_FAILURES
+            {
+                self.make_unavailable(
+                    REPEATED_FAILURES,
+                    runtime,
+                    read_open,
+                    clock,
+                    journal,
+                    builds,
+                )
+                .await;
+                return;
+            }
+            let retained = if self.cleanup_before_start {
+                Some(
+                    self.records
+                        .iter()
+                        .filter_map(|record| match &record.location {
+                            records::Location::Unloaded(cwd) => {
+                                Some((record.session.clone(), cwd.clone()))
+                            }
+                            records::Location::Loaded => None,
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            self.cleanup_before_start = true;
+            match builds.launch(retained).await {
+                Ok((started, catalog)) => {
+                    self.replaced(Some(started.session_id().into()), Some(catalog));
+                    *runtime = Some(started);
+                    *read_open = true;
+                    self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
+                        .await;
+                    return;
+                }
+                Err(crate::runtime_builds::LaunchFailure::Runtime(_)) => {
+                    self.apply(Event::RuntimeFailure, runtime, read_open, clock, journal)
+                        .await;
+                }
+                Err(crate::runtime_builds::LaunchFailure::Stopped) => {
+                    self.apply(Event::Stop, runtime, read_open, clock, journal)
+                        .await;
+                    return;
+                }
+                Err(
+                    error @ (crate::runtime_builds::LaunchFailure::NoExecutable
+                    | crate::runtime_builds::LaunchFailure::NotAccepted),
+                ) => {
+                    self.make_unavailable(
+                        &error.to_string(),
+                        runtime,
+                        read_open,
+                        clock,
+                        journal,
+                        builds,
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+    }
+    async fn make_unavailable(
+        &mut self,
+        reason: &str,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+    ) {
+        self.apply(
+            Event::RuntimeUnavailable(builds.unavailable(reason)),
+            runtime,
+            read_open,
+            clock,
+            journal,
+        )
+        .await;
+    }
+    async fn stop_runtime(&mut self, runtime: &mut Option<Runtime>, read_open: &mut bool) {
+        *read_open = false;
+        if let Some(old) = runtime.take() {
+            for record in &mut self.records {
+                if matches!(record.location, records::Location::Loaded) {
+                    record.location =
+                        records::Location::Unloaded(old.session_cwd(&record.session).to_path_buf());
+                }
+            }
+            old.stop().await;
+        }
+        self.replaced(None, None);
+    }
     fn replacement_ready(&self) -> bool {
-        matches!(self.runtime_state, RuntimeState::Retiring)
-            && !self.work.values().any(Work::occupies_place)
+        matches!(
+            self.runtime_state,
+            RuntimeState::Retiring | RuntimeState::Restarting | RuntimeState::Unavailable(_)
+        ) && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
-        self.records.clear();
         self.startup_session = session;
         self.catalog = catalog;
     }
@@ -373,6 +475,7 @@ impl Core {
                 _ => None,
             })
             .chain(self.records.iter().map(|record| record.expires))
+            .chain(self.cancels.values().copied())
             .min()
     }
     fn check_model(
@@ -483,29 +586,38 @@ impl Core {
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         match event {
-            Event::RuntimeUnavailable(message) => {
-                let queued: Vec<_> = self
-                    .work
-                    .iter()
-                    .filter_map(|(id, work)| matches!(work, Work::AcceptedQueued(_)).then_some(*id))
-                    .collect();
-                for id in queued {
-                    let request = self.work.remove(&id).unwrap().into_queued().unwrap();
-                    commands.push(Command::Complete(crate::journal::Completion {
-                        request: request.request,
-                        session: None,
-                        session_use: None,
-                        outcome: crate::journal::Outcome::Refused("runtime_unavailable"),
-                    }));
-                    commands.push(Command::Emit(
-                        request.output,
-                        TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(
-                            message.clone(),
-                        ))),
-                    ));
+            Event::Stop => {
+                self.runtime_state = RuntimeState::Stopping;
+                self.cancels.clear();
+                self.refuse_queued(
+                    crate::journal::Outcome::Refused("stopped"),
+                    crate::messages::Message::Stopped,
+                    &mut commands,
+                );
+                let ids: Vec<_> = self.work.keys().copied().collect();
+                for id in ids {
+                    if let Some(active) = self.work[&id].execution()
+                        && matches!(active.phase, Phase::Prompt)
+                        && let Some(session) = &active.session
+                    {
+                        commands.push(Command::Cancel(session.clone()));
+                    }
+                    self.finish(id, Err(crate::messages::Message::Stopped), &mut commands);
                 }
             }
-            Event::RetireRuntime => self.runtime_state = RuntimeState::Retiring,
+            Event::RuntimeUnavailable(message) => {
+                self.runtime_state = RuntimeState::Unavailable(message.clone());
+                self.refuse_queued(
+                    crate::journal::Outcome::Refused("runtime_unavailable"),
+                    crate::messages::Message::RuntimeUnavailable(message),
+                    &mut commands,
+                );
+            }
+            Event::RetireRuntime => {
+                if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+                    self.runtime_state = RuntimeState::Retiring;
+                }
+            }
             Event::ResumeRuntime => self.runtime_state = RuntimeState::Serving,
             Event::Accepted(request) => {
                 self.work
@@ -530,8 +642,8 @@ impl Core {
                 } else {
                     let active = self.work.remove(&id).unwrap().into_active().unwrap();
                     let ended = matches!(active.phase, Phase::Settling { .. });
-                    if let Some(session) = &active.session {
-                        commands.push(Command::Cancel(session.clone()));
+                    if matches!(active.phase, Phase::Prompt) {
+                        self.cancel(active.session.as_ref().unwrap().clone(), now, &mut commands);
                     }
                     self.work.insert(
                         id,
@@ -588,23 +700,29 @@ impl Core {
                             );
                         }
                     }
+                } else if let Ok((session, _)) = result {
+                    commands.push(Command::Forget(session));
                 }
             }
             Event::Runtime(RuntimeEvent::Retired { session }) => {
+                self.cancels.remove(&session);
                 if let Some(id) = self.by_session(&session) {
                     self.finish(id, Ok(()), &mut commands);
                 }
             }
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
+                if matches!(
+                    update,
+                    TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_)
+                ) {
+                    self.cancels.remove(&session);
+                }
                 if let Some(id) = self.by_session(&session) {
                     self.update(id, session, update, now, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } = update
                 {
-                    commands.push(Command::Permission {
-                        request,
-                        cancel: false,
-                    });
+                    commands.push(Command::Permission(request));
                 }
             }
             Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
@@ -620,6 +738,7 @@ impl Core {
                             id,
                             session,
                             crate::messages::Message::UpstreamHttp(error),
+                            now,
                             &mut commands,
                         );
                     }
@@ -645,9 +764,16 @@ impl Core {
                     );
                 }
             }
-            Event::Runtime(RuntimeEvent::Closed) => {
+            Event::Runtime(RuntimeEvent::Closed)
+                if matches!(self.runtime_state, RuntimeState::Restarting) => {}
+            Event::Runtime(RuntimeEvent::Closed) | Event::RuntimeFailure => {
+                self.runtime_state = RuntimeState::Restarting;
+                self.cancels.clear();
+                self.failures
+                    .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
+                self.failures.push_back(now);
                 self.catalog = None;
-                self.forget_idle(&mut commands);
+                self.startup_session = None;
                 while let Some(id) = self
                     .work
                     .iter()
@@ -655,15 +781,16 @@ impl Core {
                 {
                     self.finish(
                         id,
-                        Err(crate::messages::Message::Upstream(
-                            "runtime stdout closed".into(),
-                        )),
+                        Err(crate::messages::Message::RuntimeFailed),
                         &mut commands,
                     );
                 }
             }
             Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
             Event::Deadline => {
+                if self.cancels.values().any(|at| *at <= now) {
+                    return self.handle(Event::RuntimeFailure, now);
+                }
                 let due: Vec<_> = self
                     .work
                     .iter()
@@ -736,16 +863,20 @@ impl Core {
                 level: request.model.level,
             };
             let ready = match matched {
-                Some((index, _)) => Some(self.records.remove(index).session),
-                None if settings.system.is_none() && settings.tools.is_empty() => {
-                    self.startup_session.take()
+                Some((index, _)) => {
+                    let record = self.records.remove(index);
+                    Some((record.session, record.location))
                 }
+                None if settings.system.is_none() && settings.tools.is_empty() => self
+                    .startup_session
+                    .take()
+                    .map(|id| (id, records::Location::Loaded)),
                 None => None,
             };
             self.use_sequence += 1;
             let work = request.request.id.clone();
             let (session, phase) = match ready {
-                Some(id) => {
+                Some((id, records::Location::Loaded)) => {
                     commands.push(Command::Prompt {
                         work: work.clone(),
                         session: id.clone(),
@@ -753,10 +884,19 @@ impl Core {
                     });
                     (Some(id), Phase::Prompt)
                 }
+                Some((session, records::Location::Unloaded(cwd))) => {
+                    commands.push(Command::Prepare {
+                        work,
+                        settings: settings.clone(),
+                        load: Some((session.clone(), cwd)),
+                    });
+                    (Some(session), Phase::Preparing(prompt))
+                }
                 None => {
                     commands.push(Command::Prepare {
                         work,
                         settings: settings.clone(),
+                        load: None,
                     });
                     (None, Phase::Preparing(prompt))
                 }
@@ -802,10 +942,7 @@ impl Core {
                 }
                 TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } => {
-                    commands.push(Command::Permission {
-                        request,
-                        cancel: false,
-                    });
+                    commands.push(Command::Permission(request));
                 }
                 TurnUpdate::Text(_)
                 | TurnUpdate::Usage(_)
@@ -817,8 +954,9 @@ impl Core {
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
         match update {
             TurnUpdate::Text(text) => {
-                if active.tool_call.is_none() {
-                    active.release_or_cut_reply(Some(text), commands);
+                if active.tool_call.is_none() && active.release_or_cut_reply(Some(text), commands) {
+                    let session = active.session.as_ref().unwrap().clone();
+                    self.cancel(session, now, commands);
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
@@ -868,6 +1006,7 @@ impl Core {
                     id,
                     session,
                     crate::messages::Message::BuiltInToolRan(name),
+                    now,
                     commands,
                 );
             }
@@ -878,23 +1017,46 @@ impl Core {
                     kind: crate::journal::SafetyKind::PermissionRefused,
                     tool: name,
                 }));
-                commands.push(Command::Permission {
-                    request,
-                    cancel: false,
-                });
+                commands.push(Command::Permission(request));
             }
             TurnUpdate::Permission { request, call } => {
                 let cancel = matches!(active.phase, Phase::Prompt) && active.tool_call.is_none();
                 if cancel {
                     active.tool_call = Some(call);
+                    self.cancel(session, now, commands);
                 }
-                commands.push(Command::Permission { request, cancel });
+                commands.push(Command::Permission(request));
             }
         }
     }
     fn forget_idle(&mut self, commands: &mut Vec<Command>) {
         let idle = self.records.drain(..).map(|record| record.session);
         commands.extend(idle.chain(self.startup_session.take()).map(Command::Forget));
+    }
+    fn refuse_queued(
+        &mut self,
+        outcome: crate::journal::Outcome,
+        message: crate::messages::Message,
+        commands: &mut Vec<Command>,
+    ) {
+        let queued: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| matches!(work, Work::AcceptedQueued(_)).then_some(*id))
+            .collect();
+        for id in queued {
+            let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+            commands.push(Command::Complete(crate::journal::Completion {
+                request: request.request,
+                session: None,
+                session_use: None,
+                outcome,
+            }));
+            commands.push(Command::Emit(
+                request.output,
+                TurnEvent::End(Err(message.clone())),
+            ));
+        }
     }
     fn drop_queued(request: Accepted, commands: &mut Vec<Command>) {
         commands.push(Command::Complete(crate::journal::Completion {
@@ -904,17 +1066,47 @@ impl Core {
             outcome: crate::journal::Outcome::Disconnected,
         }));
     }
+    fn command_failed(
+        &mut self,
+        work: Option<String>,
+        error: crate::runtime_driver::CommandError,
+        now: Moment,
+    ) -> Vec<Command> {
+        if matches!(self.runtime_state, RuntimeState::Restarting) {
+            return Vec::new();
+        }
+        let event = match error {
+            crate::runtime_driver::CommandError::Io(_)
+                if matches!(self.runtime_state, RuntimeState::Stopping) =>
+            {
+                Event::Stop
+            }
+            crate::runtime_driver::CommandError::Io(_) => Event::RuntimeFailure,
+            crate::runtime_driver::CommandError::Session(error) => match work {
+                Some(work) => Event::StartFailed(work, error),
+                None => Event::Runtime(RuntimeEvent::Failed(error)),
+            },
+        };
+        self.handle(event, now)
+    }
+    fn cancel(&mut self, session: String, now: Moment, commands: &mut Vec<Command>) {
+        self.cancels
+            .entry(session.clone())
+            .or_insert_with(|| now.saturating_add(30_000));
+        commands.push(Command::Cancel(session));
+    }
     fn retire(
         &mut self,
         id: WorkId,
         session: String,
         error: crate::messages::Message,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
         let ended = matches!(active.phase, Phase::Settling { .. });
-        if !ended {
-            commands.push(Command::Cancel(session));
+        if matches!(active.phase, Phase::Prompt) {
+            self.cancel(session, now, commands);
         }
         let outstanding = OutstandingWork {
             request: active.request.clone(),
@@ -1005,6 +1197,7 @@ impl Core {
                     active.hashes.messages.push(hash);
                 }
                 self.records.push(records::Record {
+                    location: records::Location::Loaded,
                     session: session.clone(),
                     hashes: active.hashes,
                     tools: active.tools_hash,
@@ -1059,7 +1252,9 @@ impl Conductor {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
-                unavailable: None,
+                failures: VecDeque::new(),
+                cleanup_before_start: false,
+                cancels: BTreeMap::new(),
                 changes: VecDeque::new(),
                 replacement: None,
                 startup_session: None,
@@ -1072,6 +1267,7 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
+            let mut stopped = actor_builds.start.stopped.clone();
             loop {
                 if core.replacement_ready() && core.replacement.is_some() {
                     core.replace(
@@ -1083,9 +1279,29 @@ impl Conductor {
                         &publish,
                     )
                     .await;
+                    if matches!(core.runtime_state, RuntimeState::Stopping) {
+                        break;
+                    }
+                }
+                if matches!(core.runtime_state, RuntimeState::Restarting)
+                    && core.replacement.is_none()
+                {
+                    core.stop_runtime(&mut runtime, &mut read_open).await;
+                    core.launch(
+                        &mut runtime,
+                        &mut read_open,
+                        &clock,
+                        &journal,
+                        &actor_builds,
+                    )
+                    .await;
+                    if matches!(core.runtime_state, RuntimeState::Stopping) {
+                        break;
+                    }
                 }
                 if core.replacement.is_none() {
                     while let Some((action, reply)) = core.changes.pop_front() {
+                        let initial = matches!(action, crate::runtime_builds::Action::Initial);
                         let mut changed = (**publish.borrow()).clone();
                         match actor_builds
                             .select(action, &mut changed, &configuration)
@@ -1112,7 +1328,11 @@ impl Conductor {
                                             &journal,
                                         )
                                         .await;
-                                        core.replacement = Some(Replacement { reply, source });
+                                        core.replacement = Some(Replacement {
+                                            reply,
+                                            source,
+                                            initial,
+                                        });
                                         break;
                                     }
                                 }
@@ -1151,6 +1371,9 @@ impl Conductor {
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
                 let (event, hold) = tokio::select! {
                     biased;
+                    Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => {
+                        (Event::Stop, clock.hold(HoldKind::TurnEvent))
+                    }
                     work = first_closed(&connected), if !connected.is_empty() => {
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
                     }
@@ -1165,9 +1388,9 @@ impl Conductor {
                                 continue;
                             }
                             Input::Models { reply, hold } => {
-                                let result = match &core.unavailable {
-                                    Some(message) => Err(unavailable_refusal(message, clock.as_ref())),
-                                    None => Ok(core.model_entries()),
+                                let result = match &core.runtime_state {
+                                    RuntimeState::Unavailable(message) => Err(unavailable_refusal(message, clock.as_ref())),
+                                    _ => Ok(core.model_entries()),
                                 };
                                 let _ = reply.send(result);
                                 drop(hold);
@@ -1198,7 +1421,7 @@ impl Conductor {
                                 continue;
                             }
                             Input::Turn(work) => {
-                                if let Some(message) = &core.unavailable {
+                                if let RuntimeState::Unavailable(message) = &core.runtime_state {
                                     let error = unavailable_refusal(message, clock.as_ref());
                                     if work.admission.send(Err(error)).is_err() {
                                         journal.complete(crate::journal::Completion { request: work.request, session: None, session_use: None, outcome: crate::journal::Outcome::Disconnected }, clock.as_ref());
@@ -1225,6 +1448,9 @@ impl Conductor {
                 core.apply(event, &mut runtime, &mut read_open, &clock, &journal)
                     .await;
                 drop(hold);
+                if matches!(core.runtime_state, RuntimeState::Stopping) {
+                    break;
+                }
             }
             if let Some(runtime) = runtime {
                 runtime.stop().await;
@@ -1260,9 +1486,7 @@ impl Conductor {
                     if let Some(runtime) = runtime.as_mut()
                         && let Err(error) = runtime.cancel(&session).await
                     {
-                        commands.extend(
-                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
-                        );
+                        commands.extend(core.command_failed(None, error, clock.now()));
                     }
                 }
                 Command::Safety(report) => journal.safety(report, clock.as_ref()),
@@ -1270,7 +1494,11 @@ impl Conductor {
                     journal.diagnostic(&request, diagnostic, clock.as_ref())
                 }
                 Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
-                Command::Prepare { work, settings } => {
+                Command::Prepare {
+                    work,
+                    settings,
+                    load,
+                } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => {
                             runtime
@@ -1278,13 +1506,14 @@ impl Conductor {
                                     work.clone(),
                                     &settings.tools,
                                     settings.system.as_deref(),
+                                    load,
                                 )
                                 .await
                         }
-                        Err(error) => Err(error),
+                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
                     };
                     if let Err(error) = result {
-                        commands.extend(core.handle(Event::StartFailed(work, error), clock.now()));
+                        commands.extend(core.command_failed(Some(work), error, clock.now()));
                     }
                 }
                 Command::Prompt {
@@ -1294,19 +1523,17 @@ impl Conductor {
                 } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => runtime.start_configured_prompt(prompt, &session).await,
-                        Err(error) => Err(error),
+                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
                     };
                     if let Err(error) = result {
-                        commands.extend(core.handle(Event::StartFailed(work, error), clock.now()));
+                        commands.extend(core.command_failed(Some(work), error, clock.now()));
                     }
                 }
-                Command::Permission { request, cancel } => {
+                Command::Permission(request) => {
                     if let Some(runtime) = runtime.as_mut()
-                        && let Err(error) = runtime.permission(request, cancel).await
+                        && let Err(error) = runtime.permission(request).await
                     {
-                        commands.extend(
-                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
-                        );
+                        commands.extend(core.command_failed(None, error, clock.now()));
                     }
                 }
                 Command::Forget(session) => {
@@ -1342,10 +1569,10 @@ impl Conductor {
                 hold,
             })
             .await
-            .map_err(|_| crate::runtime_builds::LaunchFailure::Start("conductor stopped".into()))?;
+            .map_err(|_| crate::runtime_builds::LaunchFailure::Stopped)?;
         result
             .await
-            .map_err(|_| crate::runtime_builds::LaunchFailure::Start("conductor stopped".into()))?
+            .map_err(|_| crate::runtime_builds::LaunchFailure::Stopped)?
     }
     pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
         let (reply, result) = oneshot::channel();
@@ -1417,12 +1644,31 @@ fn unavailable_refusal(message: &str, clock: &dyn Clock) -> crate::messages::Ref
     refusal
 }
 fn stopped<T>(_: T) -> crate::messages::Refusal {
-    crate::messages::Message::Upstream("conductor stopped".into()).into()
+    crate::messages::Message::Stopped.into()
 }
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    struct Facts(Vec<crate::ListedBuild>);
+    impl crate::ReleaseFacts for Facts {
+        fn version(&self) -> &str {
+            "test"
+        }
+        fn platform(&self) -> &str {
+            if cfg!(windows) {
+                "windows-x64"
+            } else {
+                "macos-arm64"
+            }
+        }
+        fn listed_builds(&self) -> &[crate::ListedBuild] {
+            &self.0
+        }
+        fn highest_concurrency_limit(&self) -> u8 {
+            1
+        }
+    }
     fn prompting_with_waiter(
         journal: &crate::journal::Journal,
     ) -> (
@@ -1432,7 +1678,9 @@ mod tests {
     ) {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
-            unavailable: None,
+            failures: VecDeque::new(),
+            cleanup_before_start: false,
+            cancels: BTreeMap::new(),
             changes: VecDeque::new(),
             replacement: None,
             catalog: None,
@@ -1515,25 +1763,6 @@ mod tests {
                     .expect("two launches only");
                 record(&self.1, format!("launch:{label}"));
                 Ok(child)
-            }
-        }
-        struct Facts(Vec<ListedBuild>);
-        impl ReleaseFacts for Facts {
-            fn version(&self) -> &str {
-                "test"
-            }
-            fn platform(&self) -> &str {
-                if cfg!(windows) {
-                    "windows-x64"
-                } else {
-                    "macos-arm64"
-                }
-            }
-            fn listed_builds(&self) -> &[ListedBuild] {
-                &self.0
-            }
-            fn highest_concurrency_limit(&self) -> u8 {
-                1
             }
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1638,6 +1867,465 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_during_session_load_does_not_fail_another_prompt_after_30_seconds() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-load-disconnect-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, loading, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::RetireRuntime, 0);
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::Text("Hi".into()),
+            }),
+            1,
+        );
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(agent_client_protocol_schema::v1::StopReason::EndTurn),
+                },
+            }),
+            2,
+        );
+        core.handle(Event::Deadline, 202);
+        core.records[0].location = records::Location::Unloaded(folder.join("saved-cwd"));
+        let id = core.by_request(&loading).unwrap();
+        core.work.get_mut(&id).and_then(|work| match work {
+            Work::AcceptedQueued(request) => Some(request),
+            _ => None,
+        }).unwrap().turn = crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"First"},{"role":"assistant","content":"Hi"},{"role":"user","content":"Next"}]})).unwrap()).ok().unwrap().turn;
+        core.replaced(Some("other".into()), None);
+        core.limit = 2;
+        let preparing = core.handle(Event::ResumeRuntime, 203);
+        assert!(preparing.iter().any(|command| matches!(command, Command::Prepare { load: Some((session, _)), .. } if session == "running")));
+        let turn = crate::dialect::CHAT
+            .parse(br#"{"model":"m","messages":[{"role":"user","content":"Independent"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        let (output, _ticket) = mpsc::unbounded_channel();
+        core.handle(
+            Event::Accepted(Box::new(Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 203),
+                output,
+            })),
+            203,
+        );
+        core.handle(Event::Disconnected(loading.clone()), 204);
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: loading,
+                result: Ok(("running".into(), catalog)),
+            }),
+            205,
+        );
+        let mut commands = core.handle(Event::Deadline, 30_205);
+        commands.extend(core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "other".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(agent_client_protocol_schema::v1::StopReason::EndTurn),
+                },
+            }),
+            30_206,
+        ));
+        commands.extend(core.handle(Event::Deadline, 30_406));
+        let ends: Vec<_> = commands
+            .into_iter()
+            .filter_map(|command| match command {
+                Command::Emit(_, TurnEvent::End(result)) => Some(
+                    result
+                        .map(|_| "success".into())
+                        .unwrap_or_else(|error| error.to_string()),
+                ),
+                _ => None,
+            })
+            .collect();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            ends,
+            ["success"],
+            "FR-041 a disconnected session/load has no running prompt to time out"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_stdin_counts_once_for_a_command_batch_and_later_closed() {
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
+        use tokio::io::AsyncWriteExt;
+        struct Tree;
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async {})
+            }
+        }
+        struct Launcher(std::sync::Mutex<Option<Launched>>);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                Ok(self.0.lock().unwrap().take().expect("one launch cap"))
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-cancel-pipe-{}", crate::random_hex::<12>().unwrap()));
+            let clock = crate::Ports::production().clock;
+            let mut builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            let (stdin, agent_input) = tokio::io::duplex(65536);
+            let (stdout, mut agent_output) = tokio::io::duplex(65536);
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let replies = [serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}), serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"running","configOptions":options["configOptions"]}})];
+            for reply in replies { let line = format!("{reply}\n"); assert!(line.len() <= 65536); agent_output.write_all(line.as_bytes()).await.unwrap(); }
+            let permission = serde_json::json!({"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"running","toolCall":{"toolCallId":"call","title":"Run view_file?"},"options":[]}});
+            agent_output.write_all(format!("{permission}\n").as_bytes()).await.unwrap();
+            builds.start.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(Launched { stdin:Box::pin(stdin), stdout:Box::pin(stdout), stderr:Box::pin(tokio::io::empty()), tree:Box::new(Tree) }))));
+            let (mut runtime, _) = Runtime::start(&builds.start, "1.4.0").await.unwrap();
+            let (RuntimeEvent::Turn { update:TurnUpdate::RefusedPermission { request, .. }, .. }, _hold) = runtime.next().await else { panic!("the fake must send its permission request"); };
+            let mut runtime = Some(runtime);
+            let mut read_open = true;
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let (mut core, _, [ _a, mut b ]) = prompting_with_waiter(&journal);
+            let active = core.work[&0].execution().unwrap();
+            core.records.push(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), hashes:crate::conversation::RecordHashes { system:active.hashes.system, messages:active.hashes.messages.clone() }, tools:active.tools_hash, used:0, expires:86_400_000 });
+            core.startup_session = Some("sibling".into());
+            core.handle(Event::Limit(2), 0);
+            drop(agent_input);
+            let mut batch = Vec::new();
+            core.cancel("running".into(), 0, &mut batch);
+            batch.push(Command::Permission(request));
+            let mut batch: VecDeque<_> = batch.into();
+            Conductor::commands(&mut core, &mut runtime, &mut read_open, &clock, &journal, &mut batch).await;
+            assert_eq!(core.failures.len(), 1, "two writes to one closed stdin are one runtime failure");
+            let closed = core.handle(Event::Runtime(RuntimeEvent::Closed), 1);
+            let deadline = core.handle(Event::Deadline, 30_000);
+            assert_eq!(core.failures.len(), 1, "Closed and the old deadline must not count the failed runtime again");
+            assert!(closed.is_empty() && deadline.is_empty(), "the failed runtime must emit no second M-20");
+            let mut message = None;
+            while let Ok((event, _hold)) = b.try_recv() { if let TurnEvent::End(Err(error)) = event { message = Some(error.to_string()); } }
+            let retained: Vec<_> = core.records.iter().map(|record| record.session.as_str()).collect();
+            let actual = (message, retained == ["saved"]);
+            runtime.take().unwrap().stop().await;
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (Some("acp2api: the runtime process failed, so acp2api ended the prompt turn.".into()), true), "a closed stdin is a runtime failure before stdout Closed arrives");
+        }).await.expect("broken pipe cap: five seconds, one fake launch, three messages of at most 64 KiB");
+    }
+
+    #[tokio::test]
+    async fn a_failed_initial_copy_succeeds_with_a_prd_unavailable_reason() {
+        use crate::{ListedBuild, ProcessLauncher, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        struct NoLaunch;
+        impl ProcessLauncher for NoLaunch {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                panic!("a failed first copy must launch no process")
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-initial-copy-{}", crate::random_hex::<12>().unwrap()));
+            let clock = crate::Ports::production().clock;
+            let mut builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            builds.start.launcher = Arc::new(NoLaunch);
+            let hash = crate::hex(&Sha256::digest(b"accepted source"));
+            builds.start.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            let source = folder.join("source");
+            std::fs::create_dir_all(&source).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(source.join(name), b"accepted source").unwrap(); }
+            let config = folder.join("config.toml");
+            let mut settings = crate::store::read(&config, 1).unwrap().settings;
+            settings.agy_acp_server_path = Some(source.join(crate::runtime_builds::SERVER));
+            let crate::runtime_builds::Selection::Start(selected) = builds.select(crate::runtime_builds::Action::Initial, &mut settings, &config).await.unwrap() else { panic!("the accepted source must be selected"); };
+            std::fs::remove_file(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let mut core = Core {
+                runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
+                work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
+                use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
+            };
+            core.handle(Event::RetireRuntime, 0);
+            let (reply, result) = oneshot::channel();
+            core.replacement = Some(Replacement { reply, source:selected, initial:true });
+            let settings = watch::channel(Arc::new(settings)).0;
+            let mut runtime = None;
+            let mut read_open = false;
+            core.replace(&mut runtime, &mut read_open, &clock, &journal, &builds, &settings).await;
+            let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason), _ => None };
+            let actual = (result.await.unwrap().map_err(|error| error.to_string()), reason, runtime.is_none() && !read_open);
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: no build that acp2api found is an accepted version. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
+        }).await.expect("initial-copy test cap: five seconds, one copy attempt, zero process launches");
+    }
+
+    #[tokio::test]
+    async fn a_failed_owner_copy_preserves_the_existing_unavailable_reason() {
+        use crate::{ListedBuild, ProcessLauncher, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        struct NoLaunch;
+        impl ProcessLauncher for NoLaunch {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                panic!("a copy failure must launch no process")
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-unavailable-copy-{}", crate::random_hex::<12>().unwrap()));
+            let source = folder.join("source");
+            let mut ports = crate::Ports::production();
+            let hash = crate::hex(&Sha256::digest(b"accepted source"));
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            ports.launcher = Arc::new(NoLaunch);
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root:folder.join("account"), temp:folder.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:source.clone() }, folder.clone(), crate::account::Temporary::fixture(&folder), crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
+            let config = folder.join("config.toml");
+            let settings = crate::store::read(&config, 1).unwrap().settings;
+            let journal = crate::journal::Journal::open(&folder.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = Conductor::start(builds.clone(), ports.clock.clone(), journal, settings, config, 1);
+            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            let before = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string());
+            std::fs::create_dir_all(&source).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(source.join(name), b"accepted source").unwrap(); }
+            builds.discover(None).await.unwrap();
+            let choice = crate::runtime_builds::identity(&ports.release.listed_builds()[0]);
+            std::fs::remove_file(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            let copy_error = std::fs::copy(source.join(crate::runtime_builds::HARNESS), folder.join("probe")).unwrap_err().to_string();
+            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice), Hold::empty()).await.map_err(|error| error.to_string());
+            let after = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string());
+            drop(conductor);
+            task.await.unwrap();
+            std::fs::remove_dir_all(folder).unwrap();
+            let expected = "acp2api: the official runtime is unavailable: acp2api found no executable of the official runtime. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".to_string();
+            assert_eq!((owner, before, after), (Err(copy_error), Some(expected.clone()), Some(expected)), "an owner's failed copy must preserve the earlier FR-040 state and M-14 reason");
+        }).await.expect("unavailable-copy test cap: five seconds, four conductor requests, zero process launches");
+    }
+
+    #[tokio::test]
+    async fn a_failed_owner_copy_keeps_the_running_runtime_and_counts_no_failure() {
+        use crate::{BoxFuture, Launched, ListedBuild, ProcessLauncher, ProcessTree, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use tokio::io::AsyncWriteExt;
+        struct Tree(Arc<AtomicBool>);
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async move {
+                    self.0.store(true, Ordering::SeqCst);
+                })
+            }
+        }
+        struct Launcher(std::sync::Mutex<Option<Launched>>, AtomicUsize);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                assert!(self.1.fetch_add(1, Ordering::SeqCst) < 4, "launch cap: 4");
+                self.0.lock().unwrap().take().ok_or_else(|| {
+                    crate::LaunchError::Io(std::io::Error::other("unexpected replacement start"))
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-owner-copy-{}", crate::random_hex::<12>().unwrap()));
+            let mut ports = crate::Ports::production();
+            let copy = folder.join(crate::runtime_builds::COPY);
+            std::fs::create_dir_all(&copy).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(copy.join(name), b"accepted").unwrap(); }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            let (stdin, _agent_input) = tokio::io::duplex(65536);
+            let (stdout, mut agent_output) = tokio::io::duplex(65536);
+            let replies = [serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}), serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"running","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}})];
+            for reply in replies { let line = format!("{reply}\n"); assert!(line.len() <= 65536); agent_output.write_all(line.as_bytes()).await.unwrap(); }
+            let stopped = Arc::new(AtomicBool::new(false));
+            ports.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(Launched { stdin:Box::pin(stdin), stdout:Box::pin(stdout), stderr:Box::pin(tokio::io::empty()), tree:Box::new(Tree(stopped.clone())) })), AtomicUsize::new(0)));
+            let temporary = crate::account::Temporary::fixture(&folder);
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root:folder.join("account"), temp:folder.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:folder.join("exe") }, folder.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
+            let (running, _) = Runtime::start(&builds.start, "1.4.0").await.unwrap();
+            let mut runtime = Some(running);
+            let mut read_open = true;
+            let source = folder.join("new-build");
+            std::fs::create_dir_all(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            std::fs::write(source.join(crate::runtime_builds::SERVER), b"accepted").unwrap();
+            let copy_error = std::fs::copy(source.join(crate::runtime_builds::HARNESS), folder.join("probe")).unwrap_err().to_string();
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.handle(Event::RetireRuntime, 0);
+            core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
+            core.handle(Event::Deadline, 201);
+            core.cleanup_before_start = true;
+            let (reply, result) = oneshot::channel();
+            core.replacement = Some(Replacement { reply, source:Some(source), initial:false });
+            let config = folder.join("config.toml");
+            let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
+            core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
+            let actual = (result.await.unwrap().map_err(|error| error.to_string()), core.failures.len(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.runtime_state, RuntimeState::Serving));
+            if let Some(runtime) = runtime { runtime.stop().await; }
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (Err(copy_error), 0, false, true, true), "FR-043 copy errors must return to the owner while the existing runtime stays available");
+        }).await.expect("owner copy cap: five seconds, four launch attempts, two replies of at most 64 KiB");
+    }
+
+    #[tokio::test]
+    async fn a_cleanup_error_during_replacement_counts_failures_and_ends_the_queue() {
+        use crate::{ListedBuild, ProcessLauncher, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        struct NoLaunch;
+        impl ProcessLauncher for NoLaunch {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                panic!("cleanup failure must start no process")
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-cleanup-replacement-{}", crate::random_hex::<12>().unwrap()));
+            let mut ports = crate::Ports::production();
+            let copy = folder.join(crate::runtime_builds::COPY);
+            std::fs::create_dir_all(&copy).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(copy.join(name), b"accepted").unwrap(); }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            ports.launcher = Arc::new(NoLaunch);
+            let temporary = crate::account::Temporary::fixture(&folder);
+            let cwd = temporary.sessions().join("kept");
+            crate::account::private_folder(&cwd).unwrap();
+            std::fs::write(temporary.sessions().join("not-a-folder"), b"cleanup obstruction").unwrap();
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root:folder.join("account"), temp:folder.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:folder.join("exe") }, folder.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let (mut core, _, [_a, mut queued]) = prompting_with_waiter(&journal);
+            core.handle(Event::RetireRuntime, 0);
+            core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
+            core.handle(Event::Deadline, 201);
+            core.records[0].location = records::Location::Unloaded(cwd);
+            core.cleanup_before_start = true;
+            let (reply, result) = oneshot::channel();
+            core.replacement = Some(Replacement { reply, source:None, initial:false });
+            let config = folder.join("config.toml");
+            let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
+            let mut runtime = None; let mut read_open = false;
+            core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
+            let owner = result.await.unwrap();
+            let mut unavailable = false;
+            while let Ok((event, _hold)) = queued.try_recv() {
+                if let TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(message))) = event { unavailable = message.contains("the runtime process failed 3 times in 10 minutes"); }
+            }
+            let actual = (owner.is_ok(), core.failures.len(), unavailable);
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (true, 3, true), "a verified copy whose preparation fails must not leave a serving conductor without a runtime");
+        }).await.expect("cleanup failure cap: five seconds, one local obstruction, no process launch or HTTP request");
+    }
+
+    #[test]
+    fn a_broken_pipe_during_exit_keeps_the_conductor_stopping() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-exit-pipe-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::Stop, 1);
+        core.command_failed(
+            None,
+            crate::runtime_driver::CommandError::Io(std::io::ErrorKind::BrokenPipe.into()),
+            2,
+        );
+        let exit_without_restart =
+            matches!(core.runtime_state, RuntimeState::Stopping) && core.failures.is_empty();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert!(
+            exit_without_restart,
+            "FR-045 an exit cancel that finds a closed pipe must not start a replacement"
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_build_channels_report_stopped() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!(
+                "acp2api-closed-build-channel-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let clock = crate::Ports::production().clock;
+            for close_before_send in [true, false] {
+                let (send, mut recv) = mpsc::channel(1);
+                if close_before_send {
+                    recv.close();
+                }
+                let receiver = tokio::spawn(async move {
+                    if let Some(Input::Builds { reply, .. }) = recv.recv().await {
+                        drop(reply);
+                    }
+                });
+                let settings = crate::store::read(&folder.join("config.toml"), 1)
+                    .unwrap()
+                    .settings;
+                let conductor = Conductor {
+                    send,
+                    builds: crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
+                    settings: watch::channel(Arc::new(settings)).1,
+                    notices: watch::channel(Arc::new(Vec::new())).1,
+                    highest: 1,
+                };
+                let result = conductor
+                    .builds(crate::runtime_builds::Action::Search, Hold::empty())
+                    .await;
+                receiver.await.unwrap();
+                assert!(
+                    matches!(result, Err(crate::runtime_builds::LaunchFailure::Stopped)),
+                    "a closed conductor channel must report Stopped: {result:?}"
+                );
+            }
+            std::fs::remove_dir_all(folder).unwrap();
+        })
+        .await
+        .expect("closed-channel test cap: five seconds, two owner requests, no process launch");
+    }
+
+    #[test]
+    fn a_session_prepared_after_runtime_failure_is_forgotten() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-late-prepared-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::RetireRuntime, 0);
+        let work = core.work[&0].request().id.clone();
+        core.handle(
+            Event::Runtime(RuntimeEvent::Failed("broken pipe".into())),
+            1,
+        );
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work,
+                result: Ok(("late-session".into(), catalog)),
+            }),
+            2,
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+        assert!(matches!(&commands[..], [Command::Forget(session)] if session == "late-session"));
+    }
+
+    #[test]
     fn a_failed_replacement_ends_queued_requests_with_runtime_unavailable() {
         let folder = std::env::temp_dir().join(format!(
             "acp2api-core-build-{}",
@@ -1713,11 +2401,11 @@ mod tests {
         core.replaced(Some("new-runtime-startup".into()), None);
         let dispatched = core.handle(Event::ResumeRuntime, 204);
         assert!(
-            core.records.is_empty()
+            core.records.len() == 1
                 && dispatched.iter().any(
                     |command| matches!(command, Command::Prepare {work,..} if work == &queued)
                 ),
-            "after replacement B is prepared with no ACP record from the old process"
+            "ADR-0003 retains A's record while the unrelated B gets a new ACP session"
         );
         std::fs::remove_dir_all(folder).unwrap();
         drop(tickets);
@@ -1905,7 +2593,9 @@ mod tests {
         let (output, ticket) = mpsc::unbounded_channel();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
-            unavailable: None,
+            failures: VecDeque::new(),
+            cleanup_before_start: false,
+            cancels: BTreeMap::new(),
             changes: VecDeque::new(),
             replacement: None,
             catalog: None,
@@ -2010,7 +2700,9 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
-                unavailable: None,
+                failures: VecDeque::new(),
+                cleanup_before_start: false,
+                cancels: BTreeMap::new(),
                 changes: VecDeque::new(),
                 replacement: None,
                 catalog: None,
@@ -2108,7 +2800,9 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
-                unavailable: None,
+                failures: VecDeque::new(),
+                cleanup_before_start: false,
+                cancels: BTreeMap::new(),
                 changes: VecDeque::new(),
                 replacement: None,
                 catalog: None,
@@ -2217,7 +2911,9 @@ mod tests {
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
-            unavailable: None,
+            failures: VecDeque::new(),
+            cleanup_before_start: false,
+            cancels: BTreeMap::new(),
             changes: VecDeque::new(),
             replacement: None,
             catalog: Some(catalog),
@@ -2248,7 +2944,9 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
-            unavailable: None,
+            failures: VecDeque::new(),
+            cleanup_before_start: false,
+            cancels: BTreeMap::new(),
             changes: VecDeque::new(),
             replacement: None,
             catalog: None,
@@ -2341,13 +3039,16 @@ mod tests {
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
-            unavailable: None,
+            failures: VecDeque::new(),
+            cleanup_before_start: false,
+            cancels: BTreeMap::new(),
             changes: VecDeque::new(),
             replacement: None,
             catalog: None,
             work: BTreeMap::new(),
             next_work: 0,
             records: vec![records::Record {
+                location: records::Location::Loaded,
                 session: "idle".into(),
                 hashes: crate::conversation::record_hashes(&turn.conversation),
                 tools: crate::conversation::tool_set_hash(&[]),
@@ -2383,7 +3084,9 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
-            unavailable: None,
+            failures: VecDeque::new(),
+            cleanup_before_start: false,
+            cancels: BTreeMap::new(),
             changes: VecDeque::new(),
             replacement: None,
             catalog: None,

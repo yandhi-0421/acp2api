@@ -42,7 +42,7 @@ pub(crate) enum Selection {
 pub(crate) enum LaunchFailure {
     NoExecutable,
     NotAccepted,
-    Start(String),
+    Runtime(String),
     Stopped,
 }
 impl std::fmt::Display for LaunchFailure {
@@ -52,14 +52,14 @@ impl std::fmt::Display for LaunchFailure {
                 f.write_str("acp2api found no executable of the official runtime")
             }
             Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
-            Self::Start(error) => f.write_str(error),
+            Self::Runtime(error) => f.write_str(error),
             Self::Stopped => f.write_str("acp2api is exiting"),
         }
     }
 }
 impl From<String> for LaunchFailure {
     fn from(error: String) -> Self {
-        Self::Start(error)
+        Self::Runtime(error)
     }
 }
 impl Builds {
@@ -121,7 +121,7 @@ impl Builds {
             match fs::read(&path) {
                 Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(LaunchFailure::Start(format!(
+                Err(error) => Err(LaunchFailure::Runtime(format!(
                     "cannot read {}: {error}",
                     path.display()
                 ))),
@@ -142,9 +142,7 @@ impl Builds {
         match self.identify(&self.start.data.join(COPY)) {
             Ok(build) => Ok(Some(build)),
             Err(LaunchFailure::NoExecutable | LaunchFailure::NotAccepted) => Ok(None),
-            Err(error @ (LaunchFailure::Start(_) | LaunchFailure::Stopped)) => {
-                Err(error.to_string())
-            }
+            Err(error) => Err(error.to_string()),
         }
     }
     fn scan_places(&self, configured: Option<&Path>) {
@@ -174,11 +172,7 @@ impl Builds {
                 let listed = match self.identify(&folder) {
                     Ok(build) => Some(build),
                     Err(LaunchFailure::NotAccepted) => None,
-                    Err(
-                        LaunchFailure::NoExecutable
-                        | LaunchFailure::Start(_)
-                        | LaunchFailure::Stopped,
-                    ) => continue,
+                    Err(_) => continue,
                 };
                 found.push(Found { listed, folder });
             }
@@ -256,48 +250,49 @@ impl Builds {
             .max_by_key(|found| version(&found.listed.as_ref().unwrap().version));
         Ok(Selection::Start(best.map(|found| found.folder.clone())))
     }
+    pub(crate) fn copy(&self, source: PathBuf) -> Result<(), LaunchFailure> {
+        let copy = self.start.data.join(COPY);
+        let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
+        if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
+            let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
+            let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
+            let backup = self
+                .start
+                .data
+                .join(format!(".official-runtime-old-{suffix}"));
+            fs::create_dir(&staging).map_err(|error| error.to_string())?;
+            let result = (|| {
+                for name in [SERVER, HARNESS] {
+                    fs::copy(source.join(name), staging.join(name))
+                        .map_err(|error| error.to_string())?;
+                }
+                self.identify(&staging)?;
+                let previous = copy.exists();
+                if previous {
+                    fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
+                }
+                if let Err(error) = fs::rename(&staging, &copy) {
+                    if previous {
+                        fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
+                    }
+                    return Err(LaunchFailure::Runtime(error.to_string()));
+                }
+                if previous {
+                    let _ = fs::remove_dir_all(backup);
+                }
+                Ok(())
+            })();
+            if staging.exists() {
+                fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
+            }
+            result?;
+        }
+        Ok(())
+    }
     pub(crate) async fn launch(
         &self,
-        source: Option<PathBuf>,
+        retained: Option<Vec<(String, PathBuf)>>,
     ) -> Result<(Runtime, crate::catalog::Catalog), LaunchFailure> {
-        if let Some(source) = source {
-            let copy = self.start.data.join(COPY);
-            let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
-            if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
-                let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
-                let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
-                let backup = self
-                    .start
-                    .data
-                    .join(format!(".official-runtime-old-{suffix}"));
-                fs::create_dir(&staging).map_err(|error| error.to_string())?;
-                let result = (|| {
-                    for name in [SERVER, HARNESS] {
-                        fs::copy(source.join(name), staging.join(name))
-                            .map_err(|error| error.to_string())?;
-                    }
-                    self.identify(&staging)?;
-                    let previous = copy.exists();
-                    if previous {
-                        fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
-                    }
-                    if let Err(error) = fs::rename(&staging, &copy) {
-                        if previous {
-                            fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
-                        }
-                        return Err(LaunchFailure::Start(error.to_string()));
-                    }
-                    if previous {
-                        let _ = fs::remove_dir_all(backup);
-                    }
-                    Ok(())
-                })();
-                if staging.exists() {
-                    fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
-                }
-                result?;
-            }
-        }
         let build = self
             .identify(&self.start.data.join(COPY))
             .map_err(|error| match error {
@@ -306,6 +301,12 @@ impl Builds {
                 }
                 error => error,
             })?;
+        if let Some(retained) = retained {
+            self.start
+                .clean_sessions(retained)
+                .await
+                .map_err(LaunchFailure::Runtime)?;
+        }
         Runtime::start(&self.start, &build.version).await
     }
     pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
@@ -442,7 +443,10 @@ mod tests {
     struct RefusingLauncher(Arc<AtomicUsize>);
     impl crate::ProcessLauncher for RefusingLauncher {
         fn launch(&self, spec: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
-            assert_eq!(self.0.fetch_add(1, Ordering::SeqCst), 0, "one launch cap");
+            assert!(
+                self.0.fetch_add(1, Ordering::SeqCst) < 3,
+                "three launch cap"
+            );
             Err(crate::LaunchError::Refused {
                 program: spec.program,
             })
@@ -511,7 +515,8 @@ mod tests {
         }]));
         let launches = Arc::new(AtomicUsize::new(0));
         builds.start.launcher = Arc::new(RefusingLauncher(launches.clone()));
-        let _ = builds.launch(Some(root.join("source"))).await;
+        builds.copy(root.join("source")).unwrap();
+        let _ = builds.launch(None).await;
         let backups: Vec<_> = fs::read_dir(&root)
             .unwrap()
             .flatten()
@@ -664,7 +669,7 @@ mod tests {
             tokio::sync::watch::channel(false).1,
             0,
         );
-        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let failed = builds.copy(root.join("source")).is_err();
         let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
         let staging = fs::read_dir(&root)
             .unwrap()
@@ -709,7 +714,7 @@ mod tests {
             agy_acp_server_sha256: hash.clone(),
             localharness_external_sha256: hash,
         }]));
-        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let failed = builds.copy(root.join("source")).is_err();
         let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
         let staging = fs::read_dir(&root)
             .unwrap()
@@ -776,7 +781,109 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
-    async fn an_accepted_copy_start_failure_is_a_startup_error() {
+    async fn stop_during_restart_ends_the_queued_request_with_m15() {
+        use crate::{BoxFuture, Clock, Launched, ProcessLauncher, ProcessTree};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+        struct Tree;
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async {})
+            }
+        }
+        struct Launcher(
+            Mutex<std::collections::VecDeque<Launched>>,
+            tokio::sync::watch::Sender<bool>,
+            AtomicUsize,
+        );
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                let attempt = self.2.fetch_add(1, Ordering::SeqCst);
+                assert!(attempt < 2, "two runtime starts only");
+                if attempt == 1 {
+                    self.1.send_replace(true);
+                }
+                Ok(self.0.lock().unwrap().pop_front().unwrap())
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!("acp2api-stop-restart-{}", crate::random_hex::<12>().unwrap()));
+            fs::create_dir_all(root.join(COPY)).unwrap();
+            for name in [SERVER, HARNESS] { fs::write(root.join(COPY).join(name), b"accepted").unwrap(); }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            let (stopping, stopped) = tokio::sync::watch::channel(false);
+            let (first, agent) = tokio::io::duplex(65536);
+            let (second, _silent_agent) = tokio::io::duplex(65536);
+            let mut children = std::collections::VecDeque::new();
+            for child in [first, second] {
+                let (stdout, stdin) = tokio::io::split(child);
+                children.push_back(Launched { stdin: Box::pin(stdin), stdout: Box::pin(stdout), stderr: Box::pin(tokio::io::empty()), tree: Box::new(Tree) });
+            }
+            let prompting = Arc::new(tokio::sync::Notify::new());
+            let exit = Arc::new(tokio::sync::Notify::new());
+            let agent_task = {
+                let prompting = prompting.clone(); let exit = exit.clone();
+                tokio::spawn(async move {
+                    let (input, mut output) = tokio::io::split(agent);
+                    let mut input = tokio::io::BufReader::new(input);
+                    for _ in 0..4 {
+                        let mut bytes = Vec::new();
+                        (&mut input).take(65537).read_until(b'\n', &mut bytes).await.unwrap();
+                        assert!(bytes.len() <= 65536, "ACP line cap: 64 KiB");
+                        let call: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                        let result = match call["method"].as_str().unwrap() {
+                            "initialize" => serde_json::json!({"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}),
+                            "session/new" => serde_json::json!({"sessionId":"first","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}),
+                            "session/prompt" => { prompting.notify_one(); exit.notified().await; return; },
+                            method => panic!("unexpected ACP method: {method}"),
+                        };
+                        output.write_all(format!("{}\n", serde_json::json!({"jsonrpc":"2.0","id":call["id"],"result":result})).as_bytes()).await.unwrap();
+                    }
+                    panic!("first runtime request cap: four");
+                })
+            };
+            let mut ports = Ports::production();
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:ports.release.platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            ports.launcher = Arc::new(Launcher(Mutex::new(children), stopping, AtomicUsize::new(0)));
+            let builds = Builds::new(&ports, Environment { account_root:root.join("account"), home:None, local_app_data:None, temp:root.join("temp"), path:vec![], exe_dir:root.join("exe") }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), stopped, 0);
+            let config = root.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            settings.concurrency_limit = 1;
+            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = crate::conductor::Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 3);
+            conductor.builds(Action::Initial, crate::Hold::empty()).await.unwrap();
+            let parse = |text: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":text}]})).unwrap()).ok().unwrap().turn;
+            let _a = conductor.admit(parse("A"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            prompting.notified().await;
+            let mut b = conductor.admit(parse("B"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            exit.notify_one();
+            let Some((crate::conversation::TurnEvent::End(Err(error)), _hold)) = b.events.recv().await else {
+                panic!("the queued request must end with an error");
+            };
+            let message = error.to_string();
+            drop(conductor);
+            task.await.unwrap(); agent_task.await.unwrap(); fs::remove_dir_all(root).unwrap();
+            assert_eq!(message, "acp2api: acp2api stopped before the end of this request.", "FR-045 a stop during restart must use the exit path");
+        }).await.expect("stop-restart cap: five seconds, two starts, four first-runtime requests and 64 KiB per line");
+    }
+
+    #[tokio::test]
+    async fn an_accepted_copy_start_failure_retries_until_runtime_unavailable() {
+        refused_starts(|_| Action::Initial).await;
+    }
+
+    #[tokio::test]
+    async fn a_planned_replacement_start_failure_retries_until_runtime_unavailable() {
+        refused_starts(|build| Action::Build(identity(build))).await;
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    async fn refused_starts(action: fn(&ListedBuild) -> Action) {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let root = std::env::temp_dir().join(format!(
                 "acp2api-launch-reason-{}",
@@ -794,7 +901,8 @@ mod tests {
                 agy_acp_server_sha256: hash.clone(),
                 localharness_external_sha256: hash,
             }]));
-            ports.launcher = Arc::new(RefusingLauncher(Arc::new(AtomicUsize::new(0))));
+            let launches = Arc::new(AtomicUsize::new(0));
+            ports.launcher = Arc::new(RefusingLauncher(launches.clone()));
             let builds = Builds::new(
                 &ports,
                 Environment {
@@ -811,6 +919,8 @@ mod tests {
                 tokio::sync::watch::channel(false).1,
                 0,
             );
+            builds.discover(Some(root.join(COPY).join(SERVER))).await.unwrap();
+            let action = action(&ports.release.listed_builds()[0]);
             let config = root.join("config.toml");
             let settings = crate::store::read(&config, 3).unwrap().settings;
             let journal =
@@ -824,21 +934,19 @@ mod tests {
                 3,
             );
             let result = conductor
-                .builds(Action::Initial, crate::Hold::empty())
+                .builds(action, crate::Hold::empty())
                 .await;
+            let unavailable = conductor.model_names(crate::Hold::empty()).await;
             drop(conductor);
             task.await.unwrap();
             fs::remove_dir_all(root).unwrap();
-            assert!(
-                result
-                    .as_ref()
-                    .is_err_and(|error| error.to_string().contains("runtime launch: Refused")),
-                "an accepted runtime launch failure must fail startup: {result:?}"
-            );
+            assert!(result.is_ok() && launches.load(Ordering::SeqCst) == 3
+                && unavailable.is_err_and(|error| error.message.to_string().contains("the runtime process failed 3 times in 10 minutes")),
+                "FR-041 counts three verified start failures before runtime unavailable: {result:?}");
         })
         .await
         .expect(
-            "launch failure cap: 5 seconds; one refused launch, no child process or HTTP requests",
+            "launch failure cap: 5 seconds; three refused launches, no child process or HTTP requests",
         );
     }
 
@@ -905,7 +1013,8 @@ mod tests {
             else {
                 panic!("the listed build must be selectable")
             };
-            let _ = builds.launch(source).await;
+            builds.copy(source.expect("selected build source")).unwrap();
+            let _ = builds.launch(None).await;
             let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());
             fs::remove_dir_all(&root).unwrap();
             assert_eq!(

@@ -89,7 +89,10 @@ impl<T: WireDialect + 'static> Dialect for T {
             Row::Key | Row::Rejected | Row::TooLarge | Row::Other502 => {}
         }
         if matches!(refusal.row(), Row::Other502)
-            || matches!(refusal.message, Message::RuntimeUnavailable(_))
+            || matches!(
+                refusal.message,
+                Message::RuntimeUnavailable(_) | Message::Stopped
+            )
         {
             response.headers_mut().insert(
                 "x-should-retry",
@@ -277,6 +280,8 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
             "upstream_error"
         }
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
+        Message::RuntimeFailed => "runtime_failed",
+        Message::Stopped => "stopped",
     }
 }
 

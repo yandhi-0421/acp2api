@@ -110,14 +110,6 @@ pub(crate) async fn start(
     let journal = crate::journal::Journal::open(&data.join("logs"), ports.clock.wall())
         .map_err(|error| error.to_string())?;
     let earlier_trees_ended = account.temporary.recover()?;
-    if earlier_trees_ended {
-        let sessions = data.join("runtime-home/antigravity-acp/conversations");
-        match std::fs::remove_dir_all(&sessions) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("cannot remove {}: {error}", sessions.display())),
-        }
-    }
     let tools = crate::runtime_driver::mcp::ToolSets::new(port);
     let (stopping, stopped) = tokio::sync::watch::channel(false);
     let builds = crate::runtime_builds::Builds::new(
@@ -129,6 +121,9 @@ pub(crate) async fn start(
         stopped.clone(),
         port,
     );
+    if earlier_trees_ended {
+        builds.start.clean_sessions(Vec::new()).await?;
+    }
     let (conductor, task) = crate::conductor::Conductor::start(
         builds,
         ports.clock.clone(),
@@ -227,7 +222,7 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn a_stop_during_a_running_prompt_turn_allows_a_normal_reply() {
+    async fn a_stop_during_a_running_prompt_turn_cancels_and_returns_m15() {
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
             stop_runtime_during(StopPoint::Prompt),
@@ -464,11 +459,18 @@ mod lifecycle_tests {
                     method => panic!("unexpected ACP request: {method}"),
                 }
             }
-            let prompting = prompting.expect("eight ACP request cap");
+            prompting.expect("eight ACP request cap");
             stop.send(()).unwrap();
             stop_observed.await.unwrap();
-            let reply = serde_json::json!({"jsonrpc":"2.0", "id":prompting["id"], "result":{"stopReason":"end_turn"}});
-            let _ = agent.write_all(format!("{reply}\n").as_bytes()).await;
+            let mut cancel = String::new();
+            (&mut agent)
+                .take(65537)
+                .read_line(&mut cancel)
+                .await
+                .unwrap();
+            assert!(cancel.len() <= 65536, "ACP cancel cap: 64 KiB");
+            let cancel: serde_json::Value = serde_json::from_str(&cancel).unwrap();
+            assert_eq!(cancel["method"], "session/cancel");
         } else {
             stop.send(()).unwrap();
         }
@@ -476,8 +478,10 @@ mod lifecycle_tests {
             tokio::time::timeout(std::time::Duration::from_secs(1), task).await,
             Ok(Ok(Ok(())))
         );
-        let normal_reply = if let Some(response) = response {
-            response.await.unwrap().starts_with("HTTP/1.1 200 OK")
+        let exit_reply = if let Some(response) = response {
+            let response = response.await.unwrap();
+            response.starts_with("HTTP/1.1 400 Bad Request")
+                && response.contains("acp2api: acp2api stopped before the end of this request.")
         } else {
             true
         };
@@ -493,8 +497,8 @@ mod lifecycle_tests {
             "a stop during first launch must not open the browser"
         );
         assert!(
-            normal_reply,
-            "a stop during a running prompt turn must allow its normal HTTP reply"
+            exit_reply,
+            "FR-045 returns HTTP 400 and M-15 for a stopped prompt turn"
         );
     }
 

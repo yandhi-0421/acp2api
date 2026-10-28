@@ -139,19 +139,22 @@ pub async fn search(w: &mut World) {
     action(w, "/manage/search", json!({})).await;
 }
 pub async fn request(w: &mut World) -> acp2api_acceptance::client::Answer {
-    let hub = w.startup.panel_hub();
-    let mut time = acp2api_acceptance::timeline::TimeLine::new(hub.clone());
+    let root = if w.builds.bound {
+        w.startup.root()
+    } else {
+        &w.scenario.root
+    };
     w.request.queue_next(&w.scenario);
     ApiClient::new(
-        format!("127.0.0.1:{}", w.startup.root().port),
-        w.startup.root().key.clone(),
-        hub,
+        format!("127.0.0.1:{}", root.port),
+        root.key.clone(),
+        w.scenario.hub.clone(),
     )
     .send(ApiCall::one_user_message(
         "POST /v1/messages",
         "build availability",
     ))
-    .finish(&mut time)
+    .finish(&mut w.scenario.time)
     .await
 }
 pub fn launches(w: &World) -> Vec<PathBuf> {

@@ -8,7 +8,7 @@ use crate::{
 };
 use std::{
     io::{BufRead, BufReader, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -86,14 +86,14 @@ impl Scenario {
             .to_owned();
         self.spawn_host(&[], format!("127.0.0.1:{port}"), key).await;
     }
-    async fn spawn_host(&mut self, env: &[(&str, PathBuf)], address: String, key: String) {
+    pub fn launch_host(&mut self, env: &[(&str, PathBuf)], run: &Path) -> &Child {
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
         command.env(TIME_FACTOR_ENV, time_factor().to_string());
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         let mut host = command
-            .env("ACP2API_TEST_RUN", self.root.path.join("run.toml"))
+            .env("ACP2API_TEST_RUN", run)
             .envs(env.iter().map(|(name, value)| (name, value)))
             .args(["--data-dir", self.root.path.join("data").to_str().unwrap()])
             .stdin(Stdio::null())
@@ -121,7 +121,10 @@ impl Scenario {
                 }
             });
         }
-        self.host = Some(host);
+        self.host.insert(host)
+    }
+    async fn spawn_host(&mut self, env: &[(&str, PathBuf)], address: String, key: String) {
+        self.launch_host(env, &self.root.path.join("run.toml"));
         let deadline = Instant::now() + real_limit(Duration::from_secs(10));
         while !self.hub.ready() {
             if let Some(status) = self.host.as_mut().unwrap().try_wait().unwrap() {
@@ -156,7 +159,11 @@ impl Scenario {
                 if host.try_wait().unwrap().is_some() {
                     break;
                 }
-                assert!(Instant::now() < deadline, "test host shutdown cap: 10 s");
+                if Instant::now() >= deadline {
+                    host.kill().expect("kill host at shutdown cap");
+                    host.wait().expect("wait for host at shutdown cap");
+                    panic!("test host shutdown cap: 10 s");
+                }
                 self.time.settle().await;
                 if let Some(next) = self.time.next_deadline() {
                     self.time.advance_to(next).await;

@@ -18,6 +18,12 @@ mod queue_errors;
 mod response_ends;
 #[path = "steps/runtime_builds.rs"]
 mod runtime_builds;
+#[path = "steps/runtime_continuation.rs"]
+mod runtime_continuation;
+#[path = "steps/runtime_process.rs"]
+mod runtime_process;
+#[path = "support/runtime_process.rs"]
+mod runtime_support;
 mod selection;
 #[path = "steps/slash_and_thought.rs"]
 mod slash_and_thought;
@@ -41,6 +47,8 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    process: runtime_support::ProcessState,
+    reload: runtime_continuation::ReloadState,
     account: acp2api_acceptance::account_check::AccountState,
     builds: build_support::BuildState,
     places: places_support::PlacesState,
@@ -163,6 +171,8 @@ async fn run() {
         .after(|_, _, _, finished, world| {
             Box::pin(async move {
                 if let Some(world) = world {
+                    runtime_continuation::cleanup(world);
+                    runtime_support::cleanup(world).await;
                     places_support::cleanup(world).await;
                     world
                         .scenario

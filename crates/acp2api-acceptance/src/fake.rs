@@ -113,6 +113,7 @@ enum SessionResult {
 }
 #[derive(Debug)]
 pub(crate) struct FakeState {
+    pub(crate) rpc_replies: HashMap<String, VecDeque<crate::rpc_script::RpcReply>>,
     session_result: SessionResult,
     catalog: Option<Vec<ModelSpec>>,
     plans: VecDeque<TurnPlan>,
@@ -129,6 +130,7 @@ pub(crate) struct FakeState {
 impl Default for FakeState {
     fn default() -> Self {
         Self {
+            rpc_replies: HashMap::new(),
             plans: VecDeque::new(),
             catalog: None,
             session_result: SessionResult::Immediate,
@@ -155,6 +157,12 @@ pub struct ModelSpec {
     pub levels: Vec<String>,
 }
 impl FakeRuntime {
+    pub fn script_call(&self, method: &str, reply: crate::rpc_script::RpcReply) {
+        let mut state = self.hub.shared.0.lock().unwrap();
+        let replies = state.fake.rpc_replies.entry(method.into()).or_default();
+        assert!(replies.len() < 8, "ACP scripted reply cap: 8 per method");
+        replies.push_back(reply);
+    }
     pub fn signed_in(&self) -> bool {
         self.hub.shared.0.lock().unwrap().fake.signed_in
     }
@@ -254,6 +262,9 @@ fn emit(s: &mut State, label: &str, at: u64, command: Value) {
     }
 }
 pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
+    if crate::rpc_script::respond(s, label, &call) {
+        return;
+    }
     let id = call["id"].clone();
     let method = call["method"].as_str().unwrap_or("");
     match method {

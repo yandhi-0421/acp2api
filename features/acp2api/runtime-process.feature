@@ -48,14 +48,14 @@ Feature: Runtime process
       | the owner starts a new search                                 |
       | a compatibility check of a found build passes                 |
 
-  @FR-041 @issue-63 @wip
+  @FR-041 @issue-63
   Scenario: Two prompt turns at the same time use the one runtime process
     Given acp2api started in the normal state with the concurrency limit 2
     When two API clients send requests of two conversations at the same time
     Then the two prompt turns run at the same time
     And one runtime process runs
 
-  @FR-041 @issue-63 @wip
+  @FR-041 @issue-63
   Scenario: acp2api does not stop the runtime process when no request comes
     Given acp2api is in the normal state with one runtime process
     When 60 minutes pass with no request
@@ -83,14 +83,14 @@ Feature: Runtime process
     When a request comes that needs a new ACP session
     Then the prompt turn of the request starts at once in the same runtime process
 
-  @FR-041 @issue-63 @wip
+  @FR-041 @issue-63
   Scenario: An exit that acp2api did not cause ends each prompt turn of the runtime process
     Given the prompt turns of the requests "A" and "B" run in the runtime process
     When the runtime process exits, and acp2api did not cause the exit
     Then "A" and "B" each get the error of the 503 row with the message "acp2api: the runtime process failed, so acp2api ended the prompt turn."
     And acp2api starts a new runtime process at once
 
-  @FR-041 @issue-63 @wip
+  @FR-041 @issue-63
   Scenario Outline: A prompt turn that does not end 30 s after its cancel is a failure
     Given the prompt turns of the requests "A" and "B" run in the runtime process
     And the API client of "A" disconnected, so acp2api cancelled the prompt turn of "A"
@@ -102,13 +102,13 @@ Feature: Runtime process
       | does not end 30 s after its cancel    | "B" gets the error of the 503 row with the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." |
       | ends 20 s after its cancel           | the prompt turn of "B" continues to its end                                                             |
 
-  @FR-041 @issue-63 @wip
+  @FR-041 @issue-63
   Scenario: A start with no answer in 5 minutes is a failure
     Given the next start of a runtime process gives no answer
     When 5 minutes pass after the start
     Then acp2api starts a new runtime process at once
 
-  @FR-041 @issue-63 @wip
+  @FR-041 @issue-63
   Scenario Outline: The count of failures in 10 minutes decides the state runtime unavailable
     Given acp2api is in the normal state
     When the runtime process exits with no cause from acp2api at the times <times>
@@ -119,7 +119,7 @@ Feature: Runtime process
       | 0 minutes, 4 minutes, and 9 minutes | acp2api is in the state "runtime unavailable"          |
       | 0 minutes, 5 minutes, and 11 minutes | acp2api starts a new runtime process after each exit  |
 
-  @FR-045 @issue-63 @wip
+  @FR-045 @issue-63
   Scenario: At its exit, acp2api ends each request with a prompt turn and each request in the queue with M-15
     Given the concurrency limit is 1
     And the prompt turn of the request "A" with no stream runs
@@ -128,7 +128,7 @@ Feature: Runtime process
     Then the official runtime gets a cancel of the prompt turn of "A"
     And "A" and "B" each get HTTP 400 with the message "acp2api: acp2api stopped before the end of this request."
 
-  @FR-045 @issue-63 @wip
+  @FR-045 @issue-63
   Scenario Outline: The runtime process and all its child processes end after acp2api ends
     Given the runtime process runs with two harness processes
     When <end of acp2api>
