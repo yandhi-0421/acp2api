@@ -1,5 +1,10 @@
 use crate::conversation::{self, Item, RecordHashes, ToolSetHash};
+pub(super) enum Location {
+    Loaded,
+    Unloaded(std::path::PathBuf),
+}
 pub(super) struct Record {
+    pub location: Location,
     pub session: String,
     pub hashes: RecordHashes,
     pub tools: ToolSetHash,
@@ -47,6 +52,7 @@ mod tests {
         let tools = conversation::tool_set_hash(&[]);
         let records = vec![
             Record {
+                location: Location::Loaded,
                 session: "short-recent".into(),
                 hashes: RecordHashes {
                     system: hashes.system,
@@ -57,6 +63,7 @@ mod tests {
                 expires: 0,
             },
             Record {
+                location: Location::Loaded,
                 session: "long-older".into(),
                 hashes: RecordHashes {
                     system: hashes.system,

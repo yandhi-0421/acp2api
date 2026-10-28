@@ -154,7 +154,7 @@ async fn exercise(creation_pending: bool) {
         namespace: None,
     };
     runtime
-        .request_session("work-beta".into(), &[tool], None)
+        .request_session("work-beta".into(), &[tool], None, None)
         .await
         .unwrap();
     let beta = agent.receive("session/new").await;
@@ -175,7 +175,7 @@ async fn exercise(creation_pending: bool) {
     }
     let incoming_id = if creation_pending {
         runtime
-            .request_session("work-gamma".into(), &[], None)
+            .request_session("work-gamma".into(), &[], None, None)
             .await
             .unwrap();
         agent.receive("session/new").await["id"].clone()
@@ -269,7 +269,7 @@ async fn a_rejected_session_removes_only_its_empty_folder() {
             .path();
         for nonempty in [true, false] {
             runtime
-                .request_session("rejected".into(), &[], None)
+                .request_session("rejected".into(), &[], None, None)
                 .await
                 .unwrap();
             let request = agent.receive("session/new").await;
@@ -344,7 +344,7 @@ async fn a_new_session_folder_keeps_account_ownership() {
         let root = Root::new();
         let (mut runtime, mut agent) = start(&root).await;
         runtime
-            .request_session("work-beta".into(), &[], None)
+            .request_session("work-beta".into(), &[], None, None)
             .await
             .unwrap();
         let request = agent.receive("session/new").await;

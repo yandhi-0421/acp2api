@@ -27,11 +27,47 @@ pub(crate) struct RuntimeStart {
     pub(crate) temporary: crate::account::Temporary,
     pub(crate) tool_sets: mcp::ToolSets,
 }
+impl RuntimeStart {
+    pub(crate) async fn clean_sessions(
+        &self,
+        retained: Vec<(String, PathBuf)>,
+    ) -> Result<(), String> {
+        let folders = self.temporary.sessions();
+        let files = self.data.join("runtime-home/antigravity-acp/conversations");
+        tokio::task::spawn_blocking(move || {
+            for entry in std::fs::read_dir(folders).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                if !retained.iter().any(|(_, cwd)| cwd == &entry.path()) {
+                    std::fs::remove_dir_all(entry.path()).map_err(|error| error.to_string())?;
+                }
+            }
+            match std::fs::read_dir(files) {
+                Ok(files) => {
+                    for file in files {
+                        let file = file.map_err(|error| error.to_string())?;
+                        let name = file.file_name();
+                        let name = name.to_string_lossy();
+                        if !retained.iter().any(|(session, _)| {
+                            name == *session || name.starts_with(&format!("{session}."))
+                        }) {
+                            std::fs::remove_file(file.path()).map_err(|error| error.to_string())?;
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+}
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
     prompts: std::collections::HashMap<u64, String>,
-    creating: std::collections::HashMap<u64, (String, SessionTools)>,
+    creating: std::collections::HashMap<u64, CreatingSession>,
     tree: Box<dyn ProcessTree>,
     clock: Arc<dyn Clock>,
     next_id: u64,
@@ -43,6 +79,11 @@ pub(crate) struct Runtime {
     config: std::collections::HashMap<(String, String), String>,
     configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
     stderr_session: Option<String>,
+}
+struct CreatingSession {
+    work: String,
+    tools: SessionTools,
+    session: Option<String>,
 }
 struct ConfiguringPrompt {
     session: String,
@@ -172,7 +213,7 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
     ) -> Result<crate::catalog::Catalog, String> {
-        let (params, tools) = self.session_parameters(tools, system)?;
+        let (params, tools) = self.session_parameters(tools, system, None)?;
         let session = self.call("session/new", params).await?;
         let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
         let session_id = session["sessionId"]
@@ -198,13 +239,20 @@ impl Runtime {
         &self,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
+        cwd: Option<PathBuf>,
     ) -> Result<(Value, SessionTools), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
-        let cwd = self.cwd.join(format!(
-            "session-{}",
-            crate::random_hex::<16>().map_err(|error| error.to_string())?
-        ));
-        crate::account::private_folder(&cwd)?;
+        let new = cwd.is_none();
+        let cwd = match cwd {
+            Some(cwd) => cwd,
+            None => self.cwd.join(format!(
+                "session-{}",
+                crate::random_hex::<16>().map_err(|error| error.to_string())?
+            )),
+        };
+        if new || !cwd.exists() {
+            crate::account::private_folder(&cwd)?;
+        }
         let mut params = json!({
             "cwd": cwd,
             "mcpServers": [{
@@ -233,11 +281,32 @@ impl Runtime {
         work: String,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
+        load: Option<(String, PathBuf)>,
     ) -> Result<(), String> {
-        let (params, tools) = self.session_parameters(tools, system)?;
-        let id = self.send("session/new", params).await?;
-        self.creating.insert(id, (work, tools));
+        let (session, cwd) = match load {
+            Some((id, cwd)) => (Some(id), Some(cwd)),
+            None => (None, None),
+        };
+        let (mut params, tools) = self.session_parameters(tools, system, cwd)?;
+        let method = if let Some(session) = &session {
+            params["sessionId"] = json!(session);
+            "session/load"
+        } else {
+            "session/new"
+        };
+        let id = self.send(method, params).await?;
+        self.creating.insert(
+            id,
+            CreatingSession {
+                work,
+                tools,
+                session,
+            },
+        );
         Ok(())
+    }
+    pub(crate) fn session_cwd(&self, session: &str) -> &std::path::Path {
+        &self.tools[session].cwd
     }
     pub(crate) fn forget(&mut self, session: &str) {
         self.tool_calls.clear(session);
@@ -459,8 +528,13 @@ impl Runtime {
                     },
                 };
             }
-            if let Some((work, tools)) = self.creating.remove(&id) {
-                let result = self.created_session(&value);
+            if let Some(CreatingSession {
+                work,
+                tools,
+                session,
+            }) = self.creating.remove(&id)
+            {
+                let result = self.created_session(&value, session);
                 match &result {
                     Ok((session, _)) => {
                         self.tools.insert(session.clone(), tools);
@@ -574,14 +648,21 @@ impl Runtime {
             RuntimeEvent::Other
         }
     }
-    fn created_session(&self, value: &Value) -> Result<(String, crate::catalog::Catalog), String> {
+    fn created_session(
+        &self,
+        value: &Value,
+        loaded: Option<String>,
+    ) -> Result<(String, crate::catalog::Catalog), String> {
         let response = value
             .get("result")
             .ok_or_else(|| acp_error(&value["error"]).to_string())?;
-        let session = response["sessionId"]
-            .as_str()
-            .ok_or("missing sessionId")?
-            .to_owned();
+        let session = match loaded {
+            Some(id) => id,
+            None => response["sessionId"]
+                .as_str()
+                .ok_or("missing sessionId")?
+                .to_owned(),
+        };
         let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
         Ok((session, catalog))
     }
@@ -618,6 +699,13 @@ impl Runtime {
         let _ = self.input.shutdown().await;
         drop(self.input);
         self.tree.stop(self.clock).await;
+        for tools in self
+            .tools
+            .into_values()
+            .chain(self.creating.into_values().map(|creating| creating.tools))
+        {
+            self.tool_sets.remove(&tools.mcp_url);
+        }
     }
 }
 

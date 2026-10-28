@@ -225,6 +225,7 @@ enum RuntimeState {
 struct Core {
     runtime_state: RuntimeState,
     failures: VecDeque<Moment>,
+    first_start: bool,
     cancels: BTreeMap<String, Moment>,
     unavailable: Option<String>,
     changes: VecDeque<(
@@ -268,6 +269,7 @@ enum Command {
     Prepare {
         work: String,
         settings: Session,
+        load: Option<(String, std::path::PathBuf)>,
     },
     Prompt {
         work: String,
@@ -303,10 +305,7 @@ impl Core {
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) {
         let change = self.replacement.take().unwrap();
-        if let Some(old) = runtime.take() {
-            old.stop().await;
-        }
-        self.replaced(None, None);
+        self.stop_runtime(runtime, read_open).await;
         if let Err(error) = self
             .launch(runtime, read_open, clock, journal, builds, change.source)
             .await
@@ -333,6 +332,20 @@ impl Core {
     ) -> Result<(), crate::runtime_builds::LaunchFailure> {
         *read_open = false;
         loop {
+            if !self.first_start {
+                let retained = self
+                    .records
+                    .iter()
+                    .filter_map(|record| match &record.location {
+                        records::Location::Unloaded(cwd) => {
+                            Some((record.session.clone(), cwd.clone()))
+                        }
+                        records::Location::Loaded => None,
+                    })
+                    .collect();
+                builds.start.clean_sessions(retained).await?;
+            }
+            self.first_start = false;
             let reason = match builds.launch(source.take()).await {
                 Ok((started, catalog)) => {
                     self.replaced(Some(started.session_id().into()), Some(catalog));
@@ -370,6 +383,19 @@ impl Core {
             return Ok(());
         }
     }
+    async fn stop_runtime(&mut self, runtime: &mut Option<Runtime>, read_open: &mut bool) {
+        *read_open = false;
+        if let Some(old) = runtime.take() {
+            for record in &mut self.records {
+                if matches!(record.location, records::Location::Loaded) {
+                    record.location =
+                        records::Location::Unloaded(old.session_cwd(&record.session).to_path_buf());
+                }
+            }
+            old.stop().await;
+        }
+        self.replaced(None, None);
+    }
     fn replacement_ready(&self) -> bool {
         matches!(
             self.runtime_state,
@@ -377,7 +403,6 @@ impl Core {
         ) && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
-        self.records.clear();
         self.startup_session = session;
         self.catalog = catalog;
     }
@@ -725,7 +750,7 @@ impl Core {
                     .retain(|at| now.saturating_sub(*at) <= 10 * 60 * 1000);
                 self.failures.push_back(now);
                 self.catalog = None;
-                self.forget_idle(&mut commands);
+                self.startup_session = None;
                 while let Some(id) = self
                     .work
                     .iter()
@@ -815,16 +840,20 @@ impl Core {
                 level: request.model.level,
             };
             let ready = match matched {
-                Some((index, _)) => Some(self.records.remove(index).session),
-                None if settings.system.is_none() && settings.tools.is_empty() => {
-                    self.startup_session.take()
+                Some((index, _)) => {
+                    let record = self.records.remove(index);
+                    Some((record.session, record.location))
                 }
+                None if settings.system.is_none() && settings.tools.is_empty() => self
+                    .startup_session
+                    .take()
+                    .map(|id| (id, records::Location::Loaded)),
                 None => None,
             };
             self.use_sequence += 1;
             let work = request.request.id.clone();
             let (session, phase) = match ready {
-                Some(id) => {
+                Some((id, records::Location::Loaded)) => {
                     commands.push(Command::Prompt {
                         work: work.clone(),
                         session: id.clone(),
@@ -832,10 +861,19 @@ impl Core {
                     });
                     (Some(id), Phase::Prompt)
                 }
+                Some((session, records::Location::Unloaded(cwd))) => {
+                    commands.push(Command::Prepare {
+                        work,
+                        settings: settings.clone(),
+                        load: Some((session.clone(), cwd)),
+                    });
+                    (Some(session), Phase::Preparing(prompt))
+                }
                 None => {
                     commands.push(Command::Prepare {
                         work,
                         settings: settings.clone(),
+                        load: None,
                     });
                     (None, Phase::Preparing(prompt))
                 }
@@ -1099,6 +1137,7 @@ impl Core {
                     active.hashes.messages.push(hash);
                 }
                 self.records.push(records::Record {
+                    location: records::Location::Loaded,
                     session: session.clone(),
                     hashes: active.hashes,
                     tools: active.tools_hash,
@@ -1154,6 +1193,7 @@ impl Conductor {
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
+                first_start: true,
                 cancels: BTreeMap::new(),
                 unavailable: None,
                 changes: VecDeque::new(),
@@ -1184,11 +1224,7 @@ impl Conductor {
                 if matches!(core.runtime_state, RuntimeState::Restarting)
                     && core.replacement.is_none()
                 {
-                    read_open = false;
-                    if let Some(old) = runtime.take() {
-                        old.stop().await;
-                    }
-                    core.replaced(None, None);
+                    core.stop_runtime(&mut runtime, &mut read_open).await;
                     if core.failures.len() >= 3 {
                         let message = actor_builds
                             .unavailable("the runtime process failed 3 times in 10 minutes");
@@ -1416,7 +1452,11 @@ impl Conductor {
                     journal.diagnostic(&request, diagnostic, clock.as_ref())
                 }
                 Command::Complete(completion) => journal.complete(completion, clock.as_ref()),
-                Command::Prepare { work, settings } => {
+                Command::Prepare {
+                    work,
+                    settings,
+                    load,
+                } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => {
                             runtime
@@ -1424,6 +1464,7 @@ impl Conductor {
                                     work.clone(),
                                     &settings.tools,
                                     settings.system.as_deref(),
+                                    load,
                                 )
                                 .await
                         }
@@ -1579,6 +1620,7 @@ mod tests {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
+            first_start: true,
             cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
@@ -1888,11 +1930,11 @@ mod tests {
         core.replaced(Some("new-runtime-startup".into()), None);
         let dispatched = core.handle(Event::ResumeRuntime, 204);
         assert!(
-            core.records.is_empty()
+            core.records.len() == 1
                 && dispatched.iter().any(
                     |command| matches!(command, Command::Prepare {work,..} if work == &queued)
                 ),
-            "after replacement B is prepared with no ACP record from the old process"
+            "ADR-0003 retains A's record while the unrelated B gets a new ACP session"
         );
         std::fs::remove_dir_all(folder).unwrap();
         drop(tickets);
@@ -2081,6 +2123,7 @@ mod tests {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
+            first_start: true,
             cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
@@ -2188,6 +2231,7 @@ mod tests {
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
+                first_start: true,
                 cancels: BTreeMap::new(),
                 unavailable: None,
                 changes: VecDeque::new(),
@@ -2288,6 +2332,7 @@ mod tests {
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
+                first_start: true,
                 cancels: BTreeMap::new(),
                 unavailable: None,
                 changes: VecDeque::new(),
@@ -2399,6 +2444,7 @@ mod tests {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
+            first_start: true,
             cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
@@ -2432,6 +2478,7 @@ mod tests {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
+            first_start: true,
             cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
@@ -2527,6 +2574,7 @@ mod tests {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
+            first_start: true,
             cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
@@ -2535,6 +2583,7 @@ mod tests {
             work: BTreeMap::new(),
             next_work: 0,
             records: vec![records::Record {
+                location: records::Location::Loaded,
                 session: "idle".into(),
                 hashes: crate::conversation::record_hashes(&turn.conversation),
                 tools: crate::conversation::tool_set_hash(&[]),
@@ -2571,6 +2620,7 @@ mod tests {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
+            first_start: true,
             cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),

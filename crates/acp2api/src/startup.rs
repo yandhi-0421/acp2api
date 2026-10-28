@@ -110,14 +110,6 @@ pub(crate) async fn start(
     let journal = crate::journal::Journal::open(&data.join("logs"), ports.clock.wall())
         .map_err(|error| error.to_string())?;
     let earlier_trees_ended = account.temporary.recover()?;
-    if earlier_trees_ended {
-        let sessions = data.join("runtime-home/antigravity-acp/conversations");
-        match std::fs::remove_dir_all(&sessions) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("cannot remove {}: {error}", sessions.display())),
-        }
-    }
     let tools = crate::runtime_driver::mcp::ToolSets::new(port);
     let (stopping, stopped) = tokio::sync::watch::channel(false);
     let builds = crate::runtime_builds::Builds::new(
@@ -129,6 +121,9 @@ pub(crate) async fn start(
         stopped.clone(),
         port,
     );
+    if earlier_trees_ended {
+        builds.start.clean_sessions(Vec::new()).await?;
+    }
     let (conductor, task) = crate::conductor::Conductor::start(
         builds,
         ports.clock.clone(),
