@@ -39,6 +39,7 @@ impl Notice {
 struct Replacement {
     reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
     source: Option<std::path::PathBuf>,
+    initial: bool,
 }
 enum Input {
     Builds {
@@ -305,6 +306,7 @@ impl Core {
         let change = self.replacement.take().unwrap();
         if let Some(source) = change.source
             && let Err(error) = builds.copy(source)
+            && !change.initial
         {
             if matches!(self.runtime_state, RuntimeState::Retiring) {
                 if runtime.is_some() {
@@ -1307,6 +1309,7 @@ impl Conductor {
                 }
                 if core.replacement.is_none() {
                     while let Some((action, reply)) = core.changes.pop_front() {
+                        let initial = matches!(action, crate::runtime_builds::Action::Initial);
                         let mut changed = (**publish.borrow()).clone();
                         match actor_builds
                             .select(action, &mut changed, &configuration)
@@ -1333,7 +1336,11 @@ impl Conductor {
                                             &journal,
                                         )
                                         .await;
-                                        core.replacement = Some(Replacement { reply, source });
+                                        core.replacement = Some(Replacement {
+                                            reply,
+                                            source,
+                                            initial,
+                                        });
                                         break;
                                     }
                                 }
@@ -2028,6 +2035,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_initial_copy_succeeds_with_a_prd_unavailable_reason() {
+        use crate::{ListedBuild, ProcessLauncher, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        struct NoLaunch;
+        impl ProcessLauncher for NoLaunch {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                panic!("a failed first copy must launch no process")
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-initial-copy-{}", crate::random_hex::<12>().unwrap()));
+            let clock = crate::Ports::production().clock;
+            let mut builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            builds.start.launcher = Arc::new(NoLaunch);
+            let hash = crate::hex(&Sha256::digest(b"accepted source"));
+            builds.start.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            let source = folder.join("source");
+            std::fs::create_dir_all(&source).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(source.join(name), b"accepted source").unwrap(); }
+            let config = folder.join("config.toml");
+            let mut settings = crate::store::read(&config, 1).unwrap().settings;
+            settings.agy_acp_server_path = Some(source.join(crate::runtime_builds::SERVER));
+            let crate::runtime_builds::Selection::Start(selected) = builds.select(crate::runtime_builds::Action::Initial, &mut settings, &config).await.unwrap() else { panic!("the accepted source must be selected"); };
+            std::fs::remove_file(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let mut core = Core {
+                runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
+                work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
+                use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
+            };
+            core.handle(Event::RetireRuntime, 0);
+            let (reply, result) = oneshot::channel();
+            core.replacement = Some(Replacement { reply, source:selected, initial:true });
+            let settings = watch::channel(Arc::new(settings)).0;
+            let mut runtime = None;
+            let mut read_open = false;
+            core.replace(&mut runtime, &mut read_open, &clock, &journal, &builds, &settings).await;
+            let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason), _ => None };
+            let actual = (result.await.unwrap().map_err(|error| error.to_string()), reason, runtime.is_none() && !read_open);
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: no build that acp2api found is an accepted version. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
+        }).await.expect("initial-copy test cap: five seconds, one copy attempt, zero process launches");
+    }
+
+    #[tokio::test]
     async fn a_failed_owner_copy_keeps_the_running_runtime_and_counts_no_failure() {
         use crate::{BoxFuture, Launched, ListedBuild, ProcessLauncher, ProcessTree, ReleaseFacts};
         use sha2::{Digest, Sha256};
@@ -2086,7 +2140,7 @@ mod tests {
             core.handle(Event::Deadline, 201);
             core.cleanup_before_start = true;
             let (reply, result) = oneshot::channel();
-            core.replacement = Some(Replacement { reply, source:Some(source) });
+            core.replacement = Some(Replacement { reply, source:Some(source), initial:false });
             let config = folder.join("config.toml");
             let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
             core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
@@ -2129,7 +2183,7 @@ mod tests {
             core.records[0].location = records::Location::Unloaded(cwd);
             core.cleanup_before_start = true;
             let (reply, result) = oneshot::channel();
-            core.replacement = Some(Replacement { reply, source:None });
+            core.replacement = Some(Replacement { reply, source:None, initial:false });
             let config = folder.join("config.toml");
             let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
             let mut runtime = None; let mut read_open = false;
