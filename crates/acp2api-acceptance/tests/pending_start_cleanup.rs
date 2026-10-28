@@ -60,3 +60,48 @@ async fn stop_waits_for_the_pending_start_host_and_its_replacement_runtime() {
     .await
     .expect("pending-start cleanup run cap: 30 s");
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_cap_kills_and_waits_for_a_host_that_cannot_handle_stop() {
+    tokio::time::timeout(real_limit(Duration::from_secs(30)), async {
+        let mut scenario = Scenario::default();
+        scenario.plan(Setup::normal());
+        scenario.start().await;
+        let host = scenario
+            .hub
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry.event["kind"] == "hello" && entry.event["hello"]["role"] == "server"
+            })
+            .unwrap()
+            .event["hello"]["parent_pid"]
+            .as_u64()
+            .unwrap() as i32;
+        let root = scenario.root.path.clone();
+        scenario.root.check_size();
+        assert_eq!(unsafe { libc::kill(host, libc::SIGSTOP) }, 0);
+        let panic = tokio::spawn(async move {
+            scenario.stop().await;
+        })
+        .await
+        .expect_err("a suspended host must exceed the shutdown cap");
+        let still_running = unsafe { libc::kill(host, 0) } == 0;
+        if still_running {
+            assert_eq!(unsafe { libc::kill(host, libc::SIGKILL) }, 0);
+            assert_eq!(
+                unsafe { libc::waitpid(host, std::ptr::null_mut(), 0) },
+                host
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            panic.to_string().contains("test host shutdown cap: 10 s"),
+            "unexpected panic: {panic}"
+        );
+        assert!(!still_running, "the shutdown cap leaked its host process");
+    })
+    .await
+    .expect("shutdown-cap regression run cap: 30 s");
+}

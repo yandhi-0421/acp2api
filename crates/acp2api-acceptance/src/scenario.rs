@@ -159,7 +159,11 @@ impl Scenario {
                 if host.try_wait().unwrap().is_some() {
                     break;
                 }
-                assert!(Instant::now() < deadline, "test host shutdown cap: 10 s");
+                if Instant::now() >= deadline {
+                    host.kill().expect("kill host at shutdown cap");
+                    host.wait().expect("wait for host at shutdown cap");
+                    panic!("test host shutdown cap: 10 s");
+                }
                 self.time.settle().await;
                 if let Some(next) = self.time.next_deadline() {
                     self.time.advance_to(next).await;
