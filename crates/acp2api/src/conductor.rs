@@ -588,6 +588,8 @@ impl Core {
                             );
                         }
                     }
+                } else if let Ok((session, _)) = result {
+                    commands.push(Command::Forget(session));
                 }
             }
             Event::Runtime(RuntimeEvent::Retired { session }) => {
@@ -1635,6 +1637,33 @@ mod tests {
             std::fs::remove_dir_all(root).unwrap();
             assert!(normal == [true, true] && ordered, "A and B must end normally around the planned replacement: {actual:?}");
         }).await.expect("planned build replacement cap: 5 seconds; two fake agents, 8 requests and 64 KiB per line each, 32 trace events");
+    }
+
+    #[test]
+    fn a_session_prepared_after_runtime_failure_is_forgotten() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-late-prepared-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::RetireRuntime, 0);
+        let work = core.work[&0].request().id.clone();
+        core.handle(
+            Event::Runtime(RuntimeEvent::Failed("broken pipe".into())),
+            1,
+        );
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work,
+                result: Ok(("late-session".into(), catalog)),
+            }),
+            2,
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+        assert!(matches!(&commands[..], [Command::Forget(session)] if session == "late-session"));
     }
 
     #[test]
