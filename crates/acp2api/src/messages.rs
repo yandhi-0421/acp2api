@@ -43,6 +43,7 @@ pub(crate) enum Message {
     TooLarge,
     QueueFull,
     RuntimeUnavailable(String),
+    RuntimeFailed,
     Upstream(String),
     UpstreamHttp(HttpError),
     UpstreamAcp(AcpError),
@@ -84,6 +85,7 @@ impl Refusal {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
             Message::QueueFull => Row::QueueFull,
+            Message::RuntimeFailed => Row::Temporary503,
             Message::UpstreamHttp(ref error) if (500..600).contains(&error.code) => {
                 Row::Temporary503
             }
@@ -163,6 +165,7 @@ impl fmt::Display for Message {
                 "acp2api: a last message from the assistant (a prefill) is not supported.",
             ),
             Self::BuiltInToolRan(name) => write!(f, "acp2api: the built-in tool {name} of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."),
+            Self::RuntimeFailed => f.write_str("acp2api: the runtime process failed, so acp2api ended the prompt turn."),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::UpstreamHttp(error) => write!(f, "acp2api: upstream error {} {}: {}", error.code, error.status, error.message),

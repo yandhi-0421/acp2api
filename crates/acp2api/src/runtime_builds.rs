@@ -43,6 +43,7 @@ pub(crate) enum LaunchFailure {
     NoExecutable,
     NotAccepted,
     Start(String),
+    Runtime(String),
     Stopped,
 }
 impl std::fmt::Display for LaunchFailure {
@@ -52,7 +53,7 @@ impl std::fmt::Display for LaunchFailure {
                 f.write_str("acp2api found no executable of the official runtime")
             }
             Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
-            Self::Start(error) => f.write_str(error),
+            Self::Start(error) | Self::Runtime(error) => f.write_str(error),
             Self::Stopped => f.write_str("acp2api is exiting"),
         }
     }
@@ -142,9 +143,7 @@ impl Builds {
         match self.identify(&self.start.data.join(COPY)) {
             Ok(build) => Ok(Some(build)),
             Err(LaunchFailure::NoExecutable | LaunchFailure::NotAccepted) => Ok(None),
-            Err(error @ (LaunchFailure::Start(_) | LaunchFailure::Stopped)) => {
-                Err(error.to_string())
-            }
+            Err(error) => Err(error.to_string()),
         }
     }
     fn scan_places(&self, configured: Option<&Path>) {
@@ -174,11 +173,7 @@ impl Builds {
                 let listed = match self.identify(&folder) {
                     Ok(build) => Some(build),
                     Err(LaunchFailure::NotAccepted) => None,
-                    Err(
-                        LaunchFailure::NoExecutable
-                        | LaunchFailure::Start(_)
-                        | LaunchFailure::Stopped,
-                    ) => continue,
+                    Err(_) => continue,
                 };
                 found.push(Found { listed, folder });
             }
@@ -306,7 +301,12 @@ impl Builds {
                 }
                 error => error,
             })?;
-        Runtime::start(&self.start, &build.version).await
+        Runtime::start(&self.start, &build.version)
+            .await
+            .map_err(|error| match error {
+                LaunchFailure::Start(error) => LaunchFailure::Runtime(error),
+                error => error,
+            })
     }
     pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
         let builds = self.clone();
@@ -442,7 +442,10 @@ mod tests {
     struct RefusingLauncher(Arc<AtomicUsize>);
     impl crate::ProcessLauncher for RefusingLauncher {
         fn launch(&self, spec: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
-            assert_eq!(self.0.fetch_add(1, Ordering::SeqCst), 0, "one launch cap");
+            assert!(
+                self.0.fetch_add(1, Ordering::SeqCst) < 3,
+                "three launch cap"
+            );
             Err(crate::LaunchError::Refused {
                 program: spec.program,
             })
@@ -775,8 +778,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_accepted_copy_start_failure_retries_until_runtime_unavailable() {
+        refused_starts(|_| Action::Initial).await;
+    }
+
+    #[tokio::test]
+    async fn a_planned_replacement_start_failure_retries_until_runtime_unavailable() {
+        refused_starts(|build| Action::Build(identity(build))).await;
+    }
+
     #[allow(clippy::disallowed_methods)]
-    async fn an_accepted_copy_start_failure_is_a_startup_error() {
+    async fn refused_starts(action: fn(&ListedBuild) -> Action) {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let root = std::env::temp_dir().join(format!(
                 "acp2api-launch-reason-{}",
@@ -794,7 +806,8 @@ mod tests {
                 agy_acp_server_sha256: hash.clone(),
                 localharness_external_sha256: hash,
             }]));
-            ports.launcher = Arc::new(RefusingLauncher(Arc::new(AtomicUsize::new(0))));
+            let launches = Arc::new(AtomicUsize::new(0));
+            ports.launcher = Arc::new(RefusingLauncher(launches.clone()));
             let builds = Builds::new(
                 &ports,
                 Environment {
@@ -811,6 +824,8 @@ mod tests {
                 tokio::sync::watch::channel(false).1,
                 0,
             );
+            builds.discover(Some(root.join(COPY).join(SERVER))).await.unwrap();
+            let action = action(&ports.release.listed_builds()[0]);
             let config = root.join("config.toml");
             let settings = crate::store::read(&config, 3).unwrap().settings;
             let journal =
@@ -824,21 +839,19 @@ mod tests {
                 3,
             );
             let result = conductor
-                .builds(Action::Initial, crate::Hold::empty())
+                .builds(action, crate::Hold::empty())
                 .await;
+            let unavailable = conductor.model_names(crate::Hold::empty()).await;
             drop(conductor);
             task.await.unwrap();
             fs::remove_dir_all(root).unwrap();
-            assert!(
-                result
-                    .as_ref()
-                    .is_err_and(|error| error.to_string().contains("runtime launch: Refused")),
-                "an accepted runtime launch failure must fail startup: {result:?}"
-            );
+            assert!(result.is_ok() && launches.load(Ordering::SeqCst) == 3
+                && unavailable.is_err_and(|error| error.message.to_string().contains("the runtime process failed 3 times in 10 minutes")),
+                "FR-041 counts three verified start failures before runtime unavailable: {result:?}");
         })
         .await
         .expect(
-            "launch failure cap: 5 seconds; one refused launch, no child process or HTTP requests",
+            "launch failure cap: 5 seconds; three refused launches, no child process or HTTP requests",
         );
     }
 

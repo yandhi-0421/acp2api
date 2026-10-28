@@ -15,7 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 pub(crate) struct PermissionRequest {
     id: Value,
-    session: String,
+    pub(crate) session: String,
 }
 #[derive(Clone)]
 pub(crate) struct RuntimeStart {
@@ -136,12 +136,14 @@ impl Runtime {
             "version": start.release.version()
         });
         let mut stopped = start.stopped.clone();
-        let result = tokio::select! {
-            result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Start),
-            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
-        };
-        let result = async {
-            let initialized = result?;
+        let timeout = start
+            .clock
+            .sleep_until(start.clock.now().saturating_add(5 * 60 * 1000));
+        let starting = async {
+            let initialized = tokio::select! {
+                result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Start),
+                Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
+            }?;
             if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
                 return Err(LaunchFailure::Start(
                     "initialize version differs from the accepted build".into(),
@@ -151,8 +153,11 @@ impl Runtime {
                 .new_session(&[], None)
                 .await
                 .map_err(LaunchFailure::Start)
-        }
-        .await;
+        };
+        let result = tokio::select! {
+            result = starting => result,
+            _hold = timeout => Err(LaunchFailure::Start("runtime start gave no answer in 5 minutes".into())),
+        };
         let catalog = match result {
             Ok(catalog) => catalog,
             Err(error) => {

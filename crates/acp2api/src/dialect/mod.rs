@@ -277,6 +277,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
             "upstream_error"
         }
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
+        Message::RuntimeFailed => "runtime_failed",
     }
 }
 

@@ -218,9 +218,13 @@ impl Active {
 enum RuntimeState {
     Serving,
     Retiring,
+    Restarting,
+    Unavailable,
 }
 struct Core {
     runtime_state: RuntimeState,
+    failures: VecDeque<Moment>,
+    cancels: BTreeMap<String, Moment>,
     unavailable: Option<String>,
     changes: VecDeque<(
         crate::runtime_builds::Action,
@@ -238,6 +242,7 @@ struct Core {
 }
 enum Event {
     RetireRuntime,
+    RuntimeFailure,
     RuntimeUnavailable(String),
     ResumeRuntime,
     Accepted(Box<Accepted>),
@@ -300,36 +305,13 @@ impl Core {
             old.stop().await;
         }
         self.replaced(None, None);
-        match builds.launch(change.source).await {
-            Ok((started, catalog)) => {
-                self.replaced(Some(started.session_id().into()), Some(catalog));
-                *runtime = Some(started);
-                self.unavailable = None;
-            }
-            Err(
-                error @ (crate::runtime_builds::LaunchFailure::Start(_)
-                | crate::runtime_builds::LaunchFailure::Stopped),
-            ) => {
-                let _ = change.reply.send(Err(error));
-                return;
-            }
-            Err(
-                error @ (crate::runtime_builds::LaunchFailure::NoExecutable
-                | crate::runtime_builds::LaunchFailure::NotAccepted),
-            ) => {
-                let message = builds.unavailable(&error.to_string());
-                self.apply(
-                    Event::RuntimeUnavailable(message.clone()),
-                    runtime,
-                    read_open,
-                    clock,
-                    journal,
-                )
-                .await;
-                self.unavailable = Some(message);
-            }
+        if let Err(error) = self
+            .launch(runtime, read_open, clock, journal, builds, change.source)
+            .await
+        {
+            let _ = change.reply.send(Err(error));
+            return;
         }
-        *read_open = runtime.is_some();
         let configured = publish.borrow().agy_acp_server_path.clone();
         let result = builds
             .discover(configured)
@@ -338,9 +320,59 @@ impl Core {
             .map_err(Into::into);
         let _ = change.reply.send(result);
     }
+    async fn launch(
+        &mut self,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+        mut source: Option<std::path::PathBuf>,
+    ) -> Result<(), crate::runtime_builds::LaunchFailure> {
+        *read_open = false;
+        loop {
+            let reason = match builds.launch(source.take()).await {
+                Ok((started, catalog)) => {
+                    self.replaced(Some(started.session_id().into()), Some(catalog));
+                    *runtime = Some(started);
+                    *read_open = true;
+                    self.unavailable = None;
+                    self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
+                        .await;
+                    return Ok(());
+                }
+                Err(crate::runtime_builds::LaunchFailure::Runtime(_)) => {
+                    self.apply(Event::RuntimeFailure, runtime, read_open, clock, journal)
+                        .await;
+                    if self.failures.len() < 3 {
+                        continue;
+                    }
+                    "the runtime process failed 3 times in 10 minutes".into()
+                }
+                Err(
+                    error @ (crate::runtime_builds::LaunchFailure::NoExecutable
+                    | crate::runtime_builds::LaunchFailure::NotAccepted),
+                ) => error.to_string(),
+                Err(error) => return Err(error),
+            };
+            let message = builds.unavailable(&reason);
+            self.unavailable = Some(message.clone());
+            self.apply(
+                Event::RuntimeUnavailable(message),
+                runtime,
+                read_open,
+                clock,
+                journal,
+            )
+            .await;
+            return Ok(());
+        }
+    }
     fn replacement_ready(&self) -> bool {
-        matches!(self.runtime_state, RuntimeState::Retiring)
-            && !self.work.values().any(Work::occupies_place)
+        matches!(
+            self.runtime_state,
+            RuntimeState::Retiring | RuntimeState::Restarting
+        ) && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
         self.records.clear();
@@ -373,6 +405,7 @@ impl Core {
                 _ => None,
             })
             .chain(self.records.iter().map(|record| record.expires))
+            .chain(self.cancels.values().copied())
             .min()
     }
     fn check_model(
@@ -484,6 +517,7 @@ impl Core {
         let mut commands = Vec::new();
         match event {
             Event::RuntimeUnavailable(message) => {
+                self.runtime_state = RuntimeState::Unavailable;
                 let queued: Vec<_> = self
                     .work
                     .iter()
@@ -593,11 +627,18 @@ impl Core {
                 }
             }
             Event::Runtime(RuntimeEvent::Retired { session }) => {
+                self.cancels.remove(&session);
                 if let Some(id) = self.by_session(&session) {
                     self.finish(id, Ok(()), &mut commands);
                 }
             }
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
+                if matches!(
+                    update,
+                    TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_)
+                ) {
+                    self.cancels.remove(&session);
+                }
                 if let Some(id) = self.by_session(&session) {
                     self.update(id, session, update, now, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
@@ -647,7 +688,12 @@ impl Core {
                     );
                 }
             }
-            Event::Runtime(RuntimeEvent::Closed) => {
+            Event::Runtime(RuntimeEvent::Closed) | Event::RuntimeFailure => {
+                self.runtime_state = RuntimeState::Restarting;
+                self.cancels.clear();
+                self.failures
+                    .retain(|at| now.saturating_sub(*at) <= 10 * 60 * 1000);
+                self.failures.push_back(now);
                 self.catalog = None;
                 self.forget_idle(&mut commands);
                 while let Some(id) = self
@@ -657,15 +703,16 @@ impl Core {
                 {
                     self.finish(
                         id,
-                        Err(crate::messages::Message::Upstream(
-                            "runtime stdout closed".into(),
-                        )),
+                        Err(crate::messages::Message::RuntimeFailed),
                         &mut commands,
                     );
                 }
             }
             Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
             Event::Deadline => {
+                if self.cancels.values().any(|at| *at <= now) {
+                    return self.handle(Event::RuntimeFailure, now);
+                }
                 let due: Vec<_> = self
                     .work
                     .iter()
@@ -786,6 +833,21 @@ impl Core {
                 }),
             );
             places += 1;
+        }
+        for command in &commands {
+            let session = match command {
+                Command::Cancel(session) => session,
+                Command::Permission {
+                    request,
+                    cancel: true,
+                } => &request.session,
+                _ => continue,
+            };
+            if self.by_session(session).is_some() {
+                self.cancels
+                    .entry(session.clone())
+                    .or_insert_with(|| now.saturating_add(30_000));
+            }
         }
         commands
     }
@@ -1061,6 +1123,8 @@ impl Conductor {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
+                failures: VecDeque::new(),
+                cancels: BTreeMap::new(),
                 unavailable: None,
                 changes: VecDeque::new(),
                 replacement: None,
@@ -1085,6 +1149,49 @@ impl Conductor {
                         &publish,
                     )
                     .await;
+                }
+                if matches!(core.runtime_state, RuntimeState::Restarting)
+                    && core.replacement.is_none()
+                {
+                    read_open = false;
+                    if let Some(old) = runtime.take() {
+                        old.stop().await;
+                    }
+                    core.replaced(None, None);
+                    if core.failures.len() >= 3 {
+                        let message = actor_builds
+                            .unavailable("the runtime process failed 3 times in 10 minutes");
+                        core.unavailable = Some(message.clone());
+                        core.apply(
+                            Event::RuntimeUnavailable(message),
+                            &mut runtime,
+                            &mut read_open,
+                            &clock,
+                            &journal,
+                        )
+                        .await;
+                    } else if let Err(error) = core
+                        .launch(
+                            &mut runtime,
+                            &mut read_open,
+                            &clock,
+                            &journal,
+                            &actor_builds,
+                            None,
+                        )
+                        .await
+                    {
+                        let message = actor_builds.unavailable(&error.to_string());
+                        core.unavailable = Some(message.clone());
+                        core.apply(
+                            Event::RuntimeUnavailable(message),
+                            &mut runtime,
+                            &mut read_open,
+                            &clock,
+                            &journal,
+                        )
+                        .await;
+                    }
                 }
                 if core.replacement.is_none() {
                     while let Some((action, reply)) = core.changes.pop_front() {
@@ -1434,6 +1541,8 @@ mod tests {
     ) {
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            failures: VecDeque::new(),
+            cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
             replacement: None,
@@ -1934,6 +2043,8 @@ mod tests {
         let (output, ticket) = mpsc::unbounded_channel();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            failures: VecDeque::new(),
+            cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
             replacement: None,
@@ -2039,6 +2150,8 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
+                failures: VecDeque::new(),
+                cancels: BTreeMap::new(),
                 unavailable: None,
                 changes: VecDeque::new(),
                 replacement: None,
@@ -2137,6 +2250,8 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 runtime_state: RuntimeState::Serving,
+                failures: VecDeque::new(),
+                cancels: BTreeMap::new(),
                 unavailable: None,
                 changes: VecDeque::new(),
                 replacement: None,
@@ -2246,6 +2361,8 @@ mod tests {
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            failures: VecDeque::new(),
+            cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
             replacement: None,
@@ -2277,6 +2394,8 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            failures: VecDeque::new(),
+            cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
             replacement: None,
@@ -2370,6 +2489,8 @@ mod tests {
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            failures: VecDeque::new(),
+            cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
             replacement: None,
@@ -2412,6 +2533,8 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             runtime_state: RuntimeState::Serving,
+            failures: VecDeque::new(),
+            cancels: BTreeMap::new(),
             unavailable: None,
             changes: VecDeque::new(),
             replacement: None,
