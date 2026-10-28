@@ -13,6 +13,24 @@ use agent_client_protocol_schema::v1::{
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+#[derive(Debug)]
+pub(crate) enum CommandError {
+    Io(std::io::Error),
+    Session(String),
+}
+impl From<String> for CommandError {
+    fn from(error: String) -> Self {
+        Self::Session(error)
+    }
+}
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Session(error) => error.fmt(f),
+        }
+    }
+}
 pub(crate) struct PermissionRequest {
     id: Value,
 }
@@ -281,7 +299,7 @@ impl Runtime {
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
         load: Option<(String, PathBuf)>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CommandError> {
         let (session, cwd) = match load {
             Some((id, cwd)) => (Some(id), Some(cwd)),
             None => (None, None),
@@ -314,7 +332,7 @@ impl Runtime {
             self.tool_sets.remove(&tools.mcp_url);
         }
     }
-    async fn send(&mut self, method: &str, params: Value) -> Result<u64, String> {
+    async fn send(&mut self, method: &str, params: Value) -> Result<u64, CommandError> {
         self.next_id += 1;
         let id = self.next_id;
         self.write(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
@@ -324,21 +342,25 @@ impl Runtime {
     pub(crate) fn session_id(&self) -> &str {
         &self.session
     }
-    async fn write(&mut self, value: Value) -> Result<(), String> {
-        let mut bytes = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+    async fn write(&mut self, value: Value) -> Result<(), CommandError> {
+        let mut bytes =
+            serde_json::to_vec(&value).map_err(|e| CommandError::Session(e.to_string()))?;
         bytes.push(b'\n');
         self.input
             .write_all(&bytes)
             .await
-            .map_err(|e| e.to_string())?;
-        self.input.flush().await.map_err(|e| e.to_string())
+            .map_err(CommandError::Io)?;
+        self.input.flush().await.map_err(CommandError::Io)
     }
-    pub(crate) async fn permission(&mut self, request: PermissionRequest) -> Result<(), String> {
+    pub(crate) async fn permission(
+        &mut self,
+        request: PermissionRequest,
+    ) -> Result<(), CommandError> {
         let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
         self.write(json!({"jsonrpc":"2.0","id":request.id,"result":outcome}))
             .await
     }
-    pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), String> {
+    pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), CommandError> {
         for pending in self
             .configuring
             .values_mut()
@@ -351,12 +373,15 @@ impl Runtime {
         )
         .await
     }
-    async fn refuse(&mut self, request: &Value) -> Result<(), String> {
+    async fn refuse(&mut self, request: &Value) -> Result<(), CommandError> {
         self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
             .await
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.send(method, params).await?;
+        let id = self
+            .send(method, params)
+            .await
+            .map_err(|error| error.to_string())?;
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
                 Line::Stdout(value) => value?,
@@ -365,7 +390,9 @@ impl Runtime {
             };
             if value.get("method").is_some() {
                 if value.get("id").is_some() {
-                    self.refuse(&value).await?;
+                    self.refuse(&value)
+                        .await
+                        .map_err(|error| error.to_string())?;
                 }
                 continue;
             }
@@ -382,7 +409,7 @@ impl Runtime {
         &mut self,
         prompt: crate::conversation::PromptRequest,
         session: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), CommandError> {
         self.configure_prompt(prompt, session, Vec::new()).await
     }
     async fn configure_prompt(
@@ -390,7 +417,7 @@ impl Runtime {
         prompt: crate::conversation::PromptRequest,
         session: &str,
         mut sent: Vec<&'static str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CommandError> {
         let desired = [
             ("model", Some(prompt.model.as_str())),
             ("thinking_level", prompt.level.map(|level| level.as_str())),
@@ -408,7 +435,7 @@ impl Runtime {
             if sent.contains(&option) {
                 return Err(format!(
                     "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."
-                ));
+                ).into());
             }
             sent.push(option);
             let option = option.to_owned();
@@ -437,7 +464,7 @@ impl Runtime {
         &mut self,
         prompt: Vec<crate::conversation::PromptBlock>,
         session: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), CommandError> {
         self.tool_calls.clear(session);
         let blocks: Vec<ContentBlock> = prompt
             .into_iter()
@@ -514,7 +541,8 @@ impl Runtime {
                 };
                 return match self.configure_prompt(prompt, &session, sent).await {
                     Ok(()) => RuntimeEvent::Other,
-                    Err(error) => RuntimeEvent::Turn {
+                    Err(CommandError::Io(_)) => RuntimeEvent::Closed,
+                    Err(CommandError::Session(error)) => RuntimeEvent::Turn {
                         session,
                         update: TurnUpdate::Failed(crate::messages::Message::Upstream(error)),
                     },
@@ -633,7 +661,8 @@ impl Runtime {
         } else if value.get("method").is_some() && value.get("id").is_some() {
             match self.refuse(&value).await {
                 Ok(()) => RuntimeEvent::Other,
-                Err(error) => RuntimeEvent::Failed(error),
+                Err(CommandError::Io(_)) => RuntimeEvent::Closed,
+                Err(CommandError::Session(error)) => RuntimeEvent::Failed(error),
             }
         } else {
             RuntimeEvent::Other

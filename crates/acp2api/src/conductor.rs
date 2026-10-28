@@ -328,21 +328,23 @@ impl Core {
     ) -> Result<(), crate::runtime_builds::LaunchFailure> {
         *read_open = false;
         loop {
-            if !self.first_start {
-                let retained = self
-                    .records
-                    .iter()
-                    .filter_map(|record| match &record.location {
-                        records::Location::Unloaded(cwd) => {
-                            Some((record.session.clone(), cwd.clone()))
-                        }
-                        records::Location::Loaded => None,
-                    })
-                    .collect();
-                builds.start.clean_sessions(retained).await?;
-            }
+            let retained = if !self.first_start {
+                Some(
+                    self.records
+                        .iter()
+                        .filter_map(|record| match &record.location {
+                            records::Location::Unloaded(cwd) => {
+                                Some((record.session.clone(), cwd.clone()))
+                            }
+                            records::Location::Loaded => None,
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
             self.first_start = false;
-            let reason = match builds.launch(source.take()).await {
+            let reason = match builds.launch(source.take(), retained).await {
                 Ok((started, catalog)) => {
                     self.replaced(Some(started.session_id().into()), Some(catalog));
                     *runtime = Some(started);
@@ -1017,6 +1019,26 @@ impl Core {
             outcome: crate::journal::Outcome::Disconnected,
         }));
     }
+    fn command_failed(
+        &mut self,
+        work: Option<String>,
+        error: crate::runtime_driver::CommandError,
+        now: Moment,
+    ) -> Vec<Command> {
+        let event = match error {
+            crate::runtime_driver::CommandError::Io(_)
+                if matches!(self.runtime_state, RuntimeState::Stopping) =>
+            {
+                Event::Stop
+            }
+            crate::runtime_driver::CommandError::Io(_) => Event::RuntimeFailure,
+            crate::runtime_driver::CommandError::Session(error) => match work {
+                Some(work) => Event::StartFailed(work, error),
+                None => Event::Runtime(RuntimeEvent::Failed(error)),
+            },
+        };
+        self.handle(event, now)
+    }
     fn cancel(&mut self, session: String, now: Moment, commands: &mut Vec<Command>) {
         self.cancels
             .entry(session.clone())
@@ -1436,9 +1458,7 @@ impl Conductor {
                     if let Some(runtime) = runtime.as_mut()
                         && let Err(error) = runtime.cancel(&session).await
                     {
-                        commands.extend(
-                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
-                        );
+                        commands.extend(core.command_failed(None, error, clock.now()));
                     }
                 }
                 Command::Safety(report) => journal.safety(report, clock.as_ref()),
@@ -1462,10 +1482,10 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        Err(error) => Err(error),
+                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
                     };
                     if let Err(error) = result {
-                        commands.extend(core.handle(Event::StartFailed(work, error), clock.now()));
+                        commands.extend(core.command_failed(Some(work), error, clock.now()));
                     }
                 }
                 Command::Prompt {
@@ -1475,19 +1495,17 @@ impl Conductor {
                 } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => runtime.start_configured_prompt(prompt, &session).await,
-                        Err(error) => Err(error),
+                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
                     };
                     if let Err(error) = result {
-                        commands.extend(core.handle(Event::StartFailed(work, error), clock.now()));
+                        commands.extend(core.command_failed(Some(work), error, clock.now()));
                     }
                 }
                 Command::Permission(request) => {
                     if let Some(runtime) = runtime.as_mut()
                         && let Err(error) = runtime.permission(request).await
                     {
-                        commands.extend(
-                            core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
-                        );
+                        commands.extend(core.command_failed(None, error, clock.now()));
                     }
                 }
                 Command::Forget(session) => {
@@ -1604,6 +1622,25 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    struct Facts(Vec<crate::ListedBuild>);
+    impl crate::ReleaseFacts for Facts {
+        fn version(&self) -> &str {
+            "test"
+        }
+        fn platform(&self) -> &str {
+            if cfg!(windows) {
+                "windows-x64"
+            } else {
+                "macos-arm64"
+            }
+        }
+        fn listed_builds(&self) -> &[crate::ListedBuild] {
+            &self.0
+        }
+        fn highest_concurrency_limit(&self) -> u8 {
+            1
+        }
+    }
     fn prompting_with_waiter(
         journal: &crate::journal::Journal,
     ) -> (
@@ -1699,25 +1736,6 @@ mod tests {
                     .expect("two launches only");
                 record(&self.1, format!("launch:{label}"));
                 Ok(child)
-            }
-        }
-        struct Facts(Vec<ListedBuild>);
-        impl ReleaseFacts for Facts {
-            fn version(&self) -> &str {
-                "test"
-            }
-            fn platform(&self) -> &str {
-                if cfg!(windows) {
-                    "windows-x64"
-                } else {
-                    "macos-arm64"
-                }
-            }
-            fn listed_builds(&self) -> &[ListedBuild] {
-                &self.0
-            }
-            fn highest_concurrency_limit(&self) -> u8 {
-                1
             }
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1913,6 +1931,131 @@ mod tests {
             ends,
             ["success"],
             "FR-041 a disconnected session/load has no running prompt to time out"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_cancel_pipe_before_closed_preserves_records_and_returns_m20() {
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
+        use tokio::io::AsyncWriteExt;
+        struct Tree;
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async {})
+            }
+        }
+        struct Launcher(std::sync::Mutex<Option<Launched>>);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                Ok(self.0.lock().unwrap().take().expect("one launch cap"))
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-cancel-pipe-{}", crate::random_hex::<12>().unwrap()));
+            let clock = crate::Ports::production().clock;
+            let mut builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            let (stdin, agent_input) = tokio::io::duplex(65536);
+            let (stdout, mut agent_output) = tokio::io::duplex(65536);
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let replies = [serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}), serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"running","configOptions":options["configOptions"]}})];
+            for reply in replies { let line = format!("{reply}\n"); assert!(line.len() <= 65536); agent_output.write_all(line.as_bytes()).await.unwrap(); }
+            builds.start.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(Launched { stdin:Box::pin(stdin), stdout:Box::pin(stdout), stderr:Box::pin(tokio::io::empty()), tree:Box::new(Tree) }))));
+            let (runtime, _) = Runtime::start(&builds.start, "1.4.0").await.unwrap();
+            let mut runtime = Some(runtime);
+            let mut read_open = true;
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let (mut core, _, [ _a, mut b ]) = prompting_with_waiter(&journal);
+            let a = core.work[&0].request().id.clone();
+            let active = core.work[&0].execution().unwrap();
+            core.records.push(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), hashes:crate::conversation::RecordHashes { system:active.hashes.system, messages:active.hashes.messages.clone() }, tools:active.tools_hash, used:0, expires:86_400_000 });
+            core.startup_session = Some("sibling".into());
+            core.handle(Event::Limit(2), 0);
+            drop(agent_input);
+            core.apply(Event::Disconnected(a), &mut runtime, &mut read_open, &clock, &journal).await;
+            let mut message = None;
+            while let Ok((event, _hold)) = b.try_recv() { if let TurnEvent::End(Err(error)) = event { message = Some(error.to_string()); } }
+            let retained: Vec<_> = core.records.iter().map(|record| record.session.as_str()).collect();
+            let actual = (message, retained == ["saved"]);
+            runtime.take().unwrap().stop().await;
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (Some("acp2api: the runtime process failed, so acp2api ended the prompt turn.".into()), true), "a closed stdin is a runtime failure before stdout Closed arrives");
+        }).await.expect("broken pipe cap: five seconds, one fake launch, two reply lines of at most 64 KiB");
+    }
+
+    #[tokio::test]
+    async fn a_cleanup_error_during_replacement_counts_failures_and_ends_the_queue() {
+        use crate::{ListedBuild, ProcessLauncher, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        struct NoLaunch;
+        impl ProcessLauncher for NoLaunch {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                panic!("cleanup failure must start no process")
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-cleanup-replacement-{}", crate::random_hex::<12>().unwrap()));
+            let mut ports = crate::Ports::production();
+            let copy = folder.join(crate::runtime_builds::COPY);
+            std::fs::create_dir_all(&copy).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(copy.join(name), b"accepted").unwrap(); }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            ports.launcher = Arc::new(NoLaunch);
+            let temporary = crate::account::Temporary::fixture(&folder);
+            let cwd = temporary.sessions().join("kept");
+            crate::account::private_folder(&cwd).unwrap();
+            std::fs::write(temporary.sessions().join("not-a-folder"), b"cleanup obstruction").unwrap();
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root:folder.join("account"), temp:folder.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:folder.join("exe") }, folder.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let (mut core, _, [_a, mut queued]) = prompting_with_waiter(&journal);
+            core.handle(Event::RetireRuntime, 0);
+            core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
+            core.handle(Event::Deadline, 201);
+            core.records[0].location = records::Location::Unloaded(cwd);
+            core.first_start = false;
+            let (reply, result) = oneshot::channel();
+            core.replacement = Some(Replacement { reply, source:None });
+            let config = folder.join("config.toml");
+            let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
+            let mut runtime = None; let mut read_open = false;
+            core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
+            let owner = result.await.unwrap();
+            let mut unavailable = false;
+            while let Ok((event, _hold)) = queued.try_recv() {
+                if let TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(message))) = event { unavailable = message.contains("the runtime process failed 3 times in 10 minutes"); }
+            }
+            let actual = (owner.is_ok(), core.failures.len(), unavailable);
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (true, 3, true), "a verified copy whose preparation fails must not leave a serving conductor without a runtime");
+        }).await.expect("cleanup failure cap: five seconds, one local obstruction, no process launch or HTTP request");
+    }
+
+    #[test]
+    fn a_broken_pipe_during_exit_keeps_the_conductor_stopping() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-exit-pipe-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::Stop, 1);
+        core.command_failed(
+            None,
+            crate::runtime_driver::CommandError::Io(std::io::ErrorKind::BrokenPipe.into()),
+            2,
+        );
+        let exit_without_restart =
+            matches!(core.runtime_state, RuntimeState::Stopping) && core.failures.is_empty();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert!(
+            exit_without_restart,
+            "FR-045 an exit cancel that finds a closed pipe must not start a replacement"
         );
     }
 

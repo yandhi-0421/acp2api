@@ -254,6 +254,7 @@ impl Builds {
     pub(crate) async fn launch(
         &self,
         source: Option<PathBuf>,
+        retained: Option<Vec<(String, PathBuf)>>,
     ) -> Result<(Runtime, crate::catalog::Catalog), LaunchFailure> {
         if let Some(source) = source {
             let copy = self.start.data.join(COPY);
@@ -301,6 +302,12 @@ impl Builds {
                 }
                 error => error,
             })?;
+        if let Some(retained) = retained {
+            self.start
+                .clean_sessions(retained)
+                .await
+                .map_err(LaunchFailure::Runtime)?;
+        }
         Runtime::start(&self.start, &build.version)
             .await
             .map_err(|error| match error {
@@ -514,7 +521,7 @@ mod tests {
         }]));
         let launches = Arc::new(AtomicUsize::new(0));
         builds.start.launcher = Arc::new(RefusingLauncher(launches.clone()));
-        let _ = builds.launch(Some(root.join("source"))).await;
+        let _ = builds.launch(Some(root.join("source")), None).await;
         let backups: Vec<_> = fs::read_dir(&root)
             .unwrap()
             .flatten()
@@ -667,7 +674,10 @@ mod tests {
             tokio::sync::watch::channel(false).1,
             0,
         );
-        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let failed = builds
+            .launch(Some(root.join("source")), None)
+            .await
+            .is_err();
         let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
         let staging = fs::read_dir(&root)
             .unwrap()
@@ -712,7 +722,10 @@ mod tests {
             agy_acp_server_sha256: hash.clone(),
             localharness_external_sha256: hash,
         }]));
-        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let failed = builds
+            .launch(Some(root.join("source")), None)
+            .await
+            .is_err();
         let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
         let staging = fs::read_dir(&root)
             .unwrap()
@@ -1011,7 +1024,7 @@ mod tests {
             else {
                 panic!("the listed build must be selectable")
             };
-            let _ = builds.launch(source).await;
+            let _ = builds.launch(source, None).await;
             let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());
             fs::remove_dir_all(&root).unwrap();
             assert_eq!(
