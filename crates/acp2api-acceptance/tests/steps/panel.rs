@@ -377,6 +377,18 @@ fn credentials(w: &mut World) {
         "FR-005 generated password delivery"
     );
 }
+#[given("an accepted runtime build is available for the credential check")]
+async fn credential_runtime(w: &mut World) {
+    w.startup.initialize().await;
+    let run = w.startup.run.as_ref().unwrap();
+    acp2api_acceptance::build_fixture::install(
+        &w.startup.root().path.join("builds/normal"),
+        &run.environment.exe_dir,
+        "1.4.0",
+        "normal",
+    )
+    .unwrap();
+}
 #[then("a request with the local API key from the terminal gets no HTTP 401")]
 #[then("a request with that new key gets no HTTP 401")]
 async fn generated_key(w: &mut World) {

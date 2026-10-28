@@ -1,0 +1,928 @@
+use crate::{
+    Environment, ListedBuild, Ports,
+    runtime_driver::{Runtime, RuntimeStart},
+    store::Settings,
+};
+use sha2::{Digest, Sha256};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
+#[derive(Clone)]
+pub(crate) struct Builds {
+    pub(crate) start: RuntimeStart,
+    environment: Environment,
+    port: u16,
+    found: Arc<Mutex<Vec<Found>>>,
+}
+#[derive(Clone)]
+struct Found {
+    folder: PathBuf,
+    listed: Option<ListedBuild>,
+}
+pub(crate) struct Summary {
+    pub(crate) found: Vec<(PathBuf, Option<String>)>,
+    pub(crate) choices: Vec<(String, String)>,
+    pub(crate) newer: Option<String>,
+}
+pub(crate) enum Action {
+    Initial,
+    Search,
+    Path(PathBuf),
+    Build(String),
+}
+pub(crate) enum Selection {
+    Keep,
+    Notice(&'static str),
+    Start(Option<PathBuf>),
+}
+#[derive(Debug)]
+pub(crate) enum LaunchFailure {
+    NoExecutable,
+    NotAccepted,
+    Start(String),
+    Stopped,
+}
+impl std::fmt::Display for LaunchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoExecutable => {
+                f.write_str("acp2api found no executable of the official runtime")
+            }
+            Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
+            Self::Start(error) => f.write_str(error),
+            Self::Stopped => f.write_str("acp2api is exiting"),
+        }
+    }
+}
+impl From<String> for LaunchFailure {
+    fn from(error: String) -> Self {
+        Self::Start(error)
+    }
+}
+impl Builds {
+    pub(crate) fn new(
+        ports: &Ports,
+        environment: Environment,
+        data: PathBuf,
+        temporary: crate::account::Temporary,
+        tools: crate::runtime_driver::mcp::ToolSets,
+        stopped: tokio::sync::watch::Receiver<bool>,
+        port: u16,
+    ) -> Self {
+        Self {
+            start: RuntimeStart {
+                clock: ports.clock.clone(),
+                stopped,
+                launcher: ports.launcher.clone(),
+                release: ports.release.clone(),
+                data,
+                temporary,
+                tool_sets: tools,
+            },
+            environment,
+            port,
+            found: Arc::default(),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture(root: &Path, clock: Arc<dyn crate::Clock>) -> Self {
+        let mut ports = Ports::production();
+        ports.clock = clock;
+        Self::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            },
+            root.into(),
+            crate::account::Temporary::fixture(root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
+            0,
+        )
+    }
+    fn accepted_builds(&self) -> impl Iterator<Item = &ListedBuild> {
+        self.start
+            .release
+            .listed_builds()
+            .iter()
+            .filter(|build| build.platform == self.start.release.platform())
+    }
+    fn identify(&self, folder: &Path) -> Result<ListedBuild, LaunchFailure> {
+        let hash = |name: &str| -> Result<Option<String>, LaunchFailure> {
+            let path = folder.join(name);
+            match fs::read(&path) {
+                Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(LaunchFailure::Start(format!(
+                    "cannot read {}: {error}",
+                    path.display()
+                ))),
+            }
+        };
+        let (Some(server), Some(harness)) = (hash(SERVER)?, hash(HARNESS)?) else {
+            return Err(LaunchFailure::NoExecutable);
+        };
+        self.accepted_builds()
+            .find(|build| {
+                build.agy_acp_server_sha256 == server
+                    && build.localharness_external_sha256 == harness
+            })
+            .cloned()
+            .ok_or(LaunchFailure::NotAccepted)
+    }
+    fn accepted_copy(&self) -> Result<Option<ListedBuild>, String> {
+        match self.identify(&self.start.data.join(COPY)) {
+            Ok(build) => Ok(Some(build)),
+            Err(LaunchFailure::NoExecutable | LaunchFailure::NotAccepted) => Ok(None),
+            Err(error @ (LaunchFailure::Start(_) | LaunchFailure::Stopped)) => {
+                Err(error.to_string())
+            }
+        }
+    }
+    fn scan_places(&self, configured: Option<&Path>) {
+        let mut folders = vec![self.environment.exe_dir.clone(), self.start.data.join(COPY)];
+        folders.extend(self.environment.path.iter().cloned());
+        if let Some(path) = configured
+            && let Some(folder) = path.parent()
+        {
+            folders.push(folder.into());
+        }
+        if let Some(home) = &self.environment.home {
+            scan(&home.join("Library/Application Support/Zed"), &mut folders);
+            scan(&home.join("Library/Caches/JetBrains"), &mut folders);
+        }
+        if let Some(local) = &self.environment.local_app_data {
+            scan(&local.join("Zed"), &mut folders);
+            scan(&local.join("JetBrains"), &mut folders);
+        }
+        folders.sort();
+        folders.dedup();
+        let mut found = Vec::new();
+        for folder in folders {
+            if [SERVER, HARNESS]
+                .iter()
+                .all(|name| folder.join(name).is_file())
+            {
+                let listed = match self.identify(&folder) {
+                    Ok(build) => Some(build),
+                    Err(LaunchFailure::NotAccepted) => None,
+                    Err(
+                        LaunchFailure::NoExecutable
+                        | LaunchFailure::Start(_)
+                        | LaunchFailure::Stopped,
+                    ) => continue,
+                };
+                found.push(Found { listed, folder });
+            }
+        }
+        *self.found.lock().unwrap() = found;
+    }
+    fn select_blocking(
+        &self,
+        action: Action,
+        settings: &mut Settings,
+        configuration: &Path,
+    ) -> Result<Selection, String> {
+        let initial = matches!(action, Action::Initial);
+        if initial {
+            for entry in fs::read_dir(&self.start.data).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-old-")
+                    && entry
+                        .file_type()
+                        .map_err(|error| error.to_string())?
+                        .is_dir()
+                {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        match action {
+            Action::Path(path) => {
+                if !path.is_absolute() {
+                    return Err("Enter an absolute path of agy_acp_server.".into());
+                }
+                if !path
+                    .parent()
+                    .is_some_and(|folder| folder.join(HARNESS).is_file())
+                {
+                    return Ok(Selection::Notice(
+                        "This folder has no localharness_external, so acp2api did not use this path.",
+                    ));
+                }
+                if !path.is_file() {
+                    return Err("This path has no agy_acp_server.".into());
+                }
+                settings.agy_acp_server_path = Some(path);
+                crate::store::save(configuration, settings)?;
+            }
+            Action::Build(choice) => {
+                let found = self.found.lock().unwrap();
+                let selected = found
+                    .iter()
+                    .find(|found| {
+                        found
+                            .listed
+                            .as_ref()
+                            .is_some_and(|build| identity(build) == choice)
+                    })
+                    .ok_or("Choose an accepted build from the search results.")?;
+                return Ok(Selection::Start(Some(selected.folder.clone())));
+            }
+            Action::Initial if self.accepted_copy()?.is_some() => {
+                return Ok(Selection::Start(None));
+            }
+            Action::Initial | Action::Search => {}
+        }
+        self.scan_places(settings.agy_acp_server_path.as_deref());
+        if !initial && self.accepted_copy()?.is_some() {
+            return Ok(Selection::Keep);
+        }
+        let found = self.found.lock().unwrap();
+        let best = found
+            .iter()
+            .filter(|found| found.listed.is_some())
+            .max_by_key(|found| version(&found.listed.as_ref().unwrap().version));
+        Ok(Selection::Start(best.map(|found| found.folder.clone())))
+    }
+    pub(crate) async fn launch(
+        &self,
+        source: Option<PathBuf>,
+    ) -> Result<(Runtime, crate::catalog::Catalog), LaunchFailure> {
+        if let Some(source) = source {
+            let copy = self.start.data.join(COPY);
+            let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
+            if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
+                let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
+                let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
+                let backup = self
+                    .start
+                    .data
+                    .join(format!(".official-runtime-old-{suffix}"));
+                fs::create_dir(&staging).map_err(|error| error.to_string())?;
+                let result = (|| {
+                    for name in [SERVER, HARNESS] {
+                        fs::copy(source.join(name), staging.join(name))
+                            .map_err(|error| error.to_string())?;
+                    }
+                    self.identify(&staging)?;
+                    let previous = copy.exists();
+                    if previous {
+                        fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
+                    }
+                    if let Err(error) = fs::rename(&staging, &copy) {
+                        if previous {
+                            fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
+                        }
+                        return Err(LaunchFailure::Start(error.to_string()));
+                    }
+                    if previous {
+                        let _ = fs::remove_dir_all(backup);
+                    }
+                    Ok(())
+                })();
+                if staging.exists() {
+                    fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
+                }
+                result?;
+            }
+        }
+        let build = self
+            .identify(&self.start.data.join(COPY))
+            .map_err(|error| match error {
+                LaunchFailure::NoExecutable if !self.found.lock().unwrap().is_empty() => {
+                    LaunchFailure::NotAccepted
+                }
+                error => error,
+            })?;
+        Runtime::start(&self.start, &build.version).await
+    }
+    pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
+        let builds = self.clone();
+        tokio::task::spawn_blocking(move || builds.scan_places(configured.as_deref()))
+            .await
+            .map_err(|error| error.to_string())
+    }
+    pub(crate) async fn select(
+        &self,
+        action: Action,
+        settings: &mut Settings,
+        configuration: &Path,
+    ) -> Result<Selection, String> {
+        let builds = self.clone();
+        let mut changed = settings.clone();
+        let configuration = configuration.to_path_buf();
+        let (result, changed) = tokio::task::spawn_blocking(move || {
+            let result = builds.select_blocking(action, &mut changed, &configuration);
+            (result, changed)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        *settings = changed;
+        result
+    }
+    pub(crate) fn unavailable(&self, reason: &str) -> String {
+        let versions = self
+            .accepted_builds()
+            .map(|build| build.version.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "acp2api: the official runtime is unavailable: {reason}. Accepted versions: {versions}. See http://127.0.0.1:{}/.",
+            self.port
+        )
+    }
+    pub(crate) fn summary(&self) -> Result<Summary, String> {
+        let current = self.accepted_copy()?.map(|build| build.version);
+        let found = self.found.lock().unwrap();
+        let rows = found
+            .iter()
+            .map(|found| {
+                (
+                    found.folder.join(SERVER),
+                    found.listed.as_ref().map(|build| build.version.clone()),
+                )
+            })
+            .collect();
+        let newer = current.as_ref().and_then(|current| {
+            found
+                .iter()
+                .filter_map(|found| found.listed.as_ref())
+                .filter(|build| version(&build.version) > version(current))
+                .max_by_key(|build| version(&build.version))
+                .map(|build| build.version.clone())
+        });
+        let choices = found
+            .iter()
+            .filter_map(|found| {
+                found.listed.as_ref().map(|build| {
+                    (
+                        identity(build),
+                        format!(
+                            "{} — {}",
+                            build.version,
+                            found.folder.join(SERVER).display()
+                        ),
+                    )
+                })
+            })
+            .collect();
+        Ok(Summary {
+            found: rows,
+            newer,
+            choices,
+        })
+    }
+}
+fn scan(path: &Path, folders: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            folders.push(entry.path());
+            scan(&entry.path(), folders);
+        }
+    }
+}
+pub(crate) const COPY: &str = "official-runtime";
+#[cfg(windows)]
+pub(crate) const SERVER: &str = "agy_acp_server.exe";
+#[cfg(not(windows))]
+pub(crate) const SERVER: &str = "agy_acp_server.par";
+#[cfg(windows)]
+pub(crate) const HARNESS: &str = "localharness_external.exe";
+#[cfg(not(windows))]
+pub(crate) const HARNESS: &str = "localharness_external";
+pub(crate) fn identity(build: &ListedBuild) -> String {
+    format!(
+        "{}:{}",
+        build.agy_acp_server_sha256, build.localharness_external_sha256
+    )
+}
+fn version(text: &str) -> Vec<u64> {
+    text.split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Facts(Vec<ListedBuild>);
+    impl crate::ReleaseFacts for Facts {
+        fn version(&self) -> &str {
+            "test"
+        }
+        fn platform(&self) -> &str {
+            &self.0[0].platform
+        }
+        fn listed_builds(&self) -> &[ListedBuild] {
+            &self.0
+        }
+        fn highest_concurrency_limit(&self) -> u8 {
+            3
+        }
+    }
+    struct RefusingLauncher(Arc<AtomicUsize>);
+    impl crate::ProcessLauncher for RefusingLauncher {
+        fn launch(&self, spec: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+            assert_eq!(self.0.fetch_add(1, Ordering::SeqCst), 0, "one launch cap");
+            Err(crate::LaunchError::Refused {
+                program: spec.program,
+            })
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_later_start_removes_each_leftover_runtime_backup() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-old-copies-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in [
+            ".official-runtime-old-first",
+            ".official-runtime-old-second",
+            "owner-files",
+        ] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            fs::write(root.join(folder).join("sentinel"), b"saved").unwrap();
+        }
+        let builds = Builds::fixture(&root, Ports::production().clock);
+        let config = root.join("config.toml");
+        let mut settings = crate::store::read(&config, 3).unwrap().settings;
+        builds
+            .select(Action::Initial, &mut settings, &config)
+            .await
+            .unwrap();
+        let actual = [
+            ".official-runtime-old-first",
+            ".official-runtime-old-second",
+            "owner-files",
+        ]
+        .map(|folder| root.join(folder).join("sentinel").is_file());
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            actual,
+            [false, false, true],
+            "startup removes leftover backups and preserves other folders"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_backup_deletion_failure_keeps_the_new_copy_launchable() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-backup-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in [COPY, "source"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(root.join(folder).join(name), folder.as_bytes()).unwrap();
+            }
+        }
+        fs::set_permissions(root.join(COPY), fs::Permissions::from_mode(0o500)).unwrap();
+        let mut builds = Builds::fixture(&root, Ports::production().clock);
+        let hash = crate::hex(&Sha256::digest(b"source"));
+        builds.start.release = Arc::new(Facts(vec![ListedBuild {
+            version: "1.4.0".into(),
+            platform: builds.start.release.platform().into(),
+            agy_acp_server_sha256: hash.clone(),
+            localharness_external_sha256: hash,
+        }]));
+        let launches = Arc::new(AtomicUsize::new(0));
+        builds.start.launcher = Arc::new(RefusingLauncher(launches.clone()));
+        let _ = builds.launch(Some(root.join("source"))).await;
+        let backups: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-old-")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        for backup in &backups {
+            fs::set_permissions(backup, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let actual = (launches.load(Ordering::SeqCst), backups.len());
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            actual,
+            (1, 1),
+            "backup cleanup must not prevent launch after a successful copy swap"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn an_unreadable_copy_fails_startup_without_selecting_a_replacement() {
+        for (unreadable, readable) in [(SERVER, Some(HARNESS)), (HARNESS, None)] {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-copy-read-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            fs::create_dir_all(root.join(COPY).join(unreadable)).unwrap();
+            if let Some(readable) = readable {
+                fs::write(root.join(COPY).join(readable), b"old companion").unwrap();
+            }
+            let ports = Ports::production();
+            let builds = Builds::fixture(&root, ports.clock);
+            let config = root.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            let actual = builds
+                .select(Action::Initial, &mut settings, &config)
+                .await
+                .err();
+            let preserved = root.join(COPY).join(unreadable).is_dir();
+            fs::remove_dir_all(&root).unwrap();
+            assert!(
+                actual
+                    .as_ref()
+                    .is_some_and(|error| error.contains("cannot read")),
+                "a copy read error must fail startup, including when the other executable is missing: {actual:?}"
+            );
+            assert!(preserved, "the unreadable copy must not be replaced");
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn owner_selects_a_build_by_hashes_when_versions_match() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-build-identity-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let mut ports = Ports::production();
+        let mut listed = Vec::new();
+        for label in ["first", "second"] {
+            fs::create_dir_all(root.join(label)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(root.join(label).join(name), label.as_bytes()).unwrap();
+            }
+            let hash = crate::hex(&Sha256::digest(label.as_bytes()));
+            listed.push(ListedBuild {
+                version: "1.4.0".into(),
+                platform: ports.release.platform().into(),
+                agy_acp_server_sha256: hash.clone(),
+                localharness_external_sha256: hash,
+            });
+        }
+        let choice = format!(
+            "{}:{}",
+            listed[1].agy_acp_server_sha256, listed[1].localharness_external_sha256
+        );
+        ports.release = Arc::new(Facts(listed));
+        let builds = Builds::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![root.join("first"), root.join("second")],
+                exe_dir: root.join("exe"),
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
+            0,
+        );
+        let config = root.join("config.toml");
+        let mut settings = crate::store::read(&config, 3).unwrap().settings;
+        builds
+            .discover(settings.agy_acp_server_path.clone())
+            .await
+            .unwrap();
+        let selected = builds
+            .select(Action::Build(choice), &mut settings, &config)
+            .await
+            .ok()
+            .and_then(|selection| match selection {
+                Selection::Start(path) => path,
+                Selection::Keep | Selection::Notice(_) => None,
+            });
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            selected,
+            Some(root.join("second")),
+            "equal versions do not identify a build; the executable pair does"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_failed_copy_preserves_the_previous_executables_and_removes_staging() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-staged-copy-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in ["official-runtime", "source"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        for name in [SERVER, HARNESS] {
+            fs::write(root.join(COPY).join(name), b"old").unwrap();
+        }
+        fs::write(root.join("source").join(SERVER), b"new").unwrap();
+        fs::create_dir(root.join("source").join(HARNESS)).unwrap();
+        let ports = Ports::production();
+        let builds = Builds::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
+            0,
+        );
+        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
+        let staging = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-")
+            })
+            .count();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            (failed, bytes, staging),
+            (true, [b"old".to_vec(), b"old".to_vec()], 0),
+            "failed replacement must leave the accepted copy unchanged and no staging folder"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn rejected_staging_hashes_preserve_the_accepted_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-staged-hashes-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        for folder in [COPY, "source"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(
+                    root.join(folder).join(name),
+                    if folder == COPY { b"old" } else { b"new" },
+                )
+                .unwrap();
+            }
+        }
+        let mut builds = Builds::fixture(&root, Ports::production().clock);
+        let hash = crate::hex(&Sha256::digest(b"old"));
+        builds.start.release = Arc::new(Facts(vec![ListedBuild {
+            version: "1.4.0".into(),
+            platform: builds.start.release.platform().into(),
+            agy_acp_server_sha256: hash.clone(),
+            localharness_external_sha256: hash,
+        }]));
+        let failed = builds.launch(Some(root.join("source"))).await.is_err();
+        let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
+        let staging = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".official-runtime-")
+            })
+            .count();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            (failed, bytes, staging),
+            (true, [b"old".to_vec(), b"old".to_vec()], 0),
+            "unaccepted replacement hashes must preserve the accepted executable pair and remove staging"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn search_skips_an_unreadable_place_and_keeps_other_results() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-search-error-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        fs::create_dir_all(root.join("home/Library/Application Support")).unwrap();
+        fs::write(
+            root.join("home/Library/Application Support/Zed"),
+            b"not a directory",
+        )
+        .unwrap();
+        fs::create_dir(root.join("exe")).unwrap();
+        for name in [SERVER, HARNESS] {
+            fs::write(root.join("exe").join(name), b"found").unwrap();
+        }
+        let ports = Ports::production();
+        let builds = Builds::new(
+            &ports,
+            Environment {
+                account_root: root.join("account"),
+                home: Some(root.join("home")),
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            tokio::sync::watch::channel(false).1,
+            0,
+        );
+        let config = root.join("config.toml");
+        let mut settings = crate::store::read(&config, 3).unwrap().settings;
+        let result = builds.select(Action::Search, &mut settings, &config).await;
+        let found = builds.summary().unwrap().found;
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            result.is_ok() && found.len() == 1,
+            "a bad search place must not hide a readable build"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn an_accepted_copy_start_failure_is_a_startup_error() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-launch-reason-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            fs::create_dir_all(root.join(COPY)).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(root.join(COPY).join(name), b"accepted").unwrap();
+            }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            let mut ports = Ports::production();
+            ports.release = Arc::new(Facts(vec![ListedBuild {
+                version: "1.4.0".into(),
+                platform: ports.release.platform().into(),
+                agy_acp_server_sha256: hash.clone(),
+                localharness_external_sha256: hash,
+            }]));
+            ports.launcher = Arc::new(RefusingLauncher(Arc::new(AtomicUsize::new(0))));
+            let builds = Builds::new(
+                &ports,
+                Environment {
+                    account_root: root.join("account"),
+                    home: None,
+                    local_app_data: None,
+                    temp: root.join("temp"),
+                    path: vec![],
+                    exe_dir: root.join("exe"),
+                },
+                root.clone(),
+                crate::account::Temporary::fixture(&root),
+                crate::runtime_driver::mcp::ToolSets::new(0),
+                tokio::sync::watch::channel(false).1,
+                0,
+            );
+            let config = root.join("config.toml");
+            let settings = crate::store::read(&config, 3).unwrap().settings;
+            let journal =
+                crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = crate::conductor::Conductor::start(
+                builds.clone(),
+                ports.clock.clone(),
+                journal,
+                settings,
+                config,
+                3,
+            );
+            let result = conductor
+                .builds(Action::Initial, crate::Hold::empty())
+                .await;
+            drop(conductor);
+            task.await.unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.to_string().contains("runtime launch: Refused")),
+                "an accepted runtime launch failure must fail startup: {result:?}"
+            );
+        })
+        .await
+        .expect(
+            "launch failure cap: 5 seconds; one refused launch, no child process or HTTP requests",
+        );
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Bounded native filesystem regression; the launcher starts no process."
+    )]
+    async fn selecting_the_existing_copy_preserves_both_executables() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-own-copy-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let copy = root.join(COPY);
+            fs::create_dir_all(&copy).unwrap();
+            let original = [
+                b"official executable".as_slice(),
+                b"official companion".as_slice(),
+            ];
+            for (name, bytes) in [SERVER, HARNESS].into_iter().zip(original) {
+                fs::write(copy.join(name), bytes).unwrap();
+            }
+            let mut ports = Ports::production();
+            ports.release = Arc::new(Facts(vec![ListedBuild {
+                version: "1.4.0".into(),
+                platform: ports.release.platform().into(),
+                agy_acp_server_sha256: crate::hex(&Sha256::digest(original[0])),
+                localharness_external_sha256: crate::hex(&Sha256::digest(original[1])),
+            }]));
+            let launches = Arc::new(AtomicUsize::new(0));
+            ports.launcher = Arc::new(RefusingLauncher(launches.clone()));
+            let environment = Environment {
+                account_root: root.join("account"),
+                home: None,
+                local_app_data: None,
+                temp: root.join("temp"),
+                path: vec![],
+                exe_dir: root.join("exe"),
+            };
+            let builds = Builds::new(
+                &ports,
+                environment,
+                root.clone(),
+                crate::account::Temporary::fixture(&root),
+                crate::runtime_driver::mcp::ToolSets::new(0),
+                tokio::sync::watch::channel(false).1,
+                0,
+            );
+            let config = root.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            builds
+                .discover(settings.agy_acp_server_path.clone())
+                .await
+                .unwrap();
+            let Selection::Start(source) = builds
+                .select(
+                    Action::Build(identity(&builds.start.release.listed_builds()[0])),
+                    &mut settings,
+                    &config,
+                )
+                .await
+                .unwrap()
+            else {
+                panic!("the listed build must be selectable")
+            };
+            let _ = builds.launch(source).await;
+            let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());
+            fs::remove_dir_all(&root).unwrap();
+            assert_eq!(
+                launches.load(Ordering::SeqCst),
+                1,
+                "selection must reach the process boundary"
+            );
+            assert_eq!(
+                observed[0], original[0],
+                "selection must retain the executable"
+            );
+            assert_eq!(
+                observed[1], original[1],
+                "selection must retain the companion"
+            );
+        })
+        .await
+        .expect("own-copy regression cap: 5 seconds");
+    }
+}

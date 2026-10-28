@@ -71,7 +71,7 @@ impl ProcessLauncher for OneChild {
 struct NoTree;
 impl ProcessTree for NoTree {
     fn pid(&self) -> u32 {
-        0
+        std::process::id()
     }
     fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
         Box::pin(std::future::pending())
@@ -108,7 +108,12 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
         stdin: BufReader::new(stdin_agent),
         writes: 0,
     };
-    agent.stdout(result(1, json!({"protocolVersion":1}))).await;
+    agent
+        .stdout(result(
+            1,
+            json!({"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}),
+        ))
+        .await;
     for line in before_session {
         agent.stdout(line).await;
     }
@@ -127,7 +132,18 @@ async fn start(before_session: Vec<Value>) -> (Runtime, Agent, Root) {
     }))));
     let runtime = tokio::time::timeout(
         DEADLINE,
-        Runtime::start(&ports, &root.0, root.0.join("cwd"), mcp::ToolSets::new(1)),
+        Runtime::start(
+            &RuntimeStart {
+                stopped: tokio::sync::watch::channel(false).1,
+                clock: ports.clock.clone(),
+                launcher: ports.launcher.clone(),
+                release: ports.release.clone(),
+                data: root.0.clone(),
+                temporary: crate::account::Temporary::fixture(&root.0),
+                tool_sets: mcp::ToolSets::new(1),
+            },
+            "1.4.0",
+        ),
     )
     .await
     .expect("runtime start")
@@ -277,6 +293,7 @@ async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runt
             .await;
         assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
         drop(agent.stdout);
+        drop(agent.stderr);
         assert_eq!(next(&mut runtime).await, "closed");
     })
     .await;
@@ -522,4 +539,70 @@ async fn a_cancelled_config_call_completes_without_starting_its_prompt() {
         assert_eq!(prompt["params"]["prompt"][0]["text"], "Connected input");
     })
     .await;
+}
+
+#[tokio::test]
+async fn buffered_stdout_is_drained_before_a_ready_stderr_error() {
+    capped(async {
+        let (mut runtime, mut agent, _root) = start(Vec::new()).await;
+        runtime.start_prompt(vec![PromptBlock::Text("Hello".into())], "s1").await.unwrap();
+        let _prompt = agent.stdin().await;
+        // Separate pipes can wake their readers in a different order from the writes.
+        agent.stderr(b"Antigravity SDK error processing prompt for session s1\n").await;
+        agent.stderr(b"Error 503, Message: The service is unavailable., Status: UNAVAILABLE, Details: []\n").await;
+        agent.stdout(chunk("Sure, ")).await;
+        agent.stdout(chunk("503 The service is unavailable.")).await;
+        let mut observed = Vec::new();
+        for _ in 0..4 {
+            observed.push(next(&mut runtime).await);
+        }
+        assert_eq!(observed, ["text Sure, ", "text 503 The service is unavailable.", "stderr", "upstream 503"], "FR-028 buffered reply text must reach the holdback before its stderr error");
+    }).await;
+}
+
+#[tokio::test]
+async fn a_stderr_error_is_delivered_before_both_closed_streams() {
+    capped(async {
+        // Use ordinary EOF; the shared fixture appends a stdout read error.
+        let root = Root(Environment::from_process().temp.join(format!(
+            "acp2api-stderr-eof-{}", crate::random_hex::<8>().unwrap()
+        )));
+        let (stdout, stdout_agent) = tokio::io::duplex(64 * 1024);
+        let (stderr, stderr_agent) = tokio::io::duplex(64 * 1024);
+        let (stdin, stdin_agent) = tokio::io::duplex(64 * 1024);
+        let mut agent = Agent {
+            stdout: stdout_agent,
+            stderr: stderr_agent,
+            stdin: BufReader::new(stdin_agent),
+            writes: 0,
+        };
+        agent.stdout(result(1, json!({"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}))).await;
+        agent.stdout(result(2, json!({"sessionId":"s1","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}))).await;
+        let ports = Ports::production();
+        let (mut runtime, _) = Runtime::start(&RuntimeStart {
+            stopped: tokio::sync::watch::channel(false).1,
+            clock: ports.clock.clone(),
+            launcher: Arc::new(OneChild(Mutex::new(Some(Launched {
+                stdin: Box::pin(stdin), stdout: Box::pin(stdout), stderr: Box::pin(stderr), tree: Box::new(NoTree),
+            })))),
+            release: ports.release.clone(),
+            data: root.0.clone(),
+            temporary: crate::account::Temporary::fixture(&root.0),
+            tool_sets: mcp::ToolSets::new(1),
+        }, "1.4.0").await.unwrap();
+        assert_eq!(agent.stdin().await["method"], "initialize");
+        assert_eq!(agent.stdin().await["method"], "session/new");
+        runtime.start_prompt(vec![PromptBlock::Text("Hello".into())], "s1").await.unwrap();
+        let _prompt = agent.stdin().await;
+        agent.stdout(chunk("Sure, ")).await;
+        agent.stderr(b"Antigravity SDK error processing prompt for session s1\n").await;
+        agent.stderr(b"Error 503, Message: The service is unavailable., Status: UNAVAILABLE, Details: []").await;
+        drop(agent.stdout);
+        drop(agent.stderr);
+        let mut observed = Vec::new();
+        for _ in 0..4 {
+            observed.push(next(&mut runtime).await);
+        }
+        assert_eq!(observed, ["text Sure, ", "stderr", "upstream 503", "closed"], "stdout EOF must not discard a final stderr error, and buffered reply text must still precede that error");
+    }).await;
 }

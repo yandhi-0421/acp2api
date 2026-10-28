@@ -1,11 +1,10 @@
 #[cfg(test)]
 mod agent_lines;
 pub(crate) mod mcp;
-mod safety;
-mod session_folders;
-pub(crate) use session_folders::root as session_root;
 #[cfg(test)]
 mod rpc_request_ids;
+mod safety;
+use crate::runtime_builds::LaunchFailure;
 use crate::*;
 use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
@@ -17,6 +16,16 @@ use tokio::sync::mpsc;
 pub(crate) struct PermissionRequest {
     id: Value,
     session: String,
+}
+#[derive(Clone)]
+pub(crate) struct RuntimeStart {
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) stopped: tokio::sync::watch::Receiver<bool>,
+    pub(crate) launcher: Arc<dyn ProcessLauncher>,
+    pub(crate) release: Arc<dyn ReleaseFacts>,
+    pub(crate) data: PathBuf,
+    pub(crate) temporary: crate::account::Temporary,
+    pub(crate) tool_sets: mcp::ToolSets,
 }
 pub(crate) struct Runtime {
     input: ProcessWrite,
@@ -43,38 +52,19 @@ struct ConfiguringPrompt {
 }
 impl Runtime {
     pub(crate) async fn start(
-        ports: &Ports,
-        data: &std::path::Path,
-        cwd: PathBuf,
-        tool_sets: mcp::ToolSets,
-    ) -> Result<(Self, crate::catalog::Catalog), String> {
-        if let Err(error) =
-            std::fs::remove_dir_all(data.join("runtime-home/antigravity-acp/conversations"))
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(error.to_string());
-        }
-        match std::fs::read_dir(&cwd) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry.map_err(|e| e.to_string())?;
-                    if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-                        std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
-                    } else {
-                        std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
-        }
+        start: &RuntimeStart,
+        expected_version: &str,
+    ) -> Result<(Self, crate::catalog::Catalog), LaunchFailure> {
+        let data = &start.data;
+        let cwd = start.temporary.sessions();
+        let tool_sets = start.tool_sets.clone();
         std::fs::create_dir_all(data.join("runtime-home")).map_err(|e| e.to_string())?;
-        let program = program(data);
-        std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
-        let child = ports
-            .launcher
-            .launch(LaunchSpec {
-                program,
+        let child = crate::startup::launch(
+            &start.temporary,
+            start.launcher.as_ref(),
+            start.clock.clone(),
+            LaunchSpec {
+                program: program(data),
                 args: Vec::new(),
                 env_set: vec![(
                     "GEMINI_HOME".into(),
@@ -82,29 +72,43 @@ impl Runtime {
                 )],
                 cwd: cwd.clone(),
                 own_temp: None,
-            })
-            .map_err(|e| format!("runtime launch: {e:?}"))?;
+            },
+        )
+        .await?;
         let (tx, lines) = mpsc::channel(128);
-        let (stdout_tx, clock) = (tx.clone(), ports.clock.clone());
+        let clock = start.clock.clone();
         tokio::spawn(async move {
-            let mut stdout = BufReader::new(child.stdout);
-            while let Some(line) = read_line(&mut stdout).await {
-                let hold = clock.hold(HoldKind::RuntimeLine);
-                let line = serde_json::from_slice(&line).map_err(|e| format!("ACP JSON: {e}"));
-                if stdout_tx.send((Line::Stdout(line), hold)).await.is_err() {
-                    return;
-                }
-            }
-            let _ = stdout_tx
-                .send((Line::Closed, clock.hold(HoldKind::TurnEvent)))
-                .await;
-        });
-        let clock = ports.clock.clone();
-        tokio::spawn(async move {
-            let mut stderr = BufReader::new(child.stderr);
-            while let Some(line) = read_line(&mut stderr).await {
-                let hold = clock.hold(HoldKind::RuntimeLine);
-                if tx.send((Line::Stderr(line), hold)).await.is_err() {
+            let mut stdout = BufReader::new(child.stdout).split(b'\n');
+            let mut stderr = BufReader::new(child.stderr).split(b'\n');
+            let mut stdout_open = true;
+            let mut stderr_open = true;
+            loop {
+                // Drain buffered reply chunks before stderr can end their prompt turn.
+                let line = tokio::select! {
+                    biased;
+                    line = stdout.next_segment(), if stdout_open => match line {
+                        Ok(Some(line)) => Line::Stdout(serde_json::from_slice(&line).map_err(|e| format!("ACP JSON: {e}"))),
+                        Ok(None) | Err(_) => {
+                            stdout_open = false;
+                            continue;
+                        }
+                    },
+                    line = stderr.next_segment(), if stderr_open => match line {
+                        Ok(Some(line)) => Line::Stderr(line),
+                        Ok(None) | Err(_) => {
+                            stderr_open = false;
+                            continue;
+                        }
+                    },
+                    else => Line::Closed,
+                };
+                let closed = matches!(line, Line::Closed);
+                let hold = clock.hold(if closed {
+                    HoldKind::TurnEvent
+                } else {
+                    HoldKind::RuntimeLine
+                });
+                if tx.send((line, hold)).await.is_err() || closed {
                     return;
                 }
             }
@@ -115,7 +119,7 @@ impl Runtime {
             prompts: std::collections::HashMap::new(),
             creating: std::collections::HashMap::new(),
             tree: child.tree,
-            clock: ports.clock.clone(),
+            clock: start.clock.clone(),
             next_id: 0,
             session: String::new(),
             cwd: cwd.clone(),
@@ -129,15 +133,33 @@ impl Runtime {
         let client = json!({
             "name": "acp2api",
             "title": "acp2api",
-            "version": ports.release.version()
+            "version": start.release.version()
         });
-        runtime
-            .call(
-                "initialize",
-                json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}}),
-            )
-            .await?;
-        let catalog = runtime.new_session(&[], None).await?;
+        let mut stopped = start.stopped.clone();
+        let result = tokio::select! {
+            result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Start),
+            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
+        };
+        let result = async {
+            let initialized = result?;
+            if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
+                return Err(LaunchFailure::Start(
+                    "initialize version differs from the accepted build".into(),
+                ));
+            }
+            runtime
+                .new_session(&[], None)
+                .await
+                .map_err(LaunchFailure::Start)
+        }
+        .await;
+        let catalog = match result {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                runtime.stop().await;
+                return Err(error);
+            }
+        };
         Ok((runtime, catalog))
     }
     pub(crate) async fn new_session(
@@ -173,8 +195,11 @@ impl Runtime {
         system: Option<&str>,
     ) -> Result<(Value, SessionTools), String> {
         let mcp_url = self.tool_sets.insert(tools)?;
-        let cwd = self.cwd.join(format!("session-{}", self.next_id));
-        std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
+        let cwd = self.cwd.join(format!(
+            "session-{}",
+            crate::random_hex::<16>().map_err(|error| error.to_string())?
+        ));
+        crate::account::private_folder(&cwd)?;
         let mut params = json!({
             "cwd": cwd,
             "mcpServers": [{
@@ -591,19 +616,9 @@ impl Runtime {
     }
 }
 
-pub(crate) fn program(data: &std::path::Path) -> PathBuf {
-    data.join("official-runtime").join(if cfg!(windows) {
-        "agy_acp_server.exe"
-    } else {
-        "agy_acp_server.par"
-    })
-}
-async fn read_line(input: &mut BufReader<ProcessRead>) -> Option<Vec<u8>> {
-    let mut line = Vec::new();
-    match input.read_until(b'\n', &mut line).await {
-        Ok(0) | Err(_) => None,
-        Ok(_) => Some(line),
-    }
+pub(crate) fn program(data: &std::path::Path) -> std::path::PathBuf {
+    data.join(crate::runtime_builds::COPY)
+        .join(crate::runtime_builds::SERVER)
 }
 fn acp_error(value: &Value) -> crate::messages::Message {
     match serde_json::from_value(value.clone()) {

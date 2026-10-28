@@ -380,7 +380,7 @@ pub fn cwd(s: &Scenario) {
     for observation in observed {
         let path = PathBuf::from(observation["cwd"].as_str().unwrap());
         assert!(
-            path.starts_with(s.root.path.join("temp/acp2api")),
+            path.starts_with(std::fs::canonicalize(s.root.path.join("temp/acp2api")).unwrap()),
             "session cwd must use the account-owned temporary hierarchy"
         );
         assert_eq!(

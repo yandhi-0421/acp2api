@@ -42,6 +42,7 @@ pub struct OsLauncher;
 #[cfg(windows)]
 mod windows;
 struct OsTree {
+    pid: u32,
     child: tokio::process::Child,
     #[cfg(windows)]
     job: windows::Job,
@@ -58,17 +59,21 @@ impl ProcessLauncher for OsLauncher {
             .kill_on_drop(true);
         #[cfg(unix)]
         cmd.process_group(0);
-        if let Some(temp) = spec.own_temp {
-            cmd.env("TEMP", &temp).env("TMP", temp);
+        if let Some(temp) = &spec.own_temp {
+            cmd.env("TEMP", temp).env("TMP", temp);
         }
+        // Assign the suspended process to its job before it can create descendants.
+        #[cfg(windows)]
+        cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
         let mut child = cmd.spawn()?;
         Ok(Launched {
             stdin: Box::pin(child.stdin.take().expect("piped stdin")),
             stdout: Box::pin(child.stdout.take().expect("piped stdout")),
             stderr: Box::pin(child.stderr.take().expect("piped stderr")),
             tree: Box::new(OsTree {
+                pid: child.id().expect("new child process"),
                 #[cfg(windows)]
-                job: windows::Job::assign(&child)?,
+                job: windows::Job::assign(&child, spec.own_temp.as_deref())?,
                 child,
             }),
         })
@@ -76,7 +81,7 @@ impl ProcessLauncher for OsLauncher {
 }
 impl ProcessTree for OsTree {
     fn pid(&self) -> u32 {
-        self.child.id().unwrap_or(0)
+        self.pid
     }
     fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
         Box::pin(async { self.child.wait().await.expect("wait child") })
@@ -236,6 +241,9 @@ pub(crate) fn private_file(path: &std::path::Path) -> io::Result<std::fs::File> 
         windows::private_file(path)
     }
 }
+
+#[cfg(windows)]
+pub(crate) use windows::{private_folder, process_tree_ended, validate_private};
 
 #[cfg(test)]
 mod tests {

@@ -51,7 +51,7 @@ fn main() -> ExitCode {
     let stream = TcpStream::connect(&fields["hub"]).expect("hub");
     let writer = Arc::new(Mutex::new(stream.try_clone().unwrap()));
     let harness = std::env::args().any(|a| a == "--harness");
-    let hello = json!({"op":"Hello","token":fields["token"],"label":fields["label"],"role":if harness {"harness"}else{"server"},"pid":std::process::id(),"parent_pid":parent_pid(),"argv":std::env::args().collect::<Vec<_>>(),"cwd":std::env::current_dir().unwrap(),"environment_names":std::env::vars_os().map(|(k,_)|k.to_string_lossy().into_owned()).collect::<Vec<_>>(),"GEMINI_HOME":std::env::var("GEMINI_HOME").ok(),"TEMP":std::env::var("TEMP").ok(),"TMP":std::env::var("TMP").ok()});
+    let hello = json!({"op":"Hello","token":fields["token"],"label":fields["label"],"version":fields.get("version").map(String::as_str).unwrap_or("1.4.0"),"role":if harness {"harness"}else{"server"},"pid":std::process::id(),"parent_pid":parent_pid(),"argv":std::env::args().collect::<Vec<_>>(),"cwd":std::env::current_dir().unwrap(),"environment_names":std::env::vars_os().map(|(k,_)|k.to_string_lossy().into_owned()).collect::<Vec<_>>(),"GEMINI_HOME":std::env::var("GEMINI_HOME").ok(),"TEMP":std::env::var("TEMP").ok(),"TMP":std::env::var("TMP").ok()});
     send(&writer, &hello);
     let children = Arc::new(Mutex::new(Vec::<std::process::Child>::new()));
     if !harness {

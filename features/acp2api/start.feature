@@ -33,6 +33,7 @@ Feature: Start of acp2api
   @FR-005 @FR-009 @issue-55
   Scenario: A first start makes a local API key and a management password and shows them
     Given the data folder "D" is empty
+    And an accepted runtime build is available for the credential check
     When the owner starts acp2api with the data folder "D"
     Then acp2api makes the configuration file in "D"
     And the terminal shows the address of the management panel, the local API key, and the management password
@@ -53,7 +54,7 @@ Feature: Start of acp2api
     Then the two local API keys are different
     And the two management passwords are different
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario Outline: A second start for the same computer account fails
     Given acp2api runs for a computer account with the data folder "D1"
     And its system temporary folder is "T1"
@@ -69,7 +70,7 @@ Feature: Start of acp2api
       | D1                 | T2                      |
       | D2                 | T2                      |
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario: The first acp2api continues after a second start
     Given acp2api runs for a computer account with the data folder "D1"
     And its system temporary folder is "T1"
@@ -79,7 +80,7 @@ Feature: Start of acp2api
     Then the first acp2api answers the next request
     And the temporary folder and the session cwd folder of the first acp2api are still there
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario: Two computer accounts keep their own temporary folders
     Given acp2api runs for computer account "A" with data folder "D1" and port 8329
     And its system temporary folder is "T"
@@ -91,7 +92,7 @@ Feature: Start of acp2api
     Then the first acp2api answers the next request
     And the temporary folder and the session cwd folder of the first acp2api are still there
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario: A second start waits for the first panel address
     Given a first acp2api owns the account lock and has not published its panel address
     When a second acp2api starts for that account
@@ -100,21 +101,21 @@ Feature: Start of acp2api
     When the first acp2api publishes its panel address
     Then the second start fails with M-24 and that address
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario: The owner can cancel a second start before the first address exists
     Given a second start waits for the first panel address
     When the owner cancels the second start
     Then the second start exits with no change to the first instance's files
     And the first acp2api can still publish its panel address and answer requests
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario: A waiting start can take ownership after the first start crashes before publication
     Given a second start waits for the first panel address
     When the first start crashes before it publishes that address
     Then the second start becomes the sole instance and publishes its own panel address
     And it shows no M-24 with a stale or absent address
 
-  @FR-006 @issue-64 @wip
+  @FR-006 @issue-64
   Scenario Outline: Unusable coordination data stops the new start without disturbing the owner
     Given a first acp2api runs for a computer account
     And its account coordination data at "P" is <condition>

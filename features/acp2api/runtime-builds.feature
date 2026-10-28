@@ -4,7 +4,7 @@ Feature: Builds of the official runtime
   acp2api starts each runtime process only from its own copy of an accepted version in the data folder.
   A compatibility check on the computer of the owner can make another build an accepted version.
 
-  @FR-004 @FR-042 @issue-58 @wip
+  @FR-004 @FR-042 @issue-58
   Scenario Outline: A start finds a build in each place that acp2api searches
     Given acp2api has no copy of the official runtime
     And the configuration file has no path of agy_acp_server
@@ -19,20 +19,20 @@ Feature: Builds of the official runtime
       | the install folder of Zed             |
       | the install folder of a JetBrains IDE |
 
-  @FR-042 @issue-58 @wip
+  @FR-042 @issue-58
   Scenario: A path that the owner gives finds the build
     Given acp2api found no build of the official runtime
     When the owner sets the path of agy_acp_server to a build in the folder "F" in the management panel
     Then the result of the search lists the build in the folder "F"
 
-  @FR-042 @issue-58 @wip
+  @FR-042 @issue-58
   Scenario: A new search finds a build that the owner added after the start
     Given acp2api found no build of the official runtime
     And the owner then puts a build of an accepted version into the install folder of Zed
     When the owner starts a new search in the management panel
     Then the result of the search lists the build in the install folder of Zed
 
-  @FR-042 @issue-58 @wip
+  @FR-042 @issue-58
   Scenario: The search ignores a folder without localharness_external
     Given acp2api has no copy of the official runtime
     And the install folder of Zed holds agy_acp_server of an accepted version and no localharness_external
@@ -40,14 +40,14 @@ Feature: Builds of the official runtime
     Then the result of the search does not list the install folder of Zed
     And acp2api is in the state "runtime unavailable"
 
-  @FR-042 @issue-58 @wip
+  @FR-042 @issue-58
   Scenario: A path without localharness_external keeps the earlier path
     Given the path of agy_acp_server points to the folder "F1"
     When the owner sets the path of agy_acp_server to the folder "F2", which has no localharness_external, in the management panel
     Then the management panel shows "This folder has no localharness_external, so acp2api did not use this path."
     And the path of agy_acp_server still points to the folder "F1"
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario: With no copy, acp2api copies the found build with the highest version on the list
     Given acp2api has no copy of the official runtime
     And acp2api finds the builds 1.4.0 and 1.5.0, and both are on the list of the release
@@ -55,7 +55,7 @@ Feature: Builds of the official runtime
     Then the data folder holds one copy of the official runtime, of the build 1.5.0
     And the runtime process runs from that copy
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario: A new build with a higher version shows new build found and does not change the build in use
     Given the runtime process runs from the copy of the build 1.4.0
     And the owner puts the accepted build 1.5.0 into the install folder of Zed
@@ -63,7 +63,7 @@ Feature: Builds of the official runtime
     Then the management panel shows "New build found: 1.5.0"
     And the build in use is 1.4.0
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario: An older found build shows only in the result of the search
     Given the runtime process runs from the copy of the build 1.5.0
     And the install folder of Zed holds the accepted build 1.4.0
@@ -71,7 +71,7 @@ Feature: Builds of the official runtime
     Then the result of the search lists the build 1.4.0
     And the management panel shows no "New build found"
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario: The owner changes to another accepted build in the management panel
     Given the runtime process runs from the copy of the build 1.4.0
     And acp2api found the accepted build 1.5.0
@@ -79,7 +79,7 @@ Feature: Builds of the official runtime
     Then acp2api replaces the runtime process with a runtime process of the build 1.5.0
     And the data folder holds one copy of the official runtime, of the build 1.5.0
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario: A build that is not on the list gets no copy without a compatibility check
     Given acp2api has no copy of the official runtime
     And the only found build is 1.6.0, which is not on the list of the release
@@ -87,7 +87,7 @@ Feature: Builds of the official runtime
     Then the data folder holds no copy of the official runtime
     And acp2api is in the state "runtime unavailable"
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario Outline: A changed byte in the copy stops the start
     Given the copy of the official runtime in the data folder has one changed byte
     And <other builds>
@@ -100,7 +100,7 @@ Feature: Builds of the official runtime
       | the install folder of Zed holds the accepted build 1.4.0 | acp2api copies the build 1.4.0 from the install folder of Zed, and the runtime process runs from the new copy     |
       | no other place holds a build of the official runtime     | acp2api is in the state "runtime unavailable" with the reason "no build that acp2api found is an accepted version" |
 
-  @FR-043 @issue-58 @wip
+  @FR-043 @issue-58
   Scenario: A build for another CPU architecture is not accepted
     Given acp2api for macOS arm64 runs
     And it has no copy of an accepted version and no usable runtime process

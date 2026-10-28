@@ -81,6 +81,37 @@ impl<I: AsRef<Path>> Parser<I> for Selected {
                         })
                         .and_then(|mut feature| {
                             feature.path = Some(path);
+                            for scenario in feature.scenarios.iter_mut().chain(
+                                feature
+                                    .rules
+                                    .iter_mut()
+                                    .flat_map(|rule| &mut rule.scenarios),
+                            ) {
+                                let names: std::collections::BTreeSet<_> = scenario
+                                    .steps
+                                    .iter()
+                                    .flat_map(|step| step.value.split('<').skip(1))
+                                    .filter_map(|part| {
+                                        part.split_once('>').map(|(name, _)| name.to_owned())
+                                    })
+                                    .collect();
+                                for table in scenario
+                                    .examples
+                                    .iter_mut()
+                                    .filter_map(|example| example.table.as_mut())
+                                {
+                                    if let Some((header, rows)) = table.rows.split_first_mut() {
+                                        for name in &names {
+                                            if !header.contains(name) {
+                                                header.push(name.clone());
+                                                for row in rows.iter_mut() {
+                                                    row.push(format!("<{name}>"));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             feature.expand_examples().map_err(Into::into)
                         }),
                 )

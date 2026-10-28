@@ -39,6 +39,9 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/password", post(password))
         .route("/manage/concurrency", post(concurrency))
         .route("/manage/notice", post(dismiss_notice))
+        .route("/manage/search", post(search))
+        .route("/manage/runtime-path", post(runtime_path))
+        .route("/manage/build", post(build))
         .layer(axum::extract::DefaultBodyLimit::max(16384))
         .layer(axum::middleware::from_fn_with_state(panel.clone(), guard))
         .with_state(panel)
@@ -87,6 +90,7 @@ impl Panel {
             self.conductor.highest,
             Some(notice),
             &self.conductor.notices(),
+            self.conductor.builds_summary(),
         );
         (status, Html(page)).into_response()
     }
@@ -150,6 +154,7 @@ async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
             panel.conductor.highest,
             None,
             &panel.conductor.notices(),
+            panel.conductor.builds_summary(),
         )
     } else {
         page::login(None)
@@ -269,6 +274,37 @@ async fn dismiss_notice(State(panel): State<Panel>, Form(form): Form<DismissNoti
             .into_response(),
     }
 }
+async fn runtime_action(panel: Panel, action: crate::runtime_builds::Action) -> Response {
+    match panel
+        .conductor
+        .builds(action, panel.clock.hold(crate::HoldKind::TurnEvent))
+        .await
+    {
+        Ok(notice) => panel.page(StatusCode::OK, &notice),
+        Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+    }
+}
+async fn search(State(panel): State<Panel>) -> Response {
+    runtime_action(panel, crate::runtime_builds::Action::Search).await
+}
+#[derive(Deserialize)]
+struct RuntimePath {
+    agy_acp_server_path: std::path::PathBuf,
+}
+async fn runtime_path(State(panel): State<Panel>, Form(form): Form<RuntimePath>) -> Response {
+    runtime_action(
+        panel,
+        crate::runtime_builds::Action::Path(form.agy_acp_server_path),
+    )
+    .await
+}
+#[derive(Deserialize)]
+struct Build {
+    build: String,
+}
+async fn build(State(panel): State<Panel>, Form(form): Form<Build>) -> Response {
+    runtime_action(panel, crate::runtime_builds::Action::Build(form.build)).await
+}
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod tests {
@@ -290,7 +326,7 @@ mod tests {
         let unsaveable_configuration = folder.join("config.toml");
         std::fs::create_dir(&unsaveable_configuration).unwrap();
         let (conductor, _task) = Conductor::start(
-            None,
+            crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
             clock.clone(),
             journal,
             settings,
@@ -333,8 +369,14 @@ mod tests {
             agy_acp_server_path: None,
         };
         let configuration = folder.join("config.toml");
-        let (conductor, _task) =
-            Conductor::start(None, clock.clone(), journal, settings, configuration, 1);
+        let (conductor, _task) = Conductor::start(
+            crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
+            clock.clone(),
+            journal,
+            settings,
+            configuration,
+            1,
+        );
         let panel = Panel::new(conductor, clock, 8329);
         let ticks = Arc::new(AtomicUsize::new(0));
         let counter = ticks.clone();

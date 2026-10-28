@@ -411,9 +411,10 @@ impl Journal {
         terminal.flush()
     }
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
+        let writer = Writer::open(folder, wall)?;
         let prefix = crate::random_hex::<8>().map_err(io::Error::other)?;
         Ok(Self(std::sync::Arc::new(JournalState {
-            writer: std::sync::Mutex::new(Writer::open(folder, wall)?),
+            writer: std::sync::Mutex::new(writer),
             prefix,
             sequence: std::sync::atomic::AtomicU64::new(1),
         })))

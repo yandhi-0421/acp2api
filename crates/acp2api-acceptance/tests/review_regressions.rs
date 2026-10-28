@@ -1,5 +1,4 @@
 use acp2api_acceptance::{Scenario, Setup, client::ApiCall};
-use futures_util::FutureExt;
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -32,16 +31,9 @@ async fn restart_preserves_saved_configuration_and_runtime_copy() {
         .replace("concurrency_limit = 2", "concurrency_limit = 1");
     std::fs::write(&config_path, &config).unwrap();
     let runtime = scenario.root.path.join("data/official-runtime");
-    let descriptor = runtime.join(if cfg!(windows) {
-        "localharness_external.exe"
-    } else {
-        "localharness_external"
-    });
-    let saved = format!(
-        "{}\n# owner annotation\n",
-        std::fs::read_to_string(&descriptor).unwrap()
-    );
-    std::fs::write(&descriptor, &saved).unwrap();
+    let marker = runtime.join("owner-marker");
+    let saved = b"owner annotation";
+    std::fs::write(&marker, saved).unwrap();
     #[cfg(unix)]
     let executable = runtime.join("agy_acp_server.par");
     #[cfg(unix)]
@@ -58,8 +50,8 @@ async fn restart_preserves_saved_configuration_and_runtime_copy() {
         "saved config bytes changed"
     );
     assert!(
-        std::fs::read_to_string(&descriptor).unwrap() == saved,
-        "runtime descriptor changed"
+        std::fs::read(&marker).unwrap() == saved,
+        "runtime marker changed"
     );
     #[cfg(unix)]
     {
@@ -83,25 +75,42 @@ async fn restart_preserves_saved_configuration_and_runtime_copy() {
     let mut edited_program = std::fs::read(&program).unwrap();
     edited_program.extend_from_slice(b"owner edit retained across restart");
     std::fs::write(&program, &edited_program).unwrap();
-    let restart = std::panic::AssertUnwindSafe(scenario.restart())
-        .catch_unwind()
+    let launches = scenario
+        .hub
+        .entries()
+        .iter()
+        .filter(|entry| entry.event["kind"] == "launch")
+        .count();
+    scenario.restart().await;
+    let answer = scenario
+        .client()
+        .await
+        .send(ApiCall::one_user_message(
+            "POST /v1/messages",
+            "changed executable",
+        ))
+        .finish(&mut scenario.time)
         .await;
-    let failure = restart.expect_err("the guard must refuse an edited executable");
-    let message = failure
-        .downcast_ref::<String>()
-        .expect("startup diagnostic");
-    assert!(message.contains("runtime launch: Refused"));
+    assert_eq!(answer.status, 400);
     assert!(
+        answer.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("acp2api: the official runtime is unavailable:")
+    );
+    assert_eq!(
         scenario
             .hub
             .entries()
             .iter()
-            .any(|e| e.event["kind"] == "launch" && e.event["allowed"] == false)
+            .filter(|entry| entry.event["kind"] == "launch")
+            .count(),
+        launches,
+        "a changed copy must be rejected before launch"
     );
     assert!(
         std::fs::read(&program).unwrap() == edited_program,
         "runtime executable bytes changed"
     );
-    // Startup refuses edited bytes; preservation also applies to a failed restart.
     scenario.finish(true).await;
 }
