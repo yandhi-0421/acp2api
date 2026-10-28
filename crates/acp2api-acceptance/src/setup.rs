@@ -448,10 +448,70 @@ pub fn definitely_exited(pid: u32) -> bool {
     }
 }
 
+#[cfg(unix)]
+pub fn alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+#[cfg(windows)]
+pub fn alive(pid: u32) -> bool {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_TIMEOUT},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    unsafe {
+        let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            return false;
+        }
+        let running = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+        CloseHandle(process);
+        running
+    }
+}
+
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn alive_requires_permission_to_signal_or_open_the_process() {
+        assert!(
+            alive(std::process::id()),
+            "the current process is accessible and alive"
+        );
+        #[cfg(unix)]
+        let protected = {
+            if unsafe { libc::kill(1, 0) } == 0 {
+                return;
+            }
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPERM)
+            );
+            1
+        };
+        #[cfg(windows)]
+        let protected = {
+            use windows_sys::Win32::{
+                Foundation::{CloseHandle, ERROR_ACCESS_DENIED, GetLastError},
+                System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE},
+            };
+            let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, 4) };
+            if !process.is_null() {
+                unsafe {
+                    CloseHandle(process);
+                }
+                return;
+            }
+            assert_eq!(unsafe { GetLastError() }, ERROR_ACCESS_DENIED);
+            4
+        };
+        assert!(
+            !alive(protected),
+            "an inaccessible PID must not prove that the test process still runs"
+        );
+    }
 
     #[test]
     fn new_root_cleans_only_terminated_owned_runs() {

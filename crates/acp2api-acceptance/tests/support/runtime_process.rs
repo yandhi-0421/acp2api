@@ -48,9 +48,7 @@ pub fn process_ids(w: &World) -> Vec<u32> {
         .map(|e| e.event["hello"]["pid"].as_u64().unwrap() as u32)
         .collect()
 }
-pub fn alive(pid: u32) -> bool {
-    !acp2api_acceptance::setup::definitely_exited(pid)
-}
+pub use acp2api_acceptance::setup::alive;
 
 pub async fn observe(w: &mut World, condition: impl Fn(&World) -> bool) {
     let deadline = Instant::now() + real_limit(Duration::from_secs(2));
