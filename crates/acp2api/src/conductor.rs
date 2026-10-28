@@ -220,6 +220,7 @@ enum RuntimeState {
     Retiring,
     Restarting,
     Unavailable,
+    Stopping,
 }
 struct Core {
     runtime_state: RuntimeState,
@@ -243,6 +244,7 @@ struct Core {
 enum Event {
     RetireRuntime,
     RuntimeFailure,
+    Stop,
     RuntimeUnavailable(String),
     ResumeRuntime,
     Accepted(Box<Accepted>),
@@ -516,6 +518,34 @@ impl Core {
     fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         match event {
+            Event::Stop => {
+                self.runtime_state = RuntimeState::Stopping;
+                self.cancels.clear();
+                let ids: Vec<_> = self.work.keys().copied().collect();
+                for id in ids {
+                    if let Work::AcceptedQueued(_) = self.work[&id] {
+                        let queued = self.work.remove(&id).unwrap().into_queued().unwrap();
+                        commands.push(Command::Complete(crate::journal::Completion {
+                            request: queued.request,
+                            session: None,
+                            session_use: None,
+                            outcome: crate::journal::Outcome::Refused("stopped"),
+                        }));
+                        commands.push(Command::Emit(
+                            queued.output,
+                            TurnEvent::End(Err(crate::messages::Message::Stopped)),
+                        ));
+                    } else {
+                        if let Some(active) = self.work[&id].execution()
+                            && matches!(active.phase, Phase::Prompt)
+                            && let Some(session) = &active.session
+                        {
+                            commands.push(Command::Cancel(session.clone()));
+                        }
+                        self.finish(id, Err(crate::messages::Message::Stopped), &mut commands);
+                    }
+                }
+            }
             Event::RuntimeUnavailable(message) => {
                 self.runtime_state = RuntimeState::Unavailable;
                 let queued: Vec<_> = self
@@ -1138,6 +1168,7 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
+            let mut stopped = actor_builds.start.stopped.clone();
             loop {
                 if core.replacement_ready() && core.replacement.is_some() {
                     core.replace(
@@ -1260,6 +1291,9 @@ impl Conductor {
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
                 let (event, hold) = tokio::select! {
                     biased;
+                    Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => {
+                        (Event::Stop, clock.hold(HoldKind::TurnEvent))
+                    }
                     work = first_closed(&connected), if !connected.is_empty() => {
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
                     }
@@ -1334,6 +1368,9 @@ impl Conductor {
                 core.apply(event, &mut runtime, &mut read_open, &clock, &journal)
                     .await;
                 drop(hold);
+                if matches!(core.runtime_state, RuntimeState::Stopping) {
+                    break;
+                }
             }
             if let Some(runtime) = runtime {
                 runtime.stop().await;
@@ -1526,7 +1563,7 @@ fn unavailable_refusal(message: &str, clock: &dyn Clock) -> crate::messages::Ref
     refusal
 }
 fn stopped<T>(_: T) -> crate::messages::Refusal {
-    crate::messages::Message::Upstream("conductor stopped".into()).into()
+    crate::messages::Message::Stopped.into()
 }
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
