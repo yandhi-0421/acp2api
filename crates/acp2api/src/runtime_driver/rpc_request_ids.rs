@@ -196,7 +196,8 @@ async fn exercise(creation_pending: bool) {
     assert_eq!(session, "beta", "permission uses its own ACP session");
     assert_eq!(call.name, "beta_lookup");
     assert_eq!(call.arguments, "{\"item\":\"beta-only\"}");
-    runtime.permission(request, true).await.unwrap();
+    runtime.cancel(&session).await.unwrap();
+    runtime.permission(request).await.unwrap();
     assert_eq!(
         agent.receive("session/cancel").await["params"]["sessionId"],
         "beta",

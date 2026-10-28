@@ -15,7 +15,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 pub(crate) struct PermissionRequest {
     id: Value,
-    pub(crate) session: String,
 }
 #[derive(Clone)]
 pub(crate) struct RuntimeStart {
@@ -334,14 +333,7 @@ impl Runtime {
             .map_err(|e| e.to_string())?;
         self.input.flush().await.map_err(|e| e.to_string())
     }
-    pub(crate) async fn permission(
-        &mut self,
-        request: PermissionRequest,
-        cancel: bool,
-    ) -> Result<(), String> {
-        if cancel {
-            self.cancel(&request.session).await?;
-        }
+    pub(crate) async fn permission(&mut self, request: PermissionRequest) -> Result<(), String> {
         let outcome = RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
         self.write(json!({"jsonrpc":"2.0","id":request.id,"result":outcome}))
             .await
@@ -575,7 +567,6 @@ impl Runtime {
                 .permission(&session, &request.tool_call.tool_call_id.to_string());
             let permission = PermissionRequest {
                 id: value["id"].clone(),
-                session: session.clone(),
             };
             let update = match self.client_tool_call(&session, &request) {
                 Some(call) => TurnUpdate::Permission {

@@ -160,10 +160,10 @@ impl Active {
             .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
             .min_by_key(|(at, _)| *at)
     }
-    fn release_or_cut_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) {
+    fn release_or_cut_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) -> bool {
         let complete = next.is_none();
         if !complete && self.stop.sequence().is_some() {
-            return;
+            return false;
         }
         let mut text = std::mem::take(&mut self.stop_prefix);
         if let Some(held) = self.held.take() {
@@ -209,10 +209,9 @@ impl Active {
             && self.stop.sequence().is_none()
         {
             self.stop = crate::conversation::Stop::Sequence(stop);
-            if let Some(session) = &self.session {
-                commands.push(Command::Cancel(session.clone()));
-            }
+            return !complete;
         }
+        false
     }
 }
 enum RuntimeState {
@@ -277,10 +276,7 @@ enum Command {
         prompt: PromptRequest,
     },
     Emit(Output, TurnEvent),
-    Permission {
-        request: crate::runtime_driver::PermissionRequest,
-        cancel: bool,
-    },
+    Permission(crate::runtime_driver::PermissionRequest),
     Forget(String),
 }
 impl Core {
@@ -619,8 +615,8 @@ impl Core {
                 } else {
                     let active = self.work.remove(&id).unwrap().into_active().unwrap();
                     let ended = matches!(active.phase, Phase::Settling { .. });
-                    if let Some(session) = &active.session {
-                        commands.push(Command::Cancel(session.clone()));
+                    if matches!(active.phase, Phase::Prompt) {
+                        self.cancel(active.session.as_ref().unwrap().clone(), now, &mut commands);
                     }
                     self.work.insert(
                         id,
@@ -699,10 +695,7 @@ impl Core {
                 } else if let TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } = update
                 {
-                    commands.push(Command::Permission {
-                        request,
-                        cancel: false,
-                    });
+                    commands.push(Command::Permission(request));
                 }
             }
             Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
@@ -718,6 +711,7 @@ impl Core {
                             id,
                             session,
                             crate::messages::Message::UpstreamHttp(error),
+                            now,
                             &mut commands,
                         );
                     }
@@ -902,21 +896,6 @@ impl Core {
             );
             places += 1;
         }
-        for command in &commands {
-            let session = match command {
-                Command::Cancel(session) => session,
-                Command::Permission {
-                    request,
-                    cancel: true,
-                } => &request.session,
-                _ => continue,
-            };
-            if self.by_session(session).is_some() {
-                self.cancels
-                    .entry(session.clone())
-                    .or_insert_with(|| now.saturating_add(30_000));
-            }
-        }
         commands
     }
     fn update(
@@ -934,10 +913,7 @@ impl Core {
                 }
                 TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } => {
-                    commands.push(Command::Permission {
-                        request,
-                        cancel: false,
-                    });
+                    commands.push(Command::Permission(request));
                 }
                 TurnUpdate::Text(_)
                 | TurnUpdate::Usage(_)
@@ -949,8 +925,9 @@ impl Core {
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
         match update {
             TurnUpdate::Text(text) => {
-                if active.tool_call.is_none() {
-                    active.release_or_cut_reply(Some(text), commands);
+                if active.tool_call.is_none() && active.release_or_cut_reply(Some(text), commands) {
+                    let session = active.session.as_ref().unwrap().clone();
+                    self.cancel(session, now, commands);
                 }
             }
             TurnUpdate::Usage(used) => active.input_tokens = used,
@@ -1000,6 +977,7 @@ impl Core {
                     id,
                     session,
                     crate::messages::Message::BuiltInToolRan(name),
+                    now,
                     commands,
                 );
             }
@@ -1010,17 +988,15 @@ impl Core {
                     kind: crate::journal::SafetyKind::PermissionRefused,
                     tool: name,
                 }));
-                commands.push(Command::Permission {
-                    request,
-                    cancel: false,
-                });
+                commands.push(Command::Permission(request));
             }
             TurnUpdate::Permission { request, call } => {
                 let cancel = matches!(active.phase, Phase::Prompt) && active.tool_call.is_none();
                 if cancel {
                     active.tool_call = Some(call);
+                    self.cancel(session, now, commands);
                 }
-                commands.push(Command::Permission { request, cancel });
+                commands.push(Command::Permission(request));
             }
         }
     }
@@ -1036,17 +1012,24 @@ impl Core {
             outcome: crate::journal::Outcome::Disconnected,
         }));
     }
+    fn cancel(&mut self, session: String, now: Moment, commands: &mut Vec<Command>) {
+        self.cancels
+            .entry(session.clone())
+            .or_insert_with(|| now.saturating_add(30_000));
+        commands.push(Command::Cancel(session));
+    }
     fn retire(
         &mut self,
         id: WorkId,
         session: String,
         error: crate::messages::Message,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
         let ended = matches!(active.phase, Phase::Settling { .. });
-        if !ended {
-            commands.push(Command::Cancel(session));
+        if matches!(active.phase, Phase::Prompt) {
+            self.cancel(session, now, commands);
         }
         let outstanding = OutstandingWork {
             request: active.request.clone(),
@@ -1487,9 +1470,9 @@ impl Conductor {
                         commands.extend(core.handle(Event::StartFailed(work, error), clock.now()));
                     }
                 }
-                Command::Permission { request, cancel } => {
+                Command::Permission(request) => {
                     if let Some(runtime) = runtime.as_mut()
-                        && let Err(error) = runtime.permission(request, cancel).await
+                        && let Err(error) = runtime.permission(request).await
                     {
                         commands.extend(
                             core.handle(Event::Runtime(RuntimeEvent::Failed(error)), clock.now()),
@@ -1825,6 +1808,101 @@ mod tests {
             std::fs::remove_dir_all(root).unwrap();
             assert!(normal == [true, true] && ordered, "A and B must end normally around the planned replacement: {actual:?}");
         }).await.expect("planned build replacement cap: 5 seconds; two fake agents, 8 requests and 64 KiB per line each, 32 trace events");
+    }
+
+    #[test]
+    fn disconnect_during_session_load_does_not_fail_another_prompt_after_30_seconds() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-load-disconnect-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, loading, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::RetireRuntime, 0);
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::Text("Hi".into()),
+            }),
+            1,
+        );
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(agent_client_protocol_schema::v1::StopReason::EndTurn),
+                },
+            }),
+            2,
+        );
+        core.handle(Event::Deadline, 202);
+        core.records[0].location = records::Location::Unloaded(folder.join("saved-cwd"));
+        let id = core.by_request(&loading).unwrap();
+        core.work.get_mut(&id).and_then(|work| match work {
+            Work::AcceptedQueued(request) => Some(request),
+            _ => None,
+        }).unwrap().turn = crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"First"},{"role":"assistant","content":"Hi"},{"role":"user","content":"Next"}]})).unwrap()).ok().unwrap().turn;
+        core.replaced(Some("other".into()), None);
+        core.limit = 2;
+        let preparing = core.handle(Event::ResumeRuntime, 203);
+        assert!(preparing.iter().any(|command| matches!(command, Command::Prepare { load: Some((session, _)), .. } if session == "running")));
+        let turn = crate::dialect::CHAT
+            .parse(br#"{"model":"m","messages":[{"role":"user","content":"Independent"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        let (output, _ticket) = mpsc::unbounded_channel();
+        core.handle(
+            Event::Accepted(Box::new(Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 203),
+                output,
+            })),
+            203,
+        );
+        core.handle(Event::Disconnected(loading.clone()), 204);
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: loading,
+                result: Ok(("running".into(), catalog)),
+            }),
+            205,
+        );
+        let mut commands = core.handle(Event::Deadline, 30_205);
+        commands.extend(core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "other".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(agent_client_protocol_schema::v1::StopReason::EndTurn),
+                },
+            }),
+            30_206,
+        ));
+        commands.extend(core.handle(Event::Deadline, 30_406));
+        let ends: Vec<_> = commands
+            .into_iter()
+            .filter_map(|command| match command {
+                Command::Emit(_, TurnEvent::End(result)) => Some(
+                    result
+                        .map(|_| "success".into())
+                        .unwrap_or_else(|error| error.to_string()),
+                ),
+                _ => None,
+            })
+            .collect();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            ends,
+            ["success"],
+            "FR-041 a disconnected session/load has no running prompt to time out"
+        );
     }
 
     #[test]
