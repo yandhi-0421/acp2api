@@ -112,6 +112,8 @@ fn oldest(w: &mut World) {
 #[given(regex = r"^the log folder has a log file whose modification time is (.+) ago$")]
 async fn age_fixture(w: &mut World, age: String) {
     w.scenario.start().await;
+    // The shutdown advances the virtual clock, so the file time must come from the clock after it.
+    w.scenario.stop().await;
     let offset = match age.as_str() {
         "30 days plus 1 ms" => 1,
         "30 days" => 0,
