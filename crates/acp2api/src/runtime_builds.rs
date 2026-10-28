@@ -250,49 +250,49 @@ impl Builds {
             .max_by_key(|found| version(&found.listed.as_ref().unwrap().version));
         Ok(Selection::Start(best.map(|found| found.folder.clone())))
     }
+    pub(crate) fn copy(&self, source: PathBuf) -> Result<(), LaunchFailure> {
+        let copy = self.start.data.join(COPY);
+        let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
+        if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
+            let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
+            let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
+            let backup = self
+                .start
+                .data
+                .join(format!(".official-runtime-old-{suffix}"));
+            fs::create_dir(&staging).map_err(|error| error.to_string())?;
+            let result = (|| {
+                for name in [SERVER, HARNESS] {
+                    fs::copy(source.join(name), staging.join(name))
+                        .map_err(|error| error.to_string())?;
+                }
+                self.identify(&staging)?;
+                let previous = copy.exists();
+                if previous {
+                    fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
+                }
+                if let Err(error) = fs::rename(&staging, &copy) {
+                    if previous {
+                        fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
+                    }
+                    return Err(LaunchFailure::Runtime(error.to_string()));
+                }
+                if previous {
+                    let _ = fs::remove_dir_all(backup);
+                }
+                Ok(())
+            })();
+            if staging.exists() {
+                fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
+            }
+            result?;
+        }
+        Ok(())
+    }
     pub(crate) async fn launch(
         &self,
-        source: Option<PathBuf>,
         retained: Option<Vec<(String, PathBuf)>>,
     ) -> Result<(Runtime, crate::catalog::Catalog), LaunchFailure> {
-        if let Some(source) = source {
-            let copy = self.start.data.join(COPY);
-            let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
-            if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
-                let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
-                let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
-                let backup = self
-                    .start
-                    .data
-                    .join(format!(".official-runtime-old-{suffix}"));
-                fs::create_dir(&staging).map_err(|error| error.to_string())?;
-                let result = (|| {
-                    for name in [SERVER, HARNESS] {
-                        fs::copy(source.join(name), staging.join(name))
-                            .map_err(|error| error.to_string())?;
-                    }
-                    self.identify(&staging)?;
-                    let previous = copy.exists();
-                    if previous {
-                        fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
-                    }
-                    if let Err(error) = fs::rename(&staging, &copy) {
-                        if previous {
-                            fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
-                        }
-                        return Err(LaunchFailure::Runtime(error.to_string()));
-                    }
-                    if previous {
-                        let _ = fs::remove_dir_all(backup);
-                    }
-                    Ok(())
-                })();
-                if staging.exists() {
-                    fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
-                }
-                result?;
-            }
-        }
         let build = self
             .identify(&self.start.data.join(COPY))
             .map_err(|error| match error {
@@ -515,7 +515,8 @@ mod tests {
         }]));
         let launches = Arc::new(AtomicUsize::new(0));
         builds.start.launcher = Arc::new(RefusingLauncher(launches.clone()));
-        let _ = builds.launch(Some(root.join("source")), None).await;
+        builds.copy(root.join("source")).unwrap();
+        let _ = builds.launch(None).await;
         let backups: Vec<_> = fs::read_dir(&root)
             .unwrap()
             .flatten()
@@ -668,10 +669,7 @@ mod tests {
             tokio::sync::watch::channel(false).1,
             0,
         );
-        let failed = builds
-            .launch(Some(root.join("source")), None)
-            .await
-            .is_err();
+        let failed = builds.copy(root.join("source")).is_err();
         let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
         let staging = fs::read_dir(&root)
             .unwrap()
@@ -716,10 +714,7 @@ mod tests {
             agy_acp_server_sha256: hash.clone(),
             localharness_external_sha256: hash,
         }]));
-        let failed = builds
-            .launch(Some(root.join("source")), None)
-            .await
-            .is_err();
+        let failed = builds.copy(root.join("source")).is_err();
         let bytes = [SERVER, HARNESS].map(|name| fs::read(root.join(COPY).join(name)).unwrap());
         let staging = fs::read_dir(&root)
             .unwrap()
@@ -1018,7 +1013,8 @@ mod tests {
             else {
                 panic!("the listed build must be selectable")
             };
-            let _ = builds.launch(source, None).await;
+            builds.copy(source.expect("selected build source")).unwrap();
+            let _ = builds.launch(None).await;
             let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());
             fs::remove_dir_all(&root).unwrap();
             assert_eq!(

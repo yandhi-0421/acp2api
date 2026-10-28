@@ -303,8 +303,30 @@ impl Core {
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) {
         let change = self.replacement.take().unwrap();
+        if let Some(source) = change.source
+            && let Err(error) = builds.copy(source)
+        {
+            if matches!(self.runtime_state, RuntimeState::Retiring) {
+                if runtime.is_some() {
+                    self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
+                        .await;
+                } else {
+                    self.make_unavailable(
+                        &error.to_string(),
+                        runtime,
+                        read_open,
+                        clock,
+                        journal,
+                        builds,
+                    )
+                    .await;
+                }
+            }
+            let _ = change.reply.send(Err(error));
+            return;
+        }
         self.stop_runtime(runtime, read_open).await;
-        self.launch(runtime, read_open, clock, journal, builds, change.source)
+        self.launch(runtime, read_open, clock, journal, builds)
             .await;
         if matches!(self.runtime_state, RuntimeState::Stopping) {
             let _ = change
@@ -327,7 +349,6 @@ impl Core {
         clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
         builds: &crate::runtime_builds::Builds,
-        mut source: Option<std::path::PathBuf>,
     ) {
         *read_open = false;
         loop {
@@ -361,7 +382,7 @@ impl Core {
                 None
             };
             self.cleanup_before_start = true;
-            match builds.launch(source.take(), retained).await {
+            match builds.launch(retained).await {
                 Ok((started, catalog)) => {
                     self.replaced(Some(started.session_id().into()), Some(catalog));
                     *runtime = Some(started);
@@ -1278,7 +1299,6 @@ impl Conductor {
                         &clock,
                         &journal,
                         &actor_builds,
-                        None,
                     )
                     .await;
                     if matches!(core.runtime_state, RuntimeState::Stopping) {
@@ -2007,6 +2027,76 @@ mod tests {
             std::fs::remove_dir_all(folder).unwrap();
             assert_eq!(actual, (Some("acp2api: the runtime process failed, so acp2api ended the prompt turn.".into()), true), "a closed stdin is a runtime failure before stdout Closed arrives");
         }).await.expect("broken pipe cap: five seconds, one fake launch, three messages of at most 64 KiB");
+    }
+
+    #[tokio::test]
+    async fn a_failed_owner_copy_keeps_the_running_runtime_and_counts_no_failure() {
+        use crate::{BoxFuture, Launched, ListedBuild, ProcessLauncher, ProcessTree, ReleaseFacts};
+        use sha2::{Digest, Sha256};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use tokio::io::AsyncWriteExt;
+        struct Tree(Arc<AtomicBool>);
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async move {
+                    self.0.store(true, Ordering::SeqCst);
+                })
+            }
+        }
+        struct Launcher(std::sync::Mutex<Option<Launched>>, AtomicUsize);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                assert!(self.1.fetch_add(1, Ordering::SeqCst) < 4, "launch cap: 4");
+                self.0.lock().unwrap().take().ok_or_else(|| {
+                    crate::LaunchError::Io(std::io::Error::other("unexpected replacement start"))
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!("acp2api-owner-copy-{}", crate::random_hex::<12>().unwrap()));
+            let mut ports = crate::Ports::production();
+            let copy = folder.join(crate::runtime_builds::COPY);
+            std::fs::create_dir_all(&copy).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(copy.join(name), b"accepted").unwrap(); }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            ports.release = Arc::new(Facts(vec![ListedBuild { version:"1.4.0".into(), platform:Facts(Vec::new()).platform().into(), agy_acp_server_sha256:hash.clone(), localharness_external_sha256:hash }]));
+            let (stdin, _agent_input) = tokio::io::duplex(65536);
+            let (stdout, mut agent_output) = tokio::io::duplex(65536);
+            let replies = [serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}), serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"running","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}})];
+            for reply in replies { let line = format!("{reply}\n"); assert!(line.len() <= 65536); agent_output.write_all(line.as_bytes()).await.unwrap(); }
+            let stopped = Arc::new(AtomicBool::new(false));
+            ports.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(Launched { stdin:Box::pin(stdin), stdout:Box::pin(stdout), stderr:Box::pin(tokio::io::empty()), tree:Box::new(Tree(stopped.clone())) })), AtomicUsize::new(0)));
+            let temporary = crate::account::Temporary::fixture(&folder);
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root:folder.join("account"), temp:folder.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:folder.join("exe") }, folder.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
+            let (running, _) = Runtime::start(&builds.start, "1.4.0").await.unwrap();
+            let mut runtime = Some(running);
+            let mut read_open = true;
+            let source = folder.join("new-build");
+            std::fs::create_dir_all(source.join(crate::runtime_builds::HARNESS)).unwrap();
+            std::fs::write(source.join(crate::runtime_builds::SERVER), b"accepted").unwrap();
+            let copy_error = std::fs::copy(source.join(crate::runtime_builds::HARNESS), folder.join("probe")).unwrap_err().to_string();
+            let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.handle(Event::RetireRuntime, 0);
+            core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
+            core.handle(Event::Deadline, 201);
+            core.cleanup_before_start = true;
+            let (reply, result) = oneshot::channel();
+            core.replacement = Some(Replacement { reply, source:Some(source) });
+            let config = folder.join("config.toml");
+            let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
+            core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
+            let actual = (result.await.unwrap().map_err(|error| error.to_string()), core.failures.len(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.runtime_state, RuntimeState::Serving));
+            if let Some(runtime) = runtime { runtime.stop().await; }
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, (Err(copy_error), 0, false, true, true), "FR-043 copy errors must return to the owner while the existing runtime stays available");
+        }).await.expect("owner copy cap: five seconds, four launch attempts, two replies of at most 64 KiB");
     }
 
     #[tokio::test]
