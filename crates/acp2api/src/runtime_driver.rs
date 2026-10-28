@@ -199,7 +199,7 @@ impl Runtime {
             "session-{}",
             crate::random_hex::<16>().map_err(|error| error.to_string())?
         ));
-        std::fs::create_dir(&cwd).map_err(|e| e.to_string())?;
+        crate::account::private_folder(&cwd)?;
         let mut params = json!({
             "cwd": cwd,
             "mcpServers": [{

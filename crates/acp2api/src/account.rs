@@ -428,7 +428,7 @@ impl Temporary {
         record.save(&self.account)
     }
 }
-fn private_folder(path: &Path) -> Result<(), String> {
+pub(crate) fn private_folder(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

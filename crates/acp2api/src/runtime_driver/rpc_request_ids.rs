@@ -337,3 +337,32 @@ async fn runtime_start_preserves_unrecorded_temporary_entries() {
     .await
     .expect("startup cleanup test cap: 10 seconds");
 }
+
+#[tokio::test]
+async fn a_new_session_folder_keeps_account_ownership() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let root = Root::new();
+        let (mut runtime, mut agent) = start(&root).await;
+        runtime
+            .request_session("work-beta".into(), &[], None)
+            .await
+            .unwrap();
+        let request = agent.receive("session/new").await;
+        let cwd = PathBuf::from(request["params"]["cwd"].as_str().unwrap());
+        #[cfg(unix)]
+        let owned = {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&cwd).unwrap();
+            metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o022 == 0
+        };
+        #[cfg(windows)]
+        let owned = crate::os::validate_private(&cwd, false).is_ok();
+        runtime.stop().await;
+        assert!(
+            owned,
+            "each session cwd must meet the account ownership checks needed for cleanup"
+        );
+    })
+    .await
+    .expect("session folder ownership cap: 10 seconds; one bounded duplex agent");
+}

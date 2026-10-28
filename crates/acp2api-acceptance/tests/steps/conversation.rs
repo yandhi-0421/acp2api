@@ -4,7 +4,7 @@ use cucumber::{given, then, when};
 use serde_json::{Value, json};
 #[derive(Default)]
 pub struct ConversationState {
-    folder_markers: Vec<std::path::PathBuf>,
+    session_folders: Vec<std::path::PathBuf>,
     session_files: Vec<std::path::PathBuf>,
     system: Option<String>,
     initial: Vec<Value>,
@@ -381,7 +381,7 @@ fn persisted_session(w: &mut World, label: String) {
     assert_eq!(label, "S1");
     let session = w.conversation.session.as_ref().unwrap();
     let requests = system_check::requests(&w.scenario);
-    w.conversation.folder_markers = requests
+    w.conversation.session_folders = requests
         .iter()
         .filter(|v| v["method"] == "session/new")
         .map(|created| {
@@ -390,13 +390,7 @@ fn persisted_session(w: &mut World, label: String) {
                 folder.is_dir(),
                 "the actual ACP session folder exists before restart"
             );
-            let marker = folder.join("session-folder-marker");
-            std::fs::write(&marker, b"synthetic ACP session cwd marker").unwrap();
-            assert!(
-                marker.is_file(),
-                "the session cwd marker exists before restart"
-            );
-            marker
+            folder
         })
         .collect();
     let home = w.scenario.root.path.join("data/runtime-home");
@@ -462,7 +456,7 @@ fn restart_cleanup(w: &mut World) {
                 .map(|file| file.exists())
                 .collect::<Vec<_>>(),
             w.conversation
-                .folder_markers
+                .session_folders
                 .iter()
                 .map(|file| file.exists())
                 .collect::<Vec<_>>(),
@@ -470,7 +464,7 @@ fn restart_cleanup(w: &mut World) {
         ),
         (
             vec![false; 4],
-            vec![false; w.conversation.folder_markers.len()],
+            vec![false; w.conversation.session_folders.len()],
             [
                 b"synthetic sign-in marker".to_vec(),
                 b"synthetic sign-in marker".to_vec()
