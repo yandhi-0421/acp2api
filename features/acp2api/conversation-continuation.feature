@@ -143,3 +143,13 @@ Feature: The conversation in each prompt
     Given the official runtime kept a session file for the ACP session "S1"
     When the owner restarts acp2api
     Then the session files and ACP session folders are gone and the sign-in files are unchanged
+
+  @FR-021 @FR-047 @issue-113 @wip
+  Scenario: A match loads its ACP session after the earlier runtime process stops
+    Given an ACP session holds the client tool call "lookup" and its result "sunny"
+    And the official runtime kept a session file for that ACP session
+    When the runtime process exits, and acp2api did not cause the exit
+    And the API client sends the next match of that ACP session
+    Then the official runtime gets "session/load" for that ACP session in a new runtime process
+    And the official runtime gets only the prompt "How are you?" in that ACP session
+    And the API client gets the reply "Fine." after the replay of the completed tool call
