@@ -9,7 +9,7 @@ use crate::{
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use agent_client_protocol_schema::v1::StopReason;
-pub(crate) use retry::WAIT_MILLIS;
+pub(crate) use retry::WAIT_SECONDS;
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
@@ -1965,8 +1965,9 @@ impl Core {
         {
             self.retry_waits.push(wait);
         }
-        if matches!(&result, Err(failure) if !matches!(failure.message, crate::messages::Message::MaxTurnRequests))
-        {
+        if result.as_ref().is_err_and(|failure| {
+            !matches!(failure.message, crate::messages::Message::MaxTurnRequests)
+        }) {
             active.held = None;
         }
         active.release_or_cut_reply(None, commands);
@@ -3139,8 +3140,10 @@ mod tests {
 
     #[test]
     fn retry_wait_keeps_the_client_tool_set_when_tool_calls_are_disabled() {
-        let folder =
-            std::env::temp_dir().join(format!("acp2api-retry-tools-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-retry-tools-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, _, _) = prompting_with_waiter(&journal);
         core.work.clear();

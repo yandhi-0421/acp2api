@@ -7,15 +7,16 @@ use crate::{
 };
 
 pub(crate) const WAIT_MILLIS: Moment = 30_000;
+pub(crate) const WAIT_SECONDS: u64 = WAIT_MILLIS / 1000;
 
 pub(super) struct Wait {
-    pub hashes: RecordHashes,
-    pub tools: ToolSetHash,
-    pub model_name: String,
-    pub effort: EffortAsk,
-    pub catalog: Option<Catalog>,
-    pub deadline: Moment,
-    pub error: Message,
+    hashes: RecordHashes,
+    tools: ToolSetHash,
+    model_name: String,
+    effort: EffortAsk,
+    catalog: Option<Catalog>,
+    pub(super) deadline: Moment,
+    error: Message,
 }
 impl Wait {
     pub(super) fn after(
@@ -46,20 +47,19 @@ pub(super) fn refusal(waits: &[Wait], turn: &TurnRequest, now: Moment) -> Option
         .iter()
         .rev()
         .find(|wait| {
-            let same_model = wait.catalog.as_ref().map_or_else(
-                || wait.model_name == turn.model,
-                |catalog| {
-                    catalog
-                        .resolve(&wait.model_name, &wait.effort)
-                        .ok()
-                        .zip(catalog.resolve(&turn.model, &turn.effort).ok())
-                        .is_some_and(|(earlier, later)| earlier.id() == later.id())
-                },
-            );
             wait.deadline > now
-                && same_model
                 && wait.tools == tools
                 && wait.hashes.is_continued_by(&hashes)
+                && wait.catalog.as_ref().map_or_else(
+                    || wait.model_name == turn.model,
+                    |catalog| {
+                        catalog
+                            .resolve(&wait.model_name, &wait.effort)
+                            .ok()
+                            .zip(catalog.resolve(&turn.model, &turn.effort).ok())
+                            .is_some_and(|(earlier, later)| earlier.id() == later.id())
+                    },
+                )
         })
         .map(|wait| Message::RetryWait {
             seconds: (wait.deadline - now).div_ceil(1000),

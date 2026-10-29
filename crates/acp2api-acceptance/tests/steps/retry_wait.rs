@@ -170,6 +170,7 @@ fn refusal_header(w: &mut World, header: String) {
 #[then("acp2api refuses the request with HTTP 503 and no prompt")]
 fn refused_without_prompt(w: &mut World) {
     check::refused_without_prompt(w);
+    let expected = (30_000 - w.retry.sent_at).div_ceil(1000).to_string();
     assert_eq!(
         w.scenario
             .answer
@@ -178,7 +179,7 @@ fn refused_without_prompt(w: &mut World) {
             .headers
             .get("retry-after")
             .map(String::as_str),
-        Some("1")
+        Some(expected.as_str())
     );
 }
 
