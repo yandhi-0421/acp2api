@@ -1,5 +1,5 @@
 use crate::{
-    client::{Answer, ApiCall, ApiClient, Owner},
+    client::{Answer, ApiClient, Owner},
     hub::Hub,
     scenario::Scenario,
     setup::TestRoot,
@@ -126,10 +126,7 @@ impl Panel {
             key.into(),
             self.hub.as_ref().unwrap().clone(),
         )
-        .send(ApiCall::one_user_message(
-            "GET /v1/models",
-            "panel key check",
-        ))
+        .model_names()
         .finish(&mut self.time())
         .await
     }
