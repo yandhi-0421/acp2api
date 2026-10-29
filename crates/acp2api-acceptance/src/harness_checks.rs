@@ -869,3 +869,76 @@ async fn stream_event_is_read_before_settle_allows_the_next_virtual_instant() {
     .await
     .expect("one readiness request and one stream request; 10 s run cap; existing hub and 8 MiB answer caps");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_runtime_sends_initialize_before_its_answer_deadline_can_pass() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
+        let mut s = world();
+        let armed = Arc::new(AtomicBool::new(false));
+        let restarting = armed.clone();
+        let mut deadline_registered = false;
+        let hub::RpcPause {
+            link,
+            publication,
+            release,
+            peer,
+        } = hub::pause_rpc_after(&s.hub, 512, move |request, _| {
+            if restarting.load(Ordering::SeqCst)
+                && request["op"] == "sleep"
+                && request["at"] == 300_000
+            {
+                deadline_registered = true;
+            }
+            deadline_registered
+                && request["op"] == "hold"
+                && request["kind"] == "TurnEvent"
+                && request["add"] == false
+        });
+        let clock = ClockConnections {
+            work: HarnessClock::new(HubLink::new(&s.hub)),
+            timers: HarnessClock::new(link),
+        };
+        let (host, _client) = start_with_clock_link(&mut s, Arc::new(clock)).await;
+        armed.store(true, Ordering::SeqCst);
+        s.hub.command("normal", json!({"op":"Exit","code":17}));
+        publication.await.unwrap();
+        // The timer constructor released its own hold; the answer has not had a poll yet.
+        let mut time = s.time.clone();
+        let mut advancing = tokio::spawn(async move { time.advance_to(300_000).await });
+        let blocked = tokio::time::timeout(real_limit(Duration::from_millis(100)), &mut advancing)
+            .await
+            .is_err();
+        let before_first_poll = s.hub.now();
+        release.send(()).unwrap();
+        if blocked {
+            advancing.await.unwrap();
+        }
+        let initialization_times: Vec<_> = s
+            .hub
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                let call: serde_json::Value =
+                    serde_json::from_str(entry.event["line"].as_str()?).ok()?;
+                (call["method"] == "initialize").then_some(entry.at)
+            })
+            .collect();
+        let exit = stop_with_clock_link(&mut s, host).await;
+        peer.join().unwrap();
+        s.finish(true).await;
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert!(blocked, "the first answer poll is still work in progress");
+        assert_eq!(
+            before_first_poll, 0,
+            "a registered deadline cannot pass before initialize starts"
+        );
+        assert_eq!(initialization_times, [0, 0]);
+    })
+    .await
+    .expect("one readiness request and one restart; 10 s run cap; existing fake and hub log caps");
+}
