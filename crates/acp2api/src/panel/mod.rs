@@ -394,6 +394,58 @@ async fn build(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn assert_state_file_panel_diagnostic(folder: &std::path::Path, expected: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let clock = crate::Ports::production().clock;
+            let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let mut builds = crate::runtime_builds::Builds::fixture(folder, clock.clone());
+            let (stopped, stop) = tokio::sync::watch::channel(false);
+            builds.start.stopped = stop;
+            let settings = crate::store::Settings { port: 8329, concurrency_limit: 1, local_api_key: String::new(), management_password_hash: String::new(), agy_acp_server_path: None };
+            let (conductor, task) = Conductor::start(builds, clock.clone(), journal, settings, folder.join("config.toml"), 1);
+            conductor.builds(crate::runtime_builds::Action::Initial, crate::Hold::empty()).await.unwrap();
+            let response = conductor.model_names(crate::Hold::empty()).await.err().unwrap().message.to_string();
+            let panel = Panel::new(conductor, clock.clone(), 8329);
+            panel.sessions.lock().unwrap().insert("panel-test-session".into(), Session { since: clock.now(), password_hash: String::new() });
+            let mut headers = HeaderMap::new();
+            headers.insert(header::COOKIE, "acp2api_session=panel-test-session".parse().unwrap());
+            let Html(html) = index(State(panel), headers).await;
+            stopped.send(true).unwrap();
+            task.await.unwrap();
+            assert_eq!((response.contains(expected), html.contains(expected), html.contains(&*folder.to_string_lossy())), (true, true, false), "#161: the first API refusal and the panel show the same path-free state-file diagnostic");
+        }).await.expect("state-file panel test cap: five seconds, no runtime requests");
+    }
+
+    #[tokio::test]
+    async fn a_damaged_state_file_shows_the_same_diagnostic_in_the_panel_and_first_response() {
+        let folder = std::env::temp_dir().join(format!(
+            "PRIVATE-OWNER-panel-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(crate::store::STATE_FILE), b"{damaged").unwrap();
+        assert_state_file_panel_diagnostic(&folder, "damaged state file: InvalidData").await;
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_state_file_shows_the_same_diagnostic_in_the_panel_and_first_response() {
+        let folder = std::env::temp_dir().join(format!(
+            "PRIVATE-OWNER-panel-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let path = folder.join(crate::store::STATE_FILE);
+        std::fs::create_dir_all(&path).unwrap();
+        let category = std::fs::read(&path).unwrap_err().kind();
+        assert_state_file_panel_diagnostic(
+            &folder,
+            &format!("state file cannot be read: {category:?}"),
+        )
+        .await;
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
     #[tokio::test]
     async fn a_failed_save_and_an_unusable_value_keep_the_settings_page() {
         let folder = std::env::temp_dir().join(format!("acp2api-save-{}", std::process::id()));

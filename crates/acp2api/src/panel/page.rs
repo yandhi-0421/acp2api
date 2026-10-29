@@ -8,6 +8,11 @@ function update() {
 }
 update();"#;
 pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment) -> String {
+    let evidence = view
+        .lockout_evidence
+        .as_ref()
+        .map(|text| format!("<p>{}</p>", escape(text)))
+        .unwrap_or_default();
     let sign_in = if let Some(wait) = &view.sign_in_wait {
         let seconds = wait.deadline.saturating_sub(now).div_ceil(1000);
         let address = wait
@@ -29,7 +34,7 @@ pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment)
         r#"<form method="post" action="/manage/sign-in"><button type="submit">Sign in</button></form>"#.into()
     };
     format!(
-        r#"<section id="{entry_id}"><h2>{}</h2><p>Requests in the queue <span>{}</span></p>{sign_in}</section>"#,
+        r#"<section id="{entry_id}"><h2>{}</h2>{evidence}<p>Requests in the queue <span>{}</span></p>{sign_in}</section>"#,
         view.state,
         view.queued,
         entry_id = crate::conductor::sign_in::ENTRY_ID

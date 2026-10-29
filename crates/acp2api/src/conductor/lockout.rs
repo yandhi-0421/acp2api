@@ -22,11 +22,19 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
             }
             state.lockout
         }
-        Err(error) => Some(Lockout {
-            since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
-            signal: "unreadable or damaged state file".into(),
-            original_error_text: crate::journal::redact_error(&error.to_string()),
-        }),
+        Err(error) => {
+            let case = if error.kind() == std::io::ErrorKind::InvalidData {
+                "damaged state file"
+            } else {
+                "state file cannot be read"
+            };
+            let diagnostic = format!("{case}: {:?}", error.kind());
+            Some(Lockout {
+                since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
+                signal: diagnostic.clone(),
+                original_error_text: diagnostic,
+            })
+        }
     }
 }
 

@@ -35,6 +35,7 @@ pub(crate) struct View {
     pub(crate) state: &'static str,
     pub(crate) queued: usize,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
+    pub(crate) lockout_evidence: Option<String>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -42,6 +43,7 @@ impl Default for View {
             state: "Running",
             queued: 0,
             sign_in_wait: None,
+            lockout_evidence: None,
         }
     }
 }
@@ -1796,6 +1798,10 @@ impl Core {
     fn publish_view(&self) {
         self.view.send_replace(Arc::new(View {
             sign_in_wait: self.sign_in_wait.clone(),
+            lockout_evidence: self
+                .lockout
+                .as_ref()
+                .map(|evidence| evidence.original_error_text.clone()),
             state: self.state(),
             queued: self.work.values().filter(|work| work.is_queued()).count(),
         }));
@@ -3378,6 +3384,54 @@ mod tests {
             ),
             "acp2api: upstream error 403 PERMISSION_DENIED: Verify your account",
         ).await;
+    }
+
+    fn assert_state_file_diagnostic(folder: &std::path::Path, expected: &str) {
+        let path = folder.join(crate::store::STATE_FILE);
+        let clock = crate::Ports::production().clock;
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+        let evidence = lockout::load(&path, clock.as_ref(), &journal).unwrap();
+        let core = Core {
+            lockout: Some(evidence.clone()),
+            ..Core::fixture(1)
+        };
+        let response = core.refusal(0).unwrap().to_string();
+        let actual = (
+            evidence.signal,
+            evidence.original_error_text,
+            response.contains(expected),
+            response.contains(&*path.to_string_lossy()),
+        );
+        assert_eq!(
+            actual,
+            (expected.into(), expected.into(), true, false),
+            "#161: state-file evidence and the first refusal give the case and OS category without an owner path"
+        );
+    }
+
+    #[test]
+    fn a_damaged_state_file_lockout_names_the_case_and_category_without_a_path() {
+        let folder = std::env::temp_dir().join(format!(
+            "PRIVATE-OWNER-state-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(crate::store::STATE_FILE), b"{damaged").unwrap();
+        assert_state_file_diagnostic(&folder, "damaged state file: InvalidData");
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_state_file_lockout_names_the_case_and_category_without_a_path() {
+        let folder = std::env::temp_dir().join(format!(
+            "PRIVATE-OWNER-state-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let path = folder.join(crate::store::STATE_FILE);
+        std::fs::create_dir_all(&path).unwrap();
+        let category = std::fs::read(&path).unwrap_err().kind();
+        assert_state_file_diagnostic(&folder, &format!("state file cannot be read: {category:?}"));
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     fn prepare_quota_queries(core: &mut Core, commands: &[Command], now: Moment) -> Vec<Command> {
