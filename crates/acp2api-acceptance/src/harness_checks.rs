@@ -44,6 +44,124 @@ fn runtime_line_without_a_reader_returns_a_hub_failure() {
     hub.close();
 }
 #[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_channel_reset_requires_a_product_stop() {
+    use crate::hub::send;
+    use std::{
+        io::{BufRead, BufReader, Read},
+        net::TcpStream,
+        os::fd::AsRawFd,
+    };
+
+    let hub = Hub::new("command-reset-test".into());
+    let link = HubLink::new(&hub);
+    for (pid, stopped) in [(1, true), (2, false)] {
+        let barrier = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        fake::FakeRuntime::new(hub.clone()).script_call(
+            "initialize",
+            rpc_script::RpcReply::FromRequest(|_, call| {
+                let address = call["params"]["barrier"].as_str().unwrap().parse().unwrap();
+                let mut barrier =
+                    TcpStream::connect_timeout(&address, real_limit(Duration::from_secs(3)))
+                        .unwrap();
+                barrier
+                    .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
+                    .unwrap();
+                let mut closed = [0];
+                barrier.read_exact(&mut closed).unwrap();
+                assert_eq!(&closed, b"R");
+                json!({})
+            }),
+        );
+        let stream = TcpStream::connect(&hub.address).unwrap();
+        stream
+            .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(real_limit(Duration::from_secs(3))))
+            .unwrap();
+        let mut reader = BufReader::new(stream);
+        send(
+            reader.get_mut(),
+            &json!({"op":"Hello","token":hub.token,"role":"server","label":"normal","pid":pid}),
+        )
+        .unwrap();
+        let mut hello = String::new();
+        reader.by_ref().take(4097).read_line(&mut hello).unwrap();
+        assert!(hello.len() <= 4096, "reset peer frame cap: 4 KiB");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&hello).unwrap(),
+            json!({"ok":true})
+        );
+        let process = link.call(json!({"op":"process","pid":pid}))["process"].clone();
+        link.call(json!({"op":"io","direction":"stdin","lines":1,"process":process}));
+        if stopped {
+            link.call(json!({"op":"process_stop","process":process}));
+        }
+        send(
+            reader.get_mut(),
+            &json!({"op":"Got","line":json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"barrier":barrier.local_addr().unwrap().to_string()}}).to_string()}),
+        )
+        .unwrap();
+        let (mut released, _) =
+            tokio::time::timeout(real_limit(Duration::from_secs(3)), barrier.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        // The callback has read Got; release its reply only after the reset.
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    reader.get_ref().as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_LINGER,
+                    (&linger as *const libc::linger).cast(),
+                    std::mem::size_of_val(&linger) as libc::socklen_t,
+                )
+            },
+            0
+        );
+        drop(reader);
+        tokio::time::timeout(
+            real_limit(Duration::from_secs(3)),
+            tokio::io::AsyncWriteExt::write_all(&mut released, b"R"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        wait_for(
+            &hub,
+            Instant::now() + real_limit(Duration::from_secs(3)),
+            || {
+                hub.entries()
+                    .iter()
+                    .filter(|entry| entry.event["kind"] == "process_end")
+                    .count()
+                    == pid as usize
+            },
+        )
+        .await;
+        let failure = hub.failure();
+        let counts = hub.counts();
+        assert_eq!(counts.ordered, pid, "the queued Got must reach its reply");
+        if stopped {
+            assert_eq!(
+                failure, None,
+                "a stopped fake cannot receive its queued reply"
+            );
+            assert!(counts.balanced(), "the stopped channel closes pending IO");
+        } else {
+            assert!(failure.unwrap().starts_with("fake command channel:"));
+            assert!(!counts.balanced(), "a live fake must consume its output");
+        }
+    }
+    hub.close();
+}
+#[cfg(unix)]
 fn send_signal(pid: i32, signal: i32) {
     assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
 }
