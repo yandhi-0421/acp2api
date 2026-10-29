@@ -727,3 +727,145 @@ async fn rearmed_timers_wait_for_other_work_before_advancing_again() {
     assert!(hub.counts().balanced());
     hub.close();
 }
+
+// Separate timer construction from event holds so each test pauses its own boundary.
+struct ClockConnections {
+    work: HarnessClock,
+    timers: HarnessClock,
+}
+impl Clock for ClockConnections {
+    fn now(&self) -> acp2api::Moment {
+        self.work.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.work.wall()
+    }
+    fn sleep_until(&self, at: acp2api::Moment) -> acp2api::BoxFuture<'static, acp2api::Hold> {
+        self.timers.sleep_until(at)
+    }
+    fn hold(&self, kind: HoldKind) -> acp2api::Hold {
+        self.work.hold(kind)
+    }
+}
+
+async fn start_with_clock_link(
+    s: &mut Scenario,
+    clock: std::sync::Arc<dyn Clock>,
+) -> (
+    std::thread::JoinHandle<std::process::ExitCode>,
+    client::ApiClient,
+) {
+    let run = s.root.seed(&s.hub, &Setup::normal());
+    let mut ports = run.ports();
+    ports.clock = clock;
+    let args = [
+        "acp2api-test-host".into(),
+        "--data-dir".into(),
+        s.root.path.join("data").into_os_string(),
+    ];
+    // A child host would discard the proxied connection when it reads the run file.
+    let host = std::thread::spawn(move || acp2api::run(ports, args, run.environment));
+    wait_for(
+        &s.hub,
+        Instant::now() + real_limit(Duration::from_secs(3)),
+        || s.hub.entries().iter().any(|e| e.event["kind"] == "launch"),
+    )
+    .await;
+    let client = client::ApiClient::new(
+        format!("127.0.0.1:{}", s.root.port),
+        s.root.key.clone(),
+        s.hub.clone(),
+    );
+    assert_eq!(client.model_names().finish(&mut s.time).await.status, 200);
+    s.time.settle().await;
+    (host, client)
+}
+
+async fn stop_with_clock_link(
+    s: &mut Scenario,
+    host: std::thread::JoinHandle<std::process::ExitCode>,
+) -> std::process::ExitCode {
+    s.hub.stop();
+    let mut stopped = tokio::task::spawn_blocking(move || host.join().unwrap());
+    loop {
+        s.time.settle().await;
+        if stopped.is_finished() {
+            return stopped.await.unwrap();
+        }
+        if let Some(next) = s.time.next_deadline() {
+            s.time.advance_to(next).await;
+        } else {
+            let hub = s.hub.clone();
+            tokio::select! {
+                exit = &mut stopped => return exit.unwrap(),
+                _ = tokio::task::spawn_blocking(move || {
+                    hub.wait_change(Instant::now() + real_limit(Duration::from_secs(3)))
+                }) => {}
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stream_event_is_read_before_settle_allows_the_next_virtual_instant() {
+    tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
+        let mut s = world();
+        let hub::RpcPause {
+            link,
+            publication,
+            release,
+            peer,
+        } = hub::pause_rpc_after(&s.hub, 512, move |request, reply| {
+            request["op"] == "hold"
+                && request["kind"] == "TurnEvent"
+                && request["add"] == false
+                && reply["now"] == 15_000
+        });
+        let clock = ClockConnections {
+            work: HarnessClock::new(link),
+            timers: HarnessClock::new(HubLink::new(&s.hub)),
+        };
+        let (host, client) = start_with_clock_link(&mut s, std::sync::Arc::new(clock)).await;
+        let mut plan = TurnPlan::new();
+        plan.steps.push(TurnStep::HoldUntil("stream-window".into()));
+        plan.steps.push(TurnStep::Chunk("released".into()));
+        s.fake().next_prompt(plan);
+        let mut request = ApiCall::one_user_message("POST /v1/messages", "stream event arrival");
+        request.body["stream"] = json!(true);
+        let call = client.send(request);
+        s.time.settle().await;
+        let mut time = s.time.clone();
+        let advancing = tokio::spawn(async move { time.advance_to(15_000).await });
+        publication.await.unwrap();
+        // Pause a TurnEvent release before its owner can do any more work.
+        // Hyper's queue must have written the bytes before it drops their owner.
+        let wire = call.wire();
+        let deadline = Instant::now() + real_limit(Duration::from_millis(100));
+        while !wire.lock().unwrap().blocks.iter().any(|b| b.at == 15_000 && b.event == "ping")
+            && Instant::now() < deadline
+        {
+            let hub = s.hub.clone();
+            tokio::task::spawn_blocking(move || hub.wait_change(deadline))
+                .await
+                .unwrap();
+        }
+        let before_release = wire.lock().unwrap().blocks.clone();
+        release.send(()).unwrap();
+        advancing.await.unwrap();
+        s.time.advance_to(30_000).await;
+        s.fake().open_gate("stream-window");
+        let answer = call.finish(&mut s.time).await;
+        let exit = stop_with_clock_link(&mut s, host).await;
+        peer.join().unwrap();
+        s.finish(true).await;
+        // Finish both peers before assertions so the red run keeps no process or socket.
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert_eq!(answer.status, 200);
+        assert!(
+            before_release.iter().any(|b| b.at == 15_000 && b.event == "ping"),
+            "the client must read the 15000 keep-alive before its hold ends: {before_release:?}"
+        );
+    })
+    .await
+    .expect("one readiness request and one stream request; 10 s run cap; existing hub and 8 MiB answer caps");
+}
