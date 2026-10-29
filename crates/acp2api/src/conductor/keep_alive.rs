@@ -22,7 +22,7 @@ impl Core {
             .collect();
         for id in idle {
             let session = self.work[&id].execution().unwrap().session.clone().unwrap();
-            self.retire(id, session, Message::NoUpdate, now, commands);
+            self.fail_request(id, session, Message::NoUpdate, now, commands);
         }
     }
 
