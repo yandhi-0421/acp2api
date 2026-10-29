@@ -1706,6 +1706,19 @@ impl Core {
                     continue;
                 }
                 Work::QuotaQueued { query, session } => {
+                    if let QuotaPurpose::Reset { wait, .. } = &query.purpose
+                        && !self.can_query_quota_reset(wait)
+                    {
+                        let error = self.quota_wait.as_ref().unwrap().message(now);
+                        self.complete_quota(
+                            query,
+                            session,
+                            Err(Failure::at(error, now)),
+                            now,
+                            &mut commands,
+                        );
+                        continue;
+                    }
                     let phase =
                         if let Some(session) = session.or_else(|| self.startup_session.take()) {
                             commands.push(Command::Usage {
@@ -2346,6 +2359,9 @@ impl Core {
             .as_ref()
             .is_some_and(|current| current.timer == wait.timer)
     }
+    fn can_query_quota_reset(&self, wait: &quota::Wait) -> bool {
+        self.quota_wait.is_none() || self.is_current_quota_wait(wait)
+    }
     /// A request that leaves a quota wait without its usage check hands the reset query on.
     fn keep_quota_wait_reset_query(&mut self, active: &Active) {
         if let Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } =
@@ -2427,7 +2443,7 @@ impl Core {
                             can_continue: false,
                             result: Ok(()),
                         };
-                        if self.quota_wait.is_none() || self.is_current_quota_wait(&wait) {
+                        if self.can_query_quota_reset(&wait) {
                             self.enqueue_quota(
                                 QuotaPurpose::Reset {
                                     wait,
@@ -3438,6 +3454,92 @@ mod tests {
             core.model_entries(61_402).is_ok(),
             "the query does not restart an expired quota wait"
         );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn a_queued_reset_query_runs_only_without_another_current_quota_wait() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-queued-replaced-quota-wait-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for (release, queries, responses, state) in
+            [(60_300, 0, 1, "Quota wait"), (120_001, 1, 0, "Running")]
+        {
+            let (mut core, second, _tickets) = prompting_with_waiter(&journal);
+            core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+            core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work: second,
+                    result: Ok(("other".into(), catalog)),
+                }),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+            core.handle(Event::Limit(1), 1, std::time::UNIX_EPOCH);
+            core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session: "running".into(),
+                    update: TurnUpdate::Failed(crate::messages::Message::UpstreamHttp(
+                        quota_error_without_reset_time(),
+                    )),
+                }),
+                60_000,
+                std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_000),
+            );
+            let queued = core.handle(
+                Event::Deadline,
+                60_200,
+                std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_200),
+            );
+            assert!(
+                !queued.iter().any(|command| matches!(
+                    command,
+                    Command::Usage { .. } | Command::Emit(_, TurnEvent::End(_))
+                )),
+                "the reset query and its response wait for a place"
+            );
+            core.handle(
+                Event::Runtime(RuntimeEvent::UpstreamError {
+                    session: "other".into(),
+                    error: crate::messages::HttpError {
+                        code: 429,
+                        status: "RESOURCE_EXHAUSTED".into(),
+                        message: "resets 1970-01-01T00:02:00Z".into(),
+                    },
+                }),
+                60_201,
+                std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_201),
+            );
+            let dispatched = core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session: "other".into(),
+                    update: TurnUpdate::PromptEnded {
+                        stop_reason: Some(StopReason::EndTurn),
+                    },
+                }),
+                release,
+                std::time::UNIX_EPOCH + std::time::Duration::from_millis(release),
+            );
+            assert_eq!(
+                dispatched
+                    .iter()
+                    .filter(|command| matches!(command,
+                        Command::Usage { session, .. } if session == "running"
+                    ))
+                    .count(),
+                queries,
+                "FR-036/FR-052 skip the queued reset query only while another quota wait is current"
+            );
+            assert_eq!(dispatched.iter().filter(|command| matches!(command,
+                Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::QuotaWait { until, retry_after: 60 })))
+                    if until == "1970-01-01T00:02:00Z"
+            )).count(), responses, "a skipped query ends its response with the current quota wait");
+            assert_eq!(core.view.borrow().state, state);
+        }
         std::fs::remove_dir_all(folder).unwrap();
     }
 
