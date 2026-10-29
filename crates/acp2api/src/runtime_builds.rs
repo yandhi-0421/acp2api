@@ -253,9 +253,6 @@ impl Builds {
         if initial {
             let path = self.start.data.join(crate::store::STATE_FILE);
             let state = crate::store::StateFile::read(&path)?;
-            if !path.exists() {
-                state.save(&path)?;
-            }
             *self.checked.lock().unwrap() = state
                 .checked_builds
                 .into_iter()

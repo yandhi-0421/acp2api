@@ -372,6 +372,26 @@ impl Journal {
             eprintln!("acp2api: cannot write state change: {error}");
         }
     }
+    pub(crate) fn state_file_failure(
+        &self,
+        operation: &str,
+        error: &str,
+        clock: &dyn crate::Clock,
+    ) {
+        let result = timestamp(clock.wall()).and_then(|time| {
+            let record = serde_json::json!({
+                "time": time, "event": "state_file_write_failed", "operation": operation,
+                "error": redact_error(error),
+            });
+            self.emit_to_file_then_stdout_under_writer_lock(
+                &record,
+                serde_json::to_string(&record)?,
+            )
+        });
+        if let Err(error) = result {
+            eprintln!("acp2api: cannot write state-file failure: {error}");
+        }
+    }
     pub(crate) fn upstream(
         &self,
         session: &str,

@@ -2696,7 +2696,14 @@ impl Conductor {
         let limit = settings.concurrency_limit;
         let state_path = builds.start.data.join(crate::store::STATE_FILE);
         let lockout = match crate::store::StateFile::read(&state_path) {
-            Ok(state) => state.lockout,
+            Ok(state) => {
+                if !state_path.exists()
+                    && let Err(error) = state.save(&state_path)
+                {
+                    journal.state_file_failure("create", &error, clock.as_ref());
+                }
+                state.lockout
+            }
             Err(error) => Some(crate::store::Lockout {
                 since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
                 signal: "unreadable or damaged state file".into(),
@@ -6495,6 +6502,58 @@ mod tests {
             3,
         )
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_start_without_state_survives_an_unwritable_data_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!(
+                "acp2api-state-create-failure-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            std::fs::create_dir_all(&folder).unwrap();
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let journal =
+                crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            let configuration = folder.join("config.toml");
+            let settings = crate::store::read(&configuration, 3).unwrap().settings;
+            let state_path = folder.join(crate::store::STATE_FILE);
+            assert!(!state_path.exists());
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let (conductor, task) =
+                Conductor::start(builds, clock.clone(), journal, settings, configuration, 3);
+            let result = conductor
+                .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+                .await;
+            let state = conductor.view().state;
+            let file_exists = state_path.exists();
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+            drop(conductor);
+            task.await.unwrap();
+            let logged = std::fs::read_dir(folder.join("logs"))
+                .unwrap()
+                .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+                .collect::<String>();
+            std::fs::remove_dir_all(folder).unwrap();
+            assert!(
+                result.is_ok(),
+                "the start keeps serving after a state-file write failure: {result:?}"
+            );
+            assert_eq!(
+                state, "Runtime unavailable",
+                "the missing executable, rather than lockout, stops runtime work"
+            );
+            assert!(!file_exists);
+            assert!(
+                logged.contains("state_file_write_failed"),
+                "the journal reports the failed state-file creation"
+            );
+        })
+        .await
+        .expect("state-file startup test cap: five seconds, no runtime launches");
+    }
+
     #[test]
     fn models_are_empty_after_a_runtime_closes() {
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
