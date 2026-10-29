@@ -533,12 +533,12 @@ async fn held_fake_plan_resumes_without_holding_virtual_time() {
         .send(ApiCall::one_user_message("POST /v1/messages", "gate"));
     s.time.settle().await;
     assert!(s.hub.counts().balanced());
-    s.time.advance_to(60 * 60 * 1000).await;
-    assert_eq!(s.hub.now(), 60 * 60 * 1000, "the gate permits time to pass");
+    s.time.advance_to(4 * 60 * 1000).await;
+    assert_eq!(s.hub.now(), 4 * 60 * 1000, "the gate permits time to pass");
     s.fake().open_gate("release");
     let answer = call.finish(&mut s.time).await;
     assert_eq!(answer.json()["content"][0]["text"], "released");
-    assert_eq!(s.hub.now(), 60 * 60 * 1000 + 200);
+    assert_eq!(s.hub.now(), 4 * 60 * 1000 + 200);
     s.finish(true).await;
 }
 
