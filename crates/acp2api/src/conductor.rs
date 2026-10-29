@@ -2014,11 +2014,7 @@ impl Core {
                         .and_then(|model| quota::usage_reset(&text, model, wall))
                 {
                     *wait = quota::Wait::new(until, now, wall, wait.timer);
-                    if self
-                        .quota_wait
-                        .as_ref()
-                        .is_some_and(|current| current.timer == wait.timer)
-                    {
+                    if self.is_current_quota_wait(wait) {
                         self.quota_wait = Some(wait.clone());
                     }
                 }
@@ -2345,14 +2341,16 @@ impl Core {
         }
         self.end_request(id, Failure::at(error, now), now, commands);
     }
+    fn is_current_quota_wait(&self, wait: &quota::Wait) -> bool {
+        self.quota_wait
+            .as_ref()
+            .is_some_and(|current| current.timer == wait.timer)
+    }
     /// A request that leaves a quota wait without its usage check hands the reset query on.
     fn keep_quota_wait_reset_query(&mut self, active: &Active) {
         if let Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } =
             &active.phase
-            && self
-                .quota_wait
-                .as_ref()
-                .is_some_and(|current| current.timer == wait.timer)
+            && self.is_current_quota_wait(wait)
         {
             self.enqueue_reset_query(wait.clone(), Some(active.model.clone()));
         }
@@ -2421,7 +2419,7 @@ impl Core {
             }
             work => {
                 let mut active = work.into_active().unwrap();
-                match std::mem::replace(&mut active.phase, Phase::Completing) {
+                let result = match std::mem::replace(&mut active.phase, Phase::Completing) {
                     Phase::QuotaSettling { wait, .. } if result.is_ok() => {
                         let session = active.session.clone();
                         active.phase = Phase::Settling {
@@ -2429,18 +2427,27 @@ impl Core {
                             can_continue: false,
                             result: Ok(()),
                         };
-                        self.enqueue_quota(
-                            QuotaPurpose::Reset {
-                                wait,
-                                model: Some(active.model.clone()),
-                                response: Some(active),
-                            },
-                            session,
-                        );
-                        return;
+                        if self.is_current_quota_wait(&wait) {
+                            self.enqueue_quota(
+                                QuotaPurpose::Reset {
+                                    wait,
+                                    model: Some(active.model.clone()),
+                                    response: Some(active),
+                                },
+                                session,
+                            );
+                            return;
+                        }
+                        Err(Failure::at(
+                            self.refusal(now).unwrap_or_else(|| wait.message(now)),
+                            now,
+                        ))
                     }
-                    phase => active.phase = phase,
-                }
+                    phase => {
+                        active.phase = phase;
+                        result
+                    }
+                };
                 if result.is_ok() && matches!(active.stop, crate::conversation::Stop::Refusal) {
                     let model = active.model.clone();
                     let session = active.session.clone();
