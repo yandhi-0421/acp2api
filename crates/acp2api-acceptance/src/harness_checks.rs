@@ -17,6 +17,68 @@ fn world() -> Scenario {
     s.plan(Setup::normal());
     s
 }
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stdin_shutdown_waits_for_the_fake_to_report_buffered_lines() {
+    use std::task::Poll;
+    use tokio::io::AsyncWriteExt;
+
+    let s = world();
+    let run = s.root.seed(&s.hub, &Setup::normal());
+    let launcher = GuardedLauncher::new(&run.fake_program, run.hub);
+    let mut child = launcher
+        .launch(LaunchSpec {
+            program: s.root.path.join("data/official-runtime/agy_acp_server.par"),
+            args: vec![],
+            env_set: vec![],
+            cwd: s.root.path.clone(),
+            own_temp: None,
+        })
+        .unwrap();
+    let deadline = Instant::now() + real_limit(Duration::from_secs(3));
+    wait_for(&s.hub, deadline, || {
+        s.hub.entries().iter().any(|e| e.event["kind"] == "hello")
+    })
+    .await;
+    let pid = child.tree.pid() as i32;
+    unsafe {
+        assert_eq!(libc::kill(pid, libc::SIGSTOP), 0);
+    }
+    wait_for(&s.hub, deadline, || unsafe {
+        let mut status = 0;
+        let result = libc::waitpid(pid, &mut status, libc::WUNTRACED | libc::WNOHANG);
+        assert!(result >= 0);
+        result == pid && libc::WIFSTOPPED(status)
+    })
+    .await;
+    // One complete cancel fits in the pipe while the fake's reader cannot run.
+    child
+        .stdin
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\",\"params\":{\"sessionId\":\"finished\"}}\n")
+        .await
+        .unwrap();
+    let mut shutdown = Box::pin(child.stdin.shutdown());
+    let first = futures_util::poll!(shutdown.as_mut());
+    unsafe {
+        assert_eq!(libc::kill(pid, libc::SIGCONT), 0);
+    }
+    assert!(
+        matches!(first, Poll::Pending),
+        "stdin shutdown completed before the fake reported the buffered line"
+    );
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), shutdown)
+        .await
+        .unwrap()
+        .unwrap();
+    let counts = s.hub.counts();
+    assert_eq!((counts.stdin_written, counts.stdin_got), (1, 1));
+    drop(child.stdin);
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), child.tree.exited())
+        .await
+        .unwrap();
+    s.hub.close();
+    s.root.cleanup();
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settle_drains_real_subprocess_bursts() {
     let mut s = world();
