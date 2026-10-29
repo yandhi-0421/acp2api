@@ -889,11 +889,22 @@ impl Core {
             }
             Event::RuntimeUnavailable(message) => {
                 self.runtime_state = RuntimeState::Unavailable(message.clone());
+                let error = crate::messages::Message::RuntimeUnavailable(message);
                 self.refuse_queued(
                     crate::journal::Outcome::Refused("runtime_unavailable"),
-                    crate::messages::Message::RuntimeUnavailable(message),
+                    error.clone(),
                     &mut commands,
                 );
+                let queries: Vec<_> = self
+                    .work
+                    .iter()
+                    .filter_map(|(id, work)| {
+                        matches!(work, Work::QuotaQueued { .. }).then_some(*id)
+                    })
+                    .collect();
+                for id in queries {
+                    self.finish(id, Err(error.clone()), &mut commands);
+                }
             }
             Event::RetireRuntime => {
                 if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
@@ -2426,6 +2437,57 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_unavailable_ends_each_kind_of_queued_quota_query() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-queued-quota-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let mut observed = Vec::new();
+        for kind in ["reset", "refusal", "refresh"] {
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            let active = core.work.remove(&0).unwrap().into_active().unwrap();
+            let (reply, mut result) = oneshot::channel();
+            let purpose = match kind {
+                "reset" => QuotaPurpose::Reset {
+                    wait: quota::Wait::new(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(3600),
+                        0,
+                        std::time::UNIX_EPOCH,
+                        quota::TimerId(1),
+                    ),
+                    model: Some(active.model.clone()),
+                    response: Some(active),
+                },
+                "refusal" => QuotaPurpose::Refusal {
+                    model: active.model.clone(),
+                    response: Some(active),
+                },
+                _ => QuotaPurpose::Refresh(reply),
+            };
+            core.enqueue_quota(purpose, None);
+            let commands = core.handle(
+                Event::RuntimeUnavailable("runtime missing".into()),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+            let answers = commands.iter().filter(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(text)))) if text == "runtime missing")).count();
+            observed.push((
+                answers,
+                core.work
+                    .values()
+                    .any(|work| matches!(work, Work::QuotaQueued { .. })),
+                kind != "refresh" || matches!(result.try_recv(), Ok(Err(_))),
+            ));
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            observed,
+            [(2, false, true), (2, false, true), (1, false, true)],
+            "queued Reset/Refusal replies get M-14 and the queued owner action gets an error"
+        );
+    }
     #[test]
     fn model_lists_use_the_quota_row_until_the_deadline_without_waiting_for_its_timer() {
         let folder = std::env::temp_dir().join(format!(
