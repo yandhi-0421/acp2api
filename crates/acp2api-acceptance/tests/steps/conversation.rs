@@ -196,6 +196,10 @@ fn one_rebuild(w: &mut World) {
 }
 #[given("the owner restarted acp2api")]
 async fn restart(w: &mut World) {
+    restart_at(w, w.scenario.hub.now()).await;
+}
+pub async fn restart_at(w: &mut World, at: u64) {
+    w.scenario.time.advance_to(at).await;
     w.scenario.restart().await;
 }
 #[given(expr = "the first request had the header {string}")]

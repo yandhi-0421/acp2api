@@ -32,7 +32,7 @@ struct OfferedModel {
 }
 impl OfferedModel {
     fn name_with_level(&self, level: ThinkingLevel) -> String {
-        format!("{}-{}", self.value, level.as_str())
+        model_id(&self.value, level)
     }
 }
 pub(crate) struct SelectedModel {
@@ -43,10 +43,13 @@ pub(crate) struct SelectedModel {
 impl SelectedModel {
     pub(crate) fn id(&self) -> String {
         match self.level {
-            Some(level) => format!("{}-{}", self.model, level.as_str()),
+            Some(level) => model_id(&self.model, level),
             None => self.model.clone(),
         }
     }
+}
+fn model_id(value: &str, level: ThinkingLevel) -> String {
+    format!("{value}-{}", level.as_str())
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

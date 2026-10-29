@@ -139,15 +139,12 @@ async fn tools(w: &mut World, first: String, second: String, seconds: u64) {
 #[given(expr = "acp2api refused \"R\" at the time {int} s")]
 async fn refused(w: &mut World, seconds: u64) {
     check::send_at(w, w.retry.call(), seconds * 1000).await;
-    check::refusal(w.scenario.answer.as_ref().unwrap(), 503);
-    let (before, _) = w.scenario.hub.active_request();
-    assert_eq!(w.scenario.fake().record().prompts().len(), before);
+    check::refused_without_prompt(w);
 }
 
 #[given(expr = "the owner restarted acp2api at the time {int} s")]
 async fn restart(w: &mut World, seconds: u64) {
-    w.scenario.time.advance_to(seconds * 1000).await;
-    w.scenario.restart().await;
+    crate::conversation::restart_at(w, seconds * 1000).await;
 }
 
 #[then(regex = r"^acp2api refuses the request with HTTP (502|503)$")]
@@ -172,7 +169,7 @@ fn refusal_header(w: &mut World, header: String) {
 
 #[then("acp2api refuses the request with HTTP 503 and no prompt")]
 fn refused_without_prompt(w: &mut World) {
-    check::refusal(w.scenario.answer.as_ref().unwrap(), 503);
+    check::refused_without_prompt(w);
     assert_eq!(
         w.scenario
             .answer
@@ -183,8 +180,6 @@ fn refused_without_prompt(w: &mut World) {
             .map(String::as_str),
         Some("1")
     );
-    let (before, _) = w.scenario.hub.active_request();
-    assert_eq!(w.scenario.fake().record().prompts().len(), before);
 }
 
 #[then(expr = "the official runtime gets a prompt for {string}")]
@@ -194,7 +189,11 @@ fn prompted(w: &mut World, name: String) {
     let prompts = w.scenario.fake().record().prompts();
     let current = &prompts[before..];
     assert_eq!(current.len(), 1, "FR-029 one prompt after the retry wait");
-    assert_eq!(current[0].text, "Hello", "request conversation reaches ACP");
+    assert_eq!(
+        current[0].text,
+        w.retry.body["messages"][0]["content"].as_str().unwrap(),
+        "request conversation reaches ACP"
+    );
     assert_eq!(
         current[0].at, w.retry.sent_at,
         "prompt starts at the requested boundary"

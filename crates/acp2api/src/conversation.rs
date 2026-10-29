@@ -277,6 +277,11 @@ pub(crate) struct RecordHashes {
     pub system: ItemHash,
     pub messages: Vec<ItemHash>,
 }
+impl RecordHashes {
+    pub(crate) fn is_continued_by(&self, later: &Self) -> bool {
+        self.system == later.system && later.messages.starts_with(&self.messages)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ToolSetHash([u8; 32]);
 struct ItemHasher(sha2::Sha256);

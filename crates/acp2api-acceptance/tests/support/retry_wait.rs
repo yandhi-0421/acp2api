@@ -67,7 +67,17 @@ pub async fn seed(w: &mut World, plan: TurnPlan, status: u16, message: &str) {
         "one failed prompt is the positive control"
     );
     assert_eq!(prompts[0].at, 0, "seed prompt at virtual time zero");
-    assert_eq!(prompts[0].text, "Hello", "seed conversation reaches ACP");
+    assert_eq!(
+        prompts[0].text,
+        w.retry.body["messages"][0]["content"].as_str().unwrap(),
+        "seed conversation reaches ACP"
+    );
+}
+
+pub fn refused_without_prompt(w: &World) {
+    refusal(w.scenario.answer.as_ref().unwrap(), 503);
+    let (before, _) = w.scenario.hub.active_request();
+    assert_eq!(w.scenario.fake().record().prompts().len(), before);
 }
 
 pub fn refusal(answer: &Answer, status: u16) {
