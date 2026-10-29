@@ -486,13 +486,14 @@ pub(crate) struct Usage {
 pub(crate) enum Stop {
     EndTurn,
     MaxTokens,
+    Refusal,
     Sequence(String),
 }
 impl Stop {
     pub(crate) fn sequence(&self) -> Option<&str> {
         match self {
             Self::Sequence(sequence) => Some(sequence),
-            Self::EndTurn | Self::MaxTokens => None,
+            Self::EndTurn | Self::MaxTokens | Self::Refusal => None,
         }
     }
 }

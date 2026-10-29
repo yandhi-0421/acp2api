@@ -65,7 +65,7 @@ pub fn refusal(s: &Scenario, endpoint: &str, model: &str, names: &[&str]) {
         "model_not_found",
         Some("model"),
     );
-    let records = crate::journal_check::records(s);
+    let records = crate::journal_check::request_records(s);
     assert_eq!(records.len(), 1);
     assert_eq!(
         records[0]["request_id"],

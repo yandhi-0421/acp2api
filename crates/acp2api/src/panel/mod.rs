@@ -38,6 +38,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/key", post(new_key))
         .route("/manage/password", post(password))
         .route("/manage/concurrency", post(concurrency))
+        .route("/manage/refresh-quota", post(refresh_quota))
         .route("/manage/notice", post(dismiss_notice))
         .route("/manage/search", post(search))
         .route("/manage/retry", post(retry))
@@ -93,6 +94,7 @@ impl Panel {
             Some(notice),
             &self.conductor.notices(),
             self.conductor.builds_summary(),
+            &self.conductor.quota_result(),
         );
         (status, Html(page)).into_response()
     }
@@ -157,6 +159,7 @@ async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
             None,
             &panel.conductor.notices(),
             panel.conductor.builds_summary(),
+            &panel.conductor.quota_result(),
         )
     } else {
         page::login(None)
@@ -212,6 +215,17 @@ async fn new_key(State(panel): State<Panel>) -> Response {
     match panel.act(OwnerAction::NewLocalApiKey).await {
         Ok(()) => Redirect::to("/").into_response(),
         Err(response) => response,
+    }
+}
+async fn refresh_quota(
+    State(panel): State<Panel>,
+    Extension(lease): Extension<crate::front::RequestHold>,
+) -> Response {
+    let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
+    drop(lease.release());
+    match panel.conductor.owner(OwnerAction::RefreshQuota, hold).await {
+        Ok(()) => panel.page(StatusCode::OK, "Quota refreshed."),
+        Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
     }
 }
 async fn password(State(panel): State<Panel>, Form(form): Form<Password>) -> Response {

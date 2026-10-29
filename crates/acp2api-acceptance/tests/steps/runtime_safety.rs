@@ -173,12 +173,15 @@ fn normal(w: &mut World) {
 }
 #[then("the official runtime gets a prompt for the request")]
 fn prompted(w: &mut World) {
+    let (before, request) = w.scenario.hub.active_request();
     let prompts = w.scenario.fake().record().prompts();
-    assert_eq!(prompts.len(), 2, "both conversations reach the runtime");
-    assert_eq!(prompts[1].text, "a different conversation after the event");
-    safety::reply(
-        w.safety.next.as_ref().unwrap(),
-        "Next conversation completes",
+    let current = &prompts[before..];
+    let messages = request["messages"].as_array().unwrap();
+    let text = messages.last().unwrap()["content"].as_str().unwrap();
+    assert_eq!(current.len(), 1, "one ACP prompt for the active request");
+    assert_eq!(
+        current[0].text, text,
+        "ACP gets the text of the active request"
     );
 }
 #[when("two requests of two conversations make two new ACP sessions")]

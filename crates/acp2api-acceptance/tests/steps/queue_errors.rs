@@ -9,18 +9,23 @@ async fn full_queue(w: &mut World) {
 }
 
 async fn refusal(w: &mut World, status: u16, header: &str) -> Answer {
-    let live = w.endpoint.take_live();
-    assert_eq!(
-        live.status(),
-        Some(status),
-        "FR-033/FR-050 a full queue refuses at acceptance"
-    );
-    let answer = live.finish(&mut w.scenario.time).await;
+    let answer = if let Some(answer) = w.scenario.answer.take() {
+        answer
+    } else {
+        let live = w.endpoint.take_live();
+        assert_eq!(
+            live.status(),
+            Some(status),
+            "FR-033/FR-050 refusal status at acceptance"
+        );
+        live.finish(&mut w.scenario.time).await
+    };
+    assert_eq!(answer.status, status, "FR-033 refusal status");
     let (name, value) = header.split_once(": ").unwrap();
     assert_eq!(
         answer.headers.get(name).map(String::as_str),
         Some(value),
-        "FR-033/FR-050 full-queue retry header"
+        "FR-033 refusal header"
     );
     answer
 }

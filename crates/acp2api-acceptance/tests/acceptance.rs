@@ -18,8 +18,16 @@ mod places_and_queue;
 mod places_support;
 #[path = "support/prompt_turn.rs"]
 mod prompt_turn;
+#[path = "support/quota_queries.rs"]
+mod query_support;
 #[path = "steps/queue_errors.rs"]
 mod queue_errors;
+#[path = "steps/quota_queries.rs"]
+mod quota_queries;
+#[path = "support/quota_wait.rs"]
+mod quota_support;
+#[path = "steps/quota_wait.rs"]
+mod quota_wait;
 #[path = "steps/response_ends.rs"]
 mod response_ends;
 #[path = "steps/runtime_builds.rs"]
@@ -57,6 +65,8 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    quota: quota_support::QuotaState,
+    queries: query_support::QueryState,
     process: runtime_support::ProcessState,
     reload: runtime_continuation::ReloadState,
     account: acp2api_acceptance::account_check::AccountState,

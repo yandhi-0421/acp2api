@@ -146,6 +146,10 @@ fn error_type(w: &mut World, expected: String) {
         assert!(content_check::blocks(&w.scenario).is_empty());
     } else {
         expected_refusal(w);
+        assert!(
+            w.scenario.answer.as_ref().unwrap().headers["content-type"]
+                .starts_with("application/json")
+        );
     }
     assert_eq!(
         w.scenario.answer.as_ref().unwrap().json()["error"]["type"],

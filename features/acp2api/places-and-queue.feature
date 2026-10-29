@@ -87,7 +87,7 @@ Feature: Places and queue
     Then the request gets HTTP 529 with M-17 and "retry-after: 10"
     And it has no stream event and starts no ACP call
 
-  @FR-049 @issue-66 @wip
+  @FR-049 @issue-66
   Scenario: Each quota query holds a place
     Given the concurrency limit is 1
     And a "/usage" for a refresh by the owner runs
@@ -164,7 +164,7 @@ Feature: Places and queue
       | the stderr error line 401                         | sign-in required    | 400    |
       | the third failure of the runtime process in 10 minutes | runtime unavailable | 400 |
 
-  @FR-037 @issue-61 @wip
+  @FR-037 @issue-61
   Scenario: The prompt turns that run continue to their end at the start of a quota wait
     Given the concurrency limit is 2
     And the prompt turns of the requests "A" and "B" run

@@ -63,6 +63,7 @@ pub(crate) struct ClientSocket {
     pub consumed: u64,
 }
 pub(crate) struct State {
+    pub active_request: Option<(usize, Value)>,
     pub client_sockets: HashMap<u64, ClientSocket>,
     pub next_socket: u64,
     pub now: u64,
@@ -148,6 +149,7 @@ impl Hub {
                 entries: Vec::new(),
                 bytes: 0,
                 failure: None,
+                active_request: None,
                 sleepers: HashMap::new(),
                 wake_pending: Vec::new(),
                 external: BTreeMap::new(),
@@ -410,6 +412,15 @@ impl Hub {
     }
     pub fn entries(&self) -> Vec<Entry> {
         self.shared.0.lock().unwrap().entries.clone()
+    }
+    pub fn active_request(&self) -> (usize, Value) {
+        self.shared
+            .0
+            .lock()
+            .unwrap()
+            .active_request
+            .clone()
+            .expect("an API request precedes its prompt assertion")
     }
     pub fn now(&self) -> u64 {
         self.shared.0.lock().unwrap().now

@@ -24,7 +24,7 @@ Feature: Start of acp2api
     Then the terminal shows 3 request lines
     And each request line holds the request ID, the API, and the model name of its request
 
-  @FR-002 @issue-61 @wip
+  @FR-002 @issue-61
   Scenario: The terminal shows one line for each change of state
     Given acp2api is in the normal state
     When a quota signal starts a quota wait

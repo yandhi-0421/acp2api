@@ -38,6 +38,12 @@ pub fn records(s: &Scenario) -> Vec<Value> {
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect()
 }
+pub fn request_records(s: &Scenario) -> Vec<Value> {
+    records(s)
+        .into_iter()
+        .filter(|record| record.get("api").is_some())
+        .collect()
+}
 pub fn terminal(s: &Scenario) -> Vec<Value> {
     s.hub
         .entries()
@@ -101,7 +107,7 @@ pub async fn send(
     serde_json::json!({"session":session,"request_id":response.headers.get("x-request-id").cloned(),"api": match path {"POST /v1/messages"=>"messages", "POST /v1/responses"=>"responses", _=>"chat.completions"}, "model":model, "field":field, "usage":usage, "delay":delay})
 }
 pub fn verify(s: &Scenario, expected: &[Value]) {
-    let records = records(s);
+    let records = request_records(s);
     let terminal = terminal(s);
     assert_eq!(
         records.len(),

@@ -38,7 +38,7 @@ Feature: Logs
       | the request adds one user message to the last conversation    | continue |
       | the request has an edited earlier message                     | rebuild  |
 
-  @FR-056 @issue-61 @wip
+  @FR-056 @issue-61
   Scenario: A change of state gives one log line
     When a quota signal starts a quota wait
     Then the log has one line for the change to the state "quota wait"

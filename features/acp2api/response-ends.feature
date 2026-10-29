@@ -49,7 +49,7 @@ Feature: Ends of a response
       | POST /v1/chat/completions | "finish_reason" set to "length"                             |
       | POST /v1/responses        | "status" set to "incomplete" with the reason "max_output_tokens" |
 
-  @FR-030 @issue-66 @wip
+  @FR-030 @issue-66
   Scenario Outline: The stop reason refusal with quota gives the end of each API
     Given the next prompt turn ends with the stop reason "refusal", and no error channel has a quota text
     And "/usage" shows quota for the model of the request
