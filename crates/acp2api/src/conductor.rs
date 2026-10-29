@@ -100,6 +100,13 @@ struct TurnWork {
     request: crate::journal::Request,
     hold: Hold,
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
+    connection: mpsc::UnboundedSender<()>,
+}
+struct PendingRequest {
+    turn: TurnRequest,
+    request: crate::journal::Request,
+    admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
+    connection: mpsc::UnboundedSender<()>,
 }
 pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
@@ -124,6 +131,8 @@ struct Accepted {
 type WorkId = u64;
 type WorkTable = BTreeMap<WorkId, Work>;
 enum Work {
+    CheckQueued(PendingRequest),
+    Checking(PendingRequest),
     AcceptedQueued(Accepted),
     AcceptedWorking(Active),
     Retiring(OutstandingWork),
@@ -171,11 +180,16 @@ struct OutstandingWork {
     model: String,
     request: crate::journal::Request,
     session: Option<String>,
-    completion: Option<crate::journal::SessionUse>,
+    completion: PendingCompletion,
+}
+enum PendingCompletion {
+    Disconnected(Option<crate::journal::SessionUse>),
+    Written,
 }
 impl Work {
     fn key(&self) -> &str {
         match self {
+            Self::CheckQueued(request) | Self::Checking(request) => &request.request.id,
             Self::AcceptedQueued(request) => &request.request.id,
             Self::AcceptedWorking(active) => &active.request.id,
             Self::Retiring(outstanding) => &outstanding.request.id,
@@ -186,6 +200,8 @@ impl Work {
         match self {
             Self::AcceptedWorking(active) => Some(active),
             Self::AcceptedQueued(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. } => None,
@@ -195,6 +211,8 @@ impl Work {
         match self {
             Self::AcceptedWorking(active) => Some(active),
             Self::AcceptedQueued(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. } => None,
@@ -204,6 +222,8 @@ impl Work {
         match self {
             Self::AcceptedQueued(request) => Some(request),
             Self::AcceptedWorking(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. } => None,
@@ -213,6 +233,8 @@ impl Work {
         match self {
             Self::AcceptedWorking(active) => Some(active),
             Self::AcceptedQueued(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. } => None,
@@ -221,7 +243,10 @@ impl Work {
     fn occupies_place(&self) -> bool {
         matches!(
             self,
-            Self::AcceptedWorking(_) | Self::Retiring(_) | Self::QuotaWorking { .. }
+            Self::Checking(_)
+                | Self::AcceptedWorking(_)
+                | Self::Retiring(_)
+                | Self::QuotaWorking { .. }
         )
     }
     fn deadline(&self) -> Option<Moment> {
@@ -242,6 +267,17 @@ impl Work {
 struct Session {
     tools: Vec<crate::conversation::ClientTool>,
     system: Option<String>,
+}
+impl Session {
+    fn for_turn(turn: &TurnRequest) -> Self {
+        Self {
+            system: crate::conversation::system_prompt_addition(&turn.conversation.system),
+            tools: match turn.tool_choice {
+                crate::conversation::ToolChoice::Off => Vec::new(),
+                crate::conversation::ToolChoice::Auto => turn.tools.clone(),
+            },
+        }
+    }
 }
 enum Phase {
     Preparing(PromptRequest),
@@ -376,6 +412,12 @@ struct Core {
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
+    CheckPending(Box<PendingRequest>),
+    Checked {
+        id: WorkId,
+        accepted: Option<Box<Accepted>>,
+        session: String,
+    },
     SignInRequired,
     RefreshQuota(oneshot::Sender<Result<(), String>>),
     RetireRuntime,
@@ -392,6 +434,14 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
+    AdmitChecked {
+        id: WorkId,
+        session: String,
+    },
+    RefusePending {
+        request: Box<PendingRequest>,
+        error: crate::messages::Message,
+    },
     State(&'static str, Option<std::io::ErrorKind>),
     Usage {
         work: String,
@@ -668,7 +718,10 @@ impl Core {
     fn by_session(&self, session: &str) -> Option<WorkId> {
         self.work.iter().find_map(|(id, work)| {
             let current = match work {
-                Work::AcceptedQueued(_) | Work::QuotaQueued { .. } => None,
+                Work::CheckQueued(_)
+                | Work::Checking(_)
+                | Work::AcceptedQueued(_)
+                | Work::QuotaQueued { .. } => None,
                 Work::AcceptedWorking(active) => active.session.as_deref(),
                 Work::Retiring(outstanding) => outstanding.session.as_deref(),
                 Work::QuotaWorking { phase, .. } => phase.session(),
@@ -707,6 +760,16 @@ impl Core {
     }
     fn sign_in_message(&self) -> crate::messages::Message {
         crate::messages::Message::SignInRequired(self.sign_in_entry.clone())
+    }
+    fn require_sign_in(&mut self, commands: &mut Vec<Command>) {
+        if !self.sign_in_required {
+            self.sign_in_required = true;
+            self.refuse_queued(
+                crate::journal::Outcome::Refused("sign_in_required"),
+                self.sign_in_message(),
+                commands,
+            );
+        }
     }
     fn start_quota(
         &mut self,
@@ -807,7 +870,12 @@ impl Core {
     fn queue_full(&self) -> bool {
         self.work
             .values()
-            .filter(|work| matches!(work, Work::AcceptedQueued(_) | Work::QuotaQueued { .. }))
+            .filter(|work| {
+                matches!(
+                    work,
+                    Work::CheckQueued(_) | Work::AcceptedQueued(_) | Work::QuotaQueued { .. }
+                )
+            })
             .count()
             == QUEUE_CAPACITY
     }
@@ -829,22 +897,57 @@ impl Core {
         journal: &crate::journal::Journal,
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
-        let (output, ticket) = mpsc::unbounded_channel();
+        let TurnWork {
+            turn,
+            request,
+            hold,
+            admission,
+            connection,
+        } = work;
+        let pending = PendingRequest {
+            turn,
+            request,
+            admission,
+            connection,
+        };
+        if self.sign_in_required && !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+            if !self.queue_full() {
+                return Some((Event::CheckPending(Box::new(pending)), hold));
+            }
+            self.accept(
+                pending,
+                Err(crate::messages::Message::QueueFull.into()),
+                journal,
+                clock,
+            );
+            return None;
+        }
         let mut checked = match self.refusal(clock.now()) {
             Some(message) => Err(message.into()),
-            None => self.check_model(&work.turn),
+            None => self.check_model(&pending.turn),
         };
         if self.queue_full() {
             checked = checked.and(Err(crate::messages::Message::QueueFull.into()));
         }
+        self.accept(pending, checked, journal, clock)
+            .map(|accepted| (Event::Accepted(Box::new(accepted)), hold))
+    }
+    fn accept(
+        &self,
+        pending: PendingRequest,
+        checked: Result<crate::catalog::SelectedModel, crate::messages::Refusal>,
+        journal: &crate::journal::Journal,
+        clock: &dyn Clock,
+    ) -> Option<Accepted> {
+        let (output, ticket) = mpsc::unbounded_channel();
         let (model, admitted) = match checked {
             Ok(model) => {
                 if self.catalog.is_some()
                     && !model.level_from_name
-                    && let EffortAsk::Unknown(value) = &work.turn.effort
+                    && let EffortAsk::Unknown(value) = &pending.turn.effort
                 {
                     journal.diagnostic(
-                        &work.request,
+                        &pending.request,
                         crate::journal::Diagnostic::UnknownEffort {
                             value: value.clone(),
                         },
@@ -855,17 +958,17 @@ impl Core {
                     events: ticket,
                     hold: clock.hold(HoldKind::TurnEvent),
                 };
-                (Some(model), work.admission.send(Ok(ticket)))
+                (Some(model), pending.admission.send(Ok(ticket)))
             }
             Err(mut error) => {
                 error.hold = clock.hold(HoldKind::TurnEvent);
-                (None, work.admission.send(Err(error)))
+                (None, pending.admission.send(Err(error)))
             }
         };
         if admitted.is_err() {
             journal.complete(
                 crate::journal::Completion {
-                    request: work.request,
+                    request: pending.request,
                     session: None,
                     session_use: None,
                     outcome: crate::journal::Outcome::Disconnected,
@@ -875,20 +978,39 @@ impl Core {
             return None;
         }
         let model = model?;
-        let accepted = Accepted {
-            turn: work.turn,
+        Some(Accepted {
+            turn: pending.turn,
             model,
-            request: work.request,
+            request: pending.request,
             output,
-        };
-        Some((Event::Accepted(Box::new(accepted)), work.hold))
+        })
     }
-    fn handle(&mut self, event: Event, now: Moment, wall: std::time::SystemTime) -> Vec<Command> {
+    fn handle(
+        &mut self,
+        mut event: Event,
+        now: Moment,
+        wall: std::time::SystemTime,
+    ) -> Vec<Command> {
         if matches!(event, Event::Deadline) && self.cancels.values().any(|at| *at <= now) {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
         let previous = self.state();
         let mut commands = Vec::new();
+        match &mut event {
+            Event::Runtime(
+                RuntimeEvent::Prepared {
+                    result: Err(error), ..
+                }
+                | RuntimeEvent::Turn {
+                    update: TurnUpdate::Failed(error),
+                    ..
+                },
+            ) if error.requires_sign_in() => {
+                self.require_sign_in(&mut commands);
+                *error = self.refusal(now).unwrap();
+            }
+            _ => {}
+        }
         if self
             .quota_wait
             .as_ref()
@@ -921,15 +1043,27 @@ impl Core {
         }
         let quota_work = work_id.filter(|id| matches!(self.work[id], Work::QuotaWorking { .. }));
         match (quota_work, event) {
-            (None, Event::SignInRequired) => {
-                if !self.sign_in_required {
-                    self.sign_in_required = true;
-                    self.refuse_queued(
-                        crate::journal::Outcome::Refused("sign_in_required"),
-                        self.sign_in_message(),
-                        &mut commands,
-                    );
+            (None, Event::CheckPending(request)) => {
+                self.work
+                    .insert(self.next_work, Work::CheckQueued(*request));
+                self.next_work += 1;
+            }
+            (
+                None,
+                Event::Checked {
+                    id,
+                    accepted,
+                    session,
+                },
+            ) => {
+                if let Some(request) = accepted {
+                    self.start_request(id, *request, Some(session), now, &mut commands);
+                } else {
+                    commands.push(Command::Forget(session));
                 }
+            }
+            (None, Event::SignInRequired) => {
+                self.require_sign_in(&mut commands);
             }
             (Some(id), event) => self.quota_event(id, event, now, wall, &mut commands),
             (None, Event::RefreshQuota(reply)) => {
@@ -937,6 +1071,8 @@ impl Core {
                     Some(reason.message.clone())
                 } else if matches!(self.runtime_state, RuntimeState::Stopping) {
                     Some(crate::messages::Message::Stopped.to_string())
+                } else if self.sign_in_required {
+                    Some(self.sign_in_message().to_string())
                 } else if self
                     .last_refresh
                     .is_some_and(|at| now.saturating_sub(at) < 60_000)
@@ -1015,7 +1151,31 @@ impl Core {
             }
             (None, Event::Disconnected(request_id)) => {
                 let id = self.by_request(&request_id).unwrap();
-                if matches!(self.work[&id], Work::AcceptedQueued(_)) {
+                if matches!(self.work[&id], Work::CheckQueued(_) | Work::Checking(_)) {
+                    let work = self.work.remove(&id).unwrap();
+                    let checking = matches!(work, Work::Checking(_));
+                    let (Work::CheckQueued(request) | Work::Checking(request)) = work else {
+                        unreachable!()
+                    };
+                    if checking {
+                        self.work.insert(
+                            id,
+                            Work::Retiring(OutstandingWork {
+                                model: request.turn.model,
+                                request: request.request,
+                                session: None,
+                                completion: PendingCompletion::Disconnected(None),
+                            }),
+                        );
+                    } else {
+                        commands.push(Command::Complete(crate::journal::Completion {
+                            request: request.request,
+                            session: None,
+                            session_use: None,
+                            outcome: crate::journal::Outcome::Disconnected,
+                        }));
+                    }
+                } else if matches!(self.work[&id], Work::AcceptedQueued(_)) {
                     let request = self.work.remove(&id).unwrap().into_queued().unwrap();
                     Self::drop_queued(request, &mut commands);
                 } else if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
@@ -1048,7 +1208,7 @@ impl Core {
                             model: active.model,
                             request: active.request,
                             session: active.session,
-                            completion: Some(active.kind),
+                            completion: PendingCompletion::Disconnected(Some(active.kind)),
                         }),
                     );
                     if ended {
@@ -1070,7 +1230,11 @@ impl Core {
                     match result {
                         Ok((session, catalog)) => {
                             self.catalog = Some(catalog);
+                            self.sign_in_required = false;
                             match self.work.get_mut(&id).unwrap() {
+                                Work::Checking(_) => {
+                                    commands.push(Command::AdmitChecked { id, session });
+                                }
                                 Work::Retiring(outstanding) => {
                                     outstanding.session = Some(session);
                                     self.finish(id, Ok(()), &mut commands);
@@ -1148,7 +1312,11 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::UpstreamError { session, error })) => {
                 let id = work_id;
-                let message = crate::messages::Message::UpstreamHttp(error);
+                let mut message = crate::messages::Message::UpstreamHttp(error);
+                if message.requires_sign_in() {
+                    self.require_sign_in(&mut commands);
+                    message = self.refusal(now).unwrap();
+                }
                 if let Some((wait, known)) = self.quota_signal(&message, now, wall, &mut commands) {
                     if let Some(id) = id {
                         if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
@@ -1276,13 +1444,26 @@ impl Core {
             && places < usize::from(self.limit)
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
-                Work::QuotaQueued { .. } => Some(*id),
-                Work::AcceptedQueued(_) if self.quota_wait.is_none() => Some(*id),
+                Work::CheckQueued(_) => Some(*id),
+                Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
+                Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
+                    Some(*id)
+                }
                 _ => None,
             }) else {
                 break;
             };
             let request = match self.work.remove(&id).unwrap() {
+                Work::CheckQueued(request) => {
+                    commands.push(Command::Prepare {
+                        work: request.request.id.clone(),
+                        settings: Session::for_turn(&request.turn),
+                        load: None,
+                    });
+                    self.work.insert(id, Work::Checking(request));
+                    places += 1;
+                    continue;
+                }
                 Work::QuotaQueued { query, session } => {
                     let phase =
                         if let Some(session) = session.or_else(|| self.startup_session.take()) {
@@ -1316,102 +1497,9 @@ impl Core {
                 }
                 work => work.into_queued().unwrap(),
             };
-            if request.output.is_closed() {
-                Self::drop_queued(request, &mut commands);
-                continue;
+            if self.start_request(id, request, None, now, &mut commands) {
+                places += 1;
             }
-            let settings = Session {
-                system: crate::conversation::system_prompt_addition(
-                    &request.turn.conversation.system,
-                ),
-                tools: match request.turn.tool_choice {
-                    crate::conversation::ToolChoice::Off => Vec::new(),
-                    crate::conversation::ToolChoice::Auto => request.turn.tools,
-                },
-            };
-            let hashes = crate::conversation::record_hashes(&request.turn.conversation);
-            let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
-            let items = request.turn.conversation.items();
-            let matched = records::select(&self.records, &hashes, tools_hash, &items);
-            let prompt = match matched {
-                Some((_, new_items)) => Prompt::Continue { new_items },
-                None if request.turn.conversation.earlier.is_empty() => Prompt::New {
-                    message: &request.turn.conversation.last,
-                },
-                None => Prompt::Rebuild {
-                    conversation_items: &items,
-                },
-            };
-            let (kind, prompt) = crate::conversation::prompt(prompt, &items);
-            let prompt = PromptRequest {
-                blocks: prompt,
-                model: request.model.model,
-                level: request.model.level,
-            };
-            let model = prompt.model.clone();
-            let ready = match matched {
-                Some((index, _)) => {
-                    let record = self.records.remove(index);
-                    Some((record.session, record.location))
-                }
-                None if settings.system.is_none() && settings.tools.is_empty() => self
-                    .startup_session
-                    .take()
-                    .map(|id| (id, records::Location::Loaded)),
-                None => None,
-            };
-            self.use_sequence += 1;
-            let work = request.request.id.clone();
-            let (session, phase) = match ready {
-                Some((id, records::Location::Loaded)) => {
-                    commands.push(Command::Prompt {
-                        work: work.clone(),
-                        session: id.clone(),
-                        prompt,
-                    });
-                    (Some(id), Phase::Prompt)
-                }
-                Some((session, records::Location::Unloaded(cwd))) => {
-                    commands.push(Command::Prepare {
-                        work,
-                        settings: settings.clone(),
-                        load: Some((session.clone(), cwd)),
-                    });
-                    (Some(session), Phase::Preparing(prompt))
-                }
-                None => {
-                    commands.push(Command::Prepare {
-                        work,
-                        settings: settings.clone(),
-                        load: None,
-                    });
-                    (None, Phase::Preparing(prompt))
-                }
-            };
-            self.work.insert(
-                id,
-                Work::AcceptedWorking(Active {
-                    output: request.output,
-                    request: request.request,
-                    session,
-                    hashes,
-                    tools_hash,
-                    kind,
-                    used: self.use_sequence,
-                    expires: now.saturating_add(24 * 60 * 60 * 1000),
-                    held: None,
-                    text: String::new(),
-                    thought_dropped: false,
-                    input_tokens: request.turn.input_tokens,
-                    model,
-                    phase,
-                    tool_call: None,
-                    stop: crate::conversation::Stop::EndTurn,
-                    stops: request.turn.stop,
-                    stop_prefix: String::new(),
-                }),
-            );
-            places += 1;
         }
         if self.state() != previous {
             let cause = match &self.runtime_state {
@@ -1425,10 +1513,119 @@ impl Core {
             queued: self
                 .work
                 .values()
-                .filter(|work| matches!(work, Work::AcceptedQueued(_) | Work::QuotaQueued { .. }))
+                .filter(|work| {
+                    matches!(
+                        work,
+                        Work::CheckQueued(_) | Work::AcceptedQueued(_) | Work::QuotaQueued { .. }
+                    )
+                })
                 .count(),
         }));
         commands
+    }
+    fn start_request(
+        &mut self,
+        id: WorkId,
+        request: Accepted,
+        mut checked_session: Option<String>,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) -> bool {
+        if request.output.is_closed() {
+            commands.extend(checked_session.map(Command::Forget));
+            Self::drop_queued(request, commands);
+            return false;
+        }
+        let settings = Session::for_turn(&request.turn);
+        let hashes = crate::conversation::record_hashes(&request.turn.conversation);
+        let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
+        let items = request.turn.conversation.items();
+        let matched = records::select(&self.records, &hashes, tools_hash, &items);
+        let prompt = match matched {
+            Some((_, new_items)) => Prompt::Continue { new_items },
+            None if request.turn.conversation.earlier.is_empty() => Prompt::New {
+                message: &request.turn.conversation.last,
+            },
+            None => Prompt::Rebuild {
+                conversation_items: &items,
+            },
+        };
+        let (kind, prompt) = crate::conversation::prompt(prompt, &items);
+        let prompt = PromptRequest {
+            blocks: prompt,
+            model: request.model.model,
+            level: request.model.level,
+        };
+        let model = prompt.model.clone();
+        let ready = match matched {
+            Some((index, _)) => {
+                let record = self.records.remove(index);
+                Some((record.session, record.location))
+            }
+            None if checked_session.is_some() => checked_session
+                .take()
+                .map(|session| (session, records::Location::Loaded)),
+            None if settings.system.is_none() && settings.tools.is_empty() => self
+                .startup_session
+                .take()
+                .map(|id| (id, records::Location::Loaded)),
+            None => None,
+        };
+        if matched.is_some() {
+            commands.extend(checked_session.map(Command::Forget));
+        }
+        self.use_sequence += 1;
+        let work = request.request.id.clone();
+        let (session, phase) = match ready {
+            Some((id, records::Location::Loaded)) => {
+                commands.push(Command::Prompt {
+                    work: work.clone(),
+                    session: id.clone(),
+                    prompt,
+                });
+                (Some(id), Phase::Prompt)
+            }
+            Some((session, records::Location::Unloaded(cwd))) => {
+                commands.push(Command::Prepare {
+                    work,
+                    settings: settings.clone(),
+                    load: Some((session.clone(), cwd)),
+                });
+                (Some(session), Phase::Preparing(prompt))
+            }
+            None => {
+                commands.push(Command::Prepare {
+                    work,
+                    settings: settings.clone(),
+                    load: None,
+                });
+                (None, Phase::Preparing(prompt))
+            }
+        };
+        self.work.insert(
+            id,
+            Work::AcceptedWorking(Active {
+                output: request.output,
+                request: request.request,
+                session,
+                hashes,
+                tools_hash,
+                kind,
+                used: self.use_sequence,
+                expires: now.saturating_add(24 * 60 * 60 * 1000),
+                held: None,
+                text: String::new(),
+                thought_dropped: false,
+                input_tokens: request.turn.input_tokens,
+                model,
+                phase,
+                tool_call: None,
+                stop: crate::conversation::Stop::EndTurn,
+                stops: request.turn.stop,
+                stop_prefix: String::new(),
+            }),
+        );
+        true
     }
     fn quota_event(
         &mut self,
@@ -1776,10 +1973,21 @@ impl Core {
         let queued: Vec<_> = self
             .work
             .iter()
-            .filter_map(|(id, work)| matches!(work, Work::AcceptedQueued(_)).then_some(*id))
+            .filter_map(|(id, work)| {
+                matches!(work, Work::AcceptedQueued(_) | Work::CheckQueued(_)).then_some(*id)
+            })
             .collect();
         for id in queued {
-            let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+            let request = match self.work.remove(&id).unwrap() {
+                Work::CheckQueued(request) => {
+                    commands.push(Command::RefusePending {
+                        request: Box::new(request),
+                        error: message.clone(),
+                    });
+                    continue;
+                }
+                work => work.into_queued().unwrap(),
+            };
             commands.push(Command::Complete(crate::journal::Completion {
                 request: request.request,
                 session: None,
@@ -1858,7 +2066,7 @@ impl Core {
             model: active.model.clone(),
             request: active.request.clone(),
             session: active.session.clone(),
-            completion: None,
+            completion: PendingCompletion::Written,
         };
         let forget = self.complete_request(active, Err(error), commands);
         if ended {
@@ -1874,6 +2082,12 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         match self.work.remove(&id).unwrap() {
+            Work::CheckQueued(request) | Work::Checking(request) => {
+                commands.push(Command::RefusePending {
+                    request: Box::new(request),
+                    error: result.err().unwrap(),
+                });
+            }
             Work::QuotaQueued { query, session } => {
                 self.complete_quota(query, session, result, commands)
             }
@@ -1884,11 +2098,11 @@ impl Core {
                 if let Some(session) = &outstanding.session {
                     commands.push(Command::Forget(session.clone()));
                 }
-                if let Some(kind) = outstanding.completion {
+                if let PendingCompletion::Disconnected(kind) = outstanding.completion {
                     commands.push(Command::Complete(crate::journal::Completion {
                         request: outstanding.request,
                         session: outstanding.session,
-                        session_use: Some(kind),
+                        session_use: kind,
                         outcome: crate::journal::Outcome::Disconnected,
                     }));
                 }
@@ -2197,6 +2411,7 @@ impl Conductor {
                             Some((request.request.id.clone(), request.output.clone()))
                         }
                         Work::Retiring(_) => None,
+                        Work::CheckQueued(_) | Work::Checking(_) => None,
                         Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => {
                             match &query.purpose {
                                 QuotaPurpose::Reset { response, .. }
@@ -2206,6 +2421,16 @@ impl Conductor {
                                 QuotaPurpose::Refresh(_) => None,
                             }
                         }
+                    })
+                    .collect();
+                let pending: Vec<_> = core
+                    .work
+                    .values()
+                    .filter_map(|work| match work {
+                        Work::CheckQueued(request) | Work::Checking(request) => {
+                            Some((request.request.id.clone(), request.connection.clone()))
+                        }
+                        _ => None,
                     })
                     .collect();
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
@@ -2220,6 +2445,9 @@ impl Conductor {
                         continue;
                     }
                     work = first_closed(&connected), if !connected.is_empty() => {
+                        (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
+                    }
+                    work = first_closed(&pending), if !pending.is_empty() => {
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
                     }
                     work = recv.recv() => {
@@ -2311,6 +2539,33 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::AdmitChecked { id, session } => {
+                    let Work::Checking(request) = core.work.remove(&id).unwrap() else {
+                        unreachable!()
+                    };
+                    let checked = match core.refusal(clock.now()) {
+                        Some(error) => Err(error.into()),
+                        None => core.check_model(&request.turn),
+                    };
+                    let accepted = core
+                        .accept(request, checked, journal, clock.as_ref())
+                        .map(Box::new);
+                    commands.extend(core.handle(
+                        Event::Checked {
+                            id,
+                            accepted,
+                            session,
+                        },
+                        clock.now(),
+                        clock.wall(),
+                    ));
+                }
+                Command::RefusePending { request, error } => {
+                    let _ = request.admission.send(Err(crate::messages::Refusal {
+                        message: error,
+                        hold: clock.hold(HoldKind::TurnEvent),
+                    }));
+                }
                 Command::State(state, cause) => journal.state(state, cause, clock.as_ref()),
                 Command::Usage { work, session } => {
                     let result = match readable(runtime, *read_open) {
@@ -2473,16 +2728,20 @@ impl Conductor {
         request: crate::journal::Request,
     ) -> Result<Ticket, crate::messages::Refusal> {
         let (admission, reply) = oneshot::channel();
+        let (connection, lease) = mpsc::unbounded_channel();
         self.send
             .send(Input::Turn(Box::new(TurnWork {
                 turn,
                 request,
                 hold,
                 admission,
+                connection,
             })))
             .await
             .map_err(stopped)?;
-        reply.await.map_err(stopped)?
+        let result = reply.await.map_err(stopped)?;
+        drop(lease);
+        result
     }
     pub(crate) async fn model_names(
         &self,
@@ -2502,7 +2761,7 @@ fn readable(runtime: &mut Option<Runtime>, read_open: bool) -> Result<&mut Runti
         .filter(|_| read_open)
         .ok_or_else(|| UNAVAILABLE.into())
 }
-async fn first_closed(outputs: &[(String, Output)]) -> String {
+async fn first_closed<T>(outputs: &[(String, mpsc::UnboundedSender<T>)]) -> String {
     let waits = outputs.iter().map(|(id, output)| {
         Box::pin(async move {
             output.closed().await;
@@ -4839,6 +5098,7 @@ mod tests {
                 request: request(),
                 hold: clock.hold(HoldKind::HttpRequest),
                 admission,
+                connection: mpsc::unbounded_channel().0,
             })))
             .await
             .ok()
@@ -4854,5 +5114,90 @@ mod tests {
             lines.contains(r#""result":"disconnected""#),
             "request line of the gone client: {lines}"
         );
+    }
+    #[test]
+    fn a_disconnected_sign_in_check_keeps_its_place_until_its_acp_reply() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-check-disconnect-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.work.clear();
+        core.sign_in_required = true;
+        core.limit = 1;
+        let mut replies = Vec::new();
+        let mut leases = Vec::new();
+        let mut ids = Vec::new();
+        for text in ["A", "B"] {
+            let body = serde_json::json!({"model":"m","messages":[{"role":"user","content":text}]})
+                .to_string();
+            let turn = crate::dialect::CHAT
+                .parse(body.as_bytes())
+                .ok()
+                .unwrap()
+                .turn;
+            let request = journal.begin(crate::journal::Api::Chat, 0);
+            ids.push(request.id.clone());
+            let (admission, reply) = oneshot::channel();
+            replies.push(reply);
+            let (connection, lease) = mpsc::unbounded_channel();
+            leases.push(lease);
+            core.handle(
+                Event::CheckPending(Box::new(PendingRequest {
+                    turn,
+                    request,
+                    admission,
+                    connection,
+                })),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+        }
+        let commands = core.handle(
+            Event::Disconnected(ids[0].clone()),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(
+            matches!(
+                core.work[&core.by_request(&ids[1]).unwrap()],
+                Work::CheckQueued(_)
+            ),
+            "FR-049 the next check waits for the disconnected call reply"
+        );
+        assert!(
+            core.by_request(&ids[0])
+                .is_some_and(|id| matches!(core.work[&id], Work::Retiring(_))),
+            "the disconnected check retains its occupied entry"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, Command::Prepare { work, .. } if work == &ids[1])),
+            "FR-049 disconnect does not release outstanding ACP work"
+        );
+        let error = crate::messages::Message::UpstreamAcp(
+            serde_json::from_value(
+                serde_json::json!({"code":-32000,"message":"Authentication required"}),
+            )
+            .unwrap(),
+        );
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: ids[0].clone(),
+                result: Err(error),
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, Command::Prepare { work, .. } if work == &ids[1])),
+            "FR-049 ACP completion releases the place"
+        );
+        assert!(commands.iter().any(|command| matches!(command, Command::Complete(done) if done.request.id == ids[0] && done.session_use.is_none())), "FR-031 the pending request retains its journal completion");
+        std::fs::remove_dir_all(folder).unwrap();
     }
 }
