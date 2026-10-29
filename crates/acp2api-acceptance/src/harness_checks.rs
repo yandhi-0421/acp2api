@@ -30,55 +30,93 @@ fn process_is_stopped(pid: i32) -> bool {
 }
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stdin_shutdown_waits_for_the_fake_to_report_buffered_lines() {
-    use std::task::Poll;
+async fn process_exit_closes_only_its_undelivered_lines() {
     use tokio::io::AsyncWriteExt;
 
-    let s = world();
+    let mut s = world();
     let run = s.root.seed(&s.hub, &Setup::normal());
     let launcher = GuardedLauncher::new(&run.fake_program, run.hub);
-    let mut child = launcher
-        .launch(LaunchSpec {
-            program: s.root.path.join("data/official-runtime/agy_acp_server.par"),
-            args: vec![],
-            env_set: vec![],
-            cwd: s.root.path.clone(),
-            own_temp: None,
+    let folder = s.root.path.join("data/official-runtime");
+    let descriptor = folder.join("localharness_external");
+    let original = std::fs::read_to_string(&descriptor).unwrap();
+    let mut children = Vec::new();
+    for label in ["normal", "second"] {
+        std::fs::write(
+            &descriptor,
+            original.replace("label = \"normal\"", &format!("label = \"{label}\"")),
+        )
+        .unwrap();
+        let mut child = launcher
+            .launch(LaunchSpec {
+                program: folder.join("agy_acp_server.par"),
+                args: vec![],
+                env_set: vec![],
+                cwd: s.root.path.clone(),
+                own_temp: None,
+            })
+            .unwrap();
+        let pid = child.tree.pid() as i32;
+        let deadline = Instant::now() + real_limit(Duration::from_secs(3));
+        wait_for(&s.hub, deadline, || {
+            s.hub
+                .entries()
+                .iter()
+                .any(|e| e.event["kind"] == "hello" && e.event["hello"]["pid"] == pid)
         })
-        .unwrap();
-    let deadline = Instant::now() + real_limit(Duration::from_secs(3));
-    wait_for(&s.hub, deadline, || {
-        s.hub.entries().iter().any(|e| e.event["kind"] == "hello")
-    })
-    .await;
-    let pid = child.tree.pid() as i32;
-    send_signal(pid, libc::SIGSTOP);
-    wait_for(&s.hub, deadline, || process_is_stopped(pid)).await;
-    // One complete cancel fits in the pipe while the fake's reader cannot run.
-    child
-        .stdin
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\",\"params\":{\"sessionId\":\"finished\"}}\n")
-        .await
-        .unwrap();
-    let mut shutdown = Box::pin(child.stdin.shutdown());
-    let first = futures_util::poll!(shutdown.as_mut());
-    send_signal(pid, libc::SIGCONT);
+        .await;
+        send_signal(pid, libc::SIGSTOP);
+        wait_for(&s.hub, deadline, || process_is_stopped(pid)).await;
+        // Each fake has one input and one output in flight when Windows would kill it.
+        child.stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\",\"params\":{\"sessionId\":\"finished\"}}\n").await.unwrap();
+        s.hub.command(label, json!({"op":"Out","line":r#"{"jsonrpc":"2.0","id":136,"result":{"stopReason":"cancelled"}}"#}));
+        children.push(child);
+    }
     assert!(
-        matches!(first, Poll::Pending),
-        "stdin shutdown completed before the fake reported the buffered line"
+        !s.hub.counts().balanced(),
+        "live fakes must report and consume their lines"
     );
-    tokio::time::timeout(real_limit(Duration::from_secs(3)), shutdown)
-        .await
-        .unwrap()
-        .unwrap();
+    for (index, child) in children.iter_mut().enumerate() {
+        send_signal(child.tree.pid() as i32, libc::SIGKILL);
+        tokio::time::timeout(real_limit(Duration::from_secs(3)), child.tree.exited())
+            .await
+            .unwrap();
+        wait_for(
+            &s.hub,
+            Instant::now() + real_limit(Duration::from_secs(3)),
+            || {
+                s.hub
+                    .entries()
+                    .iter()
+                    .filter(|e| e.event["kind"] == "process_end")
+                    .count()
+                    == index + 1
+            },
+        )
+        .await;
+        if index == 0 {
+            assert!(
+                !s.hub.counts().balanced(),
+                "one process exit must not hide a live process's undelivered lines"
+            );
+        }
+    }
     let counts = s.hub.counts();
-    assert_eq!((counts.stdin_written, counts.stdin_got), (1, 1));
-    drop(child.stdin);
-    tokio::time::timeout(real_limit(Duration::from_secs(3)), child.tree.exited())
-        .await
-        .unwrap();
-    s.hub.close();
-    s.root.cleanup();
+    assert_eq!(
+        (
+            counts.stdin_written,
+            counts.stdin_got,
+            counts.ordered,
+            counts.read,
+            counts.processed
+        ),
+        (2, 0, 2, 0, 0)
+    );
+    assert!(
+        counts.balanced(),
+        "exited processes cannot deliver more lines: {counts:?}"
+    );
+    s.time.settle().await;
+    s.finish(true).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settle_drains_real_subprocess_bursts() {
