@@ -374,14 +374,15 @@ impl Journal {
     }
     pub(crate) fn state_file_failure(
         &self,
+        event: &str,
         operation: &str,
-        error: &str,
+        cause: io::ErrorKind,
         clock: &dyn crate::Clock,
     ) {
         let result = timestamp(clock.wall()).and_then(|time| {
             let record = serde_json::json!({
-                "time": time, "event": "state_file_write_failed", "operation": operation,
-                "error": redact_error(error),
+                "time": time, "event": event, "operation": operation,
+                "cause": os_error_category(cause),
             });
             self.emit_to_file_then_stdout_under_writer_lock(
                 &record,

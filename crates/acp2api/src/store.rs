@@ -28,7 +28,7 @@ pub(crate) struct CheckedBuild {
     pub(crate) checked_at: String,
 }
 impl StateFile {
-    pub(crate) fn read(path: &Path) -> Result<Self, String> {
+    pub(crate) fn read(path: &Path) -> std::io::Result<Self> {
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -38,12 +38,24 @@ impl StateFile {
                     checked_builds: Vec::new(),
                 });
             }
-            Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+            Err(error) => {
+                return Err(std::io::Error::new(
+                    error.kind(),
+                    format!("cannot read {}: {error}", path.display()),
+                ));
+            }
         };
-        let state: Self = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+        let state: Self = serde_json::from_slice(&bytes).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("cannot parse {}: {error}", path.display()),
+            )
+        })?;
         if state.format != 1 {
-            return Err(format!("unknown state file format {}", state.format));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown state file format {}", state.format),
+            ));
         }
         for checked in &state.checked_builds {
             if checked.build.version.is_empty()
@@ -54,13 +66,16 @@ impl StateFile {
                 .iter()
                 .all(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
             {
-                return Err("the state file has an invalid checked build".into());
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the state file has an invalid checked build",
+                ));
             }
         }
         Ok(state)
     }
-    pub(crate) fn save(&self, path: &Path) -> Result<(), String> {
-        let bytes = serde_json::to_vec(self).map_err(|error| error.to_string())?;
+    pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
+        let bytes = serde_json::to_vec(self).map_err(std::io::Error::other)?;
         atomic_write(path, &bytes)
     }
 }
@@ -271,22 +286,27 @@ fn base64url(bytes: &[u8]) -> String {
 }
 pub(crate) fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     let text = toml::to_string(settings).map_err(|_| "cannot encode configuration")?;
-    atomic_write(path, text.as_bytes())
+    atomic_write(path, text.as_bytes()).map_err(|error| error.to_string())
 }
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().ok_or("stored file path has no parent")?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "stored file path has no parent",
+        )
+    })?;
+    fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(
         ".{}-{}.tmp",
         path.file_name().unwrap().to_string_lossy(),
-        crate::random_hex::<16>().map_err(|error| error.to_string())?
+        crate::random_hex::<16>().map_err(|error| std::io::Error::other(error.to_string()))?
     ));
     let result = (|| {
-        let mut file = crate::os::private_file(&temporary).map_err(|error| error.to_string())?;
-        file.write_all(bytes).map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
+        let mut file = crate::os::private_file(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
         drop(file);
-        fs::rename(&temporary, path).map_err(|error| error.to_string())
+        fs::rename(&temporary, path)
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);

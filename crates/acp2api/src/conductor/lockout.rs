@@ -13,25 +13,39 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
             if !path.exists()
                 && let Err(error) = state.save(path)
             {
-                journal.state_file_failure("create", &error, clock);
+                journal.state_file_failure(
+                    "state_file_write_failed",
+                    "create",
+                    error.kind(),
+                    clock,
+                );
             }
             state.lockout
         }
         Err(error) => Some(Lockout {
             since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
             signal: "unreadable or damaged state file".into(),
-            original_error_text: crate::journal::redact_error(&error),
+            original_error_text: crate::journal::redact_error(&error.to_string()),
         }),
     }
 }
 
 pub(super) fn persist(path: &Path, evidence: Lockout, journal: &Journal, clock: &dyn Clock) {
-    let result = StateFile::read(path).and_then(|mut state| {
-        state.lockout = Some(evidence);
-        state.save(path)
-    });
-    if let Err(error) = result {
-        journal.state_file_failure("lockout", &error, clock);
+    match StateFile::read(path) {
+        Ok(mut state) => {
+            state.lockout = Some(evidence);
+            if let Err(error) = state.save(path) {
+                journal.state_file_failure(
+                    "state_file_write_failed",
+                    "lockout",
+                    error.kind(),
+                    clock,
+                );
+            }
+        }
+        Err(error) => {
+            journal.state_file_failure("state_file_read_failed", "lockout", error.kind(), clock);
+        }
     }
 }
 

@@ -3514,9 +3514,77 @@ mod tests {
         assert!(
             records
                 .iter()
-                .any(|record| record["event"] == "state_file_write_failed"
+                .any(|record| record["event"] == "state_file_read_failed"
                     && record["operation"] == "lockout"),
             "a failed lockout persistence is recorded in the journal: {records:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn state_file_failures_log_only_the_os_category_and_the_failed_access() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for access in ["read", "write"] {
+            let (mut core, commands, folder) = error_after_reply(
+                "",
+                crate::messages::HttpError {
+                    code: Some(403),
+                    status: "PERMISSION_DENIED".into(),
+                    message: "Account suspended".into(),
+                },
+            );
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let journal =
+                crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let category = if access == "read" {
+                core.state_path = folder.join(r"C:\Users\PRIVATE-OWNER\state.json");
+                std::fs::create_dir(&core.state_path).unwrap();
+                std::fs::read(&core.state_path).unwrap_err().kind()
+            } else {
+                std::fs::write(
+                    &core.state_path,
+                    br#"{"format":1,"lockout":null,"checked_builds":[]}"#,
+                )
+                .unwrap();
+                std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+                std::io::ErrorKind::PermissionDenied
+            };
+            Conductor::commands(
+                &mut core,
+                &mut None,
+                &mut false,
+                &clock,
+                &journal,
+                &mut commands.into(),
+            )
+            .await;
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+            for entry in std::fs::read_dir(folder.join("logs")).unwrap() {
+                for line in std::fs::read_to_string(entry.unwrap().path())
+                    .unwrap()
+                    .lines()
+                {
+                    let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+                    if record["event"]
+                        .as_str()
+                        .is_some_and(|event| event.starts_with("state_file_"))
+                    {
+                        record.as_object_mut().unwrap().remove("time");
+                        actual.push(record);
+                    }
+                }
+            }
+            std::fs::remove_dir_all(folder).unwrap();
+            expected.push(serde_json::json!({
+                "event": format!("state_file_{access}_failed"),
+                "operation": "lockout", "cause": format!("{category:?}"),
+            }));
+        }
+        assert_eq!(
+            actual, expected,
+            "FR-056 logs the OS category without an owner path"
         );
     }
 
