@@ -702,18 +702,19 @@ impl Runtime {
         &self,
         value: &Value,
         loaded: Option<String>,
-    ) -> Result<(String, crate::catalog::Catalog), String> {
+    ) -> Result<(String, crate::catalog::Catalog), crate::messages::Message> {
         let response = value
             .get("result")
-            .ok_or_else(|| acp_error(&value["error"]).to_string())?;
+            .ok_or_else(|| acp_error(&value["error"]))?;
         let session = match loaded {
             Some(id) => id,
             None => response["sessionId"]
                 .as_str()
-                .ok_or("missing sessionId")?
+                .ok_or_else(|| crate::messages::Message::Upstream("missing sessionId".into()))?
                 .to_owned(),
         };
-        let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())?;
+        let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())
+            .map_err(crate::messages::Message::Upstream)?;
         Ok((session, catalog))
     }
     fn client_tool_call(
@@ -788,7 +789,7 @@ pub(crate) enum RuntimeEvent {
     },
     Prepared {
         work: String,
-        result: Result<(String, crate::catalog::Catalog), String>,
+        result: Result<(String, crate::catalog::Catalog), crate::messages::Message>,
     },
     Retired {
         session: String,

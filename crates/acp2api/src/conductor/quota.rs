@@ -24,12 +24,16 @@ pub(super) fn error_text(message: &Message) -> Option<&str> {
 
 #[derive(Clone)]
 pub(super) struct Wait {
+    pub timer: TimerId,
     pub deadline: Moment,
     until: SystemTime,
 }
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct TimerId(pub u64);
 impl Wait {
-    pub fn new(until: SystemTime, now: Moment, wall: SystemTime) -> Self {
+    pub fn new(until: SystemTime, now: Moment, wall: SystemTime, timer: TimerId) -> Self {
         Self {
+            timer,
             deadline: now
                 .saturating_add(until.duration_since(wall).unwrap_or_default().as_millis() as u64),
             until,
@@ -180,7 +184,7 @@ mod tests {
     #[test]
     fn an_expired_rfc3339_reset_before_the_epoch_is_still_usable() {
         let until = reset_time("resets 1969-12-31T23:59:59Z").unwrap();
-        let wait = Wait::new(until, 0, UNIX_EPOCH);
+        let wait = Wait::new(until, 0, UNIX_EPOCH, TimerId(1));
         assert_eq!(
             wait.message(0).to_string(),
             "acp2api: the Google quota is used up until 1969-12-31T23:59:59Z. acp2api starts no prompt turn before that time."

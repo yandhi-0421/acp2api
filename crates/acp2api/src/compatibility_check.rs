@@ -135,7 +135,7 @@ pub(crate) async fn run(
                     let (event, _hold) = runtime.next().await;
                     match event {
                         RuntimeEvent::Prepared { result, .. } => {
-                            result.map_err(Failure::Incompatible)?;
+                            result.map_err(|error| Failure::Incompatible(error.to_string()))?;
                             break;
                         }
                         RuntimeEvent::Other | RuntimeEvent::Stderr => {}

@@ -101,6 +101,34 @@ enum Work {
     AcceptedQueued(Accepted),
     AcceptedWorking(Active),
     Retiring(OutstandingWork),
+    QuotaQueued {
+        query: QuotaQuery,
+        session: Option<String>,
+    },
+    QuotaWorking {
+        query: QuotaQuery,
+        phase: QuotaPhase,
+        text: String,
+        result: Result<(), crate::messages::Message>,
+    },
+}
+struct QuotaQuery {
+    work: String,
+    wait: quota::Wait,
+    response: Option<Active>,
+}
+enum QuotaPhase {
+    Preparing,
+    Prompt(String),
+    Settling { session: String, at: Moment },
+}
+impl QuotaPhase {
+    fn session(&self) -> Option<&str> {
+        match self {
+            Self::Preparing => None,
+            Self::Prompt(session) | Self::Settling { session, .. } => Some(session),
+        }
+    }
 }
 struct OutstandingWork {
     request: crate::journal::Request,
@@ -108,39 +136,68 @@ struct OutstandingWork {
     completion: Option<crate::journal::SessionUse>,
 }
 impl Work {
-    fn request(&self) -> &crate::journal::Request {
+    fn key(&self) -> &str {
         match self {
-            Self::AcceptedQueued(request) => &request.request,
-            Self::AcceptedWorking(active) => &active.request,
-            Self::Retiring(outstanding) => &outstanding.request,
+            Self::AcceptedQueued(request) => &request.request.id,
+            Self::AcceptedWorking(active) => &active.request.id,
+            Self::Retiring(outstanding) => &outstanding.request.id,
+            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => &query.work,
         }
     }
     fn execution(&self) -> Option<&Active> {
         match self {
             Self::AcceptedWorking(active) => Some(active),
-            Self::AcceptedQueued(_) | Self::Retiring(_) => None,
+            Self::AcceptedQueued(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. } => None,
         }
     }
     fn execution_mut(&mut self) -> Option<&mut Active> {
         match self {
             Self::AcceptedWorking(active) => Some(active),
-            Self::AcceptedQueued(_) | Self::Retiring(_) => None,
+            Self::AcceptedQueued(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. } => None,
         }
     }
     fn into_queued(self) -> Option<Accepted> {
         match self {
             Self::AcceptedQueued(request) => Some(request),
-            Self::AcceptedWorking(_) | Self::Retiring(_) => None,
+            Self::AcceptedWorking(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. } => None,
         }
     }
     fn into_active(self) -> Option<Active> {
         match self {
             Self::AcceptedWorking(active) => Some(active),
-            Self::AcceptedQueued(_) | Self::Retiring(_) => None,
+            Self::AcceptedQueued(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. } => None,
         }
     }
     fn occupies_place(&self) -> bool {
-        matches!(self, Self::AcceptedWorking(_) | Self::Retiring(_))
+        matches!(
+            self,
+            Self::AcceptedWorking(_) | Self::Retiring(_) | Self::QuotaWorking { .. }
+        )
+    }
+    fn deadline(&self) -> Option<Moment> {
+        match self {
+            Self::AcceptedWorking(Active {
+                phase: Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. },
+                ..
+            })
+            | Self::QuotaWorking {
+                phase: QuotaPhase::Settling { at, .. },
+                ..
+            } => Some(*at),
+            _ => None,
+        }
     }
 }
 #[derive(Clone)]
@@ -151,6 +208,11 @@ struct Session {
 enum Phase {
     Preparing(PromptRequest),
     Prompt,
+    AwaitingQuotaEnd(quota::Wait),
+    QuotaSettling {
+        at: Moment,
+        wait: quota::Wait,
+    },
     Settling {
         at: Moment,
         can_continue: bool,
@@ -246,6 +308,7 @@ enum RuntimeState {
 }
 struct Core {
     quota_wait: Option<quota::Wait>,
+    next_quota: quota::TimerId,
     runtime_state: RuntimeState,
     failures: VecDeque<Moment>,
     cleanup_before_start: bool,
@@ -279,6 +342,10 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
+    Usage {
+        work: String,
+        session: String,
+    },
     UpstreamLog {
         session: String,
         error: crate::messages::HttpError,
@@ -524,9 +591,10 @@ impl Core {
     fn by_session(&self, session: &str) -> Option<WorkId> {
         self.work.iter().find_map(|(id, work)| {
             let current = match work {
-                Work::AcceptedQueued(_) => None,
+                Work::AcceptedQueued(_) | Work::QuotaQueued { .. } => None,
                 Work::AcceptedWorking(active) => active.session.as_deref(),
                 Work::Retiring(outstanding) => outstanding.session.as_deref(),
+                Work::QuotaWorking { phase, .. } => phase.session(),
             };
             (current == Some(session)).then_some(*id)
         })
@@ -534,17 +602,13 @@ impl Core {
     fn by_request(&self, request: &str) -> Option<WorkId> {
         self.work
             .iter()
-            .find_map(|(id, work)| (work.request().id == request).then_some(*id))
+            .find_map(|(id, work)| (work.key() == request).then_some(*id))
     }
 
     fn next_deadline(&self) -> Option<Moment> {
         self.work
             .values()
-            .filter_map(Work::execution)
-            .filter_map(|active| match active.phase {
-                Phase::Settling { at, .. } => Some(at),
-                _ => None,
-            })
+            .filter_map(Work::deadline)
             .chain(self.records.iter().map(|record| record.expires))
             .chain(self.cancels.values().copied())
             .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
@@ -572,7 +636,8 @@ impl Core {
             .quota_wait
             .as_ref()
             .is_none_or(|wait| wait.deadline <= now);
-        let wait = quota::Wait::new(until, now, wall);
+        self.next_quota.0 += 1;
+        let wait = quota::Wait::new(until, now, wall, self.next_quota);
         self.quota_wait = Some(wait.clone());
         if started {
             let message = match &self.runtime_state {
@@ -705,6 +770,9 @@ impl Core {
         Some((Event::Accepted(Box::new(accepted)), work.hold))
     }
     fn handle(&mut self, event: Event, now: Moment, wall: std::time::SystemTime) -> Vec<Command> {
+        if matches!(event, Event::Deadline) && self.cancels.values().any(|at| *at <= now) {
+            return self.handle(Event::RuntimeFailure, now, wall);
+        }
         let mut commands = Vec::new();
         if self
             .quota_wait
@@ -767,9 +835,22 @@ impl Core {
                 if matches!(self.work[&id], Work::AcceptedQueued(_)) {
                     let request = self.work.remove(&id).unwrap().into_queued().unwrap();
                     Self::drop_queued(request, &mut commands);
+                } else if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
+                    self.work.get_mut(&id).unwrap()
+                {
+                    let active = query.response.take().unwrap();
+                    commands.push(Command::Complete(crate::journal::Completion {
+                        request: active.request,
+                        session: active.session,
+                        session_use: Some(active.kind),
+                        outcome: crate::journal::Outcome::Disconnected,
+                    }));
                 } else {
                     let active = self.work.remove(&id).unwrap().into_active().unwrap();
-                    let ended = matches!(active.phase, Phase::Settling { .. });
+                    let ended = matches!(
+                        active.phase,
+                        Phase::Settling { .. } | Phase::QuotaSettling { .. }
+                    );
                     if matches!(active.phase, Phase::Prompt) {
                         self.cancel(active.session.as_ref().unwrap().clone(), now, &mut commands);
                     }
@@ -788,48 +869,95 @@ impl Core {
             }
             Event::StartFailed(work, error) => {
                 if let Some(id) = self.by_request(&work) {
-                    self.finish(
-                        id,
-                        Err(crate::messages::Message::Upstream(error)),
-                        &mut commands,
-                    );
+                    if matches!(self.work[&id], Work::QuotaWorking { .. }) {
+                        self.finish_quota(
+                            id,
+                            Err(crate::messages::Message::Upstream(error)),
+                            now,
+                            wall,
+                            &mut commands,
+                        );
+                    } else {
+                        self.finish(
+                            id,
+                            Err(crate::messages::Message::Upstream(error)),
+                            &mut commands,
+                        );
+                    }
                 }
             }
             Event::Runtime(RuntimeEvent::Prepared { work, result }) => {
                 if let Some(id) = self.by_request(&work) {
-                    match result {
-                        Ok((session, catalog)) => {
-                            self.catalog = Some(catalog);
-                            match self.work.get_mut(&id).unwrap() {
-                                Work::Retiring(outstanding) => {
-                                    outstanding.session = Some(session);
-                                    self.finish(id, Ok(()), &mut commands);
-                                }
-                                entry => {
-                                    let active = entry.execution_mut().unwrap();
-                                    active.session = Some(session.clone());
-                                    if let Phase::Preparing(prompt) =
-                                        std::mem::replace(&mut active.phase, Phase::Prompt)
-                                    {
-                                        if let Some(message) = self.refusal(now) {
-                                            self.finish(id, Err(message), &mut commands);
-                                        } else {
-                                            commands.push(Command::Prompt {
-                                                work,
-                                                session,
-                                                prompt,
-                                            });
+                    if let Work::QuotaWorking { phase, .. } = self.work.get_mut(&id).unwrap() {
+                        match result {
+                            Ok((session, catalog)) => {
+                                self.catalog = Some(catalog);
+                                *phase = QuotaPhase::Prompt(session.clone());
+                                commands.push(Command::Usage { work, session });
+                            }
+                            Err(error) => {
+                                self.finish_quota(id, Err(error), now, wall, &mut commands)
+                            }
+                        }
+                    } else {
+                        match result {
+                            Ok((session, catalog)) => {
+                                self.catalog = Some(catalog);
+                                match self.work.get_mut(&id).unwrap() {
+                                    Work::Retiring(outstanding) => {
+                                        outstanding.session = Some(session);
+                                        self.finish(id, Ok(()), &mut commands);
+                                    }
+                                    entry => {
+                                        let active = entry.execution_mut().unwrap();
+                                        active.session = Some(session.clone());
+                                        if let Phase::AwaitingQuotaEnd(wait) = &active.phase {
+                                            active.phase = Phase::QuotaSettling {
+                                                at: now,
+                                                wait: wait.clone(),
+                                            };
+                                        } else if let Phase::Preparing(prompt) =
+                                            std::mem::replace(&mut active.phase, Phase::Prompt)
+                                        {
+                                            if let Some(message) = self.refusal(now) {
+                                                self.finish(id, Err(message), &mut commands);
+                                            } else {
+                                                commands.push(Command::Prompt {
+                                                    work,
+                                                    session,
+                                                    prompt,
+                                                });
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                        Err(error) => {
-                            self.finish(
-                                id,
-                                Err(crate::messages::Message::Upstream(error)),
-                                &mut commands,
-                            );
+                            Err(error) => {
+                                if let Some(text) = quota::error_text(&error) {
+                                    let reset = quota::reset_time(text);
+                                    let wait = self.start_quota(
+                                        reset
+                                            .unwrap_or(wall + std::time::Duration::from_secs(3600)),
+                                        now,
+                                        wall,
+                                        &mut commands,
+                                    );
+                                    if reset.is_some() {
+                                        self.finish(id, Err(wait.message(now)), &mut commands);
+                                    } else {
+                                        let mut active =
+                                            self.work.remove(&id).unwrap().into_active().unwrap();
+                                        active.phase = Phase::Settling {
+                                            at: now,
+                                            can_continue: false,
+                                            result: Ok(()),
+                                        };
+                                        self.enqueue_quota(wait, Some(active), None);
+                                    }
+                                } else {
+                                    self.finish(id, Err(error), &mut commands);
+                                }
+                            }
                         }
                     }
                 } else if let Ok((session, _)) = result {
@@ -850,7 +978,11 @@ impl Core {
                     self.cancels.remove(&session);
                 }
                 if let Some(id) = self.by_session(&session) {
-                    self.update(id, session, update, now, &mut commands);
+                    if matches!(self.work[&id], Work::QuotaWorking { .. }) {
+                        self.update_quota(id, session, update, now, &mut commands);
+                    } else {
+                        self.update(id, session, update, now, wall, &mut commands);
+                    }
                 } else if let TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } = update
                 {
@@ -865,21 +997,48 @@ impl Core {
                     late: id.is_none(),
                 });
                 let message = crate::messages::Message::UpstreamHttp(error);
-                let message = if let Some(text) = quota::error_text(&message) {
-                    let until = quota::reset_time(text)
-                        .unwrap_or(wall + std::time::Duration::from_secs(3600));
-                    self.start_quota(until, now, wall, &mut commands)
-                        .message(now)
-                } else {
-                    message
-                };
-                if let Some(id) = id {
-                    if !matches!(self.work[&id], Work::Retiring(_)) {
-                        if matches!(message, crate::messages::Message::QuotaWait { .. }) {
-                            self.end_request(id, message, &mut commands);
-                        } else {
-                            self.retire(id, session, message, now, &mut commands);
+                if let Some(text) = quota::error_text(&message) {
+                    let reset = quota::reset_time(text);
+                    let wait = self.start_quota(
+                        reset.unwrap_or(wall + std::time::Duration::from_secs(3600)),
+                        now,
+                        wall,
+                        &mut commands,
+                    );
+                    if let Some(id) = id {
+                        if let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() {
+                            *result = Err(message);
+                        } else if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut()
+                        {
+                            if reset.is_some() {
+                                self.end_request(id, wait.message(now), &mut commands);
+                            } else {
+                                active.phase = match active.phase {
+                                    Phase::Settling { at, .. }
+                                    | Phase::QuotaSettling { at, .. } => {
+                                        Phase::QuotaSettling { at, wait }
+                                    }
+                                    _ => Phase::AwaitingQuotaEnd(wait),
+                                };
+                            }
+                        } else if reset.is_none() {
+                            self.enqueue_quota(wait, None, None);
                         }
+                    } else {
+                        self.records.retain(|record| record.session != session);
+                        if self.startup_session.as_ref() == Some(&session) {
+                            self.startup_session = None;
+                        }
+                        commands.push(Command::Forget(session));
+                        if reset.is_none() {
+                            self.enqueue_quota(wait, None, None);
+                        }
+                    }
+                } else if let Some(id) = id {
+                    if let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() {
+                        *result = Err(message);
+                    } else if !matches!(self.work[&id], Work::Retiring(_)) {
+                        self.retire(id, session, message, now, &mut commands);
                     }
                 } else {
                     self.records.retain(|record| record.session != session);
@@ -927,21 +1086,17 @@ impl Core {
             }
             Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
             Event::Deadline => {
-                if self.cancels.values().any(|at| *at <= now) {
-                    return self.handle(Event::RuntimeFailure, now, wall);
-                }
                 let due: Vec<_> = self
                     .work
                     .iter()
-                    .filter_map(|(id, work)| {
-                        work.execution().and_then(|active| {
-                            matches!(active.phase, Phase::Settling { at, .. } if at <= now)
-                                .then_some(*id)
-                        })
-                    })
+                    .filter_map(|(id, work)| work.deadline().filter(|at| *at <= now).map(|_| *id))
                     .collect();
                 for id in due {
-                    self.finish(id, Ok(()), &mut commands);
+                    if matches!(self.work[&id], Work::QuotaWorking { .. }) {
+                        self.finish_quota(id, Ok(()), now, wall, &mut commands);
+                    } else {
+                        self.finish(id, Ok(()), &mut commands);
+                    }
                 }
             }
         }
@@ -959,17 +1114,49 @@ impl Core {
             .filter(|work| work.occupies_place())
             .count();
         while matches!(self.runtime_state, RuntimeState::Serving)
-            && self.quota_wait.is_none()
             && places < usize::from(self.limit)
         {
-            let Some(id) = self
-                .work
-                .iter()
-                .find_map(|(id, work)| matches!(work, Work::AcceptedQueued(_)).then_some(*id))
-            else {
+            let Some(id) = self.work.iter().find_map(|(id, work)| match work {
+                Work::QuotaQueued { .. } => Some(*id),
+                Work::AcceptedQueued(_) if self.quota_wait.is_none() => Some(*id),
+                _ => None,
+            }) else {
                 break;
             };
-            let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+            let request = match self.work.remove(&id).unwrap() {
+                Work::QuotaQueued { query, session } => {
+                    let phase =
+                        if let Some(session) = session.or_else(|| self.startup_session.take()) {
+                            commands.push(Command::Usage {
+                                work: query.work.clone(),
+                                session: session.clone(),
+                            });
+                            QuotaPhase::Prompt(session)
+                        } else {
+                            commands.push(Command::Prepare {
+                                work: query.work.clone(),
+                                settings: Session {
+                                    tools: Vec::new(),
+                                    system: None,
+                                },
+                                load: None,
+                            });
+                            QuotaPhase::Preparing
+                        };
+                    self.work.insert(
+                        id,
+                        Work::QuotaWorking {
+                            query,
+                            phase,
+                            text: String::new(),
+                            result: Ok(()),
+                        },
+                    );
+                    places += 1;
+                    continue;
+                }
+                work => work.into_queued().unwrap(),
+            };
             if request.output.is_closed() {
                 Self::drop_queued(request, &mut commands);
                 continue;
@@ -1067,12 +1254,131 @@ impl Core {
         }
         commands
     }
+    fn enqueue_quota(
+        &mut self,
+        wait: quota::Wait,
+        response: Option<Active>,
+        session: Option<String>,
+    ) {
+        let id = self.next_work;
+        self.next_work += 1;
+        let query = QuotaQuery {
+            work: format!("quota-{id}"),
+            wait,
+            response,
+        };
+        self.work.insert(id, Work::QuotaQueued { query, session });
+    }
+    fn update_quota(
+        &mut self,
+        id: WorkId,
+        session: String,
+        update: TurnUpdate,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        let Work::QuotaWorking {
+            phase,
+            text,
+            result,
+            ..
+        } = self.work.get_mut(&id).unwrap()
+        else {
+            unreachable!()
+        };
+        match update {
+            TurnUpdate::Text(chunk) => text.push_str(&chunk),
+            TurnUpdate::PromptEnded { .. } => {
+                *phase = QuotaPhase::Settling {
+                    session,
+                    at: now.saturating_add(200),
+                }
+            }
+            TurnUpdate::Failed(error) => {
+                *result = Err(error);
+                *phase = QuotaPhase::Settling {
+                    session,
+                    at: now.saturating_add(200),
+                };
+            }
+            TurnUpdate::Permission { request, .. }
+            | TurnUpdate::RefusedPermission { request, .. } => {
+                commands.push(Command::Permission(request))
+            }
+            TurnUpdate::UnpermittedTool(name) => {
+                self.cancel(session, now, commands);
+                let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() else {
+                    unreachable!()
+                };
+                *result = Err(crate::messages::Message::BuiltInToolRan(name));
+            }
+            TurnUpdate::Usage(_) | TurnUpdate::ThoughtDropped => {}
+        }
+    }
+    fn finish_quota(
+        &mut self,
+        id: WorkId,
+        result: Result<(), crate::messages::Message>,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        let Work::QuotaWorking {
+            mut query,
+            phase,
+            text,
+            result: recorded,
+        } = self.work.remove(&id).unwrap()
+        else {
+            unreachable!()
+        };
+        let result = result.and(recorded);
+        if result.is_ok()
+            && let Some(until) = quota::reset_time(&text)
+        {
+            query.wait = quota::Wait::new(until, now, wall, query.wait.timer);
+            if self
+                .quota_wait
+                .as_ref()
+                .is_some_and(|wait| wait.timer == query.wait.timer)
+            {
+                self.quota_wait = Some(query.wait.clone());
+            }
+        }
+        let message = self.refusal(now).unwrap_or_else(|| query.wait.message(now));
+        self.complete_quota(
+            query,
+            phase.session().map(str::to_owned),
+            Err(message),
+            commands,
+        );
+    }
+    fn complete_quota(
+        &mut self,
+        query: QuotaQuery,
+        session: Option<String>,
+        result: Result<(), crate::messages::Message>,
+        commands: &mut Vec<Command>,
+    ) {
+        if let Some(active) = query.response {
+            let forget = self.complete_request(active, result, commands);
+            commands.extend(
+                session
+                    .filter(|session| Some(session) != forget.as_ref())
+                    .map(Command::Forget),
+            );
+            commands.extend(forget.map(Command::Forget));
+        } else {
+            commands.extend(session.map(Command::Forget));
+        }
+    }
     fn update(
         &mut self,
         id: WorkId,
         session: String,
         update: TurnUpdate,
         now: Moment,
+        wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
     ) {
         if matches!(self.work[&id], Work::Retiring(_)) {
@@ -1088,6 +1394,53 @@ impl Core {
                 | TurnUpdate::Usage(_)
                 | TurnUpdate::ThoughtDropped
                 | TurnUpdate::UnpermittedTool(_) => {}
+            }
+            return;
+        }
+        if let TurnUpdate::Failed(error) = &update
+            && let Some(text) = quota::error_text(error)
+        {
+            let reset = quota::reset_time(text);
+            let wait = self.start_quota(
+                reset.unwrap_or(wall + std::time::Duration::from_secs(3600)),
+                now,
+                wall,
+                commands,
+            );
+            if reset.is_some() {
+                self.finish(id, Err(wait.message(now)), commands);
+            } else {
+                self.work
+                    .get_mut(&id)
+                    .unwrap()
+                    .execution_mut()
+                    .unwrap()
+                    .phase = Phase::QuotaSettling {
+                    at: now.saturating_add(200),
+                    wait,
+                };
+            }
+            return;
+        }
+        if matches!(
+            self.work[&id].execution().unwrap().phase,
+            Phase::AwaitingQuotaEnd(_) | Phase::QuotaSettling { .. }
+        ) {
+            let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
+            match update {
+                TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
+                    if let Phase::AwaitingQuotaEnd(wait) = &active.phase {
+                        active.phase = Phase::QuotaSettling {
+                            at: now.saturating_add(200),
+                            wait: wait.clone(),
+                        };
+                    }
+                }
+                TurnUpdate::Permission { request, .. }
+                | TurnUpdate::RefusedPermission { request, .. } => {
+                    commands.push(Command::Permission(request))
+                }
+                _ => {}
             }
             return;
         }
@@ -1255,7 +1608,10 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
-        let ended = matches!(active.phase, Phase::Settling { .. });
+        let ended = matches!(
+            active.phase,
+            Phase::Settling { .. } | Phase::QuotaSettling { .. }
+        );
         let outstanding = OutstandingWork {
             request: active.request.clone(),
             session: active.session.clone(),
@@ -1275,6 +1631,12 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         match self.work.remove(&id).unwrap() {
+            Work::QuotaQueued { query, session } => {
+                self.complete_quota(query, session, result, commands)
+            }
+            Work::QuotaWorking { query, phase, .. } => {
+                self.complete_quota(query, phase.session().map(str::to_owned), result, commands)
+            }
             Work::Retiring(outstanding) => {
                 if let Some(session) = &outstanding.session {
                     commands.push(Command::Forget(session.clone()));
@@ -1289,7 +1651,20 @@ impl Core {
                 }
             }
             work => {
-                let active = work.into_active().unwrap();
+                let mut active = work.into_active().unwrap();
+                match std::mem::replace(&mut active.phase, Phase::Prompt) {
+                    Phase::QuotaSettling { wait, .. } if result.is_ok() => {
+                        let session = active.session.clone();
+                        active.phase = Phase::Settling {
+                            at: 0,
+                            can_continue: false,
+                            result: Ok(()),
+                        };
+                        self.enqueue_quota(wait, Some(active), session);
+                        return;
+                    }
+                    phase => active.phase = phase,
+                }
                 let forget = self.complete_request(active, result, commands);
                 commands.extend(forget.map(Command::Forget));
             }
@@ -1307,7 +1682,10 @@ impl Core {
                 result: pending,
                 ..
             } => (can_continue, result.and(pending)),
-            Phase::Preparing(_) | Phase::Prompt => (false, result),
+            Phase::Preparing(_)
+            | Phase::Prompt
+            | Phase::AwaitingQuotaEnd(_)
+            | Phase::QuotaSettling { .. } => (false, result),
         };
         let tool_hash = active
             .tool_call
@@ -1400,6 +1778,7 @@ impl Conductor {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
                 quota_wait: None,
+                next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -1547,6 +1926,10 @@ impl Conductor {
                             Some((request.request.id.clone(), request.output.clone()))
                         }
                         Work::Retiring(_) => None,
+                        Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => query
+                            .response
+                            .as_ref()
+                            .map(|active| (query.work.clone(), active.output.clone())),
                     })
                     .collect();
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
@@ -1660,6 +2043,27 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::Usage { work, session } => {
+                    let result = match readable(runtime, *read_open) {
+                        Ok(runtime) => {
+                            runtime
+                                .start_prompt(
+                                    vec![crate::conversation::PromptBlock::Text("/usage".into())],
+                                    &session,
+                                )
+                                .await
+                        }
+                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
+                    };
+                    if let Err(error) = result {
+                        commands.extend(core.command_failed(
+                            Some(work),
+                            error,
+                            clock.now(),
+                            clock.wall(),
+                        ));
+                    }
+                }
                 Command::UpstreamLog {
                     session,
                     error,
@@ -1885,6 +2289,105 @@ mod tests {
         );
     }
     #[test]
+    fn a_quota_error_after_disconnect_still_queries_the_reset_time() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-retiring-quota-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        let request = core.work[&0].key().to_owned();
+        core.handle(Event::Disconnected(request), 0, std::time::UNIX_EPOCH);
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 429,
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: "Quota exhausted; no reset time.".into(),
+                },
+            }),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::Cancelled),
+                },
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        let mut queries = 0;
+        for command in commands {
+            if let Command::Prepare { work, .. } = command {
+                let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+                let catalog =
+                    crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+                queries += core
+                    .handle(
+                        Event::Runtime(RuntimeEvent::Prepared {
+                            work,
+                            result: Ok(("quota-query".into(), catalog)),
+                        }),
+                        1,
+                        std::time::UNIX_EPOCH,
+                    )
+                    .into_iter()
+                    .filter(|command| matches!(command, Command::Usage { .. }))
+                    .count();
+            }
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            queries, 1,
+            "FR-036/FR-052 a lost API reply does not discard a global quota signal or its reset query"
+        );
+    }
+    #[test]
+    fn acp_quota_error_refuses_the_current_and_queued_requests() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-acp-quota-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        let mut commands = core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::Failed(crate::messages::Message::UpstreamAcp(
+                    crate::messages::AcpError {
+                        code: 429,
+                        message: "RESOURCE_EXHAUSTED; resets 1970-01-01T00:02:00Z".into(),
+                    },
+                )),
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        commands.extend(core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH));
+        let statuses: Vec<_> = commands
+            .into_iter()
+            .filter_map(|command| match command {
+                Command::Emit(_, TurnEvent::End(Err(message))) => Some(
+                    crate::dialect::MESSAGES
+                        .refusal(&message.into())
+                        .status()
+                        .as_u16(),
+                ),
+                _ => None,
+            })
+            .collect();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            statuses,
+            [429, 429],
+            "FR-033/FR-036 an ACP quota error has the same state row as a stderr quota error"
+        );
+    }
+    #[test]
     fn preparation_rechecks_quota_after_runtime_recovery() {
         let folder = std::env::temp_dir().join(format!(
             "acp2api-quota-preparation-{}",
@@ -1981,6 +2484,7 @@ mod tests {
     ) {
         let mut core = Core {
             quota_wait: None,
+            next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -2678,7 +3182,7 @@ mod tests {
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let mut core = Core {
-                quota_wait:None, runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                quota_wait:None, next_quota: quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
                 cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
                 work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
                 use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
@@ -2938,7 +3442,7 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, _, _tickets) = prompting_with_waiter(&journal);
         core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
-        let work = core.work[&0].request().id.clone();
+        let work = core.work[&0].key().to_owned();
         core.handle(
             Event::Runtime(RuntimeEvent::Failed("broken pipe".into())),
             1,
@@ -3194,9 +3698,8 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, queued, _tickets) = prompting_with_waiter(&journal);
         let request = core.work[&core.by_session("running").unwrap()]
-            .request()
-            .id
-            .clone();
+            .key()
+            .to_owned();
         let disconnected = core.handle(Event::Disconnected(request), 1, std::time::UNIX_EPOCH);
         assert!(
             !disconnected
@@ -3236,6 +3739,7 @@ mod tests {
         let (output, ticket) = mpsc::unbounded_channel();
         let mut core = Core {
             quota_wait: None,
+            next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3347,6 +3851,7 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 quota_wait: None,
+                next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -3453,6 +3958,7 @@ mod tests {
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
                 quota_wait: None,
+                next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -3567,6 +4073,7 @@ mod tests {
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         let mut core = Core {
             quota_wait: None,
+            next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3609,6 +4116,7 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             quota_wait: None,
+            next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3708,6 +4216,7 @@ mod tests {
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
             quota_wait: None,
+            next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3754,6 +4263,7 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
             quota_wait: None,
+            next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3790,7 +4300,9 @@ mod tests {
         ));
         let failed = Event::Runtime(RuntimeEvent::Prepared {
             work,
-            result: Err("session/new failed".into()),
+            result: Err(crate::messages::Message::Upstream(
+                "session/new failed".into(),
+            )),
         });
         for command in core.handle(failed, 0, std::time::UNIX_EPOCH) {
             if let Command::Complete(completion) = command {
