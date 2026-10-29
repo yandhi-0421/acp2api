@@ -65,8 +65,13 @@ fn clear_conditions(w: &mut World) {
         process::calls(w, "session/prompt").is_empty(),
         "no prompt supplied a quota or lockout signal"
     );
-    assert!(
-        !w.scenario.root.path.join("data/state.json").exists(),
+    let state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(w.scenario.root.path.join("data/state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        state.get("lockout"),
+        Some(&serde_json::Value::Null),
         "normal fixture has no stored lockout"
     );
 }
