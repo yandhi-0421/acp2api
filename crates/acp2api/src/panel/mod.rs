@@ -12,9 +12,19 @@ use axum::{
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 mod page;
+static CONTENT_SECURITY_POLICY: LazyLock<axum::http::HeaderValue> = LazyLock::new(|| {
+    use base64::Engine;
+    use sha2::Digest;
+    let hash =
+        base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(page::COUNTDOWN));
+    let policy = format!(
+        "default-src 'none'; script-src 'sha256-{hash}'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    );
+    policy.parse().unwrap()
+});
 const LIFETIME: u64 = 12 * 60 * 60 * 1000;
 const COOKIE: &str = "acp2api_session";
 const ARGON2_CHECKS_AT_ONCE: usize = 1;
@@ -39,6 +49,8 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/password", post(password))
         .route("/manage/concurrency", post(concurrency))
         .route("/manage/refresh-quota", post(refresh_quota))
+        .route("/manage/sign-in", post(sign_in))
+        .route("/manage/cancel-sign-in", post(cancel_sign_in))
         .route("/manage/notice", post(dismiss_notice))
         .route("/manage/search", post(search))
         .route("/manage/retry", post(retry))
@@ -95,6 +107,7 @@ impl Panel {
             &self.conductor.notices(),
             self.conductor.builds_summary(),
             &self.conductor.quota_result(),
+            &page::sign_in_section(&self.conductor.view(), self.clock.now()),
         );
         (status, Html(page)).into_response()
     }
@@ -139,16 +152,16 @@ async fn guard(
         ("cache-control", "no-store"),
         ("x-frame-options", "DENY"),
         ("x-content-type-options", "nosniff"),
-        (
-            "content-security-policy",
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-        ),
     ] {
         response.headers_mut().insert(
             axum::http::HeaderName::from_static(name),
             axum::http::HeaderValue::from_static(value),
         );
     }
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        CONTENT_SECURITY_POLICY.clone(),
+    );
     response
 }
 async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
@@ -160,6 +173,7 @@ async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
             &panel.conductor.notices(),
             panel.conductor.builds_summary(),
             &panel.conductor.quota_result(),
+            &page::sign_in_section(&panel.conductor.view(), panel.clock.now()),
         )
     } else {
         page::login(None)
@@ -204,7 +218,8 @@ async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Respon
         },
     );
     let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
-    let mut response = Redirect::to("/").into_response();
+    let mut response =
+        Redirect::to(&format!("/#{}", crate::conductor::sign_in::ENTRY_ID)).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
         cookie.parse().expect("generated cookie"),
@@ -226,6 +241,25 @@ async fn refresh_quota(
     match panel.conductor.owner(OwnerAction::RefreshQuota, hold).await {
         Ok(()) => panel.page(StatusCode::OK, "Quota refreshed."),
         Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
+    }
+}
+async fn sign_in(State(panel): State<Panel>) -> Response {
+    panel.sign_in_action(OwnerAction::SignIn).await
+}
+async fn cancel_sign_in(State(panel): State<Panel>) -> Response {
+    panel.sign_in_action(OwnerAction::CancelSignIn).await
+}
+impl Panel {
+    async fn sign_in_action(&self, action: OwnerAction) -> Response {
+        // Keep the HTTP hold through page rendering. The action acknowledges the wait immediately.
+        match self
+            .conductor
+            .owner(action, self.clock.hold(crate::HoldKind::TurnEvent))
+            .await
+        {
+            Ok(()) => self.page(StatusCode::OK, ""),
+            Err(error) => self.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
+        }
     }
 }
 async fn password(State(panel): State<Panel>, Form(form): Form<Password>) -> Response {
@@ -439,7 +473,19 @@ mod tests {
         let password = Password {
             password: "wrong".into(),
         };
-        let response = login(State(panel), Form(password)).await;
+        let response = login(State(panel.clone()), Form(password)).await;
+        let signed_in = login(
+            State(panel),
+            Form(Password {
+                password: "right".into(),
+            }),
+        )
+        .await;
+        assert_eq!(
+            signed_in.headers()[header::LOCATION],
+            "/#sign-in",
+            "the password entry returns to the sign-in fragment"
+        );
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(

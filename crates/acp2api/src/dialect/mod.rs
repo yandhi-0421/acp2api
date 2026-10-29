@@ -93,7 +93,7 @@ impl<T: WireDialect + 'static> Dialect for T {
         if matches!(refusal.row(), Row::Other502)
             || matches!(
                 refusal.message,
-                Message::RuntimeUnavailable(_) | Message::Stopped
+                Message::RuntimeUnavailable(_) | Message::SignInRequired(_) | Message::Stopped
             )
         {
             response.headers_mut().insert(
@@ -262,6 +262,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
 pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
     match refusal.message {
         Message::RuntimeUnavailable(_) => "runtime_unavailable",
+        Message::SignInRequired(_) => "sign_in_required",
         Message::Model { .. } => "model_not_found",
         Message::Field { .. } => "unsupported_parameter",
         Message::Content(_) => "unsupported_content_type",

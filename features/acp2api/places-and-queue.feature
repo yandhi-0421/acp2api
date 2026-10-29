@@ -34,7 +34,7 @@ Feature: Places and queue
     When "C" ends
     Then the official runtime gets the first call for "D"
 
-  @FR-049 @issue-67 @wip
+  @FR-049 @issue-67
   Scenario: In the state sign-in required, the sign-in check of a request holds a place
     Given the concurrency limit is 1
     And acp2api is in the state "sign-in required"
@@ -42,7 +42,7 @@ Feature: Places and queue
     When the request "B" comes
     Then the sign-in check of "B" starts only after the end of the sign-in check of "A"
 
-  @FR-011 @FR-026 @FR-038 @FR-049 @FR-050 @issue-67 @wip
+  @FR-011 @FR-026 @FR-038 @FR-049 @FR-050 @issue-67
   Scenario: A queued sign-in check has no accepted stream
     Given the concurrency limit is 1
     And acp2api is in the state "sign-in required"
@@ -56,7 +56,7 @@ Feature: Places and queue
     When the sign-in check of "B" fails
     Then "B" gets HTTP 400 with M-13 and no stream event
 
-  @FR-026 @FR-038 @FR-049 @issue-67 @wip
+  @FR-026 @FR-038 @FR-049 @issue-67
   Scenario: A queued request keeps its own check after another check succeeds
     Given the concurrency limit is 1
     And acp2api is in the state "sign-in required"
@@ -70,7 +70,7 @@ Feature: Places and queue
     When that check succeeds
     Then "B" gets HTTP 200 and its prompt turn starts
 
-  @FR-031 @FR-038 @FR-050 @issue-67 @wip
+  @FR-031 @FR-038 @FR-050 @issue-67
   Scenario: A disconnect before a sign-in check removes the queued request
     Given all places are occupied
     And a request waits for its required sign-in check
@@ -78,7 +78,7 @@ Feature: Places and queue
     Then the queue count decreases by one
     And the official runtime gets no call for that request
 
-  @FR-026 @FR-038 @FR-050 @issue-67 @wip
+  @FR-026 @FR-038 @FR-050 @issue-67
   Scenario: The queue cap includes requests before their sign-in checks
     Given acp2api is in the state "sign-in required"
     And all places are occupied by sign-in checks

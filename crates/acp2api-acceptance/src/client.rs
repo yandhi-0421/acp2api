@@ -193,6 +193,15 @@ impl ApiClient {
             .len();
         self.hub.shared.0.lock().unwrap().active_request =
             Some((prompts_before, call.body.clone()));
+        self.begin(call)
+    }
+    pub fn model_names(&self) -> Call {
+        self.begin(ApiCall::one_user_message(
+            "GET /v1/models",
+            "model catalog observation",
+        ))
+    }
+    fn begin(&self, call: ApiCall) -> Call {
         assert!(
             self.requests.fetch_add(1, Ordering::SeqCst) < 300,
             "API request cap: 300"

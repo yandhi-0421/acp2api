@@ -172,6 +172,8 @@ async fn next(runtime: &mut Runtime) -> String {
         RuntimeEvent::Retired { .. } => "retired".into(),
         RuntimeEvent::Failed(error) => format!("failed {error}"),
         RuntimeEvent::Stderr => "stderr".into(),
+        RuntimeEvent::SignInAddress(_) => "sign-in address".into(),
+        RuntimeEvent::Authenticated(_) => "authenticated".into(),
         RuntimeEvent::UpstreamError { error, .. } => format!("upstream {}", error.code),
         RuntimeEvent::Other => "other".into(),
         RuntimeEvent::Closed => "closed".into(),
@@ -674,4 +676,20 @@ async fn load_uses_the_requested_session_id_and_recreates_its_missing_cwd() {
         assert!(matches!(event, RuntimeEvent::Prepared { work, result: Ok((session, _)) } if work == "resume" && session == "saved-session"),
             "ACP session/load returns the catalog without a sessionId; the request identifies the loaded session");
     }).await;
+}
+
+#[tokio::test]
+async fn a_sign_in_address_accepts_four_kib_and_rejects_a_longer_line() {
+    let (mut runtime, _agent, _root) = start(vec![]).await;
+    let prefix = "https://accounts.example.com/";
+    let address = format!("{prefix}{}", "a".repeat(4096 - prefix.len()));
+    let line = format!("Open the following link to authenticate the ACP server: {address}");
+    assert!(
+        matches!(runtime.stderr(&format!("{line}b")), RuntimeEvent::Stderr),
+        "the product rejects a sign-in address over 4 KiB"
+    );
+    assert!(
+        matches!(runtime.stderr(&line), RuntimeEvent::SignInAddress(value) if value == address),
+        "the product accepts a sign-in address of exactly 4 KiB"
+    );
 }

@@ -1,3 +1,40 @@
+pub(super) const COUNTDOWN: &str = r#"const timer = document.getElementById('sign-in-time');
+const seconds = Number(timer.dataset.seconds);
+const started = performance.now();
+function update() {
+    const left = Math.max(0, seconds - Math.floor((performance.now() - started) / 1000));
+    timer.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    if (left > 0) setTimeout(update, 1000);
+}
+update();"#;
+pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment) -> String {
+    let sign_in = if let Some(wait) = &view.sign_in_wait {
+        let seconds = wait.deadline.saturating_sub(now).div_ceil(1000);
+        let address = wait
+            .address
+            .as_ref()
+            .map(|address| {
+                format!(
+                    " If no browser opened, copy this address: <a href=\"{0}\">{0}</a>",
+                    escape(address)
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            r#"<p>acp2api waits for the sign-in in the browser: <span id="sign-in-time" role="timer" data-seconds="{seconds}">{}:{:02}</span> left.{address}</p><form method="post" action="/manage/cancel-sign-in"><button type="submit">Cancel the sign-in</button></form><script>{COUNTDOWN}</script>"#,
+            seconds / 60,
+            seconds % 60
+        )
+    } else {
+        r#"<form method="post" action="/manage/sign-in"><button type="submit">Sign in</button></form>"#.into()
+    };
+    format!(
+        r#"<section id="{entry_id}"><h2>{}</h2><p>Requests in the queue <span>{}</span></p>{sign_in}</section>"#,
+        view.state,
+        view.queued,
+        entry_id = crate::conductor::sign_in::ENTRY_ID
+    )
+}
 fn document(content: &str) -> String {
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>acp2api</title><style>
@@ -27,6 +64,7 @@ pub(super) fn settings(
     notices: &[crate::conductor::Notice],
     builds: Result<crate::runtime_builds::Summary, String>,
     quota_result: &Option<crate::conductor::QuotaResult>,
+    sign_in_section: &str,
 ) -> String {
     let key = escape(&settings.local_api_key);
     let options = (1..=highest)
@@ -54,7 +92,7 @@ pub(super) fn settings(
         r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p></section>"#
     );
     document(&format!(
-        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Concurrency limit</h2><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{sign_in_section}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Concurrency limit</h2><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
     ))
 }
 

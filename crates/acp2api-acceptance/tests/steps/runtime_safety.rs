@@ -158,9 +158,6 @@ async fn next(w: &mut World) {
         .next_prompt(acp2api_acceptance::TurnPlan::new().chunk("Next conversation completes"));
     w.safety.next =
         Some(safety::send(&mut w.scenario, "a different conversation after the event").await);
-}
-#[then("acp2api is in the normal state")]
-fn normal(w: &mut World) {
     safety::reply(
         w.safety.next.as_ref().unwrap(),
         "Next conversation completes",
@@ -169,6 +166,20 @@ fn normal(w: &mut World) {
         w.scenario.fake().record().cancels().len(),
         1,
         "only the offending turn is cancelled"
+    );
+    w.panel.scenario(&mut w.scenario).await;
+}
+#[then("acp2api is in the normal state")]
+async fn normal(w: &mut World) {
+    let answer = w.panel.api(&w.panel.old_key).await;
+    assert_eq!(answer.status, 200, "normal state serves the model catalog");
+    assert!(
+        answer.json()["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "gemini-3.8-flash"),
+        "normal state exposes the checked model name"
     );
 }
 #[then("the official runtime gets a prompt for the request")]

@@ -4,6 +4,7 @@ pub(crate) mod mcp;
 #[cfg(test)]
 mod rpc_request_ids;
 mod safety;
+use crate::messages::Message;
 use crate::runtime_builds::LaunchFailure;
 use crate::*;
 use agent_client_protocol_schema::v1::{
@@ -109,6 +110,7 @@ impl RuntimeStart {
         .map_err(|error| error.to_string())?
     }
 }
+const MAX_SIGN_IN_ADDRESS_BYTES: usize = 4096;
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
@@ -125,6 +127,7 @@ pub(crate) struct Runtime {
     config: std::collections::HashMap<(String, String), String>,
     configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
     stderr_session: Option<String>,
+    authentication: Option<u64>,
 }
 struct CreatingSession {
     work: String,
@@ -141,7 +144,7 @@ impl Runtime {
     pub(crate) async fn start(
         start: &RuntimeStart,
         expected_version: &str,
-    ) -> Result<(Self, crate::catalog::Catalog), LaunchFailure> {
+    ) -> Result<(Self, Option<crate::catalog::Catalog>), LaunchFailure> {
         let mut runtime = Self::open(start, program(&start.data)).await?;
         let starting = async {
             let initialized = start.until_stopped(runtime.initialize(start)).await?;
@@ -150,10 +153,11 @@ impl Runtime {
                     "initialize version differs from the accepted build".into(),
                 ));
             }
-            runtime
-                .new_session(&[], None)
-                .await
-                .map_err(LaunchFailure::Runtime)
+            match runtime.new_session(&[], None).await {
+                Ok(catalog) => Ok(Some(catalog)),
+                Err(error) if error.requires_sign_in() => Ok(None),
+                Err(error) => Err(LaunchFailure::Runtime(error.to_string())),
+            }
         };
         let result = start.before_deadline(ANSWER_TIMEOUT, starting).await;
         match result {
@@ -242,6 +246,7 @@ impl Runtime {
             config: std::collections::HashMap::new(),
             configuring: std::collections::HashMap::new(),
             stderr_session: None,
+            authentication: None,
         };
         Ok(runtime)
     }
@@ -253,19 +258,22 @@ impl Runtime {
             "protocolVersion": 1,
             "clientInfo": {"name":"acp2api", "title":"acp2api", "version":start.release.version()},
             "clientCapabilities": {}
-        })).await.map_err(LaunchFailure::Runtime)
+        })).await.map_err(|error| LaunchFailure::Runtime(error.to_string()))
     }
     pub(crate) async fn new_session(
         &mut self,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
-    ) -> Result<crate::catalog::Catalog, String> {
-        let (params, tools) = self.session_parameters(tools, system, None)?;
+    ) -> Result<crate::catalog::Catalog, Message> {
+        let (params, tools) = self
+            .session_parameters(tools, system, None)
+            .map_err(Message::Upstream)?;
         let session = self.call("session/new", params).await?;
-        let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
+        let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())
+            .map_err(Message::Upstream)?;
         let session_id = session["sessionId"]
             .as_str()
-            .ok_or("missing sessionId")?
+            .ok_or_else(|| Message::Upstream("missing sessionId".into()))?
             .to_owned();
         self.remember_config(&session_id, &session);
         self.tools.insert(session_id.clone(), tools);
@@ -407,22 +415,24 @@ impl Runtime {
         self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
             .await
     }
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    async fn call(&mut self, method: &str, params: Value) -> Result<Value, Message> {
         let id = self
             .send(method, params)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| Message::Upstream(error.to_string()))?;
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
-                Line::Stdout(value) => value?,
+                Line::Stdout(value) => value.map_err(Message::Upstream)?,
                 Line::Stderr(_) => continue,
-                Line::Closed => return Err("runtime stdout closed".into()),
+                Line::Closed => {
+                    return Err(Message::Upstream("runtime stdout closed".into()));
+                }
             };
             if value.get("method").is_some() {
                 if value.get("id").is_some() {
                     self.refuse(&value)
                         .await
-                        .map_err(|error| error.to_string())?;
+                        .map_err(|error| Message::Upstream(error.to_string()))?;
                 }
                 continue;
             }
@@ -430,10 +440,10 @@ impl Runtime {
                 return value
                     .get("result")
                     .cloned()
-                    .ok_or_else(|| acp_error(&value["error"]).to_string());
+                    .ok_or_else(|| acp_error(&value["error"]));
             }
         }
-        Err("runtime stdout closed".into())
+        Err(Message::Upstream("runtime stdout closed".into()))
     }
     pub(crate) async fn start_configured_prompt(
         &mut self,
@@ -516,6 +526,13 @@ impl Runtime {
         self.prompts.insert(id, session.into());
         Ok(())
     }
+    pub(crate) async fn authenticate(&mut self) -> Result<(), CommandError> {
+        let id = self
+            .send("authenticate", json!({"methodId":"oauth-personal"}))
+            .await?;
+        self.authentication = Some(id);
+        Ok(())
+    }
     pub(crate) async fn next(&mut self) -> (RuntimeEvent, Hold) {
         let Some((line, hold)) = self.lines.recv().await else {
             return (RuntimeEvent::Closed, self.clock.hold(HoldKind::TurnEvent));
@@ -529,6 +546,16 @@ impl Runtime {
         (event, hold)
     }
     fn stderr(&mut self, line: &str) -> RuntimeEvent {
+        if let Some(address) = line
+            .trim()
+            .strip_prefix("Open the following link to authenticate the ACP server: ")
+            && address.len() <= MAX_SIGN_IN_ADDRESS_BYTES
+            && let Ok(uri) = address.parse::<axum::http::Uri>()
+            && matches!(uri.scheme_str(), Some("http" | "https"))
+            && uri.authority().is_some()
+        {
+            return RuntimeEvent::SignInAddress(address.into());
+        }
         if let Some((_, session)) =
             line.split_once("Antigravity SDK error processing prompt for session ")
         {
@@ -555,6 +582,13 @@ impl Runtime {
         if value.get("method").is_none()
             && let Some(id) = value["id"].as_u64()
         {
+            if self.authentication == Some(id) {
+                self.authentication = None;
+                return RuntimeEvent::Authenticated(match value.get("error") {
+                    Some(error) => Err(acp_error(error)),
+                    None => Ok(()),
+                });
+            }
             if let Some(pending) = self.configuring.remove(&id) {
                 let session = pending.session;
                 if let Some(error) = value.get("error") {
@@ -574,7 +608,7 @@ impl Runtime {
                     Err(CommandError::Io(_)) => RuntimeEvent::Closed,
                     Err(CommandError::Session(error)) => RuntimeEvent::Turn {
                         session,
-                        update: TurnUpdate::Failed(crate::messages::Message::Upstream(error)),
+                        update: TurnUpdate::Failed(Message::Upstream(error)),
                     },
                 };
             }
@@ -702,7 +736,7 @@ impl Runtime {
         &self,
         value: &Value,
         loaded: Option<String>,
-    ) -> Result<(String, crate::catalog::Catalog), crate::messages::Message> {
+    ) -> Result<(String, crate::catalog::Catalog), Message> {
         let response = value
             .get("result")
             .ok_or_else(|| acp_error(&value["error"]))?;
@@ -710,11 +744,11 @@ impl Runtime {
             Some(id) => id,
             None => response["sessionId"]
                 .as_str()
-                .ok_or_else(|| crate::messages::Message::Upstream("missing sessionId".into()))?
+                .ok_or_else(|| Message::Upstream("missing sessionId".into()))?
                 .to_owned(),
         };
         let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())
-            .map_err(crate::messages::Message::Upstream)?;
+            .map_err(Message::Upstream)?;
         Ok((session, catalog))
     }
     fn client_tool_call(
@@ -764,12 +798,10 @@ pub(crate) fn program(data: &std::path::Path) -> std::path::PathBuf {
     data.join(crate::runtime_builds::COPY)
         .join(crate::runtime_builds::SERVER)
 }
-fn acp_error(value: &Value) -> crate::messages::Message {
+fn acp_error(value: &Value) -> Message {
     match serde_json::from_value(value.clone()) {
-        Ok(error) => crate::messages::Message::UpstreamAcp(error),
-        Err(error) => {
-            crate::messages::Message::Upstream(format!("acp2api: invalid ACP error: {error}"))
-        }
+        Ok(error) => Message::UpstreamAcp(error),
+        Err(error) => Message::Upstream(format!("acp2api: invalid ACP error: {error}")),
     }
 }
 struct SessionTools {
@@ -783,13 +815,15 @@ enum Line {
     Closed,
 }
 pub(crate) enum RuntimeEvent {
+    SignInAddress(String),
+    Authenticated(Result<(), Message>),
     UpstreamError {
         session: String,
         error: crate::messages::HttpError,
     },
     Prepared {
         work: String,
-        result: Result<(String, crate::catalog::Catalog), crate::messages::Message>,
+        result: Result<(String, crate::catalog::Catalog), Message>,
     },
     Retired {
         session: String,
@@ -819,5 +853,5 @@ pub(crate) enum TurnUpdate {
     PromptEnded {
         stop_reason: Option<StopReason>,
     },
-    Failed(crate::messages::Message),
+    Failed(Message),
 }

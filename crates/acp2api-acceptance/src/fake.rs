@@ -113,6 +113,7 @@ enum SessionResult {
 }
 #[derive(Debug)]
 pub(crate) struct FakeState {
+    pub(crate) held_replies: HashMap<String, (String, Value, crate::rpc_script::RpcReply)>,
     usage_plans: VecDeque<TurnPlan>,
     pub(crate) rpc_replies: HashMap<String, VecDeque<crate::rpc_script::RpcReply>>,
     session_result: SessionResult,
@@ -131,6 +132,7 @@ pub(crate) struct FakeState {
 impl Default for FakeState {
     fn default() -> Self {
         Self {
+            held_replies: HashMap::new(),
             usage_plans: VecDeque::new(),
             rpc_replies: HashMap::new(),
             plans: VecDeque::new(),
@@ -159,6 +161,27 @@ pub struct ModelSpec {
     pub levels: Vec<String>,
 }
 impl FakeRuntime {
+    pub fn set_signed_in(&self, signed_in: bool) {
+        self.hub
+            .shared
+            .0
+            .lock()
+            .unwrap()
+            .fake
+            .set_signed_in(signed_in);
+    }
+    pub fn release_call(&self, gate: &str) {
+        let mut state = self.hub.shared.0.lock().unwrap();
+        let (label, call, reply) = state.fake.held_replies.remove(gate).expect("held ACP call");
+        state
+            .fake
+            .rpc_replies
+            .entry(call["method"].as_str().unwrap().into())
+            .or_default()
+            .push_front(reply);
+        assert!(crate::rpc_script::respond(&mut state, &label, &call));
+        self.hub.shared.1.notify_all();
+    }
     pub fn next_usage(&self, plan: TurnPlan) {
         assert!(
             plan.steps.len() <= 16 && format!("{plan:?}").len() <= 128 * 1024,
@@ -254,6 +277,11 @@ impl FakeRuntime {
         Record {
             entries: self.hub.entries(),
         }
+    }
+}
+impl FakeState {
+    pub(crate) fn set_signed_in(&mut self, signed_in: bool) {
+        self.signed_in = signed_in;
     }
 }
 fn result(id: Value, value: Value) -> Value {
@@ -380,7 +408,7 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
             let plan = match command {
                 Some(command @ "/logout") => {
                     s.record(json!({"kind":"slash-command","name":command}));
-                    s.fake.signed_in = false;
+                    s.fake.set_signed_in(false);
                     TurnPlan::new().chunk("Signed out.")
                 }
                 Some(command @ "/usage") => {

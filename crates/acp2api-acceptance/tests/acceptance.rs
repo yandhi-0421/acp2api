@@ -49,6 +49,12 @@ mod runtime_support;
 #[path = "steps/runtime_unavailable.rs"]
 mod runtime_unavailable;
 mod selection;
+#[path = "steps/sign_in.rs"]
+mod sign_in;
+#[path = "support/sign_in_facts.rs"]
+mod sign_in_facts;
+#[path = "support/sign_in.rs"]
+mod sign_in_support;
 #[path = "steps/slash_and_thought.rs"]
 mod slash_and_thought;
 #[path = "support/slash_and_thought.rs"]
@@ -73,6 +79,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    sign_in: sign_in_support::SignInState,
     retry: retry_support::RetryState,
     quota: quota_support::QuotaState,
     queries: query_support::QueryState,

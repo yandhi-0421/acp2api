@@ -471,7 +471,7 @@ impl Builds {
     pub(crate) async fn launch(
         &self,
         retained: Option<Vec<(String, PathBuf)>>,
-    ) -> Result<(Runtime, crate::catalog::Catalog), LaunchFailure> {
+    ) -> Result<(Runtime, Option<crate::catalog::Catalog>), LaunchFailure> {
         let build = self
             .identify(&self.start.data.join(COPY))
             .map_err(|error| match error {

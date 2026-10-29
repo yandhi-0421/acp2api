@@ -95,7 +95,7 @@ pub(crate) async fn run(
                 runtime
                     .new_session(&tools, Some(&system))
                     .await
-                    .map_err(|error| Failure::Runtime(error.into()))
+                    .map_err(|error| Failure::Runtime(error.to_string().into()))
             })
             .await?;
         let session = runtime.session_id().to_owned();

@@ -24,7 +24,6 @@ async fn send(world: &mut World, endpoint: String) {
         return;
     }
     let answer = call.finish(&mut world.scenario.time).await;
-    assert_eq!(answer.status, 200, "request must reach the product");
     world.scenario.answer = Some(answer);
 }
 #[then(expr = "the usage of the response has {string} set to {int}")]

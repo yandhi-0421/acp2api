@@ -6,12 +6,13 @@ pub(crate) struct HttpError {
     pub status: String,
     pub message: String,
 }
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 pub(crate) struct AcpError {
     pub code: i64,
     pub message: String,
+    pub data: Option<serde_json::Value>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum Message {
     Field {
         path: String,
@@ -48,6 +49,7 @@ pub(crate) enum Message {
         retry_after: u64,
     },
     RuntimeUnavailable(String),
+    SignInRequired(String),
     RuntimeFailed,
     MaxTurnRequests,
     RetryWait {
@@ -59,6 +61,48 @@ pub(crate) enum Message {
     UpstreamHttp(HttpError),
     UpstreamAcp(AcpError),
     BuiltInToolRan(String),
+}
+impl Message {
+    fn upstream_parts(&self) -> Option<(i64, &str, Option<&str>)> {
+        match self {
+            Self::UpstreamHttp(error) => Some((
+                i64::from(error.code),
+                error.message.as_str(),
+                Some(error.status.as_str()),
+            )),
+            Self::UpstreamAcp(error) => Some((error.code, error.message.as_str(), None)),
+            _ => None,
+        }
+    }
+    pub(crate) fn is_lockout_signal(&self) -> bool {
+        let Some((code, message, status)) = self.upstream_parts() else {
+            return false;
+        };
+        code == 403
+            || status == Some("PERMISSION_DENIED")
+            || message.contains("PERMISSION_DENIED")
+            || message.contains("Terms of Service")
+    }
+    pub(crate) fn requires_sign_in(&self) -> bool {
+        if self.is_lockout_signal() {
+            return false;
+        }
+        let Some((code, message, status)) = self.upstream_parts() else {
+            return false;
+        };
+        let reason = match self {
+            Self::UpstreamAcp(error) => {
+                error.data.as_ref().and_then(|data| data["reason"].as_str())
+            }
+            _ => None,
+        };
+        code == 401
+            || status == Some("UNAUTHENTICATED")
+            || message.contains("UNAUTHENTICATED")
+            || code == -32000 && message.contains("Authentication required")
+            || reason == Some("logged_out")
+            || message.contains("logged_out")
+    }
 }
 pub(crate) enum Row {
     Key,
@@ -124,6 +168,7 @@ impl Message {
             | Message::MaxTurnRequests
             | Message::BuiltInToolRan(_) => Row::Other502,
             Message::RuntimeUnavailable(_)
+            | Message::SignInRequired(_)
             | Message::Stopped
             | Message::Model { .. }
             | Message::Field { .. }
@@ -147,6 +192,7 @@ impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RuntimeUnavailable(message) => f.write_str(message),
+            Self::SignInRequired(address) => write!(f, "acp2api: the official runtime is not signed in. Sign in at {address}."),
             Self::Model { requested, names } => write!(
                 f,
                 "acp2api: the model name {requested} is not available. The model names are: {}.",
@@ -202,5 +248,63 @@ impl fmt::Display for Message {
             Self::QuotaWait { until, .. } => write!(f, "acp2api: the Google quota is used up until {until}. acp2api starts no prompt turn before that time."),
             Self::TooLarge => f.write_str("acp2api: the request body is larger than 32 MB."),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_in_signals_keep_lockout_priority_and_read_the_logged_out_reason() {
+        for (error, expected) in [
+            (
+                serde_json::json!({"code":401,"message":"Credentials expired"}),
+                true,
+            ),
+            (
+                serde_json::json!({"code":-32000,"message":"UNAUTHENTICATED"}),
+                true,
+            ),
+            (
+                serde_json::json!({"code":-32000,"message":"Sign-in ended","data":{"reason":"logged_out"}}),
+                true,
+            ),
+            (
+                serde_json::json!({"code":403,"message":"UNAUTHENTICATED"}),
+                false,
+            ),
+            (
+                serde_json::json!({"code":-32000,"message":"Terms of Service: Authentication required"}),
+                false,
+            ),
+            (
+                serde_json::json!({"code":-32000,"message":"PERMISSION_DENIED: logged_out"}),
+                false,
+            ),
+            (
+                serde_json::json!({"code":500,"message":"Connection failed"}),
+                false,
+            ),
+        ] {
+            let error = Message::UpstreamAcp(serde_json::from_value(error).unwrap());
+            assert_eq!(error.requires_sign_in(), expected, "{error}");
+        }
+        assert!(
+            Message::UpstreamHttp(HttpError {
+                code: 400,
+                status: "UNAUTHENTICATED".into(),
+                message: "Credentials expired".into()
+            })
+            .requires_sign_in()
+        );
+        assert!(
+            !Message::UpstreamHttp(HttpError {
+                code: 401,
+                status: "PERMISSION_DENIED".into(),
+                message: "Credentials expired".into()
+            })
+            .requires_sign_in()
+        );
     }
 }
