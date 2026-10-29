@@ -3,6 +3,8 @@ mod fake_pipe;
 use acp2api_acceptance::{TurnEndPlan, TurnPlan, TurnStep};
 use fake_pipe::FakePipe;
 use serde_json::json;
+#[path = "support/compatibility_script.rs"]
+mod compatibility_script;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permission_uses_captured_title_arguments_and_options() {
