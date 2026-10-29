@@ -5,7 +5,7 @@ Feature: Runtime process
   N is the number of ACP sessions after which acp2api replaces the runtime process. OD-1 of the PRD decides its value.
   In a quoted message, a value in angle brackets is a value that acp2api fills in, as the section "Message texts" of the PRD gives.
 
-  @FR-040 @issue-131 @wip
+  @FR-040 @issue-131
   Scenario: A failed automatic copy names the accepted build in M-14
     Given acp2api has no copy of the official runtime
     And the install folder of Zed holds the accepted build 1.4.0

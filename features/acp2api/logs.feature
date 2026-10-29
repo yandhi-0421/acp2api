@@ -8,7 +8,7 @@ Feature: Logs
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-056 @issue-131 @wip
+  @FR-056 @issue-131
   Scenario: A failed automatic copy logs its OS error category without a path
     Given acp2api has no copy of the official runtime
     And the install folder of Zed holds the accepted build 1.4.0
