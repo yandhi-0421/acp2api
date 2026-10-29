@@ -30,6 +30,8 @@ mod runtime_continuation;
 mod runtime_process;
 #[path = "support/runtime_process.rs"]
 mod runtime_support;
+#[path = "steps/runtime_unavailable.rs"]
+mod runtime_unavailable;
 mod selection;
 #[path = "steps/slash_and_thought.rs"]
 mod slash_and_thought;
@@ -45,6 +47,8 @@ mod timed_steps;
 mod tool_result_support;
 #[path = "steps/tool_results.rs"]
 mod tool_results;
+#[path = "support/runtime_unavailable.rs"]
+mod unavailable_support;
 #[path = "steps/upstream_error.rs"]
 mod upstream_error;
 #[path = "support/usage_contract.rs"]

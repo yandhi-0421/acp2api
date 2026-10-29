@@ -138,13 +138,16 @@ pub async fn action(w: &mut World, path: &str, body: Value) {
 pub async fn search(w: &mut World) {
     action(w, "/manage/search", json!({})).await;
 }
-pub async fn request(w: &mut World) -> acp2api_acceptance::client::Answer {
-    let root = if w.builds.bound {
+pub fn root(w: &World) -> &acp2api_acceptance::setup::TestRoot {
+    if w.builds.bound {
         w.startup.root()
     } else {
         &w.scenario.root
-    };
+    }
+}
+pub async fn request(w: &mut World) -> acp2api_acceptance::client::Answer {
     w.request.queue_next(&w.scenario);
+    let root = root(w);
     ApiClient::new(
         format!("127.0.0.1:{}", root.port),
         root.key.clone(),

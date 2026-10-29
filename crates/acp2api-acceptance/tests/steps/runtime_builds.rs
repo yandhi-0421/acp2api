@@ -339,12 +339,12 @@ async fn unavailable_message(w: &mut World, message: String) {
     let answer = build::request(w).await;
     let expected = message.replace("<versions>", "1.4.0").replace(
         "<address of the management panel>",
-        &format!("http://127.0.0.1:{}/", w.startup.root().port),
+        &format!("http://127.0.0.1:{}/", build::root(w).port),
     );
     assert_eq!(
         answer.json()["error"]["message"],
         expected,
-        "FR-040 exact M-14 for no executable"
+        "FR-040 exact M-14 for the unavailable reason"
     );
 }
 #[then("that build is not an accepted version")]
