@@ -2028,6 +2028,9 @@ impl Core {
             Err(crate::messages::Message::BuiltInToolRan(_)) => {
                 crate::journal::Outcome::BuiltInToolRan
             }
+            Err(crate::messages::Message::MaxTurnRequests) => {
+                crate::journal::Outcome::MaxTurnRequests
+            }
             Err(_) => crate::journal::Outcome::Failed,
         };
         commands.push(Command::Complete(crate::journal::Completion {
