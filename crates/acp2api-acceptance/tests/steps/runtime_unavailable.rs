@@ -1,7 +1,8 @@
 use crate::{
-    World, build_support as build, runtime_support as process, unavailable_support as support,
+    World, build_support as build, compatibility_support as check, runtime_support as process,
+    unavailable_support as support,
 };
-use acp2api_acceptance::{build_fixture, client::ApiCall};
+use acp2api_acceptance::{build_fixture, client::ApiCall, setup::file_hash};
 use cucumber::{given, then, when};
 use serde_json::json;
 
@@ -39,9 +40,9 @@ async fn accepted(w: &mut World) {
         toml::from_str(&std::fs::read_to_string(w.scenario.root.path.join("run.toml")).unwrap())
             .unwrap();
     assert!(run.release.builds.iter().any(|listed| {
-        listed.agy_acp_server_sha256 == build::hash(&folder.join(build_fixture::SERVER))
+        listed.agy_acp_server_sha256 == file_hash(&folder.join(build_fixture::SERVER))
             && listed.localharness_external_sha256
-                == build::hash(&folder.join(build_fixture::HARNESS))
+                == file_hash(&folder.join(build_fixture::HARNESS))
     }));
 }
 
@@ -100,10 +101,9 @@ fn no_automatic_start(w: &mut World) {
 #[when("the owner uses the retry entry of the management panel")]
 async fn retry(w: &mut World) {
     let answer = support::action(w, "/manage/retry", json!({})).await;
-    assert!(
-        matches!(answer.status, 200 | 303),
-        "FR-040 management retry must start a new try (HTTP {})",
-        answer.status
+    assert_eq!(
+        answer.status, 200,
+        "FR-040 management retry must start a new try"
     );
 }
 
@@ -134,26 +134,16 @@ async fn checked(w: &mut World) {
         "discover the candidate through the management panel"
     );
     crate::compatibility_facts::configure(&w.scenario.fake(), crate::compatibility_facts::echo);
-    let identity = format!(
-        "{}:{}",
-        build::hash(&folder.join(build_fixture::SERVER)),
-        build::hash(&folder.join(build_fixture::HARNESS))
-    );
+    let identity = check::identity(&folder).join(":");
     let answer = support::action(w, "/manage/compatibility-check", json!({"build":identity})).await;
     assert_eq!(
         answer.status, 200,
         "FR-040 a passed compatibility check starts a new try"
     );
-    let state: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(w.scenario.root.path.join("data/state.json")).unwrap(),
-    )
-    .unwrap();
-    assert!(
-        state["checked_builds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["version"] == "1.6.0"),
+    let entry = check::checked(&folder, &w.scenario.root.path.join("data"))
+        .expect("the real compatibility check saved both candidate hashes");
+    assert_eq!(
+        entry["version"], "1.6.0",
         "the real compatibility check passed"
     );
 }

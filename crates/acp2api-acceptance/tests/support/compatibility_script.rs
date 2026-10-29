@@ -2,7 +2,6 @@
 mod facts;
 use crate::fake_pipe::FakePipe;
 use acp2api_acceptance::real_limit;
-pub use facts::{configure, echo};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};

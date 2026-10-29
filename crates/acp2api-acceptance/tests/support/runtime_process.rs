@@ -73,6 +73,21 @@ pub async fn start(w: &mut World) {
             .collect();
     }
 }
+pub async fn exit_at(w: &mut World, minutes: &[u64]) {
+    start(w).await;
+    let origin = w.scenario.hub.now();
+    for (index, minute) in minutes.iter().enumerate() {
+        w.scenario.time.advance_to(origin + minute * 60_000).await;
+        assert_eq!(
+            servers(w).len(),
+            index + 1,
+            "FR-041 each earlier failure must leave a replacement for the next exit"
+        );
+        exit(w).await;
+        observe(w, |w| servers(w).len() >= index + 2).await;
+        w.process.exits.push(servers(w).len());
+    }
+}
 pub async fn held(w: &mut World, name: &str, stream: bool, end: TurnEndPlan) {
     start(w).await;
     let mut plan = TurnPlan::new();

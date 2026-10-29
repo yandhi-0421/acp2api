@@ -160,8 +160,8 @@ impl TestRoot {
                 builds: vec![ListedBuild {
                     version: "1.4.0".into(),
                     platform: platform().into(),
-                    agy_acp_server_sha256: hex(&Sha256::digest(fs::read(program).unwrap())),
-                    localharness_external_sha256: hex(&Sha256::digest(descriptor_text.as_bytes())),
+                    agy_acp_server_sha256: file_hash(&program),
+                    localharness_external_sha256: file_hash(&descriptor),
                 }],
             },
             environment: Environment {
@@ -226,6 +226,9 @@ pub fn binary(name: &str) -> PathBuf {
 }
 pub fn random_hex(n: usize) -> String {
     hex(&random(n))
+}
+pub fn file_hash(path: &Path) -> String {
+    hex(&Sha256::digest(fs::read(path).unwrap()))
 }
 fn random(n: usize) -> Vec<u8> {
     let mut bytes = vec![0; n];

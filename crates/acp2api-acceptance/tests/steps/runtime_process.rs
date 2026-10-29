@@ -230,24 +230,12 @@ async fn start_deadline(w: &mut World) {
     regex = r"^the runtime process exits with no cause from acp2api at the times (0 minutes, 4 minutes, and 9 minutes|0 minutes, 5 minutes, and 11 minutes)$"
 )]
 async fn failures(w: &mut World, times: String) {
-    process::start(w).await;
-    let origin = w.scenario.hub.now();
     let minutes: Vec<u64> = times
         .split(|c: char| !c.is_ascii_digit())
         .filter(|part| !part.is_empty())
         .map(|part| part.parse().unwrap())
         .collect();
-    for (index, minute) in minutes.into_iter().enumerate() {
-        w.scenario.time.advance_to(origin + minute * 60_000).await;
-        assert_eq!(
-            process::servers(w).len(),
-            index + 1,
-            "FR-041 each earlier failure must leave a replacement for the next exit"
-        );
-        process::exit(w).await;
-        process::observe(w, |w| process::servers(w).len() >= index + 2).await;
-        w.process.exits.push(process::servers(w).len());
-    }
+    process::exit_at(w, &minutes).await;
 }
 #[then("acp2api starts a new runtime process after each exit")]
 fn after_each(w: &mut World) {

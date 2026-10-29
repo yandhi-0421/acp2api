@@ -4,20 +4,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 pub async fn three_failures(w: &mut World) {
-    process::start(w).await;
-    let origin = w.scenario.hub.now();
-    for (index, minute) in [0, 4, 9].into_iter().enumerate() {
-        w.scenario.time.advance_to(origin + minute * 60_000).await;
-        assert_eq!(
-            process::servers(w).len(),
-            index + 1,
-            "three-failure setup requires each earlier replacement"
-        );
-        process::exit(w).await;
-        if index < 2 {
-            process::observe(w, |w| process::servers(w).len() == index + 2).await;
-        }
-    }
+    process::exit_at(w, &[0, 4, 9]).await;
     w.scenario.time.settle().await;
 }
 
