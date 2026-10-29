@@ -198,7 +198,10 @@ pub fn ports() -> Ports {
     }
 }
 pub fn environment() -> Environment {
+    #[cfg(unix)]
     let home = std::env::var_os("HOME").map(PathBuf::from);
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
     #[cfg(unix)]
     let account_root = unsafe {
         let entry = libc::getpwuid(libc::getuid());

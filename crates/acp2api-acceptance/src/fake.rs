@@ -724,6 +724,16 @@ fn run_plan(s: &mut State, label: &str, id: Value, session: String, plan: TurnPl
     turn_schedule(s, label, at, (&session, &id), command, true);
 }
 
+pub(crate) fn scripted_prompt(s: &mut State, label: &str, call: &Value, plan: TurnPlan) {
+    run_plan(
+        s,
+        label,
+        call["id"].clone(),
+        call["params"]["sessionId"].as_str().unwrap().into(),
+        plan,
+    );
+}
+
 fn turn_emit(s: &mut State, label: &str, at: u64, owner: (&str, &Value), value: Value) {
     turn_schedule(
         s,

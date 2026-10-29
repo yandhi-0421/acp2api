@@ -4,6 +4,12 @@ use cucumber::{World as _, event::ScenarioFinished};
 mod account_ownership;
 #[path = "support/runtime_builds.rs"]
 mod build_support;
+#[path = "steps/compatibility_check.rs"]
+mod compatibility_check;
+#[path = "support/compatibility_facts.rs"]
+mod compatibility_facts;
+#[path = "support/compatibility_check.rs"]
+mod compatibility_support;
 #[path = "steps/panel.rs"]
 mod panel;
 #[path = "steps/places_and_queue.rs"]
@@ -51,6 +57,7 @@ struct World {
     reload: runtime_continuation::ReloadState,
     account: acp2api_acceptance::account_check::AccountState,
     builds: build_support::BuildState,
+    compatibility: compatibility_support::CompatibilityState,
     places: places_support::PlacesState,
     ends: response_ends::EndState,
     upstream: upstream_error::ErrorState,

@@ -4,7 +4,7 @@ use crate::{
 };
 use axum::{
     Router,
-    extract::{Form, State},
+    extract::{Extension, Form, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -42,6 +42,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/search", post(search))
         .route("/manage/runtime-path", post(runtime_path))
         .route("/manage/build", post(build))
+        .route("/manage/compatibility-check", post(compatibility_check))
         .layer(axum::extract::DefaultBodyLimit::max(16384))
         .layer(axum::middleware::from_fn_with_state(panel.clone(), guard))
         .with_state(panel)
@@ -274,27 +275,37 @@ async fn dismiss_notice(State(panel): State<Panel>, Form(form): Form<DismissNoti
             .into_response(),
     }
 }
-async fn runtime_action(panel: Panel, action: crate::runtime_builds::Action) -> Response {
-    match panel
-        .conductor
-        .builds(action, panel.clock.hold(crate::HoldKind::TurnEvent))
-        .await
-    {
+async fn runtime_action(
+    panel: Panel,
+    action: crate::runtime_builds::Action,
+    lease: crate::front::RequestHold,
+) -> Response {
+    let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
+    drop(lease.release());
+    match panel.conductor.builds(action, hold).await {
         Ok(notice) => panel.page(StatusCode::OK, &notice),
         Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
     }
 }
-async fn search(State(panel): State<Panel>) -> Response {
-    runtime_action(panel, crate::runtime_builds::Action::Search).await
+async fn search(
+    State(panel): State<Panel>,
+    Extension(lease): Extension<crate::front::RequestHold>,
+) -> Response {
+    runtime_action(panel, crate::runtime_builds::Action::Search, lease).await
 }
 #[derive(Deserialize)]
 struct RuntimePath {
     agy_acp_server_path: std::path::PathBuf,
 }
-async fn runtime_path(State(panel): State<Panel>, Form(form): Form<RuntimePath>) -> Response {
+async fn runtime_path(
+    State(panel): State<Panel>,
+    Extension(lease): Extension<crate::front::RequestHold>,
+    Form(form): Form<RuntimePath>,
+) -> Response {
     runtime_action(
         panel,
         crate::runtime_builds::Action::Path(form.agy_acp_server_path),
+        lease,
     )
     .await
 }
@@ -302,8 +313,29 @@ async fn runtime_path(State(panel): State<Panel>, Form(form): Form<RuntimePath>)
 struct Build {
     build: String,
 }
-async fn build(State(panel): State<Panel>, Form(form): Form<Build>) -> Response {
-    runtime_action(panel, crate::runtime_builds::Action::Build(form.build)).await
+async fn compatibility_check(
+    State(panel): State<Panel>,
+    Extension(lease): Extension<crate::front::RequestHold>,
+    Form(form): Form<Build>,
+) -> Response {
+    runtime_action(
+        panel,
+        crate::runtime_builds::Action::Check(form.build),
+        lease,
+    )
+    .await
+}
+async fn build(
+    State(panel): State<Panel>,
+    Extension(lease): Extension<crate::front::RequestHold>,
+    Form(form): Form<Build>,
+) -> Response {
+    runtime_action(
+        panel,
+        crate::runtime_builds::Action::Build(form.build),
+        lease,
+    )
+    .await
 }
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]

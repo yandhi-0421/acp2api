@@ -29,7 +29,14 @@ impl FakePipe {
                         },
                     ),
                     args: vec![],
-                    env_set: vec![],
+                    env_set: vec![(
+                        "GEMINI_HOME".into(),
+                        scenario
+                            .root
+                            .path
+                            .join("data/runtime-home")
+                            .into_os_string(),
+                    )],
                     cwd: scenario.root.path.clone(),
                     own_temp: None,
                 })

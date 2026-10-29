@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 mod account;
 mod catalog;
+mod compatibility_check;
 mod conductor;
 mod conversation;
 mod dialect;
