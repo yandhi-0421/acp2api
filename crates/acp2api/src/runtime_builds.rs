@@ -68,7 +68,7 @@ pub(crate) struct Summary {
 pub(crate) struct CurrentBuild {
     pub(crate) version: String,
     pub(crate) acceptance: &'static str,
-    pub(crate) source: PathBuf,
+    pub(crate) source: Option<PathBuf>,
 }
 pub(crate) enum Action {
     Initial,
@@ -326,10 +326,23 @@ impl Builds {
                     .ok_or("Choose an accepted build from the search results.")?;
                 return Ok(Selection::Start(Some(selected.selected_build())));
             }
-            Action::Initial if self.accepted_copy()?.is_some() => {
-                return Ok(Selection::Start(None));
+            Action::Initial => {
+                if let Some(copy) = self.accepted_copy()? {
+                    self.scan_places(settings.agy_acp_server_path.as_deref());
+                    *self.source.lock().unwrap() = self
+                        .found
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find(|found| {
+                            found.folder != self.start.data.join(COPY)
+                                && found.identity == identity(&copy)
+                        })
+                        .map(|found| found.folder.join(SERVER));
+                    return Ok(Selection::Start(None));
+                }
             }
-            Action::Initial | Action::Search => {}
+            Action::Search => {}
         }
         self.scan_places(settings.agy_acp_server_path.as_deref());
         if !initial && self.accepted_copy()?.is_some() {
@@ -551,12 +564,7 @@ impl Builds {
         let current = self.accepted_copy()?.map(|build| CurrentBuild {
             acceptance: self.acceptance(&build),
             version: build.version,
-            source: self
-                .source
-                .lock()
-                .unwrap()
-                .clone()
-                .unwrap_or_else(|| self.start.data.join(COPY).join(SERVER)),
+            source: self.source.lock().unwrap().clone(),
         });
         let found = self.found.lock().unwrap();
         let rows = found

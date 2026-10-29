@@ -126,11 +126,14 @@ pub(super) fn runtime(
     };
     let current = current
         .map(|build| {
+            let source = build
+                .source
+                .map(|source| format!("<code>{}</code>", escape(&source.display().to_string())))
+                .unwrap_or_else(|| "Not found.".into());
             format!(
-                "<p>Build in use <span>{}</span> — {}</p><p>Source: <code>{}</code></p>",
+                "<p>Build in use <span>{}</span> — {}</p><p>Source: {source}</p>",
                 escape(&build.version),
                 build.acceptance,
-                escape(&build.source.display().to_string())
             )
         })
         .unwrap_or_else(|| "<p>No build in use.</p>".into());
