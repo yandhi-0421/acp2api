@@ -202,6 +202,7 @@ impl Hub {
         let mut reader = BufReader::new(stream);
         let mut role = String::new();
         let mut label = String::new();
+        let mut pid = 0;
         #[cfg(windows)]
         let mut process_recorded = false;
         loop {
@@ -225,6 +226,9 @@ impl Hub {
             if role.is_empty() {
                 if message["token"] != self.token {
                     break;
+                }
+                if message["op"] == "Hello" {
+                    pid = message["pid"].as_u64().expect("fake Hello PID");
                 }
                 role = message["role"].as_str().unwrap_or("rpc").to_owned();
                 if role != "rpc" {
@@ -283,7 +287,9 @@ impl Hub {
                             Ok(value) => {
                                 let mut redacted = value.clone();
                                 redact(&mut redacted);
-                                state.record(json!({"kind":"got","line":redacted.to_string()}));
+                                state.record(
+                                    json!({"kind":"got","pid":pid,"line":redacted.to_string()}),
+                                );
                                 let requests = crate::fake::mcp_requests(&mut state, &value);
                                 state.counts.fake_mcp_inflight += requests.len() as u64;
                                 state.counts.fake_mcp_sent += requests.len() as u64;
@@ -334,6 +340,28 @@ impl Hub {
                         state.counts.read += n;
                     }
                     json!({"ok":true})
+                }
+                "drain_stdin" => {
+                    let pid = message["pid"].as_u64().expect("stdin drain PID");
+                    let lines = message["lines"].as_u64().expect("stdin drain lines");
+                    let deadline = Instant::now() + real_limit(Duration::from_secs(10));
+                    loop {
+                        let got = state
+                            .entries
+                            .iter()
+                            .filter(|entry| {
+                                entry.event["kind"] == "got" && entry.event["pid"] == pid
+                            })
+                            .count() as u64;
+                        if got >= lines {
+                            break json!({"ok":true});
+                        }
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            break json!({"error":format!("stdin drain 10 s cap: pid {pid}, written {lines}, got {got}")});
+                        }
+                        state = self.shared.1.wait_timeout(state, remaining).unwrap().0;
+                    }
                 }
                 "now" | "drain" => json!({"now":state.now}),
                 "sleep" => {
