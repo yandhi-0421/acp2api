@@ -12,7 +12,7 @@ Feature: Runtime process
     Then acp2api is in the state "runtime unavailable"
     And a request gets the message "acp2api: the official runtime is unavailable: acp2api found no executable of the official runtime. Accepted versions: <versions>. See <address of the management panel>."
 
-  @FR-040 @issue-68 @wip
+  @FR-040 @issue-68
   Scenario Outline: Each other reason gives the state runtime unavailable and M-14 with that reason
     Given <cause>
     Then acp2api is in the state "runtime unavailable"
@@ -24,13 +24,13 @@ Feature: Runtime process
       | acp2api found only builds that are not accepted versions                    | no build that acp2api found is an accepted version      |
       | the runtime process had 3 failures in 10 minutes                            | the runtime process failed 3 times in 10 minutes        |
 
-  @FR-040 @issue-68 @wip
+  @FR-040 @issue-68
   Scenario: In the state runtime unavailable, acp2api starts no runtime process by itself
     Given the runtime process had 3 failures in 10 minutes
     When 30 minutes pass with no event that starts a new try
     Then acp2api started no runtime process after the third failure
 
-  @FR-040 @issue-68 @wip
+  @FR-040 @issue-68
   Scenario Outline: An event starts a new try, and a successful start ends the state
     Given acp2api is in the state "runtime unavailable"
     And an accepted version of the official runtime is now available
