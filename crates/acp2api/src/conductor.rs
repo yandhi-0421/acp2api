@@ -2003,7 +2003,7 @@ impl Core {
                 *result = Err(crate::messages::Message::BuiltInToolRan(name));
                 self.cancel(session, now, commands);
             }
-            TurnUpdate::Usage(_) | TurnUpdate::ThoughtDropped => {}
+            TurnUpdate::Activity | TurnUpdate::Usage(_) | TurnUpdate::ThoughtDropped => {}
         }
     }
     fn finish_quota(
@@ -2123,7 +2123,8 @@ impl Core {
                 | TurnUpdate::RefusedPermission { request, .. } => {
                     commands.push(Command::Permission(request));
                 }
-                TurnUpdate::Text(_)
+                TurnUpdate::Activity
+                | TurnUpdate::Text(_)
                 | TurnUpdate::Usage(_)
                 | TurnUpdate::ThoughtDropped
                 | TurnUpdate::UnpermittedTool(_) => {}
@@ -2183,6 +2184,7 @@ impl Core {
         }
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
         match update {
+            TurnUpdate::Activity => {}
             TurnUpdate::Text(text) => {
                 if active.tool_call.is_none() && active.release_or_cut_reply(Some(text), commands) {
                     let session = active.session.as_ref().unwrap().clone();
