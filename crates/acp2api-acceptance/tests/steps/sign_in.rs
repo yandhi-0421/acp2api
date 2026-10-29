@@ -476,7 +476,13 @@ async fn waiting_check(w: &mut World) {
 #[when("its API client disconnects")]
 async fn disconnect(w: &mut World) {
     drop(queue::take(w, "B"));
-    w.scenario.time.settle().await;
+    let handled = |w: &World| {
+        acp2api_acceptance::journal_check::terminal(&w.scenario)
+            .iter()
+            .any(|record| record["result"] == "disconnected")
+    };
+    process::observe(w, handled).await;
+    assert!(handled(w), "FR-031 queued disconnect reaches acp2api");
 }
 
 #[then("the queue count decreases by one")]
