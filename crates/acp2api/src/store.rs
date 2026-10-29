@@ -5,6 +5,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
+pub(crate) const STATE_FILE: &str = "state.json";
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StateFile {
@@ -59,23 +60,8 @@ impl StateFile {
         Ok(state)
     }
     pub(crate) fn save(&self, path: &Path) -> Result<(), String> {
-        let temporary = path.with_file_name(format!(
-            ".state-{}.tmp",
-            crate::random_hex::<16>().map_err(|error| error.to_string())?
-        ));
-        let result = (|| {
-            let mut file =
-                crate::os::private_file(&temporary).map_err(|error| error.to_string())?;
-            let bytes = serde_json::to_vec(self).map_err(|error| error.to_string())?;
-            file.write_all(&bytes).map_err(|error| error.to_string())?;
-            file.sync_all().map_err(|error| error.to_string())?;
-            drop(file);
-            fs::rename(&temporary, path).map_err(|error| error.to_string())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result
+        let bytes = serde_json::to_vec(self).map_err(|error| error.to_string())?;
+        atomic_write(path, &bytes)
     }
 }
 #[derive(Clone, Serialize)]
@@ -284,21 +270,26 @@ fn base64url(bytes: &[u8]) -> String {
     result
 }
 pub(crate) fn save(path: &Path, settings: &Settings) -> Result<(), String> {
-    let parent = path.parent().ok_or("configuration path has no parent")?;
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut suffix = [0u8; 16];
-    getrandom::fill(&mut suffix).map_err(|_| "cannot generate configuration temporary name")?;
-    let temporary = parent.join(format!(".config-{}.tmp", base64url(&suffix)));
-    let mut file = crate::os::private_file(&temporary).map_err(|e| e.to_string())?;
+    let text = toml::to_string(settings).map_err(|_| "cannot encode configuration")?;
+    atomic_write(path, text.as_bytes())
+}
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path.parent().ok_or("stored file path has no parent")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary = parent.join(format!(
+        ".{}-{}.tmp",
+        path.file_name().unwrap().to_string_lossy(),
+        crate::random_hex::<16>().map_err(|error| error.to_string())?
+    ));
     let result = (|| {
-        let text = toml::to_string(settings).map_err(|_| "cannot encode configuration")?;
-        file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
+        let mut file = crate::os::private_file(&temporary).map_err(|error| error.to_string())?;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
         drop(file);
-        fs::rename(&temporary, path).map_err(|e| e.to_string())
+        fs::rename(&temporary, path).map_err(|error| error.to_string())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(temporary);
     }
     result
 }
@@ -334,7 +325,7 @@ mod tests {
             crate::random_hex::<12>().unwrap()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("state.json");
+        let path = root.join(super::STATE_FILE);
         let hash = "a".repeat(64);
         let saved = serde_json::json!({"format":1,"lockout":null,"checked_builds":[{
             "version":"1.6.0", "platform":"macos-arm64", "agy_acp_server_sha256":hash,

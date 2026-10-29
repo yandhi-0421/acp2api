@@ -18,11 +18,21 @@ pub(crate) struct Builds {
     found: Arc<Mutex<Vec<Found>>>,
     checked: Arc<Mutex<Vec<ListedBuild>>>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BuildIdentity {
+    server: String,
+    harness: String,
+}
+impl std::fmt::Display for BuildIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.server, self.harness)
+    }
+}
 #[derive(Clone)]
 struct Found {
     folder: PathBuf,
     listed: Option<ListedBuild>,
-    identity: String,
+    identity: BuildIdentity,
 }
 pub(crate) struct BuildRow {
     pub(crate) path: PathBuf,
@@ -47,7 +57,10 @@ pub(crate) enum Selection {
     Keep,
     Notice(&'static str),
     Start(Option<PathBuf>),
-    Check { folder: PathBuf, identity: String },
+    Check {
+        folder: PathBuf,
+        identity: BuildIdentity,
+    },
 }
 #[derive(Debug)]
 pub(crate) enum LaunchFailure {
@@ -128,7 +141,7 @@ impl Builds {
             .into_iter()
             .filter(move |build| build.platform == platform)
     }
-    fn hashes(folder: &Path) -> Result<String, LaunchFailure> {
+    fn hashes(folder: &Path) -> Result<BuildIdentity, LaunchFailure> {
         let hash = |name: &str| -> Result<Option<String>, LaunchFailure> {
             let path = folder.join(name);
             match fs::read(&path) {
@@ -143,16 +156,16 @@ impl Builds {
         let (Some(server), Some(harness)) = (hash(SERVER)?, hash(HARNESS)?) else {
             return Err(LaunchFailure::NoExecutable);
         };
-        Ok(format!("{server}:{harness}"))
+        Ok(BuildIdentity { server, harness })
     }
     fn identify(&self, folder: &Path) -> Result<ListedBuild, LaunchFailure> {
         let hashes = Self::hashes(folder)?;
         self.identify_hashes(&hashes)
             .ok_or(LaunchFailure::NotAccepted)
     }
-    fn identify_hashes(&self, hashes: &str) -> Option<ListedBuild> {
+    fn identify_hashes(&self, hashes: &BuildIdentity) -> Option<ListedBuild> {
         self.accepted_builds()
-            .find(|build| identity(build) == hashes)
+            .find(|build| identity(build) == *hashes)
     }
     fn accepted_copy(&self) -> Result<Option<ListedBuild>, String> {
         match self.identify(&self.start.data.join(COPY)) {
@@ -206,7 +219,8 @@ impl Builds {
     ) -> Result<Selection, String> {
         let initial = matches!(action, Action::Initial);
         if initial {
-            let state = crate::store::StateFile::read(&self.start.data.join("state.json"))?;
+            let state =
+                crate::store::StateFile::read(&self.start.data.join(crate::store::STATE_FILE))?;
             *self.checked.lock().unwrap() = state
                 .checked_builds
                 .into_iter()
@@ -250,13 +264,13 @@ impl Builds {
                 let found = self.found.lock().unwrap();
                 let selected = found
                     .iter()
-                    .find(|found| found.listed.is_none() && found.identity == choice)
+                    .find(|found| found.listed.is_none() && found.identity.to_string() == choice)
                     .ok_or(
                         "Choose a build that is not an accepted version from the search results.",
                     )?;
                 return Ok(Selection::Check {
                     folder: selected.folder.clone(),
-                    identity: choice,
+                    identity: selected.identity.clone(),
                 });
             }
             Action::Build(choice) => {
@@ -267,7 +281,7 @@ impl Builds {
                         found
                             .listed
                             .as_ref()
-                            .is_some_and(|build| identity(build) == choice)
+                            .is_some_and(|build| identity(build).to_string() == choice)
                     })
                     .ok_or("Choose an accepted build from the search results.")?;
                 return Ok(Selection::Start(Some(selected.folder.clone())));
@@ -330,7 +344,7 @@ impl Builds {
     pub(crate) fn check_copy(
         &self,
         source: &Path,
-        identity: &str,
+        identity: &BuildIdentity,
     ) -> Result<PathBuf, LaunchFailure> {
         let check = self.start.data.join(CHECK);
         if check.exists() {
@@ -341,7 +355,7 @@ impl Builds {
             for name in [SERVER, HARNESS] {
                 fs::copy(source.join(name), check.join(name)).map_err(|error| error.to_string())?;
             }
-            if Self::hashes(&check)? != identity {
+            if Self::hashes(&check)? != *identity {
                 return Err(LaunchFailure::Runtime(
                     "the selected build changed before the compatibility check".into(),
                 ));
@@ -353,24 +367,55 @@ impl Builds {
         }
         result
     }
-    pub(crate) fn accept_check(&self, version: String, hashes: &str) -> Result<(), LaunchFailure> {
+    pub(crate) async fn check(
+        &self,
+        program: PathBuf,
+        retained: Vec<(String, PathBuf)>,
+    ) -> Result<String, crate::compatibility_check::Failure> {
+        self.start
+            .clean_sessions(retained)
+            .await
+            .map_err(crate::compatibility_check::Failure::Internal)?;
+        crate::compatibility_check::run(&self.start, program).await
+    }
+    pub(crate) fn finish_check(
+        &self,
+        identity: &BuildIdentity,
+        outcome: Result<String, crate::compatibility_check::Failure>,
+    ) -> Result<String, LaunchFailure> {
+        use crate::compatibility_check::Failure;
+        let result = match outcome {
+            Ok(version) => self
+                .accept_check(version.clone(), identity)
+                .map(|()| format!("The compatibility check passed for {version}.")),
+            Err(Failure::Runtime(LaunchFailure::Stopped)) => Err(LaunchFailure::Stopped),
+            Err(Failure::Runtime(error)) => Ok(format!("The compatibility check failed: {error}.")),
+            Err(Failure::Incompatible(error)) => {
+                Ok(format!("The compatibility check failed: {error}."))
+            }
+            Err(Failure::Internal(error)) => Err(LaunchFailure::Runtime(error)),
+        };
+        let cleanup = fs::remove_dir_all(self.start.data.join(CHECK))
+            .map_err(|error| LaunchFailure::Runtime(error.to_string()));
+        cleanup.and(result)
+    }
+    fn accept_check(&self, version: String, hashes: &BuildIdentity) -> Result<(), LaunchFailure> {
         let check = self.start.data.join(CHECK);
-        if Self::hashes(&check)? != hashes {
+        if Self::hashes(&check)? != *hashes {
             return Err("the check copy changed during the compatibility check"
                 .to_string()
                 .into());
         }
-        let (server, harness) = hashes.split_once(':').unwrap();
         let build = ListedBuild {
             version,
             platform: self.start.release.platform().into(),
-            agy_acp_server_sha256: server.into(),
-            localharness_external_sha256: harness.into(),
+            agy_acp_server_sha256: hashes.server.clone(),
+            localharness_external_sha256: hashes.harness.clone(),
         };
-        let path = self.start.data.join("state.json");
+        let path = self.start.data.join(crate::store::STATE_FILE);
         let mut state = crate::store::StateFile::read(&path)?;
         state.checked_builds.retain(|checked| {
-            !(checked.build.platform == build.platform && identity(&checked.build) == hashes)
+            !(checked.build.platform == build.platform && identity(&checked.build) == *hashes)
         });
         state.checked_builds.push(crate::store::CheckedBuild {
             build,
@@ -450,7 +495,7 @@ impl Builds {
             .map(|found| BuildRow {
                 path: found.folder.join(SERVER),
                 version: found.listed.as_ref().map(|build| build.version.clone()),
-                identity: found.identity.clone(),
+                identity: found.identity.to_string(),
                 acceptance: found.listed.as_ref().map(|build| {
                     if self.start.release.listed_builds().iter().any(|listed| {
                         listed.platform == build.platform && identity(listed) == identity(build)
@@ -475,7 +520,7 @@ impl Builds {
             .filter_map(|found| {
                 found.listed.as_ref().map(|build| {
                     (
-                        identity(build),
+                        identity(build).to_string(),
                         format!(
                             "{} — {}",
                             build.version,
@@ -523,12 +568,13 @@ pub(crate) const SERVER: &str = "agy_acp_server.par";
 pub(crate) const HARNESS: &str = "localharness_external.exe";
 #[cfg(not(windows))]
 pub(crate) const HARNESS: &str = "localharness_external";
-pub(crate) fn identity(build: &ListedBuild) -> String {
-    format!(
-        "{}:{}",
-        build.agy_acp_server_sha256, build.localharness_external_sha256
-    )
+pub(crate) fn identity(build: &ListedBuild) -> BuildIdentity {
+    BuildIdentity {
+        server: build.agy_acp_server_sha256.clone(),
+        harness: build.localharness_external_sha256.clone(),
+    }
 }
+
 fn version(text: &str) -> Vec<u64> {
     text.split('.')
         .filter_map(|part| part.parse().ok())
@@ -586,7 +632,7 @@ mod tests {
             "version":"1.6.0","platform":ports.release.platform(),
             "agy_acp_server_sha256":hash,"localharness_external_sha256":hash,"checked_at":"2026-10-18T12:00:00Z"
         }]});
-        let path = root.join("state.json");
+        let path = root.join(crate::store::STATE_FILE);
         fs::write(&path, state.to_string()).unwrap();
         let builds = Builds::fixture(&root, ports.clock.clone());
         let config = root.join("config.toml");
@@ -791,7 +837,7 @@ mod tests {
             .await
             .unwrap();
         let selected = builds
-            .select(Action::Build(choice), &mut settings, &config)
+            .select(Action::Build(choice.to_string()), &mut settings, &config)
             .await
             .ok()
             .and_then(|selection| match selection {
@@ -1048,7 +1094,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_planned_replacement_start_failure_retries_until_runtime_unavailable() {
-        refused_starts(|build| Action::Build(identity(build))).await;
+        refused_starts(|build| Action::Build(identity(build).to_string())).await;
     }
 
     #[allow(clippy::disallowed_methods)]
@@ -1173,7 +1219,7 @@ mod tests {
                 .unwrap();
             let Selection::Start(source) = builds
                 .select(
-                    Action::Build(identity(&builds.start.release.listed_builds()[0])),
+                    Action::Build(identity(&builds.start.release.listed_builds()[0]).to_string()),
                     &mut settings,
                     &config,
                 )

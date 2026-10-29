@@ -44,7 +44,36 @@ pub(crate) struct RuntimeStart {
     pub(crate) temporary: crate::account::Temporary,
     pub(crate) tool_sets: mcp::ToolSets,
 }
+pub(crate) const ANSWER_TIMEOUT: Moment = 5 * 60 * 1000;
 impl RuntimeStart {
+    pub(crate) async fn answer<T, E: From<LaunchFailure>>(
+        &self,
+        wait: Moment,
+        answer: impl std::future::Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        self.before_deadline(wait, self.until_stopped(answer)).await
+    }
+    async fn until_stopped<T, E: From<LaunchFailure>>(
+        &self,
+        answer: impl std::future::Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        let mut stopped = self.stopped.clone();
+        tokio::select! {
+            biased;
+            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped.into()),
+            result = answer => result,
+        }
+    }
+    async fn before_deadline<T, E: From<LaunchFailure>>(
+        &self,
+        wait: Moment,
+        answer: impl std::future::Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
+        tokio::select! {
+            result = answer => result,
+            _hold = self.clock.sleep_until(self.clock.now().saturating_add(wait)) => Err(LaunchFailure::Runtime("runtime gave no answer before its deadline".into()).into()),
+        }
+    }
     pub(crate) async fn clean_sessions(
         &self,
         retained: Vec<(String, PathBuf)>,
@@ -114,12 +143,8 @@ impl Runtime {
         expected_version: &str,
     ) -> Result<(Self, crate::catalog::Catalog), LaunchFailure> {
         let mut runtime = Self::open(start, program(&start.data)).await?;
-        let mut stopped = start.stopped.clone();
         let starting = async {
-            let initialized = tokio::select! {
-                result = runtime.initialize(start) => result,
-                Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
-            }?;
+            let initialized = start.until_stopped(runtime.initialize(start)).await?;
             if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
                 return Err(LaunchFailure::Runtime(
                     "initialize version differs from the accepted build".into(),
@@ -130,11 +155,7 @@ impl Runtime {
                 .await
                 .map_err(LaunchFailure::Runtime)
         };
-        let result = tokio::select! {
-            result = starting => result,
-            _hold = start.clock.sleep_until(start.clock.now().saturating_add(5 * 60 * 1000)) =>
-                Err(LaunchFailure::Runtime("runtime start gave no answer in 5 minutes".into())),
-        };
+        let result = start.before_deadline(ANSWER_TIMEOUT, starting).await;
         match result {
             Ok(catalog) => Ok((runtime, catalog)),
             Err(error) => {

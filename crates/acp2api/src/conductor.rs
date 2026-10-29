@@ -1,12 +1,12 @@
 mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
+    compatibility_check::Failure as CheckFailure,
     conversation::{EffortAsk, Prompt, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
-    runtime_builds::LaunchFailure,
-    runtime_driver::{Runtime, RuntimeEvent, RuntimeStart, TurnUpdate},
+    runtime_builds::{BuildIdentity, LaunchFailure},
+    runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use agent_client_protocol_schema::v1::StopReason;
-use serde_json::json;
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
@@ -42,44 +42,26 @@ impl Notice {
 }
 enum Replacement {
     Build {
-        reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
-        source: Option<std::path::PathBuf>,
+        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        source: Option<PathBuf>,
         initial: bool,
     },
     Check {
-        reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
-        folder: std::path::PathBuf,
-        identity: String,
+        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        folder: PathBuf,
+        identity: BuildIdentity,
     },
 }
-enum CheckFailure {
-    Incompatible(String),
-    Runtime(LaunchFailure),
-}
-impl From<String> for CheckFailure {
-    fn from(error: String) -> Self {
-        Self::Incompatible(error)
-    }
-}
-impl From<crate::runtime_driver::CommandError> for CheckFailure {
-    fn from(error: crate::runtime_driver::CommandError) -> Self {
-        match error {
-            crate::runtime_driver::CommandError::Io(error) => {
-                Self::Runtime(LaunchFailure::Runtime(error.to_string()))
-            }
-            crate::runtime_driver::CommandError::Session(error) => Self::Incompatible(error),
-        }
-    }
-}
-struct CompatibilityCheck {
-    identity: String,
-    result: crate::BoxFuture<'static, Result<String, CheckFailure>>,
-    reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
+type CompatibilityCheck = crate::BoxFuture<'static, CompletedCheck>;
+struct CompletedCheck {
+    identity: BuildIdentity,
+    result: Result<String, CheckFailure>,
+    reply: oneshot::Sender<Result<String, LaunchFailure>>,
 }
 enum Input {
     Builds {
         action: crate::runtime_builds::Action,
-        reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
+        reply: oneshot::Sender<Result<String, LaunchFailure>>,
         hold: Hold,
     },
     Owner {
@@ -267,7 +249,7 @@ struct Core {
     cancels: BTreeMap<String, Moment>,
     changes: VecDeque<(
         crate::runtime_builds::Action,
-        oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
+        oneshot::Sender<Result<String, LaunchFailure>>,
     )>,
     replacement: Option<Replacement>,
     catalog: Option<crate::catalog::Catalog>,
@@ -306,7 +288,7 @@ enum Command {
     Prepare {
         work: String,
         settings: Session,
-        load: Option<(String, std::path::PathBuf)>,
+        load: Option<(String, PathBuf)>,
     },
     Prompt {
         work: String,
@@ -352,34 +334,20 @@ impl Core {
                 Ok(program) => {
                     self.runtime_state = RuntimeState::Retiring;
                     self.stop_runtime(runtime, read_open).await;
-                    let start = builds.start.clone();
-                    let retained = self
-                        .records
-                        .iter()
-                        .filter_map(|record| match &record.location {
-                            records::Location::Unloaded(cwd) => {
-                                Some((record.session.clone(), cwd.clone()))
-                            }
-                            records::Location::Loaded => None,
-                        })
-                        .collect();
-                    return Some(CompatibilityCheck {
-                        identity,
-                        result: Box::pin(async move {
-                            start
-                                .clean_sessions(retained)
-                                .await
-                                .map_err(|error| CheckFailure::Runtime(error.into()))?;
-                            Conductor::check(&start, program).await
-                        }),
-                        reply,
-                    });
+                    let builds = builds.clone();
+                    let retained = self.retained_sessions();
+                    return Some(Box::pin(async move {
+                        let result = builds.check(program, retained).await;
+                        CompletedCheck {
+                            identity,
+                            result,
+                            reply,
+                        }
+                    }));
                 }
                 Err(error) => {
-                    if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
-                        self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
-                            .await;
-                    }
+                    self.resume_after_copy_error(runtime, read_open, clock, journal)
+                        .await;
                     let _ = reply.send(Err(error));
                     return None;
                 }
@@ -389,10 +357,8 @@ impl Core {
             && let Err(error) = builds.copy(source)
             && !initial
         {
-            if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
-                self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
-                    .await;
-            }
+            self.resume_after_copy_error(runtime, read_open, clock, journal)
+                .await;
             let _ = reply.send(Err(error));
             return None;
         }
@@ -400,7 +366,7 @@ impl Core {
         self.launch(runtime, read_open, clock, journal, builds)
             .await;
         if matches!(self.runtime_state, RuntimeState::Stopping) {
-            let _ = reply.send(Err(crate::runtime_builds::LaunchFailure::Stopped));
+            let _ = reply.send(Err(LaunchFailure::Stopped));
             return None;
         }
         let configured = publish.borrow().agy_acp_server_path.clone();
@@ -411,6 +377,58 @@ impl Core {
             .map_err(Into::into);
         let _ = reply.send(result);
         None
+    }
+    fn retained_sessions(&self) -> Vec<(String, PathBuf)> {
+        self.records
+            .iter()
+            .filter_map(|record| match &record.location {
+                records::Location::Unloaded(cwd) => Some((record.session.clone(), cwd.clone())),
+                records::Location::Loaded => None,
+            })
+            .collect()
+    }
+    async fn resume_after_copy_error(
+        &mut self,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+    ) {
+        if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
+            self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
+                .await;
+        }
+    }
+    async fn finish_check(
+        &mut self,
+        check: CompletedCheck,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+        publish: &watch::Sender<Arc<crate::store::Settings>>,
+    ) {
+        if matches!(
+            &check.result,
+            Err(CheckFailure::Runtime(LaunchFailure::Runtime(_)))
+        ) {
+            self.apply(
+                Event::RuntimeFailure,
+                runtime,
+                read_open,
+                &builds.start.clock,
+                journal,
+            )
+            .await;
+        }
+        let result = builds.finish_check(&check.identity, check.result);
+        self.launch(runtime, read_open, &builds.start.clock, journal, builds)
+            .await;
+        let configured = publish.borrow().agy_acp_server_path.clone();
+        let discovered = builds.discover(configured).await;
+        let _ = check
+            .reply
+            .send(discovered.map_err(LaunchFailure::Runtime).and(result));
     }
     async fn launch(
         &mut self,
@@ -436,21 +454,7 @@ impl Core {
                 .await;
                 return;
             }
-            let retained = if self.cleanup_before_start {
-                Some(
-                    self.records
-                        .iter()
-                        .filter_map(|record| match &record.location {
-                            records::Location::Unloaded(cwd) => {
-                                Some((record.session.clone(), cwd.clone()))
-                            }
-                            records::Location::Loaded => None,
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
+            let retained = self.cleanup_before_start.then(|| self.retained_sessions());
             self.cleanup_before_start = true;
             match builds.launch(retained).await {
                 Ok((started, catalog)) => {
@@ -461,19 +465,16 @@ impl Core {
                         .await;
                     return;
                 }
-                Err(crate::runtime_builds::LaunchFailure::Runtime(_)) => {
+                Err(LaunchFailure::Runtime(_)) => {
                     self.apply(Event::RuntimeFailure, runtime, read_open, clock, journal)
                         .await;
                 }
-                Err(crate::runtime_builds::LaunchFailure::Stopped) => {
+                Err(LaunchFailure::Stopped) => {
                     self.apply(Event::Stop, runtime, read_open, clock, journal)
                         .await;
                     return;
                 }
-                Err(
-                    error @ (crate::runtime_builds::LaunchFailure::NoExecutable
-                    | crate::runtime_builds::LaunchFailure::NotAccepted),
-                ) => {
+                Err(error @ (LaunchFailure::NoExecutable | LaunchFailure::NotAccepted)) => {
                     self.make_unavailable(
                         &error.to_string(),
                         runtime,
@@ -1050,7 +1051,6 @@ impl Core {
                 }
             }
             TurnUpdate::PromptEnded { stop_reason } => {
-                use agent_client_protocol_schema::v1::StopReason;
                 if stop_reason == Some(StopReason::MaxTokens) && active.stop.sequence().is_none() {
                     active.stop = crate::conversation::Stop::MaxTokens;
                 }
@@ -1320,7 +1320,7 @@ impl Conductor {
         clock: Arc<dyn Clock>,
         journal: crate::journal::Journal,
         settings: crate::store::Settings,
-        configuration: std::path::PathBuf,
+        configuration: PathBuf,
         highest: u8,
     ) -> (Self, tokio::task::JoinHandle<()>) {
         let (send, mut recv) = mpsc::channel::<Input>(32);
@@ -1475,25 +1475,9 @@ impl Conductor {
                     Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => {
                         (Event::Stop, clock.hold(HoldKind::TurnEvent))
                     }
-                    result = async { checking.as_mut().unwrap().result.as_mut().await }, if checking.is_some() => {
-                        let check = checking.take().unwrap();
-                        let result = match result {
-                            Ok(version) => actor_builds.accept_check(version.clone(), &check.identity)
-                                .map(|()| format!("The compatibility check passed for {version}.")),
-                            Err(CheckFailure::Runtime(LaunchFailure::Stopped)) => Err(LaunchFailure::Stopped),
-                            Err(CheckFailure::Runtime(error)) => {
-                                core.apply(Event::RuntimeFailure, &mut runtime, &mut read_open, &clock, &journal).await;
-                                Ok(format!("The compatibility check failed: {error}."))
-                            }
-                            Err(CheckFailure::Incompatible(error)) => Ok(format!("The compatibility check failed: {error}.")),
-                        };
-                        let cleanup = std::fs::remove_dir_all(actor_builds.start.data.join(crate::runtime_builds::CHECK))
-                            .map_err(|error| crate::runtime_builds::LaunchFailure::Runtime(error.to_string()));
-                        let result = cleanup.and(result);
-                        core.launch(&mut runtime, &mut read_open, &clock, &journal, &actor_builds).await;
-                        let configured = publish.borrow().agy_acp_server_path.clone();
-                        let discovered = actor_builds.discover(configured).await;
-                        let _ = check.reply.send(discovered.map_err(crate::runtime_builds::LaunchFailure::Runtime).and(result));
+                    completed = async { checking.as_mut().unwrap().as_mut().await }, if checking.is_some() => {
+                        checking = None;
+                        core.finish_check(completed, &mut runtime, &mut read_open, &journal, &actor_builds, &publish).await;
                         continue;
                     }
                     work = first_closed(&connected), if !connected.is_empty() => {
@@ -1575,10 +1559,8 @@ impl Conductor {
                 }
             }
             if let Some(check) = checking {
-                let _ = check.result.await;
-                let _ = check
-                    .reply
-                    .send(Err(crate::runtime_builds::LaunchFailure::Stopped));
+                let check = check.await;
+                let _ = check.reply.send(Err(LaunchFailure::Stopped));
             }
             if let Some(runtime) = runtime {
                 runtime.stop().await;
@@ -1675,224 +1657,6 @@ impl Conductor {
             }
         }
     }
-    async fn answer<T>(
-        start: &RuntimeStart,
-        wait: crate::Moment,
-        answer: impl std::future::Future<Output = Result<T, CheckFailure>>,
-    ) -> Result<T, CheckFailure> {
-        let mut stopped = start.stopped.clone();
-        tokio::select! {
-            biased;
-            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(CheckFailure::Runtime(LaunchFailure::Stopped)),
-            result = answer => result,
-            _hold = start.clock.sleep_until(start.clock.now().saturating_add(wait)) =>
-                Err(CheckFailure::Runtime(LaunchFailure::Runtime("runtime gave no answer before its deadline".into()))),
-        }
-    }
-    async fn check(start: &RuntimeStart, program: PathBuf) -> Result<String, CheckFailure> {
-        let mut runtime = Runtime::open(start, program)
-            .await
-            .map_err(CheckFailure::Runtime)?;
-        let checking = async {
-            let initialized = Self::answer(start, 5 * 60 * 1000, async {
-                runtime
-                    .initialize(start)
-                    .await
-                    .map_err(CheckFailure::Runtime)
-            })
-            .await?;
-            if initialized["protocolVersion"] != 1
-                || initialized["agentCapabilities"]["loadSession"] != true
-                || !initialized["authMethods"]
-                    .as_array()
-                    .is_some_and(|methods| {
-                        methods
-                            .iter()
-                            .any(|method| method["id"] == "oauth-personal")
-                    })
-            {
-                return Err(
-                    "the runtime must support ACP 1, session/load and oauth-personal"
-                        .to_string()
-                        .into(),
-                );
-            }
-            let version = initialized["agentInfo"]["version"]
-                .as_str()
-                .filter(|version| !version.is_empty())
-                .ok_or_else(|| CheckFailure::Incompatible("initialize has no version".into()))?
-                .to_owned();
-            let codeword = crate::random_hex::<16>().map_err(|error| error.to_string())?;
-            let tools = vec![crate::conversation::ClientTool {
-                name: format!(
-                    "compatibility_{}",
-                    crate::random_hex::<12>().map_err(|error| error.to_string())?
-                ),
-                description: "Return a value for the compatibility check.".into(),
-                schema: json!({"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}),
-                kind: crate::conversation::ToolKind::Function,
-                namespace: None,
-            }];
-            let system = format!(
-                "For this compatibility check the secret codeword is {codeword}. When asked for the codeword, repeat it exactly. Use only the supplied client tool when asked to use a tool."
-            );
-            Self::answer(start, 5 * 60 * 1000, async {
-                runtime
-                    .new_session(&tools, Some(&system))
-                    .await
-                    .map_err(|error| CheckFailure::Runtime(error.into()))
-            })
-            .await?;
-            let session = runtime.session_id().to_owned();
-            let (text, call) = Self::check_prompt(
-                &mut runtime,
-                start,
-                &session,
-                "Reply with the secret codeword from the system instruction. Do not use any tool.",
-            )
-            .await?;
-            if !text.contains(&codeword) || call.is_some() {
-                return Err("the reply did not contain the system codeword"
-                    .to_string()
-                    .into());
-            }
-            let (_, call) = Self::check_prompt(&mut runtime, start, &session, "Call the supplied client tool with a value of your choice. Do not use a built-in tool.").await?;
-            let call = call.ok_or_else(|| {
-                CheckFailure::Incompatible("no client tool permission request".into())
-            })?;
-            let cwd = runtime.session_cwd(&session).to_owned();
-            runtime.forget(&session);
-            Self::answer(start, 5 * 60 * 1000, async {
-                runtime
-                    .request_session(
-                        "compatibility-check".into(),
-                        &tools,
-                        Some(&system),
-                        Some((session.clone(), cwd)),
-                    )
-                    .await?;
-                loop {
-                    let (event, _hold) = runtime.next().await;
-                    match event {
-                        RuntimeEvent::Prepared { result, .. } => {
-                            result?;
-                            break;
-                        }
-                        RuntimeEvent::Other | RuntimeEvent::Stderr => {}
-                        RuntimeEvent::Closed => {
-                            return Err(CheckFailure::Runtime(LaunchFailure::Runtime(
-                                "the check runtime exited during session/load".into(),
-                            )));
-                        }
-                        _ => {
-                            return Err("session/load failed during the compatibility check"
-                                .to_string()
-                                .into());
-                        }
-                    }
-                }
-                Ok(())
-            })
-            .await?;
-            let result = crate::random_hex::<16>().map_err(|error| error.to_string())?;
-            let prompt = format!(
-                "The tool {} returned this result as text: {result}\nReply with that result exactly, without calling any tool.",
-                call.name
-            );
-            let (text, call) = Self::check_prompt(&mut runtime, start, &session, &prompt).await?;
-            if !text.contains(&result) || call.is_some() {
-                return Err("the reply did not contain the tool result sent as text"
-                    .to_string()
-                    .into());
-            }
-            Ok(version)
-        };
-        let result = checking.await;
-        runtime.stop().await;
-        result
-    }
-    async fn check_prompt(
-        runtime: &mut Runtime,
-        start: &RuntimeStart,
-        session: &str,
-        text: &str,
-    ) -> Result<(String, Option<crate::conversation::ToolCall>), CheckFailure> {
-        runtime
-            .start_prompt(
-                vec![crate::conversation::PromptBlock::Text(text.into())],
-                session,
-            )
-            .await?;
-        let mut text = String::new();
-        let mut call = None;
-        let mut deadline = start.clock.now().saturating_add(5 * 60 * 1000);
-        loop {
-            let (event, _hold) =
-                Self::answer(start, deadline.saturating_sub(start.clock.now()), async {
-                    Ok(runtime.next().await)
-                })
-                .await?;
-            match event {
-                RuntimeEvent::Turn { update, .. } => {
-                    if call.is_none() {
-                        deadline = start.clock.now().saturating_add(5 * 60 * 1000);
-                    }
-                    match update {
-                        TurnUpdate::Text(chunk) => text.push_str(&chunk),
-                        TurnUpdate::Permission {
-                            request,
-                            call: tool,
-                        } => {
-                            runtime.permission(request).await?;
-                            runtime.cancel(session).await?;
-                            call = Some(tool);
-                            deadline = start.clock.now().saturating_add(30 * 1000);
-                        }
-                        TurnUpdate::PromptEnded { stop_reason } => {
-                            let expected = if call.is_some() {
-                                StopReason::Cancelled
-                            } else {
-                                StopReason::EndTurn
-                            };
-                            if stop_reason != Some(expected) {
-                                return Err("unexpected compatibility prompt stop reason"
-                                    .to_string()
-                                    .into());
-                            }
-                            return Ok((text, call));
-                        }
-                        TurnUpdate::ThoughtDropped | TurnUpdate::Usage(_) => {}
-                        TurnUpdate::UnpermittedTool(name) => {
-                            return Err(format!(
-                                "the built-in tool {name} ran during the compatibility check"
-                            )
-                            .into());
-                        }
-                        TurnUpdate::RefusedPermission { request, .. } => {
-                            runtime.permission(request).await?;
-                            return Err(
-                                "a permission request did not name the supplied client tool"
-                                    .to_string()
-                                    .into(),
-                            );
-                        }
-                        TurnUpdate::Failed(error) => return Err(error.to_string().into()),
-                    }
-                }
-                RuntimeEvent::Other | RuntimeEvent::Stderr => {}
-                RuntimeEvent::Closed => {
-                    return Err(CheckFailure::Runtime(LaunchFailure::Runtime(
-                        "the check runtime exited unexpectedly".into(),
-                    )));
-                }
-                _ => {
-                    return Err("runtime failed during the compatibility check"
-                        .to_string()
-                        .into());
-                }
-            }
-        }
-    }
     pub(crate) fn builds_summary(&self) -> Result<crate::runtime_builds::Summary, String> {
         self.builds.summary()
     }
@@ -1906,7 +1670,7 @@ impl Conductor {
         &self,
         action: crate::runtime_builds::Action,
         hold: Hold,
-    ) -> Result<String, crate::runtime_builds::LaunchFailure> {
+    ) -> Result<String, LaunchFailure> {
         let (reply, result) = oneshot::channel();
         self.send
             .send(Input::Builds {
@@ -1915,10 +1679,8 @@ impl Conductor {
                 hold,
             })
             .await
-            .map_err(|_| crate::runtime_builds::LaunchFailure::Stopped)?;
-        result
-            .await
-            .map_err(|_| crate::runtime_builds::LaunchFailure::Stopped)?
+            .map_err(|_| LaunchFailure::Stopped)?;
+        result.await.map_err(|_| LaunchFailure::Stopped)?
     }
     pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
         let (reply, result) = oneshot::channel();
@@ -2194,7 +1956,7 @@ mod tests {
                 crate::Environment {
                     account_root: root.join("account"),
                     temp: root.join("temp"),
-                    home: None,
+                    home: Some(root.join("home")),
                     local_app_data: None,
                     path: vec![],
                     exe_dir: source,
@@ -2383,7 +2145,7 @@ mod tests {
             let mut a = conductor.admit(parse("A"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
             prompting_a.notified().await;
             let (reply, owner) = oneshot::channel();
-            conductor.send.send(Input::Builds { action: crate::runtime_builds::Action::Build(choice), reply, hold: Hold::empty() }).await.unwrap();
+            conductor.send.send(Input::Builds { action: crate::runtime_builds::Action::Build(choice.to_string()), reply, hold: Hold::empty() }).await.unwrap();
             let mut b = conductor.admit(parse("B"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
             let waiting = trace.lock().unwrap().clone();
             let deferred = !waiting.iter().any(|event| event == "stop:old" || event == "launch:new");
@@ -2650,7 +2412,7 @@ mod tests {
             std::fs::remove_file(source.join(crate::runtime_builds::HARNESS)).unwrap();
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let copy_error = std::fs::copy(source.join(crate::runtime_builds::HARNESS), folder.join("probe")).unwrap_err().to_string();
-            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice), Hold::empty()).await.map_err(|error| error.to_string());
+            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice.to_string()), Hold::empty()).await.map_err(|error| error.to_string());
             let after = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string());
             drop(conductor);
             task.await.unwrap();
@@ -2840,7 +2602,7 @@ mod tests {
                     .await;
                 receiver.await.unwrap();
                 assert!(
-                    matches!(result, Err(crate::runtime_builds::LaunchFailure::Stopped)),
+                    matches!(result, Err(LaunchFailure::Stopped)),
                     "a closed conductor channel must report Stopped: {result:?}"
                 );
             }
@@ -3337,7 +3099,6 @@ mod tests {
             std::env::temp_dir().join(format!("acp2api-tool-refusal-{}", std::process::id()));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let mut selected = Vec::new();
-        use agent_client_protocol_schema::v1::StopReason;
         for stop_reason in [
             Some(StopReason::Refusal),
             Some(StopReason::EndTurn),

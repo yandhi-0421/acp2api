@@ -281,7 +281,7 @@ async fn runtime_action(
     lease: crate::front::RequestHold,
 ) -> Response {
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
-    lease.0.lock().unwrap().take();
+    drop(lease.release());
     match panel.conductor.builds(action, hold).await {
         Ok(notice) => panel.page(StatusCode::OK, &notice),
         Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),

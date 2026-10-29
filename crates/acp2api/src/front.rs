@@ -14,7 +14,12 @@ use axum::{
 };
 use std::sync::{Arc, Mutex};
 #[derive(Clone)]
-pub(crate) struct RequestHold(pub(crate) Arc<Mutex<Option<crate::Hold>>>);
+pub(crate) struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
+impl RequestHold {
+    pub(crate) fn release(&self) -> crate::Hold {
+        self.0.lock().unwrap().take().expect("request hold")
+    }
+}
 #[derive(Clone)]
 struct App {
     conductor: Conductor,
@@ -118,7 +123,7 @@ async fn turn(
     Extension(lease): Extension<RequestHold>,
     body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
-    let hold = lease.0.lock().unwrap().take().expect("request hold");
+    let hold = lease.release();
     let body = match body {
         Ok(body) => body,
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
@@ -157,7 +162,7 @@ async fn models(
     Extension(request): Extension<crate::journal::Request>,
     Extension(lease): Extension<RequestHold>,
 ) -> axum::response::Response {
-    let hold = lease.0.lock().unwrap().take().expect("request hold");
+    let hold = lease.release();
     match app.conductor.model_names(hold).await {
         Ok(entries) => {
             let completion = crate::journal::Completion {
