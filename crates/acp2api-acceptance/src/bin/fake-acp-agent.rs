@@ -113,6 +113,15 @@ fn main() -> ExitCode {
             return ExitCode::from(70);
         }
         match command["op"].as_str().unwrap_or("") {
+            "KeepToken" => {
+                let token = command["token"].as_str().expect("synthetic token");
+                assert!(token.len() <= 128, "synthetic token cap: 128 bytes");
+                let home = std::path::PathBuf::from(
+                    std::env::var_os("GEMINI_HOME").expect("runtime home"),
+                );
+                std::fs::create_dir_all(&home).unwrap();
+                std::fs::write(home.join("synthetic-token"), token).unwrap();
+            }
             "Out" => {
                 let mut out = std::io::stdout().lock();
                 writeln!(out, "{}", command["line"].as_str().unwrap()).unwrap();
