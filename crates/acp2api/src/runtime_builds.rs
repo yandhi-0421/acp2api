@@ -403,9 +403,8 @@ impl Builds {
             }
             Err(Failure::Internal(error)) => Err(LaunchFailure::Runtime(error)),
         };
-        let cleanup = fs::remove_dir_all(self.start.data.join(CHECK))
-            .map_err(|error| LaunchFailure::Runtime(error.to_string()));
-        cleanup.and(result)
+        let _ = fs::remove_dir_all(self.start.data.join(CHECK));
+        result
     }
     fn accept_check(&self, version: String, hashes: &BuildIdentity) -> Result<(), LaunchFailure> {
         let check = self.start.data.join(CHECK);
@@ -620,6 +619,36 @@ mod tests {
                 program: spec.program,
             })
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn a_recorded_pass_survives_check_folder_cleanup_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-check-cleanup-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let check = root.join(CHECK);
+        fs::create_dir_all(&check).unwrap();
+        for name in [SERVER, HARNESS] {
+            fs::write(check.join(name), b"checked executables").unwrap();
+        }
+        let builds = Builds::fixture(&root, Ports::production().clock);
+        let identity = Builds::hashes(&check).unwrap();
+        fs::set_permissions(&check, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = builds.finish_check(&identity, Ok("1.6.0".into()));
+        let leftover = check.exists();
+        fs::set_permissions(&check, fs::Permissions::from_mode(0o755)).unwrap();
+        let accepted = builds.identify(&root.join(COPY)).unwrap().version;
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            matches!(result, Ok(ref notice) if notice == "The compatibility check passed for 1.6.0.")
+                && accepted == "1.6.0"
+                && leftover,
+            "a recorded, usable pass must reach the owner even when cleanup fails: {result:?}"
+        );
     }
 
     #[tokio::test]
