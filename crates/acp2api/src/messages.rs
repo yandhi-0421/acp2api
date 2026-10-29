@@ -94,8 +94,8 @@ impl Message {
         if code == Some(403)
             || status == Some("403")
             || message
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .any(|token| token == "403")
+                .split(|c: char| !c.is_alphanumeric() && !matches!(c, '_' | '.' | '-'))
+                .any(|token| token.strip_suffix('.').unwrap_or(token) == "403")
         {
             Some("403")
         } else if status == Some("PERMISSION_DENIED") || message.contains("PERMISSION_DENIED") {
@@ -287,6 +287,28 @@ impl fmt::Display for Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_whole_status_number_starts_a_403_lockout() {
+        let signals: Vec<_> = [
+            "backend latency 1.403 s",
+            "v2.403",
+            "req-403",
+            "Error 403.",
+            "403 PERMISSION_DENIED",
+        ]
+        .into_iter()
+        .map(|text| {
+            Message::UpstreamHttp(HttpError {
+                code: Some(503),
+                status: "UNAVAILABLE".into(),
+                message: text.into(),
+            })
+            .lockout_signal()
+        })
+        .collect();
+        assert_eq!(signals, [None, None, None, Some("403"), Some("403")]);
+    }
 
     #[test]
     fn sign_in_signals_keep_lockout_priority_and_read_the_logged_out_reason() {

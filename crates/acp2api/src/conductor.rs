@@ -3289,20 +3289,20 @@ mod tests {
     }
 
     #[test]
-    fn a_503_with_order_14030_in_the_reply_does_not_start_lockout() {
+    fn a_503_with_order_14030_in_the_error_does_not_start_lockout() {
         let (core, _, folder) = error_after_reply(
-            "order 14030",
+            "",
             crate::messages::HttpError {
                 code: Some(503),
                 status: "UNAVAILABLE".into(),
-                message: "Service unavailable".into(),
+                message: "order 14030".into(),
             },
         );
         let state = core.state();
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(
             state, "Running",
-            "FR-034: a number in reply text is not an HTTP status"
+            "FR-034: a longer number in an error is not an HTTP status"
         );
     }
 
