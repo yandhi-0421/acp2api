@@ -408,19 +408,6 @@ impl Core {
         builds: &crate::runtime_builds::Builds,
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) {
-        if matches!(
-            &check.result,
-            Err(CheckFailure::Runtime(LaunchFailure::Runtime(_)))
-        ) {
-            self.apply(
-                Event::RuntimeFailure,
-                runtime,
-                read_open,
-                &builds.start.clock,
-                journal,
-            )
-            .await;
-        }
         let result = builds.finish_check(&check.identity, check.result);
         self.launch(runtime, read_open, &builds.start.clock, journal, builds)
             .await;
@@ -1830,11 +1817,10 @@ mod tests {
         (core, queued, tickets.try_into().ok().unwrap())
     }
 
-    #[tokio::test]
-    async fn each_failed_check_process_counts_once_toward_runtime_unavailable() {
-        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        struct Tree(Arc<AtomicUsize>);
+    async fn failed_checks(timeout: bool, restart_fails: bool) {
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree, ReleaseFacts};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        struct Tree;
         impl ProcessTree for Tree {
             fn pid(&self) -> u32 {
                 std::process::id()
@@ -1843,34 +1829,126 @@ mod tests {
                 Box::pin(std::future::pending())
             }
             fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
-                Box::pin(async move {
-                    self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            }
+        }
+        struct CheckClock(Arc<AtomicBool>, Arc<dyn Clock>);
+        impl Clock for CheckClock {
+            fn now(&self) -> Moment {
+                self.1.now()
+            }
+            fn wall(&self) -> std::time::SystemTime {
+                self.1.wall()
+            }
+            fn sleep_until(&self, _: Moment) -> BoxFuture<'static, Hold> {
+                if self.0.load(Ordering::SeqCst) {
+                    Box::pin(async { Hold::empty() })
+                } else {
+                    Box::pin(std::future::pending())
+                }
+            }
+            fn hold(&self, _: HoldKind) -> Hold {
+                Hold::empty()
+            }
+        }
+        struct Output(std::io::Cursor<Vec<u8>>);
+        impl tokio::io::AsyncRead for Output {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                if self.0.position() < self.0.get_ref().len() as u64 {
+                    std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+                } else {
+                    std::task::Poll::Pending
+                }
+            }
+        }
+        struct Launcher {
+            checks: AtomicUsize,
+            starts: AtomicUsize,
+            checking: Arc<AtomicBool>,
+            timeout: bool,
+            restart_fails: bool,
+        }
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, spec: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                let check = spec
+                    .program
+                    .parent()
+                    .unwrap()
+                    .ends_with("official-runtime-check");
+                self.checking.store(check, Ordering::SeqCst);
+                let stdout: crate::ProcessRead = if check {
+                    assert!(
+                        self.checks.fetch_add(1, Ordering::SeqCst) < 3,
+                        "three candidate starts cap"
+                    );
+                    if self.timeout {
+                        Box::pin(Output(std::io::Cursor::new(Vec::new())))
+                    } else {
+                        Box::pin(tokio::io::empty())
+                    }
+                } else {
+                    let start = self.starts.fetch_add(1, Ordering::SeqCst);
+                    assert!(start < 4, "one start and three restoration attempts cap");
+                    if self.restart_fails && start > 0 {
+                        return Err(crate::LaunchError::Io(std::io::Error::other(
+                            "accepted build restart failed",
+                        )));
+                    }
+                    let replies = [
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}),
+                        serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"restored","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                    ];
+                    Box::pin(Output(std::io::Cursor::new(
+                        replies
+                            .iter()
+                            .map(|reply| format!("{reply}\n"))
+                            .collect::<String>()
+                            .into_bytes(),
+                    )))
+                };
+                Ok(Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout,
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(Tree),
                 })
             }
         }
-        struct Launcher(AtomicUsize, Arc<AtomicUsize>);
-        impl ProcessLauncher for Launcher {
-            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
-                assert!(
-                    self.0.fetch_add(1, Ordering::SeqCst) < 3,
-                    "three candidate starts cap"
-                );
-                Ok(Launched {
-                    stdin: Box::pin(tokio::io::sink()),
-                    stdout: Box::pin(tokio::io::empty()),
-                    stderr: Box::pin(tokio::io::empty()),
-                    tree: Box::new(Tree(self.1.clone())),
-                })
+        struct Facts(crate::ListedBuild);
+        impl ReleaseFacts for Facts {
+            fn version(&self) -> &str {
+                "test"
+            }
+            fn platform(&self) -> &str {
+                &self.0.platform
+            }
+            fn listed_builds(&self) -> &[crate::ListedBuild] {
+                std::slice::from_ref(&self.0)
+            }
+            fn highest_concurrency_limit(&self) -> u8 {
+                1
             }
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            use sha2::{Digest, Sha256};
             let root = std::env::temp_dir().join(format!("acp2api-check-failures-{}", crate::random_hex::<12>().unwrap()));
             let source = root.join("exe");
-            std::fs::create_dir_all(&source).unwrap();
-            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(source.join(name), b"unlisted candidate").unwrap(); }
-            let stopped = Arc::new(AtomicUsize::new(0));
+            let accepted = root.join("official-runtime");
+            for (folder, bytes) in [(&source, b"candidate".as_slice()), (&accepted, b"accepted".as_slice())] {
+                std::fs::create_dir_all(folder).unwrap();
+                for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(folder.join(name), bytes).unwrap(); }
+            }
+            let checking = Arc::new(AtomicBool::new(false));
+            let launcher = Arc::new(Launcher { checks:AtomicUsize::new(0),starts:AtomicUsize::new(0),checking:checking.clone(),timeout,restart_fails });
             let mut ports = crate::Ports::production();
-            ports.launcher = Arc::new(Launcher(AtomicUsize::new(0), stopped.clone()));
+            ports.clock = Arc::new(CheckClock(checking, ports.clock));
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            ports.release = Arc::new(Facts(crate::ListedBuild { version:"1.4.0".into(),platform:ports.release.platform().into(),agy_acp_server_sha256:hash.clone(),localharness_external_sha256:hash }));
+            ports.launcher = launcher.clone();
             let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment {
                 account_root:root.join("account"), temp:root.join("temp"), home:Some(root.join("home")), local_app_data:None, path:vec![], exe_dir:source
             }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
@@ -1879,17 +1957,36 @@ mod tests {
             let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
             let (conductor, task) = Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
             conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            assert_eq!(serde_json::to_value(conductor.model_names(Hold::empty()).await.ok().unwrap()).unwrap()[0]["id"], "m");
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
-            for attempt in 1..=3 {
-                conductor.builds(crate::runtime_builds::Action::Check(identity.clone()), Hold::empty()).await.unwrap();
-                let message = conductor.model_names(Hold::empty()).await.err().unwrap().message.to_string();
-                assert_eq!(message.contains(REPEATED_FAILURES), attempt == 3, "each failed check process must count once: attempt {attempt}, {message}");
+            for _ in 0..if restart_fails { 1 } else { 3 } {
+                let notice = conductor.builds(crate::runtime_builds::Action::Check(identity.clone()), Hold::empty()).await.unwrap();
+                assert!(notice.contains("compatibility check failed"));
+                let models = conductor.model_names(Hold::empty()).await;
+                if restart_fails {
+                    let message = models.err().unwrap().message.to_string();
+                    assert!(message.contains(REPEATED_FAILURES), "the three failed restorations must count: {message}");
+                } else {
+                    assert_eq!(serde_json::to_value(models.unwrap_or_else(|error| panic!("a failed check must restore the accepted version: {}", error.message))).unwrap()[0]["id"], "m", "a failed check must restore the earlier accepted version without using its failure budget");
+                }
             }
-            assert_eq!(stopped.load(Ordering::SeqCst), 3, "each failed check process is stopped");
+            assert_eq!(launcher.starts.load(Ordering::SeqCst), 4);
             drop(conductor);
             task.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
-        }).await.expect("failure check cap: 5 seconds, three candidate launches, three initialize writes, no output or API calls");
+        }).await.expect("failure check cap: 5 seconds, three candidates, four serving starts, two replies under 1 KiB per serving start, no prompts or logs");
+    }
+    #[tokio::test]
+    async fn crashed_checks_restore_the_accepted_version_without_consuming_its_failure_limit() {
+        failed_checks(false, false).await;
+    }
+    #[tokio::test]
+    async fn timed_out_checks_restore_the_accepted_version_without_consuming_its_failure_limit() {
+        failed_checks(true, false).await;
+    }
+    #[tokio::test]
+    async fn failures_to_restore_the_accepted_version_count_normally() {
+        failed_checks(false, true).await;
     }
     #[tokio::test]
     async fn a_check_queues_requests_when_no_accepted_runtime_existed() {
