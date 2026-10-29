@@ -1,7 +1,7 @@
-use crate::{World, places_support as queue, prompt_turn as turn};
+use crate::{World, places_support as queue, prompt_turn as turn, runtime_support as process};
 use acp2api_acceptance::{
     TurnPlan, TurnStep, client::Call, conversation_check as conversation, endpoint_check,
-    fake::TurnEndPlan,
+    fake::TurnEndPlan, journal_check,
 };
 use cucumber::{given, then, when};
 use serde_json::{Value, json};
@@ -253,8 +253,21 @@ async fn queued_disconnect(w: &mut World) {
         Some(200),
         "queued stream was accepted before disconnect"
     );
+    let request_id = live
+        .request_id()
+        .expect("accepted request has x-request-id");
     drop(live);
-    w.scenario.time.settle().await;
+    let has_disconnected_terminal_record = |w: &World| {
+        journal_check::has_disconnected_terminal_record(
+            &w.scenario,
+            journal_check::RequestRecordKey::RequestId(&request_id),
+        )
+    };
+    process::observe(w, has_disconnected_terminal_record).await;
+    assert!(
+        has_disconnected_terminal_record(w),
+        "FR-031 queued disconnect writes a disconnected terminal record"
+    );
 }
 
 #[then(expr = "the count of the requests in the queue is {int}")]

@@ -57,6 +57,24 @@ pub fn terminal(s: &Scenario) -> Vec<Value> {
         .filter(|v| v.get("request_id").is_some())
         .collect()
 }
+#[derive(Clone, Copy)]
+pub enum RequestRecordKey<'a> {
+    RequestId(&'a str),
+    UnknownField(&'a str),
+}
+pub fn has_disconnected_terminal_record(s: &Scenario, key: RequestRecordKey<'_>) -> bool {
+    terminal(s).iter().any(|record| {
+        record["result"] == "disconnected"
+            && match key {
+                RequestRecordKey::RequestId(id) => record["request_id"] == id,
+                RequestRecordKey::UnknownField(name) => record["unknown_fields"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|field| field == name),
+            }
+    })
+}
 pub async fn wait_terminal(s: &Scenario, count: usize) {
     let end = Instant::now() + real_limit(Duration::from_secs(5));
     while terminal(s).len() < count && Instant::now() < end {
@@ -264,4 +282,38 @@ pub fn verify_stress(r: &Retention, marker: &str) {
         ids.windows(2).all(|p| p[1] == p[0] + 1),
         "oldest deletion leaves consecutive newest records"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_disconnected_terminal_record_matches_only_the_queued_request() {
+        let s = Scenario::default();
+        for (id, field, result, matches) in [
+            ("other", "queued_record_Q1", "disconnected", false),
+            ("target", "queued_record_Q0", "success", false),
+            ("target", "queued_record_Q0", "disconnected", true),
+        ] {
+            let record = json!({"request_id":id,"unknown_fields":[field],"result":result});
+            s.hub.terminal(format!("acp2api: {record}\n").as_bytes());
+            assert_eq!(
+                has_disconnected_terminal_record(
+                    &s,
+                    RequestRecordKey::UnknownField("queued_record_Q0")
+                ),
+                matches
+            );
+            assert_eq!(
+                has_disconnected_terminal_record(&s, RequestRecordKey::RequestId("target")),
+                matches
+            );
+            assert!(!has_disconnected_terminal_record(
+                &s,
+                RequestRecordKey::RequestId("unrelated")
+            ));
+        }
+    }
 }

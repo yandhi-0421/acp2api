@@ -1,9 +1,11 @@
 use crate::{
     World, places_support as queue, runtime_support as process, sign_in_support as support,
 };
-use acp2api_acceptance::{Setup, client::ApiCall, fake::FakeRuntime};
+use acp2api_acceptance::{Setup, client::ApiCall, fake::FakeRuntime, journal_check};
 use cucumber::{given, then, when};
 use serde_json::json;
+
+const QUEUED_CHECK_RECORD_FIELD: &str = "queued_sign_in_request_B";
 
 #[given("the official runtime has no valid sign-in")]
 fn unsigned(w: &mut World) {
@@ -462,11 +464,11 @@ async fn occupied(w: &mut World) {
 
 #[given("a request waits for its required sign-in check")]
 async fn waiting_check(w: &mut World) {
-    let live = queue::send(
-        w,
-        acp2api_acceptance::endpoint_check::request("POST /v1/messages", &queue::marker("B"), true),
-    )
-    .await;
+    let mut call =
+        acp2api_acceptance::endpoint_check::request("POST /v1/messages", &queue::marker("B"), true);
+    // This request has no response header before its check; the field name identifies its log record.
+    call.body[QUEUED_CHECK_RECORD_FIELD] = json!(true);
+    let live = queue::send(w, call).await;
     w.places.calls.push(("B".into(), Some(live)));
     w.sign_in.queued_before = 1;
     w.sign_in.calls_before_disconnect = process::calls(w, "session/new").len();
@@ -475,14 +477,19 @@ async fn waiting_check(w: &mut World) {
 
 #[when("its API client disconnects")]
 async fn disconnect(w: &mut World) {
-    drop(queue::take(w, "B"));
-    let handled = |w: &World| {
-        acp2api_acceptance::journal_check::terminal(&w.scenario)
-            .iter()
-            .any(|record| record["result"] == "disconnected")
+    let live = queue::take(w, "B");
+    drop(live);
+    let has_disconnected_terminal_record = |w: &World| {
+        journal_check::has_disconnected_terminal_record(
+            &w.scenario,
+            journal_check::RequestRecordKey::UnknownField(QUEUED_CHECK_RECORD_FIELD),
+        )
     };
-    process::observe(w, handled).await;
-    assert!(handled(w), "FR-031 queued disconnect reaches acp2api");
+    process::observe(w, has_disconnected_terminal_record).await;
+    assert!(
+        has_disconnected_terminal_record(w),
+        "FR-031 queued disconnect writes a disconnected terminal record"
+    );
 }
 
 #[then("the queue count decreases by one")]
