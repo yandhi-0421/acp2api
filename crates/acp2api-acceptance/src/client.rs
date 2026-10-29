@@ -93,6 +93,7 @@ pub struct ApiClient {
     requests: Arc<AtomicUsize>,
     status: Arc<Mutex<Option<u16>>>,
     wire: Arc<Mutex<WireTrace>>,
+    request_id: Arc<Mutex<Option<String>>>,
 }
 #[derive(Clone, Debug)]
 pub struct Answer {
@@ -126,6 +127,7 @@ impl ApiCall {
 pub struct Call {
     status: Arc<Mutex<Option<u16>>>,
     wire: Arc<Mutex<WireTrace>>,
+    request_id: Arc<Mutex<Option<String>>>,
     task: tokio::task::JoinHandle<Result<Answer, String>>,
     hub: Hub,
     progress: Arc<Mutex<Vec<SseEvent>>>,
@@ -141,6 +143,9 @@ impl Call {
     }
     pub fn status(&self) -> Option<u16> {
         *self.status.lock().unwrap()
+    }
+    pub fn request_id(&self) -> Option<String> {
+        self.request_id.lock().unwrap().clone()
     }
     pub fn events(&self) -> Vec<SseEvent> {
         self.progress.lock().unwrap().clone()
@@ -190,6 +195,7 @@ impl ApiClient {
             requests: Arc::new(AtomicUsize::new(0)),
             status: Arc::new(Mutex::new(None)),
             wire: Arc::new(Mutex::new(WireTrace::default())),
+            request_id: Arc::new(Mutex::new(None)),
         }
     }
     pub fn without_local_api_key(&self) -> Self {
@@ -222,9 +228,11 @@ impl ApiClient {
         let client = self.clone();
         let status = Arc::new(Mutex::new(None));
         let wire = Arc::new(Mutex::new(WireTrace::default()));
+        let request_id = Arc::new(Mutex::new(None));
         let client = Self {
             status: status.clone(),
             wire: wire.clone(),
+            request_id: request_id.clone(),
             ..client
         };
         let progress = Arc::new(Mutex::new(Vec::new()));
@@ -243,6 +251,7 @@ impl ApiClient {
         Call {
             wire,
             status,
+            request_id,
             task,
             hub: self.hub.clone(),
             progress,
@@ -335,6 +344,10 @@ impl ApiClient {
             .await
             .map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
+        *self.request_id.lock().unwrap() = response
+            .headers()
+            .get("x-request-id")
+            .map(|id| id.to_str().expect("HTTP request ID").to_owned());
         *self.status.lock().unwrap() = Some(status);
         self.wire.lock().unwrap().head_at = Some(self.hub.now());
         let headers = response
