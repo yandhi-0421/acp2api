@@ -115,8 +115,10 @@ pub(super) fn settings(page: Page<'_>) -> String {
         escape(&notice.text()),escape(&notice.id)
     )).collect::<String>();
     let result = page.quota_result.as_ref().map(|result| format!(r#"<p>Last result: <time datetime="{time}">{time}</time></p><pre class="quota-result">{text}</pre>"#,time=escape(&result.time),text=escape(&result.text))).unwrap_or_else(|| "<p>No quota result yet.</p>".into());
+    let places = figure("Places in use", page.view.places);
+    let queued = figure("Requests in the queue", page.view.queued);
     let quota = format!(
-        r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section>"#
+        r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{places}{queued}{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section>"#
     );
     document(&format!(
         r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
@@ -201,4 +203,63 @@ fn runtime(
     format!(
         r#"<section><h2>Official runtime</h2>{current}{process}{newer}<ul>{release}</ul><form method="post" action="/manage/retry"><button type="submit">Retry</button></form><form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><p id="compatibility-cost">A compatibility check uses 3 to 4 model requests through your Google account.</p><p id="compatibility-risks">The check does not check the stderr lines of the lockout signals, three prompt turns at the same time, or the memory that decides N.</p><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_quota_tile_reads_occupied_and_queued_counts_from_the_view() {
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 2,
+            local_api_key: "acp2api-test".into(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let view = crate::conductor::View {
+            places: 1,
+            queued: 2,
+            ..Default::default()
+        };
+        let builds = crate::runtime_builds::Summary {
+            current: Some(crate::runtime_builds::CurrentBuild {
+                version: "1.4.0".into(),
+                acceptance: "On the release list",
+                source: Some("source".into()),
+            }),
+            found: vec![],
+            release: vec![],
+            choices: vec![],
+            newer: None,
+        };
+        let html = super::settings(Page {
+            settings: &settings,
+            highest: 3,
+            port: 8329,
+            data_folder: std::path::Path::new("data"),
+            notice: None,
+            notices: &[],
+            builds: Ok(builds),
+            quota_result: &None,
+            view: &view,
+            now: 0,
+        });
+        let quota = html
+            .split("<h2 id=\"quota-title\">Quota</h2>")
+            .nth(1)
+            .unwrap()
+            .split("</section>")
+            .next()
+            .unwrap();
+        assert_eq!(
+            [
+                quota.contains("<p>Places in use <span>1</span></p>"),
+                quota.contains("<p>Requests in the queue <span>2</span></p>"),
+            ],
+            [true, true],
+            "FR-054 the quota tile uses both live counts, not fixed zeroes"
+        );
+    }
 }

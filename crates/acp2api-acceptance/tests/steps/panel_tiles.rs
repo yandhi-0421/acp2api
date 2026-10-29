@@ -132,6 +132,8 @@ fn quota_time(w: &mut World, title: String, command: String) {
 fn quota_controls(w: &mut World, title: String) {
     let html = tiles::html(w);
     let tile = tiles::tile(&html, &title);
+    tiles::figure(tile, "Places in use", "0");
+    tiles::figure(tile, "Requests in the queue", "0");
     assert!(
         tile.contains("action=\"/manage/refresh-quota\""),
         "FR-054 quota refresh entry"
