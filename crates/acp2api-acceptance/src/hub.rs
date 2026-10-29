@@ -125,6 +125,12 @@ impl State {
         });
         self.counts.revision += 1;
     }
+    /// Replies can outlive the command channel of a process that the product stopped.
+    fn stopped_by_product(&self, label: &str) -> bool {
+        self.server_processes
+            .get(label)
+            .is_some_and(|process| self.process_io[*process].stop_requested)
+    }
     pub(crate) fn out(&mut self, label: &str, command: Value) {
         if command["op"] == "Out" || command["op"] == "Err" {
             let lines = command["line"]
@@ -143,10 +149,12 @@ impl State {
             return;
         }
         if let Some(writer) = self.servers.get(label) {
-            if let Err(e) = send(&mut writer.lock().unwrap(), &command) {
+            if let Err(e) = send(&mut writer.lock().unwrap(), &command)
+                && !self.stopped_by_product(label)
+            {
                 self.failure = Some(format!("fake command channel: {e}"));
             }
-        } else {
+        } else if !self.stopped_by_product(label) {
             self.failure = Some(format!("missing fake channel {label}"));
         }
     }
@@ -516,7 +524,6 @@ impl Hub {
                 state.process_io[process].ended = true;
                 if state.server_processes.get(&label) == Some(&process) {
                     state.servers.remove(&label);
-                    state.server_processes.remove(&label);
                 }
             }
             self.shared.1.notify_all();
