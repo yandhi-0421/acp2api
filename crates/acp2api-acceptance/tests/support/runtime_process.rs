@@ -173,14 +173,18 @@ pub fn error(answer: &Answer, status: u16, message: &str) {
 }
 
 pub async fn pending_start(w: &mut World) {
+    pending_start_with(w, Setup::normal(), &[]).await;
+}
+
+pub async fn pending_start_with(w: &mut World, setup: Setup, env: &[(&str, std::path::PathBuf)]) {
     use acp2api_acceptance::rpc_script::RpcReply;
     w.scenario
         .fake()
         .script_call("initialize", RpcReply::Silent);
-    let run = w.scenario.root.seed(&w.scenario.hub, &Setup::normal());
+    let run = w.scenario.root.seed(&w.scenario.hub, &setup);
     let path = w.scenario.root.path.join("pending-run.toml");
     std::fs::write(&path, toml::to_string(&run).unwrap()).unwrap();
-    w.scenario.launch_host(&[], &path);
+    w.scenario.launch_host(env, &path);
     observe(w, |w| calls(w, "initialize").len() == 1).await;
     assert_eq!(
         calls(w, "initialize").len(),

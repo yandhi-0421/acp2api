@@ -62,8 +62,12 @@ pub async fn start(w: &mut World) {
 }
 
 pub async fn panel(w: &mut World) {
-    start(w).await;
-    w.panel.scenario(&mut w.scenario).await;
+    if w.startup.panel_running() {
+        w.panel.startup(&mut w.startup).await;
+    } else {
+        start(w).await;
+        w.panel.scenario(&mut w.scenario).await;
+    }
     w.panel.login_initial("B1").await;
     assert_eq!(w.panel.login_answer.as_ref().unwrap().status, 303);
 }
