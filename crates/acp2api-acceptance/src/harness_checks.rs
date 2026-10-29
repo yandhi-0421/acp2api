@@ -952,9 +952,13 @@ async fn non_stream_bodies_are_read_before_settle_allows_the_next_virtual_instan
 
     let mut observations = Vec::new();
     for (endpoint, authorized, at, status, content) in [
+        // Completed JSON after the 200 ms error window.
         ("POST /v1/messages", true, 200, 200, "non-stream body"),
+        // Refusal before admission when the local API key is absent.
         ("POST /v1/messages", false, 0, 401, "error"),
+        // The cached model list needs no prompt turn.
         ("GET /v1/models", true, 0, 200, "gemini-3.8-flash"),
+        // The management panel shows its login page.
         ("GET /", true, 0, 200, "password"),
     ] {
         tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
@@ -975,7 +979,9 @@ async fn non_stream_bodies_are_read_before_settle_allows_the_next_virtual_instan
                 timers: HarnessClock::new(HubLink::new(&s.hub)),
             };
             let (host, client) = start_with_clock_link(&mut s, Arc::new(clock)).await;
-            s.fake().next_prompt(TurnPlan::new().chunk("non-stream body").usage(10, 100));
+            if authorized && endpoint == "POST /v1/messages" {
+                s.fake().next_prompt(TurnPlan::new().chunk("non-stream body").usage(10, 100));
+            }
             armed.store(true, Ordering::SeqCst);
             let request = ApiCall::one_user_message(endpoint, "body arrival");
             let call = if authorized { client } else { client.without_local_api_key() }.send(request);
@@ -990,7 +996,6 @@ async fn non_stream_bodies_are_read_before_settle_allows_the_next_virtual_instan
                 tokio::task::spawn_blocking(move || hub.wait_change(deadline)).await.unwrap();
             }
             let before_release = wire.lock().unwrap().end_at;
-            let clock_before_release = s.hub.now();
             release.send(()).unwrap();
             advancing.await.unwrap();
             let answer = call.finish(&mut s.time).await;
@@ -1000,14 +1005,14 @@ async fn non_stream_bodies_are_read_before_settle_allows_the_next_virtual_instan
             assert_eq!(exit, std::process::ExitCode::SUCCESS);
             assert_eq!(answer.status, status);
             assert!(String::from_utf8_lossy(&answer.body).contains(content));
-            observations.push((endpoint, authorized, at, before_release, clock_before_release));
+            observations.push((endpoint, authorized, at, before_release));
         }).await.expect("one readiness request and one body request; 10 s run cap; existing hub and 8 MiB answer caps");
     }
     // Clean up all four hosts before the assertion, including on a red run.
     assert!(
         observations
             .iter()
-            .all(|(_, _, at, read, _)| *read == Some(*at)),
+            .all(|(_, _, at, read)| *read == Some(*at)),
         "the client must read each non-stream body before the last hold ends: {observations:?}"
     );
 }

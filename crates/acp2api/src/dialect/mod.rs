@@ -174,13 +174,10 @@ impl<T: WireDialect + 'static> Dialect for T {
                     }
                 });
                 let (parts, body) = Sse::new(events).into_response().into_parts();
-                let bytes = body.into_data_stream().map(move |data| {
-                    data.map(|bytes| match output_hold.lock().unwrap().take() {
-                        Some(hold) => Bytes::from_owner(HeldBytes { bytes, _hold: hold }),
-                        None => bytes,
-                    })
-                });
-                Response::from_parts(parts, Body::from_stream(bytes))
+                Response::from_parts(
+                    parts,
+                    hold_body(body, move || output_hold.lock().unwrap().take()),
+                )
             } else {
                 drop(hold);
                 while let Some((event, _hold)) = events.recv().await {
@@ -210,10 +207,24 @@ struct StreamState {
     output_hold: Arc<Mutex<Option<Hold>>>,
     ended: bool,
 }
+
+pub(crate) fn hold_body(
+    body: Body,
+    mut next_hold: impl FnMut() -> Option<Hold> + Send + 'static,
+) -> Body {
+    let bytes = body.into_data_stream().map(move |data| {
+        data.map(|bytes| match next_hold() {
+            Some(hold) => Bytes::from_owner(HeldBytes { bytes, _hold: hold }),
+            None => bytes,
+        })
+    });
+    Body::from_stream(bytes)
+}
+
 // Retain the hold through the socket write so virtual time cannot move before the client has the bytes.
-pub(crate) struct HeldBytes {
-    pub(crate) bytes: Bytes,
-    pub(crate) _hold: Hold,
+struct HeldBytes {
+    bytes: Bytes,
+    _hold: Hold,
 }
 impl AsRef<[u8]> for HeldBytes {
     fn as_ref(&self) -> &[u8] {
