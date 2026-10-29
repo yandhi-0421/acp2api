@@ -7,7 +7,7 @@ function update() {
     if (left > 0) setTimeout(update, 1000);
 }
 update();"#;
-pub(super) fn status(view: &crate::conductor::View, now: crate::Moment) -> String {
+pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment) -> String {
     let sign_in = if let Some(wait) = &view.sign_in_wait {
         let seconds = wait.deadline.saturating_sub(now).div_ceil(1000);
         let address = wait

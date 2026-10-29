@@ -38,10 +38,7 @@ async fn first_start(w: &mut World) {
 #[then(expr = "acp2api refuses the request with the message {string}")]
 fn refused(w: &mut World, expected: String) {
     assert_eq!(
-        expected.replace(
-            "<address of the sign-in entry>",
-            &format!("http://127.0.0.1:{}/#sign-in", w.scenario.root.port)
-        ),
+        expected.replace("<address of the sign-in entry>", &support::sign_in_entry(w)),
         support::message(w)
     );
     support::refusal(w, w.scenario.answer.as_ref().unwrap());

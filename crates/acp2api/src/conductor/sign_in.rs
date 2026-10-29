@@ -1,7 +1,9 @@
 use super::{Command, Core};
-use crate::{Moment, messages::Message};
+use crate::{Moment, journal::Outcome, messages::Message};
 
 pub(crate) const ENTRY_ID: &str = "sign-in";
+pub(super) const CANNOT_START: &str =
+    "Sign-in cannot start while a sign-in or runtime replacement is in progress.";
 const WAIT_DURATION: Moment = 600_000;
 
 #[derive(Clone)]
@@ -18,14 +20,14 @@ impl Wait {
     }
 }
 impl Core {
-    pub(super) fn sign_in_message(&self) -> crate::messages::Message {
-        crate::messages::Message::SignInRequired(self.sign_in_entry.clone())
+    pub(super) fn sign_in_message(&self) -> Message {
+        Message::SignInRequired(self.sign_in_entry.clone())
     }
     pub(super) fn require_sign_in(&mut self, commands: &mut Vec<Command>) {
         if !self.sign_in_required {
             self.sign_in_required = true;
             self.refuse_queued(
-                crate::journal::Outcome::Refused("sign_in_required"),
+                Outcome::Refused("sign_in_required"),
                 self.sign_in_message(),
                 commands,
             );
@@ -39,7 +41,7 @@ impl Core {
     ) -> Message {
         if error.requires_sign_in() {
             self.require_sign_in(commands);
-            self.refusal(now).unwrap()
+            self.refusal(now).expect("sign-in required gives a refusal")
         } else {
             error
         }

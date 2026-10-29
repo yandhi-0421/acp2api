@@ -107,7 +107,7 @@ impl Panel {
             &self.conductor.notices(),
             self.conductor.builds_summary(),
             &self.conductor.quota_result(),
-            &page::status(&self.conductor.view(), self.clock.now()),
+            &page::sign_in_section(&self.conductor.view(), self.clock.now()),
         );
         (status, Html(page)).into_response()
     }
@@ -173,7 +173,7 @@ async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
             &panel.conductor.notices(),
             panel.conductor.builds_summary(),
             &panel.conductor.quota_result(),
-            &page::status(&panel.conductor.view(), panel.clock.now()),
+            &page::sign_in_section(&panel.conductor.view(), panel.clock.now()),
         )
     } else {
         page::login(None)

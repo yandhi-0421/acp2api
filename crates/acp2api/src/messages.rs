@@ -58,15 +58,20 @@ pub(crate) enum Message {
     BuiltInToolRan(String),
 }
 impl Message {
-    pub(crate) fn is_lockout_signal(&self) -> bool {
-        let (code, message, status) = match self {
-            Self::UpstreamHttp(error) => (
+    fn upstream_parts(&self) -> Option<(i64, &str, Option<&str>)> {
+        match self {
+            Self::UpstreamHttp(error) => Some((
                 i64::from(error.code),
                 error.message.as_str(),
                 Some(error.status.as_str()),
-            ),
-            Self::UpstreamAcp(error) => (error.code, error.message.as_str(), None),
-            _ => return false,
+            )),
+            Self::UpstreamAcp(error) => Some((error.code, error.message.as_str(), None)),
+            _ => None,
+        }
+    }
+    pub(crate) fn is_lockout_signal(&self) -> bool {
+        let Some((code, message, status)) = self.upstream_parts() else {
+            return false;
         };
         code == 403
             || status == Some("PERMISSION_DENIED")
@@ -77,20 +82,14 @@ impl Message {
         if self.is_lockout_signal() {
             return false;
         }
-        let (code, message, status, reason) = match self {
-            Self::UpstreamHttp(error) => (
-                i64::from(error.code),
-                error.message.as_str(),
-                Some(error.status.as_str()),
-                None,
-            ),
-            Self::UpstreamAcp(error) => (
-                error.code,
-                error.message.as_str(),
-                None,
-                error.data.as_ref().and_then(|data| data["reason"].as_str()),
-            ),
-            _ => return false,
+        let Some((code, message, status)) = self.upstream_parts() else {
+            return false;
+        };
+        let reason = match self {
+            Self::UpstreamAcp(error) => {
+                error.data.as_ref().and_then(|data| data["reason"].as_str())
+            }
+            _ => None,
         };
         code == 401
             || status == Some("UNAUTHENTICATED")

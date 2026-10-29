@@ -887,7 +887,7 @@ impl Core {
                 if self.sign_in_wait.is_some()
                     || !matches!(self.runtime_state, RuntimeState::Serving)
                 {
-                    let _ = reply.send(Err("Sign-in cannot start while a sign-in or runtime replacement is in progress.".into()));
+                    let _ = reply.send(Err(sign_in::CANNOT_START.into()));
                     return Vec::new();
                 }
                 let commands = self.handle(Event::StartSignIn, clock.now(), clock.wall());
@@ -1264,74 +1264,61 @@ impl Core {
             }
             (None, Event::Disconnected(request_id)) => {
                 let id = self.by_request(&request_id).unwrap();
-                match self.work.remove(&id).unwrap() {
-                    Work::CheckQueued(request) => {
-                        commands.push(Command::Complete(crate::journal::Completion {
-                            request: request.request,
-                            session: None,
-                            session_use: None,
-                            outcome: crate::journal::Outcome::Disconnected,
-                        }))
-                    }
-                    Work::Checking(request) => {
-                        self.work.insert(
-                            id,
-                            Work::Retiring(OutstandingWork {
-                                model: request.turn.model,
+                if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
+                    self.work.get_mut(&id).unwrap()
+                {
+                    query.disconnect(&mut commands);
+                } else {
+                    match self.work.remove(&id).unwrap() {
+                        Work::CheckQueued(request) => {
+                            commands.push(Command::Complete(crate::journal::Completion {
                                 request: request.request,
                                 session: None,
-                                completion: PendingCompletion::Disconnected(None),
-                            }),
-                        );
-                    }
-                    Work::AcceptedQueued(request) => Self::drop_queued(request, &mut commands),
-                    Work::QuotaQueued { mut query, session } => {
-                        query.disconnect(&mut commands);
-                        self.work.insert(id, Work::QuotaQueued { query, session });
-                    }
-                    Work::QuotaWorking {
-                        mut query,
-                        phase,
-                        text,
-                        result,
-                    } => {
-                        query.disconnect(&mut commands);
-                        self.work.insert(
-                            id,
-                            Work::QuotaWorking {
-                                query,
-                                phase,
-                                text,
-                                result,
-                            },
-                        );
-                    }
-                    Work::AcceptedWorking(active) => {
-                        let ended = matches!(
-                            active.phase,
-                            Phase::Settling { .. } | Phase::QuotaSettling { .. }
-                        );
-                        if matches!(active.phase, Phase::Prompt) {
-                            self.cancel(
-                                active.session.as_ref().unwrap().clone(),
-                                now,
-                                &mut commands,
+                                session_use: None,
+                                outcome: crate::journal::Outcome::Disconnected,
+                            }))
+                        }
+                        Work::Checking(request) => {
+                            self.work.insert(
+                                id,
+                                Work::Retiring(OutstandingWork {
+                                    model: request.turn.model,
+                                    request: request.request,
+                                    session: None,
+                                    completion: PendingCompletion::Disconnected(None),
+                                }),
                             );
                         }
-                        self.work.insert(
-                            id,
-                            Work::Retiring(OutstandingWork {
-                                model: active.model,
-                                request: active.request,
-                                session: active.session,
-                                completion: PendingCompletion::Disconnected(Some(active.kind)),
-                            }),
-                        );
-                        if ended {
-                            self.finish(id, Ok(()), &mut commands);
+                        Work::AcceptedQueued(request) => Self::drop_queued(request, &mut commands),
+                        Work::AcceptedWorking(active) => {
+                            let ended = matches!(
+                                active.phase,
+                                Phase::Settling { .. } | Phase::QuotaSettling { .. }
+                            );
+                            if matches!(active.phase, Phase::Prompt) {
+                                self.cancel(
+                                    active.session.as_ref().unwrap().clone(),
+                                    now,
+                                    &mut commands,
+                                );
+                            }
+                            self.work.insert(
+                                id,
+                                Work::Retiring(OutstandingWork {
+                                    model: active.model,
+                                    request: active.request,
+                                    session: active.session,
+                                    completion: PendingCompletion::Disconnected(Some(active.kind)),
+                                }),
+                            );
+                            if ended {
+                                self.finish(id, Ok(()), &mut commands);
+                            }
                         }
+                        Work::Retiring(_)
+                        | Work::QuotaQueued { .. }
+                        | Work::QuotaWorking { .. } => unreachable!(),
                     }
-                    Work::Retiring(_) => unreachable!(),
                 }
             }
             (None, Event::StartFailed(_, error)) => {

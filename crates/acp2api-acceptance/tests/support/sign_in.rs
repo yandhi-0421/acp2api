@@ -52,10 +52,14 @@ pub async fn start(w: &mut World) {
     );
 }
 
+pub fn sign_in_entry(w: &World) -> String {
+    format!("http://127.0.0.1:{}/#sign-in", w.scenario.root.port)
+}
+
 pub fn message(w: &World) -> String {
     format!(
-        "acp2api: the official runtime is not signed in. Sign in at http://127.0.0.1:{}/#sign-in.",
-        w.scenario.root.port
+        "acp2api: the official runtime is not signed in. Sign in at {}.",
+        sign_in_entry(w)
     )
 }
 
