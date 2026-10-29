@@ -109,6 +109,7 @@ impl ThinkingLevel {
         }
     }
 }
+#[derive(Clone)]
 pub(crate) enum EffortAsk {
     Absent,
     Level(ThinkingLevel),

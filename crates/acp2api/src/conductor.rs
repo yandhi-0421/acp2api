@@ -270,7 +270,8 @@ struct Active {
     thought_dropped: bool,
     input_tokens: u64,
     model: String,
-    model_id: String,
+    model_name: String,
+    effort: EffortAsk,
     phase: Phase,
     tool_call: Option<crate::conversation::ToolCall>,
     stop: crate::conversation::Stop,
@@ -728,7 +729,7 @@ impl Core {
                     level_from_name: false,
                 })
             },
-            |catalog| catalog.resolve(turn),
+            |catalog| catalog.resolve(&turn.model, &turn.effort),
         )
     }
     fn model_entries(
@@ -817,7 +818,7 @@ impl Core {
         let mut checked = match self.refusal(clock.now()) {
             Some(message) => Err(message.into()),
             None => self.check_model(&work.turn).and_then(|model| {
-                retry::refusal(&self.retry_waits, &work.turn, &model, clock.now())
+                retry::refusal(&self.retry_waits, &work.turn, clock.now())
                     .map_or(Ok(model), |message| Err(message.into()))
             }),
         };
@@ -1317,9 +1318,7 @@ impl Core {
                 Self::drop_queued(request, &mut commands);
                 continue;
             }
-            if let Some(message) =
-                retry::refusal(&self.retry_waits, &request.turn, &request.model, now)
-            {
+            if let Some(message) = retry::refusal(&self.retry_waits, &request.turn, now) {
                 Self::refuse_request(
                     request,
                     crate::journal::Outcome::Refused("retry_wait"),
@@ -1352,7 +1351,6 @@ impl Core {
                 },
             };
             let (kind, prompt) = crate::conversation::prompt(prompt, &items);
-            let model_id = request.model.id();
             let prompt = PromptRequest {
                 blocks: prompt,
                 model: request.model.model,
@@ -1415,7 +1413,8 @@ impl Core {
                     thought_dropped: false,
                     input_tokens: request.turn.input_tokens,
                     model,
-                    model_id,
+                    model_name: request.turn.model,
+                    effort: request.turn.effort,
                     phase,
                     tool_call: None,
                     stop: crate::conversation::Stop::EndTurn,
@@ -3042,73 +3041,99 @@ mod tests {
             crate::random_hex::<12>().unwrap()
         ));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
-        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
-        core.work.clear();
-        core.startup_session = Some("failed".into());
-        let metadata = serde_json::json!({
-            "configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}],
-            "models":{"availableModels":[{"modelId":"m-low"},{"modelId":"m-high"}]}
-        });
-        core.catalog =
-            Some(crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap());
-        let turn = |model: &str, effort: &str| {
-            crate::dialect::CHAT
-                .parse(
-                    &serde_json::to_vec(
-                        &serde_json::json!({"model":model,"reasoning_effort":effort,
-                "messages":[{"role":"user","content":"First"}]}),
+        for catalog_at_admission in [false, true] {
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.work.clear();
+            core.startup_session = None;
+            let metadata = serde_json::json!({
+                "configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}],
+                "models":{"availableModels":[{"modelId":"m-low"},{"modelId":"m-high"}]}
+            });
+            core.catalog = catalog_at_admission.then(|| {
+                crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap()
+            });
+            let turn = |model: &str, effort: &str| {
+                crate::dialect::CHAT
+                    .parse(
+                        &serde_json::to_vec(
+                            &serde_json::json!({"model":model,"reasoning_effort":effort,
+                    "messages":[{"role":"user","content":"First"}]}),
+                        )
+                        .unwrap(),
                     )
-                    .unwrap(),
-                )
-                .ok()
-                .unwrap()
-                .turn
-        };
-        let seed = turn("m", "high");
-        let (output, _seed) = mpsc::unbounded_channel();
-        core.handle(
-            Event::Accepted(Box::new(Accepted {
-                model: core.check_model(&seed).ok().unwrap(),
-                turn: seed,
-                request: journal.begin(crate::journal::Api::Chat, 0),
-                output,
-            })),
-            0,
-            std::time::UNIX_EPOCH,
-        );
-        core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
-        assert!(core.catalog.is_none(), "M-20 clears the live catalog");
-        let clock = crate::Ports::production().clock;
-        let actual: Vec<_> = [("m", "high"), ("m-high", "low"), ("m", "low")]
-            .into_iter()
-            .map(|(model, effort)| {
-                let (admission, mut answer) = oneshot::channel();
-                let _ = core.admit(
+                    .ok()
+                    .unwrap()
+                    .turn
+            };
+            let clock = crate::Ports::production().clock;
+            let request = journal.begin(crate::journal::Api::Chat, 0);
+            let work = request.id.clone();
+            let (admission, mut admitted) = oneshot::channel();
+            let (accepted, _) = core
+                .admit(
                     TurnWork {
-                        turn: turn(model, effort),
-                        request: journal.begin(crate::journal::Api::Chat, 0),
+                        turn: turn("m", "high"),
+                        request,
                         hold: clock.hold(HoldKind::TurnEvent),
                         admission,
                     },
                     &journal,
                     clock.as_ref(),
-                );
-                match answer.try_recv().unwrap() {
-                    Err(error)
-                        if matches!(error.message, crate::messages::Message::RetryWait { .. }) =>
-                    {
-                        "retry_wait"
+                )
+                .unwrap();
+            let _seed = admitted.try_recv().unwrap().ok().unwrap();
+            core.handle(accepted, 0, std::time::UNIX_EPOCH);
+            core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work,
+                    result: Ok((
+                        "failed".into(),
+                        crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
+                    )),
+                }),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+            assert!(
+                core.catalog.is_some(),
+                "catalog loads before the M-20 failure"
+            );
+            core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+            assert!(core.catalog.is_none(), "M-20 clears the live catalog");
+            let actual: Vec<_> = [("m", "high"), ("m-high", "low"), ("m", "low")]
+                .into_iter()
+                .map(|(model, effort)| {
+                    let (admission, mut answer) = oneshot::channel();
+                    let _ = core.admit(
+                        TurnWork {
+                            turn: turn(model, effort),
+                            request: journal.begin(crate::journal::Api::Chat, 0),
+                            hold: clock.hold(HoldKind::TurnEvent),
+                            admission,
+                        },
+                        &journal,
+                        clock.as_ref(),
+                    );
+                    match answer.try_recv().unwrap() {
+                        Err(error)
+                            if matches!(
+                                error.message,
+                                crate::messages::Message::RetryWait { .. }
+                            ) =>
+                        {
+                            "retry_wait"
+                        }
+                        Err(_) => "other error",
+                        Ok(_) => "accepted",
                     }
-                    Err(_) => "other error",
-                    Ok(_) => "accepted",
-                }
-            })
-            .collect();
-        assert_eq!(
-            actual,
-            ["retry_wait", "retry_wait", "accepted"],
-            "FR-029 resolves the same model ID without the live catalog"
-        );
+                })
+                .collect();
+            assert_eq!(
+                actual,
+                ["retry_wait", "retry_wait", "accepted"],
+                "FR-029 resolves the same model ID without the live catalog; catalog at admission: {catalog_at_admission}"
+            );
+        }
         std::fs::remove_dir_all(folder).unwrap();
     }
 
@@ -4649,7 +4674,8 @@ mod tests {
                         thought_dropped: false,
                         input_tokens: turn.input_tokens,
                         model: "gemini-3.8-flash".into(),
-                        model_id: "gemini-3.8-flash".into(),
+                        model_name: "gemini-3.8-flash".into(),
+                        effort: EffortAsk::Absent,
                         phase: Phase::Prompt,
                         tool_call: Some(crate::conversation::ToolCall {
                             name: "read".into(),

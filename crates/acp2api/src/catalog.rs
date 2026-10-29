@@ -1,4 +1,4 @@
-use crate::conversation::{EffortAsk, ThinkingLevel, TurnRequest};
+use crate::conversation::{EffortAsk, ThinkingLevel};
 use agent_client_protocol_schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
 };
@@ -133,27 +133,28 @@ impl Catalog {
     }
     pub(crate) fn resolve(
         &self,
-        turn: &TurnRequest,
+        model_name: &str,
+        effort: &EffortAsk,
     ) -> Result<SelectedModel, crate::messages::Refusal> {
         let found = self.models.iter().find_map(|model| {
-            if model.value == turn.model {
+            if model.value == model_name {
                 Some((model, None))
             } else {
                 model
                     .levels
                     .iter()
                     .copied()
-                    .find(|level| turn.model == model.name_with_level(*level))
+                    .find(|level| model_name == model.name_with_level(*level))
                     .map(|level| (model, Some(level)))
             }
         });
         let (model, suffix) = found.ok_or_else(|| {
             crate::messages::Refusal::from(crate::messages::Message::Model {
-                requested: turn.model.clone(),
+                requested: model_name.into(),
                 names: self.names().map(|(id, _)| id).collect(),
             })
         })?;
-        let wanted = suffix.unwrap_or(match &turn.effort {
+        let wanted = suffix.unwrap_or(match effort {
             EffortAsk::Level(level) => *level,
             EffortAsk::Absent | EffortAsk::Unknown(_) => ThinkingLevel::High,
         });

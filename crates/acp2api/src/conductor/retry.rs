@@ -1,8 +1,8 @@
 use super::{Active, Failure};
 use crate::{
     Moment,
-    catalog::{Catalog, SelectedModel},
-    conversation::{self, RecordHashes, ToolSetHash, TurnRequest},
+    catalog::Catalog,
+    conversation::{self, EffortAsk, RecordHashes, ToolSetHash, TurnRequest},
     messages::Message,
 };
 
@@ -11,7 +11,8 @@ pub(crate) const WAIT_MILLIS: Moment = 30_000;
 pub(super) struct Wait {
     pub hashes: RecordHashes,
     pub tools: ToolSetHash,
-    pub model_id: String,
+    pub model_name: String,
+    pub effort: EffortAsk,
     pub catalog: Option<Catalog>,
     pub deadline: Moment,
     pub error: Message,
@@ -29,7 +30,8 @@ impl Wait {
         .then(|| Self {
             hashes: active.hashes.clone(),
             tools: active.client_tools_hash,
-            model_id: active.model_id.clone(),
+            model_name: active.model_name.clone(),
+            effort: active.effort.clone(),
             catalog: catalog.cloned(),
             deadline: failure.at.saturating_add(WAIT_MILLIS),
             error: failure.message.clone(),
@@ -37,24 +39,25 @@ impl Wait {
     }
 }
 
-pub(super) fn refusal(
-    waits: &[Wait],
-    turn: &TurnRequest,
-    model: &SelectedModel,
-    now: Moment,
-) -> Option<Message> {
+pub(super) fn refusal(waits: &[Wait], turn: &TurnRequest, now: Moment) -> Option<Message> {
     let hashes = conversation::record_hashes(&turn.conversation);
     let tools = conversation::tool_set_hash(&turn.tools);
     waits
         .iter()
         .rev()
         .find(|wait| {
-            let model_id = wait.catalog.as_ref().map_or_else(
-                || Some(model.id()),
-                |catalog| catalog.resolve(turn).ok().map(|model| model.id()),
+            let same_model = wait.catalog.as_ref().map_or_else(
+                || wait.model_name == turn.model,
+                |catalog| {
+                    catalog
+                        .resolve(&wait.model_name, &wait.effort)
+                        .ok()
+                        .zip(catalog.resolve(&turn.model, &turn.effort).ok())
+                        .is_some_and(|(earlier, later)| earlier.id() == later.id())
+                },
             );
             wait.deadline > now
-                && model_id.as_deref() == Some(wait.model_id.as_str())
+                && same_model
                 && wait.tools == tools
                 && wait.hashes.is_continued_by(&hashes)
         })
