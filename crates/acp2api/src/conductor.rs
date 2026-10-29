@@ -1661,7 +1661,11 @@ impl Core {
                 }
                 active.phase = Phase::Settling {
                     at: now.saturating_add(SETTLE_DELAY),
-                    result: Ok(()),
+                    result: if stop_reason == Some(StopReason::MaxTurnRequests) {
+                        Err(crate::messages::Message::MaxTurnRequests)
+                    } else {
+                        Ok(())
+                    },
                     can_continue: stop_reason == Some(StopReason::EndTurn)
                         || stop_reason == Some(StopReason::MaxTokens)
                         || stop_reason == Some(StopReason::Cancelled) && active.tool_call.is_some(),

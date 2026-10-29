@@ -290,6 +290,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         }
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
         Message::RuntimeFailed => "runtime_failed",
+        Message::MaxTurnRequests => "max_turn_requests",
         Message::Stopped => "stopped",
     }
 }

@@ -49,6 +49,7 @@ pub(crate) enum Message {
     },
     RuntimeUnavailable(String),
     RuntimeFailed,
+    MaxTurnRequests,
     Stopped,
     Upstream(String),
     UpstreamHttp(HttpError),
@@ -100,6 +101,7 @@ impl Refusal {
             Message::UpstreamHttp(_)
             | Message::UpstreamAcp(_)
             | Message::Upstream(_)
+            | Message::MaxTurnRequests
             | Message::BuiltInToolRan(_) => Row::Other502,
             Message::RuntimeUnavailable(_)
             | Message::Stopped
@@ -176,6 +178,7 @@ impl fmt::Display for Message {
             Self::BuiltInToolRan(name) => write!(f, "acp2api: the built-in tool {name} of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."),
             Self::Stopped => f.write_str("acp2api: acp2api stopped before the end of this request."),
             Self::RuntimeFailed => f.write_str("acp2api: the runtime process failed, so acp2api ended the prompt turn."),
+            Self::MaxTurnRequests => f.write_str("acp2api: the prompt turn reached the limit of model requests of the official runtime."),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::UpstreamHttp(error) => write!(f, "acp2api: upstream error {} {}: {}", error.code, error.status, error.message),
