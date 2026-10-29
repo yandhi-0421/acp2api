@@ -3332,6 +3332,73 @@ mod tests {
         prepared
     }
 
+    fn error_after_reply(
+        reply: &str,
+        error: crate::messages::HttpError,
+    ) -> (Core, Vec<Command>, PathBuf) {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-lockout-error-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal =
+            crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.state_path = folder.join(crate::store::STATE_FILE);
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::Text(reply.into()),
+            }),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error,
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        (core, commands, folder)
+    }
+
+    #[test]
+    fn a_503_with_order_14030_in_the_reply_does_not_start_lockout() {
+        let (core, _, folder) = error_after_reply(
+            "order 14030",
+            crate::messages::HttpError {
+                code: Some(503),
+                status: "UNAVAILABLE".into(),
+                message: "Service unavailable".into(),
+            },
+        );
+        let state = core.state();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            state, "Running",
+            "FR-034: a number in reply text is not an HTTP status"
+        );
+    }
+
+    #[test]
+    fn a_429_with_7f403a_in_the_error_starts_quota_wait() {
+        let (core, _, folder) = error_after_reply(
+            "",
+            crate::messages::HttpError {
+                code: Some(429),
+                status: "RESOURCE_EXHAUSTED".into(),
+                message: "request 7f403a; resets 1970-01-01T00:02:00Z".into(),
+            },
+        );
+        let state = core.state();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            state, "Quota wait",
+            "FR-034: an identifier in the error is not an HTTP status"
+        );
+    }
+
     #[test]
     fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
         let folder = std::env::temp_dir().join(format!(

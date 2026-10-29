@@ -78,7 +78,12 @@ impl Message {
     }
     pub(crate) fn lockout_signal(&self) -> Option<&'static str> {
         let (code, message, status) = self.upstream_parts()?;
-        if code == Some(403) || message.contains("403") {
+        if code == Some(403)
+            || status == Some("403")
+            || message
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|token| token == "403")
+        {
             Some("403")
         } else if status == Some("PERMISSION_DENIED") || message.contains("PERMISSION_DENIED") {
             Some("PERMISSION_DENIED")
