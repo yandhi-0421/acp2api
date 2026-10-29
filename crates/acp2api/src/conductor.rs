@@ -2348,6 +2348,10 @@ impl Core {
     fn retire(&mut self, active: &Active) {
         if let Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } =
             &active.phase
+            && self
+                .quota_wait
+                .as_ref()
+                .is_some_and(|current| current.timer == wait.timer)
         {
             self.enqueue_reset_query(wait.clone(), Some(active.model.clone()));
         }
@@ -3134,6 +3138,64 @@ mod tests {
                 notices: watch::channel(Arc::new(Vec::new())).0,
             }
         }
+    }
+
+    #[test]
+    fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-replaced-quota-wait-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 429,
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: "Quota exhausted; no reset time.".into(),
+                },
+            }),
+            60_000,
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_000),
+        );
+        assert_eq!(core.quota_wait.as_ref().unwrap().deadline, 3_660_000);
+        let ended = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 429,
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: "resets 1970-01-01T00:02:00Z".into(),
+                },
+            }),
+            60_001,
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_001),
+        );
+        assert_eq!(core.quota_wait.as_ref().unwrap().deadline, 120_000);
+        assert_eq!(
+            ended
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    Command::Emit(
+                        _,
+                        TurnEvent::End(Err(crate::messages::Message::QuotaWait { .. }))
+                    )
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            core.work
+                .values()
+                .filter(|work| matches!(work, Work::QuotaQueued { .. } | Work::QuotaWorking { .. }))
+                .count(),
+            0,
+            "FR-036/FR-052 send no reset query for a replaced quota wait"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
