@@ -3589,6 +3589,168 @@ mod tests {
     }
 
     #[test]
+    fn stopping_cancels_a_prompt_still_awaiting_its_quota_end() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-stop-quota-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: quota_error_without_reset_time(),
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        let stopped = core.handle(Event::Stop, 2, std::time::UNIX_EPOCH);
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            stopped
+                .iter()
+                .filter(|command| matches!(command,
+                    Command::Cancel(session) if session == "running"
+                ))
+                .count(),
+            1,
+            "FR-045 cancels a live prompt even after a quota signal"
+        );
+        assert!(
+            stopped.iter().any(|command| matches!(
+                command,
+                Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::Stopped)))
+            )),
+            "FR-045 ends the response with M-15"
+        );
+    }
+
+    #[test]
+    fn stopping_cancels_the_running_usage_prompt_and_answers_its_owner() {
+        let mut core = Core {
+            startup_session: Some("usage".into()),
+            ..Core::fixture(1)
+        };
+        let (reply, mut answer) = oneshot::channel();
+        let started = core.handle(Event::RefreshQuota(reply), 0, std::time::UNIX_EPOCH);
+        assert!(
+            started.iter().any(|command| matches!(command,
+                Command::Usage { session, .. } if session == "usage"
+            )),
+            "FR-052 starts the owner refresh as a prompt turn"
+        );
+        let stopped = core.handle(Event::Stop, 1, std::time::UNIX_EPOCH);
+        assert_eq!(
+            stopped
+                .iter()
+                .filter(|command| matches!(command,
+                    Command::Cancel(session) if session == "usage"
+                ))
+                .count(),
+            1,
+            "FR-045 cancels every live prompt, including /usage"
+        );
+        assert_eq!(
+            answer.try_recv(),
+            Ok(Err(crate::messages::Message::Stopped.to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_ends_each_running_and_queued_response_once_with_m15() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-stop-responses-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (mut core, _, tickets) = prompting_with_waiter(&journal);
+        let commands = core.handle(Event::Stop, 1, clock.wall());
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let responses: Vec<_> = tickets
+            .into_iter()
+            .map(|mut ticket| {
+                std::iter::from_fn(|| ticket.try_recv().ok())
+                    .map(|(event, _)| match event {
+                        TurnEvent::End(Err(error)) => error.to_string(),
+                        _ => "unexpected response event".into(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let late = core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::Cancelled),
+                },
+            }),
+            2,
+            clock.wall(),
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+        let stopped = crate::messages::Message::Stopped.to_string();
+        assert_eq!(
+            responses,
+            [vec![stopped.clone()], vec![stopped]],
+            "FR-045 and R3 end both responses once; their relative order is not a contract"
+        );
+        assert!(
+            !late
+                .iter()
+                .any(|command| matches!(command, Command::Emit(_, _))),
+            "a late runtime end sends no second response"
+        );
+        assert!(core.work.is_empty());
+    }
+
+    #[test]
+    fn lockout_records_state_and_cancels_and_persists_before_any_response_ends() {
+        let (_, commands, folder) = error_after_reply(
+            "",
+            crate::messages::HttpError {
+                code: Some(403),
+                status: "PERMISSION_DENIED".into(),
+                message: "Account suspended".into(),
+            },
+        );
+        let state = commands
+            .iter()
+            .position(|command| matches!(command, Command::State("Lockout", _)))
+            .unwrap();
+        let cancel = commands
+            .iter()
+            .position(|command| matches!(command, Command::Cancel(_)))
+            .unwrap();
+        let persist_and_stop = commands
+            .iter()
+            .position(|command| matches!(command, Command::Lockout(_)))
+            .unwrap();
+        let first_end = commands
+            .iter()
+            .position(|command| matches!(command, Command::Emit(_, TurnEvent::End(_))))
+            .unwrap();
+        let state_notices = commands
+            .iter()
+            .filter(|command| matches!(command, Command::State("Lockout", _)))
+            .count();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(state_notices, 1);
+        assert!(
+            state < first_end && cancel < persist_and_stop && persist_and_stop < first_end,
+            "FR-035 and R1 require the state, cancellation, persistence, and runtime stop before a response ends"
+        );
+    }
+
+    #[test]
     fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
         let folder = std::env::temp_dir().join(format!(
             "acp2api-replaced-quota-wait-{}",
