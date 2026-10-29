@@ -88,10 +88,10 @@ async fn exercise(
                     Some("session/load") => vec![reply(catalog.clone())],
                     Some("session/prompt") => {
                         prompts += 1;
+                        prompt_id = call["id"].clone();
                         match prompts {
                             1 => vec![text(&system),reply(json!({"stopReason":"end_turn"}))],
                             2 => {
-                                prompt_id = call["id"].clone();
                                 let name = listed_tools(&mcp).await["result"]["tools"][0]["name"].as_str().unwrap().to_owned();
                                 vec![json!({"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"checked-session","toolCall":{"toolCallId":"tool","title":format!("Run {name}?"),"rawInput":{"value":"checked text"}},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}})]
                             },
@@ -371,6 +371,27 @@ async fn rejects_a_missing_session_file_in_the_runtime_home() {
                     root.join("data/runtime-home/antigravity-acp/conversations/checked-session.db"),
                 )
                 .unwrap();
+            }
+        })
+        .await,
+    );
+}
+
+#[tokio::test]
+async fn rejects_a_client_tool_call_in_the_textual_result_reply() {
+    let mut prompts = 0;
+    let mut permission = Value::Null;
+    incompatible(
+        exercise(move |call, replies, _| {
+            if call["method"] == "session/prompt" {
+                prompts += 1;
+                if prompts == 2 {
+                    permission = replies[0].clone();
+                }
+                if prompts == 3 {
+                    replies.truncate(1);
+                    replies.push(permission.clone());
+                }
             }
         })
         .await,
