@@ -1011,3 +1011,24 @@ async fn non_stream_bodies_are_read_before_settle_allows_the_next_virtual_instan
         "the client must read each non-stream body before the last hold ends: {observations:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stream_body_preserves_content_length_framing() {
+    tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
+        let mut s = world();
+        let call = s.client().await.model_names();
+        let answer = call.finish(&mut s.time).await;
+        s.finish(true).await;
+        assert_eq!(answer.status, 200);
+        let content_length = answer.body.len().to_string();
+        assert_eq!(
+            (
+                answer.headers.get("content-length").map(String::as_str),
+                answer.headers.get("transfer-encoding").map(String::as_str),
+            ),
+            (Some(content_length.as_str()), None),
+        );
+    })
+    .await
+    .expect("one models request; 10 s run cap; existing hub and 8 MiB answer caps");
+}
