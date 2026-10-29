@@ -406,7 +406,7 @@ struct UnavailableReason {
 }
 enum RuntimeState {
     Serving,
-    Retiring,
+    Retiring { sign_in_wait_ended: bool },
     Restarting,
     Unavailable(UnavailableReason),
     Stopping,
@@ -551,7 +551,9 @@ impl Core {
                 identity,
             } => match builds.check_copy(&folder, &identity) {
                 Ok(program) => {
-                    self.runtime_state = RuntimeState::Retiring;
+                    self.runtime_state = RuntimeState::Retiring {
+                        sign_in_wait_ended: false,
+                    };
                     self.stop_runtime(runtime, read_open).await;
                     let builds = builds.clone();
                     let retained = self.retained_sessions();
@@ -625,7 +627,7 @@ impl Core {
         clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
     ) {
-        if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
+        if matches!(self.runtime_state, RuntimeState::Retiring { .. }) && runtime.is_some() {
             self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
                 .await;
         }
@@ -757,7 +759,7 @@ impl Core {
     fn replacement_ready(&self) -> bool {
         matches!(
             self.runtime_state,
-            RuntimeState::Retiring | RuntimeState::Restarting | RuntimeState::Unavailable(_)
+            RuntimeState::Retiring { .. } | RuntimeState::Restarting | RuntimeState::Unavailable(_)
         ) && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
@@ -1101,7 +1103,9 @@ impl Core {
             (None, Event::EndSignInWait) => {
                 self.sign_in_wait = None;
                 if matches!(self.runtime_state, RuntimeState::Serving) {
-                    self.runtime_state = RuntimeState::Retiring;
+                    self.runtime_state = RuntimeState::Retiring {
+                        sign_in_wait_ended: true,
+                    };
                     self.replacement.get_or_insert(Replacement::SignIn);
                 }
             }
@@ -1196,12 +1200,29 @@ impl Core {
                 }
             }
             (None, Event::RetireRuntime) => {
-                self.sign_in_wait = None;
+                let sign_in_wait_ended = self.sign_in_wait.take().is_some()
+                    || matches!(
+                        self.runtime_state,
+                        RuntimeState::Retiring {
+                            sign_in_wait_ended: true
+                        }
+                    );
                 if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
-                    self.runtime_state = RuntimeState::Retiring;
+                    self.runtime_state = RuntimeState::Retiring { sign_in_wait_ended };
                 }
             }
-            (None, Event::ResumeRuntime) => self.runtime_state = RuntimeState::Serving,
+            (None, Event::ResumeRuntime) => {
+                if matches!(
+                    self.runtime_state,
+                    RuntimeState::Retiring {
+                        sign_in_wait_ended: true
+                    }
+                ) {
+                    self.replacement.get_or_insert(Replacement::SignIn);
+                } else {
+                    self.runtime_state = RuntimeState::Serving;
+                }
+            }
             (None, Event::Accepted(request)) => {
                 self.work
                     .insert(self.next_work, Work::AcceptedQueued(*request));
@@ -2493,7 +2514,7 @@ impl Conductor {
                         continue;
                     }
                     if core.replacement.is_none()
-                        && matches!(core.runtime_state, RuntimeState::Retiring)
+                        && matches!(core.runtime_state, RuntimeState::Retiring { .. })
                     {
                         core.apply(
                             Event::ResumeRuntime,
@@ -5328,7 +5349,7 @@ mod tests {
                         );
                     } else {
                         assert!(
-                            matches!(core.runtime_state, RuntimeState::Retiring),
+                            matches!(core.runtime_state, RuntimeState::Retiring { .. }),
                             "a wait cannot overwrite the build retirement"
                         );
                         assert!(
@@ -5390,6 +5411,29 @@ mod tests {
             "FR-039 planned replacement is not a runtime failure"
         );
         std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn aborting_retirement_replaces_a_runtime_with_an_ended_sign_in_wait() {
+        let mut core = Core::fixture(1);
+        core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+        core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
+        assert!(
+            core.sign_in_wait.is_none(),
+            "retirement ends the owner's wait"
+        );
+        core.handle(Event::ResumeRuntime, 2, std::time::UNIX_EPOCH);
+        assert!(
+            matches!(core.replacement, Some(Replacement::SignIn)),
+            "FR-039 an aborted retirement must still stop the runtime's authenticate call"
+        );
+        assert!(
+            core.replacement_ready(),
+            "the planned replacement can proceed"
+        );
+        assert!(
+            core.failures.is_empty(),
+            "FR-039 replacement is not a runtime failure"
+        );
     }
     #[test]
     fn an_elapsed_quota_reset_completes_a_pending_sign_in_check() {
