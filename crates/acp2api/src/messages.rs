@@ -91,20 +91,7 @@ impl Message {
     }
     pub(crate) fn lockout_signal(&self) -> Option<&'static str> {
         let (code, message, status) = self.upstream_parts()?;
-        if code == Some(403)
-            || status == Some("403")
-            || message
-                .split(|c: char| !c.is_alphanumeric() && !matches!(c, '_' | '.' | '-'))
-                .any(|token| token.strip_suffix('.').unwrap_or(token) == "403")
-        {
-            Some("403")
-        } else if status == Some("PERMISSION_DENIED") || message.contains("PERMISSION_DENIED") {
-            Some("PERMISSION_DENIED")
-        } else if message.contains("Terms of Service") {
-            Some("Terms of Service")
-        } else {
-            None
-        }
+        lockout_signal(code, message, status)
     }
     pub(crate) fn requires_sign_in(&self) -> bool {
         if self.lockout_signal().is_some() {
@@ -125,6 +112,26 @@ impl Message {
             || code == Some(-32000) && message.contains("Authentication required")
             || reason == Some("logged_out")
             || message.contains("logged_out")
+    }
+}
+pub(crate) fn lockout_signal(
+    code: Option<i64>,
+    message: &str,
+    status: Option<&str>,
+) -> Option<&'static str> {
+    if code == Some(403)
+        || status == Some("403")
+        || message
+            .split(|c: char| !c.is_alphanumeric() && !matches!(c, '_' | '.' | '-'))
+            .any(|token| token.strip_suffix('.').unwrap_or(token) == "403")
+    {
+        Some("403")
+    } else if status == Some("PERMISSION_DENIED") || message.contains("PERMISSION_DENIED") {
+        Some("PERMISSION_DENIED")
+    } else if message.contains("Terms of Service") {
+        Some("Terms of Service")
+    } else {
+        None
     }
 }
 pub(crate) enum Row {

@@ -3375,6 +3375,52 @@ mod tests {
         assert!(!state_text.contains("PRIVATE-REPLY"));
     }
 
+    #[test]
+    fn a_stderr_failed_reply_uses_all_lockout_signals_but_only_error_channel_evidence() {
+        for (reply, signal) in [
+            (
+                "PERMISSION_DENIED: Verify your account PRIVATE-REPLY",
+                Some("PERMISSION_DENIED"),
+            ),
+            ("Error 403. PRIVATE-REPLY", Some("403")),
+            ("Terms of Service PRIVATE-REPLY", Some("Terms of Service")),
+            ("backend latency 1.403 s", None),
+            ("v2.403", None),
+            ("req-403", None),
+            ("order 14030", None),
+        ] {
+            let (core, commands, folder) = error_after_reply(
+                reply,
+                crate::messages::HttpError {
+                    code: Some(400),
+                    status: "INVALID_ARGUMENT".into(),
+                    message: "Account name%40example.com failed".into(),
+                },
+            );
+            let evidence = core
+                .lockout
+                .map(|evidence| (evidence.signal, evidence.original_error_text));
+            let response = commands.iter().find_map(|command| match command {
+                Command::Emit(_, TurnEvent::End(Err(error))) => error
+                    .to_string()
+                    .split_once(" Original error: ")
+                    .map(|(_, original)| original.to_owned()),
+                _ => None,
+            });
+            std::fs::remove_dir_all(folder).unwrap();
+            let original =
+                "acp2api: upstream error 400 INVALID_ARGUMENT: Account <REDACTED> failed";
+            assert_eq!(
+                (evidence, response),
+                (
+                    signal.map(|signal| (signal.to_owned(), original.to_owned())),
+                    signal.map(|_| original.to_owned())
+                ),
+                "FR-034 classifies the failed reply; FR-035/FR-056 keep only the error channel: {reply}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_lockout_answers_the_waiting_and_queued_build_changes() {
         let folder = std::env::temp_dir().join(format!(

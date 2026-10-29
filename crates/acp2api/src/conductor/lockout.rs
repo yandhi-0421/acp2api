@@ -66,9 +66,8 @@ impl Core {
                         active.stop_prefix,
                         active.held.as_deref().unwrap_or("")
                     );
-                    if reply.contains("Terms of Service") {
-                        failed_reply_signal = Some("Terms of Service");
-                    }
+                    // FR-034 counts reply text only in a prompt turn that stderr marks as failed.
+                    failed_reply_signal = crate::messages::lockout_signal(None, &reply, None);
                 }
                 Some(upstream_error.insert(Message::UpstreamHttp(error.clone())))
             }
