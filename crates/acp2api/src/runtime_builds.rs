@@ -327,9 +327,7 @@ impl Builds {
                 return Ok(Selection::Start(Some(selected.selected_build())));
             }
             Action::Initial => {
-                if let Some(copy) = self.accepted_copy()? {
-                    self.scan_places(settings.agy_acp_server_path.as_deref());
-                    *self.source.lock().unwrap() = self.source_for(&identity(&copy));
+                if self.accepted_copy()?.is_some() {
                     return Ok(Selection::Start(None));
                 }
             }
@@ -514,9 +512,16 @@ impl Builds {
     }
     pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
         let builds = self.clone();
-        tokio::task::spawn_blocking(move || builds.scan_places(configured.as_deref()))
-            .await
-            .map_err(|error| error.to_string())
+        tokio::task::spawn_blocking(move || {
+            builds.scan_places(configured.as_deref());
+            let source = builds
+                .accepted_copy()?
+                .and_then(|copy| builds.source_for(&identity(&copy)));
+            *builds.source.lock().unwrap() = source;
+            Ok(())
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
     pub(crate) async fn select(
         &self,
@@ -688,6 +693,53 @@ mod tests {
                 program: spec.program,
             })
         }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn an_accepted_copy_reaches_launch_before_search_and_recovers_its_source_afterward() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-search-after-start-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            for folder in [COPY, "Zed/1.4.0"] {
+                fs::create_dir_all(root.join(folder)).unwrap();
+                for name in [SERVER, HARNESS] {
+                    fs::write(root.join(folder).join(name), b"accepted").unwrap();
+                }
+            }
+            let mut builds = Builds::fixture(&root, Ports::production().clock);
+            builds.environment.local_app_data = Some(root.clone());
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            builds.start.release = Arc::new(Facts(vec![ListedBuild {
+                version: "1.4.0".into(),
+                platform: builds.start.release.platform().into(),
+                agy_acp_server_sha256: hash.clone(),
+                localharness_external_sha256: hash,
+            }]));
+            let launches = Arc::new(AtomicUsize::new(0));
+            builds.start.launcher = Arc::new(RefusingLauncher(launches.clone()));
+            let config = root.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            let selected = builds.select(Action::Initial, &mut settings, &config).await.unwrap();
+            let _ = builds.launch(None).await;
+            let at_start = builds.summary().unwrap();
+            builds.discover(None).await.unwrap();
+            let after_search = builds.summary().unwrap().current.unwrap().source;
+            fs::remove_dir_all(&root).unwrap();
+            assert_eq!(
+                (
+                    matches!(selected, Selection::Start(None)),
+                    launches.load(Ordering::SeqCst),
+                    at_start.found.len(),
+                    at_start.current.unwrap().source,
+                    after_search,
+                ),
+                (true, 1, 0, None, Some(root.join("Zed/1.4.0").join(SERVER))),
+                "FR-042 reaches launch before search; FR-054 obtains the source from the later search"
+            );
+        }).await.expect("search order cap: 5 seconds, one refused launch, no child process, requests or logs");
     }
 
     #[cfg(unix)]
