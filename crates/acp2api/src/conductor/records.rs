@@ -22,8 +22,7 @@ pub(super) fn select<'a>(
         .enumerate()
         .filter(|(_, record)| {
             record.tools == tools
-                && hashes.system == record.hashes.system
-                && hashes.messages.starts_with(&record.hashes.messages)
+                && record.hashes.is_continued_by(hashes)
                 && conversation::continues_after(items, record.hashes.messages.len())
         })
         .max_by_key(|(_, record)| (record.hashes.messages.len(), record.used))

@@ -1,5 +1,6 @@
 mod quota;
 mod records;
+mod retry;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
@@ -8,6 +9,7 @@ use crate::{
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use agent_client_protocol_schema::v1::StopReason;
+pub(crate) use retry::WAIT_SECONDS;
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
@@ -241,8 +243,17 @@ enum Phase {
     Settling {
         at: Moment,
         can_continue: bool,
-        result: Result<(), crate::messages::Message>,
+        result: Result<(), Failure>,
     },
+}
+struct Failure {
+    message: crate::messages::Message,
+    at: Moment,
+}
+impl Failure {
+    fn at(message: crate::messages::Message, at: Moment) -> Self {
+        Self { message, at }
+    }
 }
 struct Active {
     output: Output,
@@ -250,6 +261,7 @@ struct Active {
     session: Option<String>,
     hashes: crate::conversation::RecordHashes,
     tools_hash: crate::conversation::ToolSetHash,
+    client_tools_hash: crate::conversation::ToolSetHash,
     kind: crate::journal::SessionUse,
     used: u64,
     expires: Moment,
@@ -258,6 +270,8 @@ struct Active {
     thought_dropped: bool,
     input_tokens: u64,
     model: String,
+    model_name: String,
+    effort: EffortAsk,
     phase: Phase,
     tool_call: Option<crate::conversation::ToolCall>,
     stop: crate::conversation::Stop,
@@ -340,6 +354,7 @@ struct Core {
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
     last_refresh: Option<Moment>,
     quota_wait: Option<quota::Wait>,
+    retry_waits: Vec<retry::Wait>,
     next_quota: quota::TimerId,
     runtime_state: RuntimeState,
     failures: VecDeque<Moment>,
@@ -664,6 +679,7 @@ impl Core {
             .chain(self.records.iter().map(|record| record.expires))
             .chain(self.cancels.values().copied())
             .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
+            .chain(self.retry_waits.iter().map(|wait| wait.deadline))
             .min()
     }
     fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
@@ -713,7 +729,7 @@ impl Core {
                     level_from_name: false,
                 })
             },
-            |catalog| catalog.resolve(turn),
+            |catalog| catalog.resolve(&turn.model, &turn.effort),
         )
     }
     fn model_entries(
@@ -801,7 +817,10 @@ impl Core {
         let (output, ticket) = mpsc::unbounded_channel();
         let mut checked = match self.refusal(clock.now()) {
             Some(message) => Err(message.into()),
-            None => self.check_model(&work.turn),
+            None => self.check_model(&work.turn).and_then(|model| {
+                retry::refusal(&self.retry_waits, &work.turn, clock.now())
+                    .map_or(Ok(model), |message| Err(message.into()))
+            }),
         };
         if self.queue_full() {
             checked = checked.and(Err(crate::messages::Message::QueueFull.into()));
@@ -858,6 +877,7 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
+        self.retry_waits.retain(|wait| wait.deadline > now);
         if self
             .quota_wait
             .as_ref()
@@ -929,7 +949,11 @@ impl Core {
                     {
                         commands.push(Command::Cancel(session.clone()));
                     }
-                    self.finish(id, Err(crate::messages::Message::Stopped), &mut commands);
+                    self.finish(
+                        id,
+                        Err(Failure::at(crate::messages::Message::Stopped, now)),
+                        &mut commands,
+                    );
                 }
             }
             (None, Event::RuntimeUnavailable(reason)) => {
@@ -948,7 +972,7 @@ impl Core {
                     })
                     .collect();
                 for id in queries {
-                    self.finish(id, Err(error.clone()), &mut commands);
+                    self.finish(id, Err(Failure::at(error.clone(), now)), &mut commands);
                 }
             }
             (None, Event::RetireRuntime) => {
@@ -1019,7 +1043,7 @@ impl Core {
                 if let Some(id) = work_id {
                     self.finish(
                         id,
-                        Err(crate::messages::Message::Upstream(error)),
+                        Err(Failure::at(crate::messages::Message::Upstream(error), now)),
                         &mut commands,
                     );
                 }
@@ -1046,7 +1070,11 @@ impl Core {
                                         std::mem::replace(&mut active.phase, Phase::Prompt)
                                     {
                                         if let Some(message) = self.refusal(now) {
-                                            self.finish(id, Err(message), &mut commands);
+                                            self.finish(
+                                                id,
+                                                Err(Failure::at(message, now)),
+                                                &mut commands,
+                                            );
                                         } else {
                                             commands.push(Command::Prompt {
                                                 work,
@@ -1063,7 +1091,11 @@ impl Core {
                                 self.quota_signal(&error, now, wall, &mut commands)
                             {
                                 if known {
-                                    self.finish(id, Err(wait.message(now)), &mut commands);
+                                    self.finish(
+                                        id,
+                                        Err(Failure::at(wait.message(now), now)),
+                                        &mut commands,
+                                    );
                                 } else {
                                     let mut active =
                                         self.work.remove(&id).unwrap().into_active().unwrap();
@@ -1082,7 +1114,7 @@ impl Core {
                                     );
                                 }
                             } else {
-                                self.finish(id, Err(error), &mut commands);
+                                self.finish(id, Err(Failure::at(error, now)), &mut commands);
                             }
                         }
                     }
@@ -1112,7 +1144,11 @@ impl Core {
                     if let Some(id) = id {
                         if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
                             if known {
-                                self.end_request(id, wait.message(now), &mut commands);
+                                self.end_request(
+                                    id,
+                                    Failure::at(wait.message(now), now),
+                                    &mut commands,
+                                );
                             } else {
                                 active.phase = match active.phase {
                                     Phase::Settling { at, .. }
@@ -1174,7 +1210,10 @@ impl Core {
                 {
                     self.finish(
                         id,
-                        Err(crate::messages::Message::Upstream(error.clone())),
+                        Err(Failure::at(
+                            crate::messages::Message::Upstream(error.clone()),
+                            now,
+                        )),
                         &mut commands,
                     );
                 }
@@ -1187,7 +1226,6 @@ impl Core {
                 self.failures
                     .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
                 self.failures.push_back(now);
-                self.catalog = None;
                 self.startup_session = None;
                 while let Some(id) = self
                     .work
@@ -1196,10 +1234,11 @@ impl Core {
                 {
                     self.finish(
                         id,
-                        Err(crate::messages::Message::RuntimeFailed),
+                        Err(Failure::at(crate::messages::Message::RuntimeFailed, now)),
                         &mut commands,
                     );
                 }
+                self.catalog = None;
             }
             (None, Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other)) => {}
             (None, Event::Deadline) => {
@@ -1279,6 +1318,16 @@ impl Core {
                 Self::drop_queued(request, &mut commands);
                 continue;
             }
+            if let Some(message) = retry::refusal(&self.retry_waits, &request.turn, now) {
+                Self::refuse_request(
+                    request,
+                    crate::journal::Outcome::Refused("retry_wait"),
+                    message,
+                    &mut commands,
+                );
+                continue;
+            }
+            let client_tools_hash = crate::conversation::tool_set_hash(&request.turn.tools);
             let settings = Session {
                 system: crate::conversation::system_prompt_addition(
                     &request.turn.conversation.system,
@@ -1355,6 +1404,7 @@ impl Core {
                     session,
                     hashes,
                     tools_hash,
+                    client_tools_hash,
                     kind,
                     used: self.use_sequence,
                     expires: now.saturating_add(24 * 60 * 60 * 1000),
@@ -1363,6 +1413,8 @@ impl Core {
                     thought_dropped: false,
                     input_tokens: request.turn.input_tokens,
                     model,
+                    model_name: request.turn.model,
+                    effort: request.turn.effort,
                     phase,
                     tool_call: None,
                     stop: crate::conversation::Stop::EndTurn,
@@ -1538,18 +1590,23 @@ impl Core {
                 }
             }
         };
-        self.complete_quota(query, phase.session().map(str::to_owned), end, commands);
+        self.complete_quota(
+            query,
+            phase.session().map(str::to_owned),
+            end.map_err(|message| Failure::at(message, now)),
+            commands,
+        );
     }
     fn complete_quota(
         &mut self,
         query: QuotaQuery,
         session: Option<String>,
-        result: Result<(), crate::messages::Message>,
+        result: Result<(), Failure>,
         commands: &mut Vec<Command>,
     ) {
         let response = match query.purpose {
             QuotaPurpose::Refresh(reply) => {
-                let _ = reply.send(result.map_err(|message| message.to_string()));
+                let _ = reply.send(result.map_err(|failure| failure.message.to_string()));
                 commands.extend(session.map(Command::Forget));
                 return;
             }
@@ -1598,7 +1655,7 @@ impl Core {
             && let Some((wait, known)) = self.quota_signal(error, now, wall, commands)
         {
             if known {
-                self.finish(id, Err(wait.message(now)), commands);
+                self.finish(id, Err(Failure::at(wait.message(now), now)), commands);
             } else {
                 self.work
                     .get_mut(&id)
@@ -1661,7 +1718,11 @@ impl Core {
                 }
                 active.phase = Phase::Settling {
                     at: now.saturating_add(SETTLE_DELAY),
-                    result: Ok(()),
+                    result: if stop_reason == Some(StopReason::MaxTurnRequests) {
+                        Err(Failure::at(crate::messages::Message::MaxTurnRequests, now))
+                    } else {
+                        Ok(())
+                    },
                     can_continue: stop_reason == Some(StopReason::EndTurn)
                         || stop_reason == Some(StopReason::MaxTokens)
                         || stop_reason == Some(StopReason::Cancelled) && active.tool_call.is_some(),
@@ -1671,7 +1732,7 @@ impl Core {
                 active.phase = Phase::Settling {
                     at: now.saturating_add(SETTLE_DELAY),
                     can_continue: false,
-                    result: Err(error),
+                    result: Err(Failure::at(error, now)),
                 }
             }
             TurnUpdate::UnpermittedTool(name) => {
@@ -1731,17 +1792,22 @@ impl Core {
             .collect();
         for id in queued {
             let request = self.work.remove(&id).unwrap().into_queued().unwrap();
-            commands.push(Command::Complete(crate::journal::Completion {
-                request: request.request,
-                session: None,
-                session_use: None,
-                outcome,
-            }));
-            commands.push(Command::Emit(
-                request.output,
-                TurnEvent::End(Err(message.clone())),
-            ));
+            Self::refuse_request(request, outcome, message.clone(), commands);
         }
+    }
+    fn refuse_request(
+        request: Accepted,
+        outcome: crate::journal::Outcome,
+        message: crate::messages::Message,
+        commands: &mut Vec<Command>,
+    ) {
+        commands.push(Command::Complete(crate::journal::Completion {
+            request: request.request,
+            session: None,
+            session_use: None,
+            outcome,
+        }));
+        commands.push(Command::Emit(request.output, TurnEvent::End(Err(message))));
     }
     fn drop_queued(request: Accepted, commands: &mut Vec<Command>) {
         commands.push(Command::Complete(crate::journal::Completion {
@@ -1792,14 +1858,9 @@ impl Core {
         if matches!(self.work[&id].execution().unwrap().phase, Phase::Prompt) {
             self.cancel(session, now, commands);
         }
-        self.end_request(id, error, commands);
+        self.end_request(id, Failure::at(error, now), commands);
     }
-    fn end_request(
-        &mut self,
-        id: WorkId,
-        error: crate::messages::Message,
-        commands: &mut Vec<Command>,
-    ) {
+    fn end_request(&mut self, id: WorkId, error: Failure, commands: &mut Vec<Command>) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
         let ended = matches!(
             active.phase,
@@ -1818,12 +1879,7 @@ impl Core {
             self.work.insert(id, Work::Retiring(outstanding));
         }
     }
-    fn finish(
-        &mut self,
-        id: WorkId,
-        result: Result<(), crate::messages::Message>,
-        commands: &mut Vec<Command>,
-    ) {
+    fn finish(&mut self, id: WorkId, result: Result<(), Failure>, commands: &mut Vec<Command>) {
         match self.work.remove(&id).unwrap() {
             Work::QuotaQueued { query, session } => {
                 self.complete_quota(query, session, result, commands)
@@ -1886,7 +1942,7 @@ impl Core {
     fn complete_request(
         &mut self,
         mut active: Active,
-        result: Result<(), crate::messages::Message>,
+        result: Result<(), Failure>,
         commands: &mut Vec<Command>,
     ) -> Option<String> {
         let (can_continue, result) = match std::mem::replace(&mut active.phase, Phase::Prompt) {
@@ -1904,12 +1960,19 @@ impl Core {
             .tool_call
             .as_ref()
             .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
-        if result.is_err() {
+        if let Err(failure) = &result
+            && let Some(wait) = retry::Wait::after(&active, failure, self.catalog.as_ref())
+        {
+            self.retry_waits.push(wait);
+        }
+        if result.as_ref().is_err_and(|failure| {
+            !matches!(failure.message, crate::messages::Message::MaxTurnRequests)
+        }) {
             active.held = None;
         }
         active.release_or_cut_reply(None, commands);
         let can_continue = can_continue && active.stop.sequence().is_none();
-        let end = result.map(|()| {
+        let end = result.map_err(|failure| failure.message).map(|()| {
             let mut output = active.text.clone();
             if let Some(call) = active.tool_call.take() {
                 output.push_str(&call.arguments);
@@ -1955,6 +2018,9 @@ impl Core {
             Err(crate::messages::Message::BuiltInToolRan(_)) => {
                 crate::journal::Outcome::BuiltInToolRan
             }
+            Err(crate::messages::Message::MaxTurnRequests) => {
+                crate::journal::Outcome::MaxTurnRequests
+            }
             Err(_) => crate::journal::Outcome::Failed,
         };
         commands.push(Command::Complete(crate::journal::Completion {
@@ -1994,6 +2060,7 @@ impl Conductor {
                 quota_result,
                 last_refresh: None,
                 quota_wait: None,
+                retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
@@ -2832,6 +2899,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -2877,6 +2945,271 @@ mod tests {
             );
         }
         (core, queued, tickets.try_into().ok().unwrap())
+    }
+
+    #[tokio::test]
+    async fn max_turn_requests_releases_the_last_chunk_before_the_error() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-max-turn-chunk-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for stream in [false, true] {
+            let (mut core, _, [events, _queued]) = prompting_with_waiter(&journal);
+            let form = crate::dialect::CHAT
+                .parse(
+                    &serde_json::to_vec(&serde_json::json!({
+                        "model":"m", "messages":[{"role":"user","content":"First"}], "stream":stream
+                    }))
+                    .unwrap(),
+                )
+                .ok()
+                .unwrap()
+                .form;
+            let mut commands = Vec::new();
+            for update in [
+                TurnUpdate::Text("Last reply chunk".into()),
+                TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::MaxTurnRequests),
+                },
+            ] {
+                commands.extend(core.handle(
+                    Event::Runtime(RuntimeEvent::Turn {
+                        session: "running".into(),
+                        update,
+                    }),
+                    0,
+                    std::time::UNIX_EPOCH,
+                ));
+            }
+            commands.extend(core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH));
+            let emitted: Vec<_> = commands
+                .iter()
+                .filter_map(|command| match command {
+                    Command::Emit(_, TurnEvent::Text(text)) => Some(text.as_str()),
+                    Command::Emit(
+                        _,
+                        TurnEvent::End(Err(crate::messages::Message::MaxTurnRequests)),
+                    ) => Some("M-21"),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                emitted,
+                ["Last reply chunk", "M-21"],
+                "FR-028: stream={stream}"
+            );
+            let clock = crate::Ports::production().clock;
+            for command in commands {
+                if let Command::Emit(output, event) = command {
+                    let _ = output.send((event, clock.hold(HoldKind::TurnEvent)));
+                }
+            }
+            let response = crate::dialect::CHAT
+                .respond(
+                    form,
+                    Ticket {
+                        events,
+                        hold: clock.hold(HoldKind::TurnEvent),
+                    },
+                    clock,
+                )
+                .await;
+            assert_eq!(response.status().as_u16(), if stream { 200 } else { 502 });
+            let body = axum::body::to_bytes(response.into_body(), 65_536)
+                .await
+                .unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            if stream {
+                assert!(
+                    body.find("Last reply chunk").unwrap()
+                        < body.find("max_turn_requests").unwrap()
+                );
+            } else {
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"]["code"],
+                    "max_turn_requests"
+                );
+            }
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn runtime_failure_keeps_retry_model_resolution_after_clearing_the_catalog() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-retry-catalog-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for catalog_at_admission in [false, true] {
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.work.clear();
+            core.startup_session = None;
+            let metadata = serde_json::json!({
+                "configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}],
+                "models":{"availableModels":[{"modelId":"m-low"},{"modelId":"m-high"}]}
+            });
+            core.catalog = catalog_at_admission.then(|| {
+                crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap()
+            });
+            let turn = |model: &str, effort: &str| {
+                crate::dialect::CHAT
+                    .parse(
+                        &serde_json::to_vec(
+                            &serde_json::json!({"model":model,"reasoning_effort":effort,
+                    "messages":[{"role":"user","content":"First"}]}),
+                        )
+                        .unwrap(),
+                    )
+                    .ok()
+                    .unwrap()
+                    .turn
+            };
+            let clock = crate::Ports::production().clock;
+            let request = journal.begin(crate::journal::Api::Chat, 0);
+            let work = request.id.clone();
+            let (admission, mut admitted) = oneshot::channel();
+            let (accepted, _) = core
+                .admit(
+                    TurnWork {
+                        turn: turn("m", "high"),
+                        request,
+                        hold: clock.hold(HoldKind::TurnEvent),
+                        admission,
+                    },
+                    &journal,
+                    clock.as_ref(),
+                )
+                .unwrap();
+            let _seed = admitted.try_recv().unwrap().ok().unwrap();
+            core.handle(accepted, 0, std::time::UNIX_EPOCH);
+            core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work,
+                    result: Ok((
+                        "failed".into(),
+                        crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
+                    )),
+                }),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+            assert!(
+                core.catalog.is_some(),
+                "catalog loads before the M-20 failure"
+            );
+            core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+            assert!(core.catalog.is_none(), "M-20 clears the live catalog");
+            let actual: Vec<_> = [("m", "high"), ("m-high", "low"), ("m", "low")]
+                .into_iter()
+                .map(|(model, effort)| {
+                    let (admission, mut answer) = oneshot::channel();
+                    let _ = core.admit(
+                        TurnWork {
+                            turn: turn(model, effort),
+                            request: journal.begin(crate::journal::Api::Chat, 0),
+                            hold: clock.hold(HoldKind::TurnEvent),
+                            admission,
+                        },
+                        &journal,
+                        clock.as_ref(),
+                    );
+                    match answer.try_recv().unwrap() {
+                        Err(error)
+                            if matches!(
+                                error.message,
+                                crate::messages::Message::RetryWait { .. }
+                            ) =>
+                        {
+                            "retry_wait"
+                        }
+                        Err(_) => "other error",
+                        Ok(_) => "accepted",
+                    }
+                })
+                .collect();
+            assert_eq!(
+                actual,
+                ["retry_wait", "retry_wait", "accepted"],
+                "FR-029 resolves the same model ID without the live catalog; catalog at admission: {catalog_at_admission}"
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn retry_wait_keeps_the_client_tool_set_when_tool_calls_are_disabled() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-retry-tools-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _) = prompting_with_waiter(&journal);
+        core.work.clear();
+        let mut tickets = Vec::new();
+        let mut request = |tool: &str| {
+            let body = serde_json::json!({
+                "model":"m", "tool_choice":"none",
+                "tools":[{"type":"function","function":{"name":tool,"parameters":{}}}],
+                "messages":[{"role":"user","content":"Read a file"}]
+            });
+            let turn = crate::dialect::CHAT
+                .parse(&serde_json::to_vec(&body).unwrap())
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, ticket) = mpsc::unbounded_channel();
+            tickets.push(ticket);
+            Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 0),
+                output,
+            }
+        };
+        let seed = request("read_file");
+        let seed_id = seed.request.id.clone();
+        core.handle(Event::Accepted(Box::new(seed)), 0, std::time::UNIX_EPOCH);
+        core.handle(
+            Event::StartFailed(seed_id, "acp2api: session creation failed".into()),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let same = core.handle(
+            Event::Accepted(Box::new(request("read_file"))),
+            5000,
+            std::time::UNIX_EPOCH,
+        );
+        let changed = core.handle(
+            Event::Accepted(Box::new(request("list_files"))),
+            5000,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            (
+                same.iter()
+                    .filter(|command| matches!(
+                        command,
+                        Command::Emit(
+                            _,
+                            TurnEvent::End(Err(crate::messages::Message::RetryWait { .. }))
+                        )
+                    ))
+                    .count(),
+                changed
+                    .iter()
+                    .filter(|command| matches!(command, Command::Prepare { .. }))
+                    .count(),
+            ),
+            (1, 1),
+            "FR-029 keeps the request's client tool set in the retry match"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     async fn failed_checks(timeout: bool, restart_fails: bool) {
@@ -3530,7 +3863,7 @@ mod tests {
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let mut core = Core {
-                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, retry_waits:Vec::new(), next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
                 cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
                 work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
                 use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
@@ -4093,6 +4426,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4207,6 +4541,7 @@ mod tests {
                 quota_result: watch::channel(Arc::new(None)).0,
                 last_refresh: None,
                 quota_wait: None,
+                retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
@@ -4316,6 +4651,7 @@ mod tests {
                 quota_result: watch::channel(Arc::new(None)).0,
                 last_refresh: None,
                 quota_wait: None,
+                retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
@@ -4332,6 +4668,7 @@ mod tests {
                         session: Some("existing".into()),
                         hashes: crate::conversation::record_hashes(&turn.conversation),
                         tools_hash: crate::conversation::tool_set_hash(&turn.tools),
+                        client_tools_hash: crate::conversation::tool_set_hash(&turn.tools),
                         kind: crate::journal::SessionUse::New,
                         used: 1,
                         expires: 100_000,
@@ -4340,6 +4677,8 @@ mod tests {
                         thought_dropped: false,
                         input_tokens: turn.input_tokens,
                         model: "gemini-3.8-flash".into(),
+                        model_name: "gemini-3.8-flash".into(),
+                        effort: EffortAsk::Absent,
                         phase: Phase::Prompt,
                         tool_call: Some(crate::conversation::ToolCall {
                             name: "read".into(),
@@ -4435,6 +4774,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4480,6 +4820,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4583,6 +4924,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4632,6 +4974,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),

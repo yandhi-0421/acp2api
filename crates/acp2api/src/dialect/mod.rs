@@ -78,15 +78,10 @@ impl<T: WireDialect + 'static> Dialect for T {
         )
             .into_response();
         match refusal.row() {
-            Row::Quota(retry_after) => {
+            Row::Quota(retry_after) | Row::Temporary503(retry_after) => {
                 response
                     .headers_mut()
                     .insert("retry-after", retry_after.to_string().parse().unwrap());
-            }
-            Row::Temporary503 => {
-                response
-                    .headers_mut()
-                    .insert("retry-after", axum::http::HeaderValue::from_static("30"));
             }
             Row::QueueFull => {
                 response
@@ -260,7 +255,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
         Row::Rejected => StatusCode::BAD_REQUEST,
         Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
-        Row::Temporary503 | Row::QueueFull => StatusCode::SERVICE_UNAVAILABLE,
+        Row::Temporary503(_) | Row::QueueFull => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -290,6 +285,8 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         }
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
         Message::RuntimeFailed => "runtime_failed",
+        Message::MaxTurnRequests => "max_turn_requests",
+        Message::RetryWait { .. } => "retry_wait",
         Message::Stopped => "stopped",
     }
 }

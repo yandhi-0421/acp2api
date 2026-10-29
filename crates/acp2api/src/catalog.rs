@@ -1,4 +1,4 @@
-use crate::conversation::{EffortAsk, ThinkingLevel, TurnRequest};
+use crate::conversation::{EffortAsk, ThinkingLevel};
 use agent_client_protocol_schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
 };
@@ -18,11 +18,13 @@ pub(crate) struct ModelEntry {
     created_at: String,
     owned_by: &'static str,
 }
+#[derive(Clone)]
 pub(crate) struct Catalog {
     models: Vec<OfferedModel>,
     created: u64,
     created_at: String,
 }
+#[derive(Clone)]
 struct OfferedModel {
     value: String,
     name: String,
@@ -30,13 +32,24 @@ struct OfferedModel {
 }
 impl OfferedModel {
     fn name_with_level(&self, level: ThinkingLevel) -> String {
-        format!("{}-{}", self.value, level.as_str())
+        model_id(&self.value, level)
     }
 }
 pub(crate) struct SelectedModel {
     pub model: String,
     pub level: Option<ThinkingLevel>,
     pub level_from_name: bool,
+}
+impl SelectedModel {
+    pub(crate) fn id(&self) -> String {
+        match self.level {
+            Some(level) => model_id(&self.model, level),
+            None => self.model.clone(),
+        }
+    }
+}
+fn model_id(value: &str, level: ThinkingLevel) -> String {
+    format!("{value}-{}", level.as_str())
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,27 +133,28 @@ impl Catalog {
     }
     pub(crate) fn resolve(
         &self,
-        turn: &TurnRequest,
+        model_name: &str,
+        effort: &EffortAsk,
     ) -> Result<SelectedModel, crate::messages::Refusal> {
         let found = self.models.iter().find_map(|model| {
-            if model.value == turn.model {
+            if model.value == model_name {
                 Some((model, None))
             } else {
                 model
                     .levels
                     .iter()
                     .copied()
-                    .find(|level| turn.model == model.name_with_level(*level))
+                    .find(|level| model_name == model.name_with_level(*level))
                     .map(|level| (model, Some(level)))
             }
         });
         let (model, suffix) = found.ok_or_else(|| {
             crate::messages::Refusal::from(crate::messages::Message::Model {
-                requested: turn.model.clone(),
+                requested: model_name.into(),
                 names: self.names().map(|(id, _)| id).collect(),
             })
         })?;
-        let wanted = suffix.unwrap_or(match &turn.effort {
+        let wanted = suffix.unwrap_or(match effort {
             EffortAsk::Level(level) => *level,
             EffortAsk::Absent | EffortAsk::Unknown(_) => ThinkingLevel::High,
         });
