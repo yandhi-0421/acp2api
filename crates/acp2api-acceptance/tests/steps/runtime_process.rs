@@ -267,22 +267,15 @@ async fn stop(w: &mut World) {
 }
 #[then(expr = "the official runtime gets a cancel of the prompt turn of {string}")]
 fn shutdown_cancel(w: &mut World, name: String) {
-    let text = format!("runtime conversation {name}");
-    let prompt = process::calls(w, "session/prompt")
-        .into_iter()
-        .find(|call| {
-            call["params"]["prompt"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|block| block["text"] == text)
-        })
-        .unwrap();
+    let session = w
+        .prompt_sessions
+        .get(&name)
+        .expect("named request reached ACP");
     assert!(
         process::calls(w, "session/cancel")
             .iter()
-            .any(|v| v["params"]["sessionId"] == prompt["params"]["sessionId"]),
-        "FR-045 shutdown cancels the running prompt"
+            .any(|v| v["params"]["sessionId"] == session.as_str()),
+        "FR-035/FR-045 cancels the running prompt of {name}"
     );
 }
 #[then(expr = "{string} and {string} each get HTTP {int} with the message {string}")]

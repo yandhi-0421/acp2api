@@ -18,6 +18,10 @@ mod copy_failure_support;
 mod keep_alive;
 #[path = "support/keep_alive.rs"]
 mod keep_alive_support;
+#[path = "steps/lockout.rs"]
+mod lockout;
+#[path = "support/lockout.rs"]
+mod lockout_support;
 #[path = "steps/panel.rs"]
 mod panel;
 #[path = "steps/places_and_queue.rs"]
@@ -83,6 +87,8 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    prompt_sessions: std::collections::HashMap<String, String>,
+    lockout: lockout_support::LockoutState,
     keep_alive: keep_alive_support::KeepAliveState,
     sign_in: sign_in_support::SignInState,
     retry: retry_support::RetryState,
@@ -113,6 +119,16 @@ struct World {
     tools: client_tools::ToolState,
     custom_tools: custom_tools::CustomToolState,
     tool_results: tool_result_support::ToolResultState,
+}
+impl World {
+    fn record_prompt_session(&mut self, name: &str, before: usize) {
+        let prompts = self.scenario.fake().record().prompts();
+        if let Some(prompt) = prompts.get(before) {
+            assert_eq!(prompts.len(), before + 1, "one prompt starts for {name}");
+            self.prompt_sessions
+                .insert(name.into(), prompt.session.clone());
+        }
+    }
 }
 #[path = "steps/access_protection.rs"]
 mod access_protection;
@@ -214,6 +230,7 @@ async fn run() {
         .after(|_, _, _, finished, world| {
             Box::pin(async move {
                 if let Some(world) = world {
+                    world.lockout.restore();
                     runtime_continuation::cleanup(world);
                     runtime_support::cleanup(world).await;
                     places_support::cleanup(world).await;

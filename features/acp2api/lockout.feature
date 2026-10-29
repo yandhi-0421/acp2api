@@ -9,7 +9,7 @@ Feature: Lockout
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-034 @issue-70 @wip
+  @FR-034 @issue-70
   Scenario Outline: Each upstream error in an error channel gives the state of its row
     When a prompt turn ends with <error>
     Then acp2api is in the state "<state>"
@@ -33,14 +33,14 @@ Feature: Lockout
       | the stderr error line 503 "UNAVAILABLE"                                                       | normal state     |
       | an exit of the official runtime                                                               | normal state     |
 
-  @FR-034 @issue-70 @wip
+  @FR-034 @issue-70
   Scenario: A normal reply about the Terms of Service gives no lockout
     Given the official runtime replies "Please read the Terms of Service." to the next prompt, with no error line
     When an API client sends a valid request
     Then the reply text of the response is "Please read the Terms of Service."
     And acp2api is in the normal state
 
-  @FR-034 @issue-70 @wip
+  @FR-034 @issue-70
   Scenario: Reply text about the Terms of Service counts in a prompt turn that stderr marks as failed
     Given the official runtime replies "Your account violates the Terms of Service." to the next prompt
     And stderr marks the prompt turn as failed with the error line 400 "INVALID_ARGUMENT"
@@ -60,14 +60,14 @@ Feature: Lockout
       | quota    | the response ends with "stop_reason" set to "refusal"       |
       | no quota | acp2api is in the state "quota wait"                        |
 
-  @FR-034 @issue-70 @wip
+  @FR-034 @issue-70
   Scenario: A lockout signal starts a lockout also in a quota wait
     Given a prompt turn runs
     And a quota signal then starts a quota wait
     When the prompt turn that runs ends with the stderr error line 403 "PERMISSION_DENIED"
     Then acp2api is in the state "lockout"
 
-  @FR-035 @issue-70 @wip
+  @FR-035 @issue-70
   Scenario: The start of a lockout cancels each prompt turn, refuses each request in the queue, and stops the runtime process
     Given the concurrency limit is 2
     And the prompt turns of the requests "A" and "B" run
@@ -77,14 +77,14 @@ Feature: Lockout
     And acp2api refuses "C" with the lockout message
     And no runtime process runs
 
-  @FR-035 @issue-70 @wip
+  @FR-035 @issue-70
   Scenario: The response that started the lockout holds the original error text of Google
     Given the next prompt turn ends with the stderr error line 403 "PERMISSION_DENIED" with the message "Appeal at https://example.com/appeal"
     When an API client sends a valid request to "POST /v1/messages" with "stream" set to false
     Then the error body holds the message "acp2api: lockout since <start time> after <signal>; acp2api sends no request to the official runtime until the owner ends the lockout at <address of the management panel>. Original error: <original error text>"
     And the original error text in the message holds "Appeal at https://example.com/appeal"
 
-  @FR-035 @issue-70 @wip
+  @FR-035 @issue-70
   Scenario: Each later request gets the lockout message and the official runtime gets no request
     Given acp2api is in lockout since a lockout signal
     When an API client sends a valid request to "POST /v1/chat/completions"
@@ -111,13 +111,13 @@ Feature: Lockout
     When the owner opens the management panel
     Then the management panel has no sign-in entry
 
-  @FR-035 @FR-056 @issue-70 @wip
+  @FR-035 @FR-056 @issue-70
   Scenario: acp2api writes the lockout and its redacted evidence into the state file
     When a prompt turn ends with the stderr error line 403 "PERMISSION_DENIED" with the message "Account name%40example.com is suspended"
     Then the state file holds the lockout with the signal, the time, and the original error text
     And the original error text in the state file holds "<REDACTED>" in place of "name%40example.com"
 
-  @FR-035 @issue-70 @wip
+  @FR-035 @issue-70
   Scenario Outline: A restart of acp2api does not end a lockout
     Given <state file>
     When the owner restarts acp2api
@@ -130,7 +130,7 @@ Feature: Lockout
       | the state file is damaged                         |
       | the state file exists, and acp2api cannot read it |
 
-  @FR-035 @issue-70 @wip
+  @FR-035 @issue-70
   Scenario: No timer ends a lockout
     Given acp2api is in lockout since a lockout signal
     When 30 days pass
@@ -163,7 +163,7 @@ Feature: Lockout
     When a prompt turn ends with the stderr error line 403 "PERMISSION_DENIED"
     Then acp2api is in the state "lockout"
 
-  @FR-035 @issue-70 @wip
+  @FR-035 @issue-70
   Scenario: The deletion of the state file ends a lockout
     Given acp2api is stopped, and the state file holds a lockout
     When the owner deletes the state file and starts acp2api

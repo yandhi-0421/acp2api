@@ -2,7 +2,7 @@ use std::fmt;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HttpError {
-    pub code: u16,
+    pub code: Option<u16>,
     pub status: String,
     pub message: String,
 }
@@ -48,6 +48,7 @@ pub(crate) enum Message {
         until: String,
         retry_after: u64,
     },
+    Lockout(String),
     RuntimeUnavailable(String),
     SignInRequired(String),
     RuntimeFailed,
@@ -64,28 +65,36 @@ pub(crate) enum Message {
     BuiltInToolRan(String),
 }
 impl Message {
-    fn upstream_parts(&self) -> Option<(i64, &str, Option<&str>)> {
+    pub(crate) fn lockout(evidence: &crate::store::Lockout, address: &str, original: bool) -> Self {
+        let mut text = format!(
+            "acp2api: lockout since {} after {}; acp2api sends no request to the official runtime until the owner ends the lockout at {address}.",
+            evidence.since, evidence.signal,
+        );
+        if original {
+            text.push_str(&format!(
+                " Original error: {}",
+                evidence.original_error_text
+            ));
+        }
+        Self::Lockout(text)
+    }
+    fn upstream_parts(&self) -> Option<(Option<i64>, &str, Option<&str>)> {
         match self {
             Self::UpstreamHttp(error) => Some((
-                i64::from(error.code),
+                error.code.map(i64::from),
                 error.message.as_str(),
                 Some(error.status.as_str()),
             )),
-            Self::UpstreamAcp(error) => Some((error.code, error.message.as_str(), None)),
+            Self::UpstreamAcp(error) => Some((Some(error.code), error.message.as_str(), None)),
             _ => None,
         }
     }
-    pub(crate) fn is_lockout_signal(&self) -> bool {
-        let Some((code, message, status)) = self.upstream_parts() else {
-            return false;
-        };
-        code == 403
-            || status == Some("PERMISSION_DENIED")
-            || message.contains("PERMISSION_DENIED")
-            || message.contains("Terms of Service")
+    pub(crate) fn lockout_signal(&self) -> Option<&'static str> {
+        let (code, message, status) = self.upstream_parts()?;
+        lockout_signal(code, message, status)
     }
     pub(crate) fn requires_sign_in(&self) -> bool {
-        if self.is_lockout_signal() {
+        if self.lockout_signal().is_some() {
             return false;
         }
         let Some((code, message, status)) = self.upstream_parts() else {
@@ -97,12 +106,32 @@ impl Message {
             }
             _ => None,
         };
-        code == 401
+        code == Some(401)
             || status == Some("UNAUTHENTICATED")
             || message.contains("UNAUTHENTICATED")
-            || code == -32000 && message.contains("Authentication required")
+            || code == Some(-32000) && message.contains("Authentication required")
             || reason == Some("logged_out")
             || message.contains("logged_out")
+    }
+}
+pub(crate) fn lockout_signal(
+    code: Option<i64>,
+    message: &str,
+    status: Option<&str>,
+) -> Option<&'static str> {
+    if code == Some(403)
+        || status == Some("403")
+        || message
+            .split(|c: char| !c.is_alphanumeric() && !matches!(c, '_' | '.' | '-'))
+            .any(|token| token.strip_suffix('.').unwrap_or(token) == "403")
+    {
+        Some("403")
+    } else if status == Some("PERMISSION_DENIED") || message.contains("PERMISSION_DENIED") {
+        Some("PERMISSION_DENIED")
+    } else if message.contains("Terms of Service") {
+        Some("Terms of Service")
+    } else {
+        None
     }
 }
 pub(crate) enum Row {
@@ -158,7 +187,9 @@ impl Message {
             Message::RuntimeFailed | Message::NoUpdate => {
                 Row::Temporary503(crate::conductor::WAIT_SECONDS)
             }
-            Message::UpstreamHttp(error) if (500..600).contains(&error.code) => {
+            Message::UpstreamHttp(error)
+                if error.code.is_some_and(|code| (500..600).contains(&code)) =>
+            {
                 Row::Temporary503(crate::conductor::WAIT_SECONDS)
             }
             Message::RetryWait { seconds, error } => match error.row() {
@@ -170,7 +201,8 @@ impl Message {
             | Message::Upstream(_)
             | Message::MaxTurnRequests
             | Message::BuiltInToolRan(_) => Row::Other502,
-            Message::RuntimeUnavailable(_)
+            Message::Lockout(_)
+            | Message::RuntimeUnavailable(_)
             | Message::SignInRequired(_)
             | Message::Stopped
             | Message::Model { .. }
@@ -194,7 +226,7 @@ impl Message {
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RuntimeUnavailable(message) => f.write_str(message),
+            Self::Lockout(message) | Self::RuntimeUnavailable(message) => f.write_str(message),
             Self::SignInRequired(address) => write!(f, "acp2api: the official runtime is not signed in. Sign in at {address}."),
             Self::Model { requested, names } => write!(
                 f,
@@ -245,7 +277,11 @@ impl fmt::Display for Message {
             Self::RetryWait { seconds, error } => write!(f, "acp2api: a request of this conversation failed less than {} s ago. Send the request again in {seconds} s. The error was: {}", crate::conductor::WAIT_SECONDS, error.to_string().trim_start_matches("acp2api: ")),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
-            Self::UpstreamHttp(error) => write!(f, "acp2api: upstream error {} {}: {}", error.code, error.status, error.message),
+            Self::UpstreamHttp(error) => {
+                f.write_str("acp2api: upstream error ")?;
+                if let Some(code) = error.code { write!(f, "{code} ")?; }
+                write!(f, "{}: {}", error.status, error.message)
+            },
             Self::UpstreamAcp(error) => write!(f, "acp2api: upstream ACP error {}: {}", error.code, error.message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
             Self::QueueFull => write!(f, "acp2api: the queue is full ({} requests). Send the request again later.", crate::conductor::QUEUE_CAPACITY),
@@ -258,6 +294,28 @@ impl fmt::Display for Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_whole_status_number_starts_a_403_lockout() {
+        let signals: Vec<_> = [
+            "backend latency 1.403 s",
+            "v2.403",
+            "req-403",
+            "Error 403.",
+            "403 PERMISSION_DENIED",
+        ]
+        .into_iter()
+        .map(|text| {
+            Message::UpstreamHttp(HttpError {
+                code: Some(503),
+                status: "UNAVAILABLE".into(),
+                message: text.into(),
+            })
+            .lockout_signal()
+        })
+        .collect();
+        assert_eq!(signals, [None, None, None, Some("403"), Some("403")]);
+    }
 
     #[test]
     fn sign_in_signals_keep_lockout_priority_and_read_the_logged_out_reason() {
@@ -296,7 +354,7 @@ mod tests {
         }
         assert!(
             Message::UpstreamHttp(HttpError {
-                code: 400,
+                code: Some(400),
                 status: "UNAUTHENTICATED".into(),
                 message: "Credentials expired".into()
             })
@@ -304,7 +362,7 @@ mod tests {
         );
         assert!(
             !Message::UpstreamHttp(HttpError {
-                code: 401,
+                code: Some(401),
                 status: "PERMISSION_DENIED".into(),
                 message: "Credentials expired".into()
             })

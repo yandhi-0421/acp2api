@@ -37,7 +37,9 @@ async fn first_start(w: &mut World) {
     support::start(w).await;
 }
 
-#[then(expr = "acp2api refuses the request with the message {string}")]
+#[then(
+    regex = r#"^acp2api refuses the request with the message "(acp2api: the official runtime is not signed in\..*)"$"#
+)]
 fn refused(w: &mut World, expected: String) {
     assert_eq!(
         expected.replace("<address of the sign-in entry>", &support::sign_in_entry(w)),

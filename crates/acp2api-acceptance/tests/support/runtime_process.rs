@@ -90,6 +90,7 @@ pub async fn exit_at(w: &mut World, minutes: &[u64]) {
 }
 pub async fn held(w: &mut World, name: &str, stream: bool, end: TurnEndPlan) {
     start(w).await;
+    let before = w.scenario.fake().record().prompts().len();
     let mut plan = TurnPlan::new();
     plan.steps
         .push(TurnStep::HoldUntil(format!("runtime-{name}")));
@@ -107,6 +108,7 @@ pub async fn held(w: &mut World, name: &str, stream: bool, end: TurnEndPlan) {
     let live = w.scenario.client().await.send(call);
     w.process.calls.push((name.into(), Some(live)));
     w.scenario.time.settle().await;
+    w.record_prompt_session(name, before);
 }
 pub fn take(w: &mut World, name: &str) -> Call {
     w.process

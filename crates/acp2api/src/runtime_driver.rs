@@ -568,13 +568,19 @@ impl Runtime {
             line.split_once("Antigravity SDK error processing prompt for session ")
         {
             self.stderr_session = Some(session.trim().to_owned());
-        } else if let Some((_, error)) = line.split_once("Error ")
-            && let Some((code, rest)) = error.split_once(", Message: ")
-            && let Ok(code) = code.parse::<u16>()
+        } else if let Some((prefix, rest)) = line.split_once("Message: ")
             && let Some((message, rest)) = rest.split_once(", Status: ")
             && let Some((status, _)) = rest.split_once(", Details:")
             && let Some(session) = self.stderr_session.take()
         {
+            // Some error lines report a status without a numeric HTTP code.
+            let Ok(code) = prefix
+                .split_once("Error ")
+                .map(|(_, code)| code.trim_end_matches(", ").parse::<u16>())
+                .transpose()
+            else {
+                return RuntimeEvent::Stderr;
+            };
             return RuntimeEvent::UpstreamError {
                 session,
                 error: crate::messages::HttpError {
