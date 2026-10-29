@@ -236,3 +236,10 @@ fn no_usage(w: &mut World) {
         "FR-036/FR-052 no unsolicited quota query"
     );
 }
+
+#[then(expr = "the quota error body has the \"error.type\" {string}")]
+fn quota_error_type(w: &mut World, expected: String) {
+    let answer = w.scenario.answer.as_ref().unwrap();
+    assert_eq!(answer.status, 429);
+    assert_eq!(answer.json()["error"]["type"], expected);
+}

@@ -161,7 +161,7 @@ Feature: Errors
     Given the next prompt turn gets the upstream error 429 RESOURCE_EXHAUSTED with a reset time 120 s away
     When an API client sends a request to "POST /v1/messages" with "stream" set to false
     Then acp2api answers with HTTP 429 and the header "retry-after: 120"
-    And the error body has the "error.type" "rate_limit_error"
+    And the quota error body has the "error.type" "rate_limit_error"
 
   @FR-033 @issue-50
   Scenario: The message of an upstream error holds the values of the stderr error line
