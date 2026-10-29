@@ -109,6 +109,7 @@ impl RuntimeStart {
         .map_err(|error| error.to_string())?
     }
 }
+const MAX_SIGN_IN_ADDRESS_BYTES: usize = 4096;
 pub(crate) struct Runtime {
     input: ProcessWrite,
     lines: mpsc::Receiver<(Line, Hold)>,
@@ -555,6 +556,7 @@ impl Runtime {
         if let Some(address) = line
             .trim()
             .strip_prefix("Open the following link to authenticate the ACP server: ")
+            && address.len() <= MAX_SIGN_IN_ADDRESS_BYTES
             && let Ok(uri) = address.parse::<axum::http::Uri>()
             && matches!(uri.scheme_str(), Some("http" | "https"))
             && uri.authority().is_some()

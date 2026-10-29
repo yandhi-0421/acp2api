@@ -5706,6 +5706,32 @@ mod tests {
         std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]
+    fn the_owners_wait_shows_the_latest_sign_in_address() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-address-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.work.clear();
+        core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+        for address in [
+            "https://accounts.example.com/first",
+            "https://accounts.example.com/latest",
+        ] {
+            core.handle(
+                Event::Runtime(RuntimeEvent::SignInAddress(address.into())),
+                1,
+                std::time::UNIX_EPOCH,
+            );
+        }
+        assert_eq!(
+            core.sign_in_wait.as_ref().unwrap().address.as_deref(),
+            Some("https://accounts.example.com/latest")
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
     fn a_sign_in_error_from_authenticate_starts_the_required_condition() {
         let folder = std::env::temp_dir().join(format!(
             "acp2api-authentication-error-{}",
