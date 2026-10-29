@@ -1042,6 +1042,7 @@ The release workflow writes this file from the result of the acceptance test (SC
 
 **Addresses (M-12, M-13, M-14, M-24).**
 
+- M-14 uses the four reasons in the PRD, section "Message texts". For a failed automatic copy, `<version>` is the selected accepted version.
 - The address of the management panel is `http://127.0.0.1:<port>/`.
 - The address of the sign-in entry is `http://127.0.0.1:<port>/#sign-in`. The page puts the sign-in entry in the element with the ID `sign-in`. After the entry of the password, the page goes back to the same fragment.
 - The management endpoints are `POST /manage/<action>`, one for each action of FR-053.
@@ -1066,6 +1067,8 @@ The release workflow writes this file from the result of the acceptance test (SC
   - the duration in ms, and the input and output tokens;
   - the result, the error code, and the names of the unknown fields.
 - Each change of state, also the first state after a start: `acp2api: <time> state <state>`. `<state>` is the English name of the panel text, for example `Running` or `Quota wait`. A lockout line adds `: ` and the notice M-12.
+- After a failed automatic copy, the state line adds `: <category>` to `Runtime unavailable`. FR-056 defines the category and excludes paths.
+- The JSON log line uses the fields `time`, `event: "state_change"`, and `state: "Runtime unavailable"`, plus `cause: "<category>"`. It has no other new field.
 - A step that checks the state of acp2api reads the last state line.
 
 **Request ID header (FR-056).** Each response of an API endpoint has the header `x-request-id`. Its value is the request ID of the request line.
