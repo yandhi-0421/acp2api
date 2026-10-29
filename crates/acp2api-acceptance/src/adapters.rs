@@ -49,6 +49,7 @@ impl Clock for HarnessClock {
             socket,
             recv,
             ready: false,
+            waiting: WaitState::Unpolled,
         })
     }
     fn hold(&self, kind: HoldKind) -> Hold {
@@ -65,12 +66,18 @@ impl Clock for HarnessClock {
         })
     }
 }
+enum WaitState {
+    Unpolled,
+    Yielded,
+    Confirmed,
+}
 struct Sleep {
     id: u64,
     link: HubLink,
     socket: std::net::TcpStream,
     recv: tokio::sync::oneshot::Receiver<bool>,
     ready: bool,
+    waiting: WaitState,
 }
 impl std::future::Future for Sleep {
     type Output = Hold;
@@ -81,12 +88,28 @@ impl std::future::Future for Sleep {
                 self.link.call(json!({"op":"sleep_delivered","id":self.id}));
                 let link = self.link.clone();
                 let id = self.id;
+                let task = reader_id();
                 Poll::Ready(Hold::on_drop(move || {
-                    link.call(json!({"op":"sleep_done","id":id}));
+                    link.call(json!({"op":"sleep_done","id":id,"task":task}));
                 }))
             }
             Poll::Ready(_) => panic!("timer hub closed"),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                match self.waiting {
+                    // A later poll confirms that the task completed its first select pass.
+                    WaitState::Unpolled => {
+                        self.waiting = WaitState::Yielded;
+                        cx.waker().wake_by_ref();
+                    }
+                    WaitState::Yielded => {
+                        self.link
+                            .call(json!({"op":"sleep_waiting","id":self.id,"task":reader_id()}));
+                        self.waiting = WaitState::Confirmed;
+                    }
+                    WaitState::Confirmed => {}
+                }
+                Poll::Pending
+            }
         }
     }
 }

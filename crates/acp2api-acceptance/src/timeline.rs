@@ -12,8 +12,11 @@ impl TimeLine {
         Self { hub }
     }
     pub async fn settle(&mut self) {
+        self.settle_timers(Vec::new()).await;
+    }
+    async fn settle_timers(&mut self, timers: Vec<u64>) {
         let hub = self.hub.clone();
-        tokio::task::spawn_blocking(move || settle_blocking(&hub))
+        tokio::task::spawn_blocking(move || settle_blocking(&hub, &timers))
             .await
             .unwrap();
     }
@@ -49,7 +52,7 @@ impl TimeLine {
             if has_external_inputs {
                 self.settle().await;
             }
-            {
+            let timers = {
                 let mut s = self.hub.shared.0.lock().unwrap();
                 let due: Vec<_> = s
                     .sleepers
@@ -57,7 +60,9 @@ impl TimeLine {
                     .filter(|(id, sleep)| sleep.at <= at && !s.wake_pending.contains(id))
                     .map(|(id, sleep)| (*id, sleep.writer.clone()))
                     .collect();
+                let mut timers = Vec::new();
                 for (id, writer) in due {
+                    timers.push(id);
                     s.wake_pending.push(id);
                     if let Some(writer) = writer {
                         send(&mut writer.lock().unwrap(), &json!({"wake":id,"now":at}))
@@ -65,25 +70,42 @@ impl TimeLine {
                     }
                 }
                 s.counts.wake_pending = s.wake_pending.len() as u64;
-            }
-            self.settle().await;
+                timers
+            };
+            self.settle_timers(timers).await;
             if at == target && self.next_deadline().is_none_or(|next| next > target) {
                 break;
             }
         }
     }
 }
-fn settle_blocking(hub: &Hub) {
+fn settle_blocking(hub: &Hub, timers: &[u64]) {
     let deadline = Instant::now() + real_limit(SETTLE_CAP);
     let link = HubLink::new(hub);
     let mut previous = None;
+    let mut drained_and_waited = false;
     loop {
         if let Some(failure) = hub.failure() {
             panic!("{failure}");
         }
         let counts = hub.counts();
-        if counts.balanced() && previous == Some(counts) {
-            return;
+        let unchanged = previous == Some(counts);
+        // Completion plus a confirmed new wait from the same task is a processing barrier.
+        let rearmed = !timers.is_empty() && {
+            let state = hub.shared.0.lock().unwrap();
+            timers.iter().all(|id| {
+                state.completed_timers.get(id).is_some_and(|task| {
+                    state.sleepers.iter().any(|(next, sleeper)| {
+                        next > id && sleeper.task.as_ref() == Some(task) && sleeper.writer.is_some()
+                    })
+                })
+            })
+        };
+        if counts.balanced()
+            && unchanged
+            && (drained_and_waited || rearmed && hub.counts() == counts)
+        {
+            break;
         }
         previous = Some(counts);
         let _ = link.call(json!({"op":"drain"}));
@@ -93,6 +115,13 @@ fn settle_blocking(hub: &Hub) {
                 SETTLE_CAP.as_secs()
             );
         }
-        hub.wait_change(deadline);
+        drained_and_waited = timers.is_empty() || unchanged && (!rearmed || !counts.balanced());
+        if drained_and_waited {
+            hub.wait_change(deadline);
+        }
+    }
+    let mut state = hub.shared.0.lock().unwrap();
+    for id in timers {
+        state.completed_timers.remove(id);
     }
 }

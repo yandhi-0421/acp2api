@@ -65,6 +65,7 @@ impl Counts {
 }
 pub(crate) struct Sleeper {
     pub at: u64,
+    pub task: Option<String>,
     pub writer: Option<Arc<Mutex<TcpStream>>>,
 }
 pub(crate) struct ClientSocket {
@@ -98,6 +99,7 @@ pub(crate) struct State {
     pub failure: Option<String>,
     pub sleepers: HashMap<u64, Sleeper>,
     pub wake_pending: Vec<u64>,
+    pub completed_timers: HashMap<u64, String>,
     pub external: BTreeMap<u64, Vec<Value>>,
     pub servers: HashMap<String, Arc<Mutex<TcpStream>>>,
     pub connections: Vec<TcpStream>,
@@ -184,6 +186,7 @@ impl Hub {
                 active_request: None,
                 sleepers: HashMap::new(),
                 wake_pending: Vec::new(),
+                completed_timers: HashMap::new(),
                 external: BTreeMap::new(),
                 servers: HashMap::new(),
                 connections: Vec::new(),
@@ -426,7 +429,14 @@ impl Hub {
                     state.next_sleep += 1;
                     let id = state.next_sleep;
                     let at = message["at"].as_u64().unwrap().max(state.now);
-                    state.sleepers.insert(id, Sleeper { at, writer: None });
+                    state.sleepers.insert(
+                        id,
+                        Sleeper {
+                            at,
+                            task: None,
+                            writer: None,
+                        },
+                    );
                     json!({"id":id,"now":state.now})
                 }
                 "wait" => {
@@ -442,6 +452,14 @@ impl Hub {
                     }
                     continue;
                 }
+                "sleep_waiting" => {
+                    let id = message["id"].as_u64().unwrap();
+                    if let Some(sleeper) = state.sleepers.get_mut(&id) {
+                        sleeper.task = Some(message["task"].as_str().unwrap().to_owned());
+                        state.counts.revision += 1;
+                    }
+                    json!({"ok":true})
+                }
                 "sleep_delivered" => {
                     let id = message["id"].as_u64().unwrap();
                     state.sleepers.remove(&id);
@@ -450,6 +468,11 @@ impl Hub {
                 "sleep_done" => {
                     let id = message["id"].as_u64().unwrap();
                     state.sleepers.remove(&id);
+                    if state.wake_pending.contains(&id)
+                        && let Some(task) = message["task"].as_str()
+                    {
+                        state.completed_timers.insert(id, task.to_owned());
+                    }
                     state.wake_pending.retain(|x| *x != id);
                     state.counts.wake_pending = state.wake_pending.len() as u64;
                     json!({"ok":true})

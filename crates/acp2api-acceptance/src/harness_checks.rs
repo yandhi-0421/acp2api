@@ -644,3 +644,44 @@ async fn initialize_reports_each_running_fake_descriptor_version() {
     s.hub.close();
     s.root.cleanup();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rearmed_timers_wait_for_other_work_before_advancing_again() {
+    let hub = hub::Hub::new(setup::random_hex(24));
+    let clock = HarnessClock::new(HubLink::new(&hub));
+    let first = clock.sleep_until(50);
+    let (entered, started) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let callback = first.await;
+        let next = clock.sleep_until(100);
+        let other_work = clock.hold(HoldKind::TurnEvent);
+        drop(callback);
+        let holding = tokio::spawn(async move {
+            let _work = other_work;
+            released.await.unwrap();
+        });
+        entered.send(()).unwrap();
+        let _callback = next.await;
+        holding.await.unwrap();
+    });
+    let mut time = timeline::TimeLine::new(hub.clone());
+    let mut advancing = tokio::spawn(async move { time.advance_to(100).await });
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), started)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        tokio::time::timeout(real_limit(Duration::from_millis(100)), &mut advancing)
+            .await
+            .is_err(),
+        "a rearmed task still waits for other work"
+    );
+    assert_eq!(hub.now(), 50, "the next timer cannot pass the live hold");
+    release.send(()).unwrap();
+    task.await.unwrap();
+    advancing.await.unwrap();
+    assert_eq!(hub.now(), 100);
+    assert!(hub.counts().balanced());
+    hub.close();
+}
