@@ -78,6 +78,9 @@ impl WireDialect for Messages {
             json!({"type":"message_start","message":{"id":w.id,"type":"message","role":"assistant","model":w.model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":w.input_tokens,"output_tokens":0}}}),
         )]
     }
+    fn keep_alive(&self, _: &mut Encoding) -> Event {
+        named("ping", json!({"type":"ping"}))
+    }
     fn text(&self, w: &mut Encoding, text: &str) -> Vec<Event> {
         if text.is_empty() {
             return Vec::new();

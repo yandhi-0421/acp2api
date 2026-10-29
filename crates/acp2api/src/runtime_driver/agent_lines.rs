@@ -159,6 +159,7 @@ async fn next(runtime: &mut Runtime) -> String {
         .expect("a runtime event");
     match event {
         RuntimeEvent::Turn { update, .. } => match update {
+            TurnUpdate::Activity => "activity".into(),
             TurnUpdate::Text(text) => format!("text {text}"),
             TurnUpdate::ThoughtDropped => "thought dropped".into(),
             TurnUpdate::Usage(used) => format!("usage {used}"),
@@ -302,7 +303,7 @@ async fn stderr_bytes_do_not_fail_a_turn_and_a_stdout_read_error_closes_the_runt
 }
 
 #[tokio::test]
-async fn an_unparsable_session_update_is_skipped() {
+async fn an_unknown_session_update_counts_as_activity_without_reply_content() {
     capped(async {
         let (mut runtime, mut agent, _root) = start(Vec::new()).await;
         runtime
@@ -316,7 +317,7 @@ async fn an_unparsable_session_update_is_skipped() {
         agent
             .stdout(result(3, json!({"stopReason":"end_turn"})))
             .await;
-        assert_eq!(turn(&mut runtime).await, ["text Hello", "prompt ended"]);
+        assert_eq!(turn(&mut runtime).await, ["activity", "text Hello", "prompt ended"]);
     })
     .await;
 }

@@ -676,19 +676,27 @@ impl Runtime {
             return RuntimeEvent::Turn { session, update };
         }
         if value["method"] == "session/update" {
+            let Some(session) = value["params"]["sessionId"]
+                .as_str()
+                .filter(|session| self.tools.contains_key(*session))
+                .map(str::to_owned)
+            else {
+                return RuntimeEvent::Other;
+            };
             let notification: SessionNotification =
                 match serde_json::from_value(value["params"].clone()) {
                     Ok(notification) => notification,
                     Err(_) => {
                         let kind = &value["params"]["update"]["sessionUpdate"];
-                        eprintln!("acp2api: skipped an ACP session/update of kind {kind}");
-                        return RuntimeEvent::Other;
+                        eprintln!(
+                            "acp2api: skipped the content of an ACP session/update of kind {kind}"
+                        );
+                        return RuntimeEvent::Turn {
+                            session,
+                            update: TurnUpdate::Activity,
+                        };
                     }
                 };
-            let session = notification.session_id.to_string();
-            if !self.tools.contains_key(&session) {
-                return RuntimeEvent::Other;
-            }
             let update = match notification.update {
                 SessionUpdate::AgentMessageChunk(chunk) => match chunk.content {
                     ContentBlock::Text(content) => Some(TurnUpdate::Text(content.text)),
@@ -718,9 +726,9 @@ impl Runtime {
                     .map(TurnUpdate::UnpermittedTool),
                 _ => None,
             };
-            match update {
-                Some(update) => RuntimeEvent::Turn { session, update },
-                None => RuntimeEvent::Other,
+            RuntimeEvent::Turn {
+                session,
+                update: update.unwrap_or(TurnUpdate::Activity),
             }
         } else if value.get("method").is_some() && value.get("id").is_some() {
             match self.refuse(&value).await {
@@ -838,6 +846,7 @@ pub(crate) enum RuntimeEvent {
     Closed,
 }
 pub(crate) enum TurnUpdate {
+    Activity,
     Text(String),
     ThoughtDropped,
     Usage(u64),

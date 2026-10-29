@@ -64,6 +64,7 @@ trait WireDialect: Sync {
     }
     fn body(&self, wire: &Encoding, usage: &Usage) -> Value;
     fn start(&self, wire: &mut Encoding) -> Vec<Event>;
+    fn keep_alive(&self, wire: &mut Encoding) -> Event;
     fn text(&self, wire: &mut Encoding, text: &str) -> Vec<Event>;
     fn end(&self, wire: &mut Encoding, usage: &Usage) -> Vec<Event>;
 }
@@ -140,6 +141,9 @@ impl<T: WireDialect + 'static> Dialect for T {
                         let (event, hold) = state.events.recv().await?;
                         state.hold = Some(hold);
                         match event {
+                            TurnEvent::KeepAlive => {
+                                state.pending.push_back(self.keep_alive(&mut state.wire))
+                            }
                             TurnEvent::Stop(stop) => state.wire.stop = stop,
                             TurnEvent::Text(text) => {
                                 state.pending.extend(self.text(&mut state.wire, &text))
@@ -163,6 +167,7 @@ impl<T: WireDialect + 'static> Dialect for T {
                 drop(hold);
                 while let Some((event, _hold)) = events.recv().await {
                     match event {
+                        TurnEvent::KeepAlive => {}
                         TurnEvent::Stop(stop) => wire.stop = stop,
                         TurnEvent::Text(chunk) => wire.text.push_str(&chunk),
                         TurnEvent::ToolCall(call) => wire.tool_call = Some(call),
@@ -286,6 +291,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         }
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
         Message::RuntimeFailed => "runtime_failed",
+        Message::NoUpdate => "no_update",
         Message::MaxTurnRequests => "max_turn_requests",
         Message::RetryWait { .. } => "retry_wait",
         Message::Stopped => "stopped",

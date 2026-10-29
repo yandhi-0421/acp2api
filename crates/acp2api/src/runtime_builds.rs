@@ -1141,9 +1141,9 @@ mod tests {
             let (conductor, task) = crate::conductor::Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 3);
             conductor.builds(Action::Initial, crate::Hold::empty()).await.unwrap();
             let parse = |text: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":text}]})).unwrap()).ok().unwrap().turn;
-            let _a = conductor.admit(parse("A"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            let _a = conductor.admit(parse("A"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), crate::conductor::ResponseMode::Body).await.ok().unwrap();
             prompting.notified().await;
-            let mut b = conductor.admit(parse("B"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            let mut b = conductor.admit(parse("B"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), crate::conductor::ResponseMode::Body).await.ok().unwrap();
             exit.notify_one();
             let Some((crate::conversation::TurnEvent::End(Err(error)), _hold)) = b.events.recv().await else {
                 panic!("the queued request must end with an error");

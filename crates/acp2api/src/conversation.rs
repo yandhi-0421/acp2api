@@ -505,6 +505,7 @@ impl Stop {
     }
 }
 pub(crate) enum TurnEvent {
+    KeepAlive,
     Stop(Stop),
     Text(String),
     ToolCall(ToolCall),

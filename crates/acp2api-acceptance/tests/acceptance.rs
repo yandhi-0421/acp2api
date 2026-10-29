@@ -14,6 +14,10 @@ mod compatibility_support;
 mod copy_failure;
 #[path = "support/copy_failure.rs"]
 mod copy_failure_support;
+#[path = "steps/keep_alive.rs"]
+mod keep_alive;
+#[path = "support/keep_alive.rs"]
+mod keep_alive_support;
 #[path = "steps/panel.rs"]
 mod panel;
 #[path = "steps/places_and_queue.rs"]
@@ -79,6 +83,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    keep_alive: keep_alive_support::KeepAliveState,
     sign_in: sign_in_support::SignInState,
     retry: retry_support::RetryState,
     quota: quota_support::QuotaState,

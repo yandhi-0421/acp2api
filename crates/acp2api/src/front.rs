@@ -1,6 +1,6 @@
 use crate::{
     Clock, HoldKind,
-    conductor::Conductor,
+    conductor::{Conductor, ResponseMode},
     dialect::{self, Dialect},
     messages::Message,
 };
@@ -142,7 +142,16 @@ async fn turn(
     request.unknown_fields = parsed.unknown_fields;
     match app
         .conductor
-        .admit(parsed.turn, hold, request.clone())
+        .admit(
+            parsed.turn,
+            hold,
+            request.clone(),
+            if parsed.form.stream {
+                ResponseMode::Stream
+            } else {
+                ResponseMode::Body
+            },
+        )
         .await
     {
         Ok(ticket) => dialect.respond(parsed.form, ticket, app.clock).await,

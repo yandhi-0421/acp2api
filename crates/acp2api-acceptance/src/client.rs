@@ -21,6 +21,13 @@ pub struct SseEvent {
     pub id: Option<String>,
     pub at: u64,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SseBlock {
+    pub event: String,
+    pub data: String,
+    pub comments: Vec<String>,
+    pub at: u64,
+}
 #[derive(Debug, Default)]
 pub struct SseReader {
     pending: Vec<u8>,
@@ -28,8 +35,14 @@ pub struct SseReader {
     data: Vec<String>,
     id: Option<String>,
     skip_lf: bool,
+    in_block: bool,
+    comments: Vec<String>,
+    pub blocks: Vec<SseBlock>,
 }
 impl SseReader {
+    pub fn has_pending_block(&self) -> bool {
+        self.in_block
+    }
     pub fn feed(&mut self, bytes: &[u8], at: u64) -> Result<Vec<SseEvent>, String> {
         let mut events = Vec::new();
         for b in bytes {
@@ -44,6 +57,15 @@ impl SseReader {
                 let raw = std::mem::take(&mut self.pending);
                 let line = String::from_utf8(raw).map_err(|_| "invalid SSE UTF-8")?;
                 if line.is_empty() {
+                    self.in_block = false;
+                    if !self.data.is_empty() || !self.comments.is_empty() {
+                        self.blocks.push(SseBlock {
+                            event: self.event.clone(),
+                            data: self.data.join("\n"),
+                            comments: std::mem::take(&mut self.comments),
+                            at,
+                        });
+                    }
                     if !self.data.is_empty() {
                         events.push(SseEvent {
                             event: if self.event.is_empty() {
@@ -58,7 +80,10 @@ impl SseReader {
                         self.data.clear();
                     }
                     self.event.clear();
-                } else if !line.starts_with(':') {
+                } else if let Some(comment) = line.strip_prefix(':') {
+                    self.comments
+                        .push(comment.strip_prefix(' ').unwrap_or(comment).into());
+                } else {
                     let (field, value) = line.split_once(':').unwrap_or((&line, ""));
                     let value = value.strip_prefix(' ').unwrap_or(value);
                     match field {
@@ -69,6 +94,7 @@ impl SseReader {
                     }
                 }
             } else {
+                self.in_block = true;
                 self.pending.push(*b);
                 if self.pending.len() > BODY_CAP {
                     return Err("SSE line cap: 8 MiB".into());
@@ -78,6 +104,13 @@ impl SseReader {
         Ok(events)
     }
 }
+#[derive(Clone, Debug, Default)]
+pub struct WireTrace {
+    pub head_at: Option<u64>,
+    pub end_at: Option<u64>,
+    pub blocks: Vec<SseBlock>,
+    pub incomplete: bool,
+}
 #[derive(Clone)]
 pub struct ApiClient {
     address: String,
@@ -86,6 +119,7 @@ pub struct ApiClient {
     hub: Hub,
     requests: Arc<AtomicUsize>,
     status: Arc<Mutex<Option<u16>>>,
+    wire: Arc<Mutex<WireTrace>>,
     request_id: Arc<Mutex<Option<String>>>,
 }
 #[derive(Clone, Debug)]
@@ -119,6 +153,7 @@ impl ApiCall {
 }
 pub struct Call {
     status: Arc<Mutex<Option<u16>>>,
+    wire: Arc<Mutex<WireTrace>>,
     request_id: Arc<Mutex<Option<String>>>,
     task: tokio::task::JoinHandle<Result<Answer, String>>,
     hub: Hub,
@@ -130,6 +165,9 @@ impl Drop for Call {
     }
 }
 impl Call {
+    pub fn wire(&self) -> Arc<Mutex<WireTrace>> {
+        self.wire.clone()
+    }
     pub fn status(&self) -> Option<u16> {
         *self.status.lock().unwrap()
     }
@@ -183,6 +221,7 @@ impl ApiClient {
             hub,
             requests: Arc::new(AtomicUsize::new(0)),
             status: Arc::new(Mutex::new(None)),
+            wire: Arc::new(Mutex::new(WireTrace::default())),
             request_id: Arc::new(Mutex::new(None)),
         }
     }
@@ -215,9 +254,11 @@ impl ApiClient {
         self.hub.shared.0.lock().unwrap().counts.http_sent += 1;
         let client = self.clone();
         let status = Arc::new(Mutex::new(None));
+        let wire = Arc::new(Mutex::new(WireTrace::default()));
         let request_id = Arc::new(Mutex::new(None));
         let client = Self {
             status: status.clone(),
+            wire: wire.clone(),
             request_id: request_id.clone(),
             ..client
         };
@@ -235,6 +276,7 @@ impl ApiClient {
             result
         });
         Call {
+            wire,
             status,
             request_id,
             task,
@@ -334,6 +376,7 @@ impl ApiClient {
             .get("x-request-id")
             .map(|id| id.to_str().expect("HTTP request ID").to_owned());
         *self.status.lock().unwrap() = Some(status);
+        self.wire.lock().unwrap().head_at = Some(self.hub.now());
         let headers = response
             .headers()
             .iter()
@@ -361,6 +404,11 @@ impl ApiClient {
                 bytes.extend_from_slice(&data);
                 if is_sse {
                     let batch = sse.feed(&data, self.hub.now())?;
+                    {
+                        let mut wire = self.wire.lock().unwrap();
+                        wire.blocks.append(&mut sse.blocks);
+                        wire.incomplete = sse.has_pending_block();
+                    }
                     progress.lock().unwrap().extend(batch.clone());
                     events.extend(batch);
                 }
@@ -373,6 +421,7 @@ impl ApiClient {
                 self.hub.shared.1.notify_all();
             }
         }
+        self.wire.lock().unwrap().end_at = Some(self.hub.now());
         drop(sender);
         drop(connection);
         drop(lease);
@@ -579,6 +628,29 @@ mod tests {
                 at: 42
             }]
         );
+        assert_eq!(
+            reader.blocks,
+            [SseBlock {
+                event: "chunk".into(),
+                data: "é\nnext".into(),
+                comments: vec!["ignored".into()],
+                at: 42,
+            }]
+        );
+        assert!(!reader.has_pending_block());
+        assert!(reader.feed(b": keep-", 60).unwrap().is_empty());
+        assert!(reader.has_pending_block());
+        assert!(reader.feed(b"alive\r\n\r\n", 75).unwrap().is_empty());
+        assert_eq!(
+            reader.blocks[1],
+            SseBlock {
+                event: String::new(),
+                data: String::new(),
+                comments: vec!["keep-alive".into()],
+                at: 75,
+            }
+        );
+        assert!(!reader.has_pending_block());
     }
     #[test]
     fn multiple_events_empty_data_and_invalid_utf8() {
@@ -625,6 +697,8 @@ mod tests {
 data: first
 data: second
 
+: keep-alive
+
 data: done
 
 "
@@ -656,6 +730,21 @@ Connection: close
                 assert!(answer.unwrap_err().contains("API answer cap"));
             } else {
                 let answer = answer.unwrap();
+                let wire = client.wire.lock().unwrap();
+                assert_eq!(wire.head_at, Some(0));
+                assert_eq!(wire.end_at, Some(0));
+                assert_eq!(
+                    answer.body,
+                    b"event: chunk\ndata: first\ndata: second\n\n: keep-alive\n\ndata: done\n\n"
+                );
+                assert_eq!(wire.blocks.len(), 3);
+                assert_eq!(wire.blocks[0].event, "chunk");
+                assert_eq!(wire.blocks[0].data, "first\nsecond");
+                assert_eq!(wire.blocks[1].comments, ["keep-alive"]);
+                assert!(wire.blocks[1].event.is_empty() && wire.blocks[1].data.is_empty());
+                assert_eq!(wire.blocks[2].data, "done");
+                assert!(wire.blocks.iter().all(|block| block.at == 0));
+                assert!(!wire.incomplete);
                 assert_eq!(answer.events.len(), 2);
                 assert_eq!(
                     answer.events[0].data,

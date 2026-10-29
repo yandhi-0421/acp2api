@@ -533,12 +533,12 @@ async fn held_fake_plan_resumes_without_holding_virtual_time() {
         .send(ApiCall::one_user_message("POST /v1/messages", "gate"));
     s.time.settle().await;
     assert!(s.hub.counts().balanced());
-    s.time.advance_to(60 * 60 * 1000).await;
-    assert_eq!(s.hub.now(), 60 * 60 * 1000, "the gate permits time to pass");
+    s.time.advance_to(4 * 60 * 1000).await;
+    assert_eq!(s.hub.now(), 4 * 60 * 1000, "the gate permits time to pass");
     s.fake().open_gate("release");
     let answer = call.finish(&mut s.time).await;
     assert_eq!(answer.json()["content"][0]["text"], "released");
-    assert_eq!(s.hub.now(), 60 * 60 * 1000 + 200);
+    assert_eq!(s.hub.now(), 4 * 60 * 1000 + 200);
     s.finish(true).await;
 }
 
@@ -643,4 +643,45 @@ async fn initialize_reports_each_running_fake_descriptor_version() {
     }
     s.hub.close();
     s.root.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rearmed_timers_wait_for_other_work_before_advancing_again() {
+    let hub = hub::Hub::new(setup::random_hex(24));
+    let clock = HarnessClock::new(HubLink::new(&hub));
+    let first = clock.sleep_until(50);
+    let (entered, started) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let callback = first.await;
+        let next = clock.sleep_until(100);
+        let other_work = clock.hold(HoldKind::TurnEvent);
+        drop(callback);
+        let holding = tokio::spawn(async move {
+            let _work = other_work;
+            released.await.unwrap();
+        });
+        entered.send(()).unwrap();
+        let _callback = next.await;
+        holding.await.unwrap();
+    });
+    let mut time = timeline::TimeLine::new(hub.clone());
+    let mut advancing = tokio::spawn(async move { time.advance_to(100).await });
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), started)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        tokio::time::timeout(real_limit(Duration::from_millis(100)), &mut advancing)
+            .await
+            .is_err(),
+        "a rearmed task still waits for other work"
+    );
+    assert_eq!(hub.now(), 50, "the next timer cannot pass the live hold");
+    release.send(()).unwrap();
+    task.await.unwrap();
+    advancing.await.unwrap();
+    assert_eq!(hub.now(), 100);
+    assert!(hub.counts().balanced());
+    hub.close();
 }
