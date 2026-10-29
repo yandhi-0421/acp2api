@@ -2,6 +2,8 @@ use crate::{World, build_support as build, panel_tiles_support as tiles, places_
 use acp2api_acceptance::{Setup, TurnPlan, endpoint_check, panel_check, system_check};
 use cucumber::{given, then, when};
 use serde_json::json;
+#[path = "../support/panel_source.rs"]
+mod panel_source;
 
 #[given("one prompt turn runs, and no request waits in the queue")]
 async fn occupied(w: &mut World) {
@@ -59,8 +61,10 @@ fn build_source(w: &mut World, title: String, version: String, label: String) {
         "FR-054 current build acceptance label"
     );
     let source = build::place(w, "the install folder of Zed").join(build::program());
-    assert!(
-        tile.contains(source.to_str().unwrap()),
+    let expected = format!("<code>{}</code>", source.display());
+    assert_eq!(
+        panel_source::source_line(tile),
+        Some(expected.as_str()),
         "FR-054 current build retains its original Zed source after a later search"
     );
 }
