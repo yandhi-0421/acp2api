@@ -1,5 +1,5 @@
 use crate::{World, places_support as queue, quota_support as quota};
-use acp2api_acceptance::{TurnStep, endpoint_check, journal_check};
+use acp2api_acceptance::{TurnStep, client::Answer, endpoint_check, journal_check};
 use cucumber::{given, then, when};
 
 #[given(
@@ -39,21 +39,22 @@ async fn later(w: &mut World, delay: String) {
     .await;
 }
 
+fn quota_429(w: &World) -> &Answer {
+    let answer = w.scenario.answer.as_ref().unwrap();
+    assert_eq!(answer.status, 429, "FR-036 quota wait refuses admission");
+    answer
+}
+
 #[then("acp2api refuses the request with HTTP 429")]
 async fn quota_status(w: &mut World) {
     quota::answer(w).await;
-    assert_eq!(
-        w.scenario.answer.as_ref().unwrap().status,
-        429,
-        "FR-036 quota wait refuses admission"
-    );
+    quota_429(w);
 }
 
 #[then(expr = "acp2api refuses the request with HTTP 429 and the message {string}")]
 async fn quota_message(w: &mut World, template: String) {
     quota::answer(w).await;
-    let answer = w.scenario.answer.as_ref().unwrap();
-    assert_eq!(answer.status, 429, "FR-036 quota wait refuses admission");
+    let answer = quota_429(w);
     assert_eq!(
         answer.json()["error"]["message"],
         template.replace("<reset time>", quota::RESET),
@@ -98,11 +99,7 @@ async fn quota_signal(w: &mut World) {
 fn state_log(w: &mut World) {
     let states = journal_check::records(&w.scenario)
         .into_iter()
-        .filter(|record| record.get("request_id").is_none())
-        .filter(|record| {
-            record["event"] != "upstream_error" && record["event"] != "late_upstream_error"
-        })
-        .filter(|record| record.to_string().to_lowercase().contains("quota"))
+        .filter(|record| record["event"] == "state_change" && record["state"] == "Quota wait")
         .count();
     assert_eq!(states, 1, "FR-056 one quota wait state log line");
 }
@@ -113,9 +110,7 @@ fn state_terminal(w: &mut World) {
     assert_eq!(
         lines
             .iter()
-            .filter(
-                |line| line.ends_with(" state Quota wait") || line.ends_with(" state Quota wait\n")
-            )
+            .filter(|line| line.trim_end().ends_with(" state Quota wait"))
             .count(),
         1,
         "FR-002 one quota wait terminal state line: {lines:?}"
@@ -239,7 +234,6 @@ fn no_usage(w: &mut World) {
 
 #[then(expr = "the quota error body has the \"error.type\" {string}")]
 fn quota_error_type(w: &mut World, expected: String) {
-    let answer = w.scenario.answer.as_ref().unwrap();
-    assert_eq!(answer.status, 429);
+    let answer = quota_429(w);
     assert_eq!(answer.json()["error"]["type"], expected);
 }

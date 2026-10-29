@@ -191,6 +191,10 @@ fn log_files(folder: &Path) -> io::Result<Vec<LogFile>> {
     }
     Ok(files)
 }
+pub(crate) fn is_leap_year(year: u64) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+}
+
 pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
     let seconds = wall
         .duration_since(std::time::UNIX_EPOCH)
@@ -198,11 +202,8 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
         .as_secs();
     let mut days = seconds / 86_400;
     let mut year = 1970;
-    let leap = |year: u64| {
-        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-    };
     loop {
-        let count = if leap(year) { 366 } else { 365 };
+        let count = if is_leap_year(year) { 366 } else { 365 };
         if days < count {
             break;
         }
@@ -211,7 +212,7 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
     }
     let months = [
         31,
-        if leap(year) { 29 } else { 28 },
+        if is_leap_year(year) { 29 } else { 28 },
         31,
         30,
         31,
@@ -344,19 +345,13 @@ fn redact_error(text: &str) -> String {
 }
 impl Journal {
     pub(crate) fn state(&self, state: &str, clock: &dyn crate::Clock) {
-        let result = (|| -> io::Result<()> {
-            let time = timestamp(clock.wall())?;
-            let mut writer = self
-                .0
-                .writer
-                .lock()
-                .map_err(|_| io::Error::other("journal writer failed"))?;
-            writer.write(&serde_json::json!({"time":time,"event":"state_change","state":state}))?;
-            use std::io::Write;
-            let mut terminal = std::io::stdout().lock();
-            writeln!(terminal, "acp2api: {time} state {state}")?;
-            terminal.flush()
-        })();
+        let result = timestamp(clock.wall()).and_then(|time| {
+            let record = serde_json::json!({"time":time,"event":"state_change","state":state});
+            self.emit_to_file_then_stdout_under_writer_lock(
+                &record,
+                format_args!("{time} state {state}"),
+            )
+        });
         if let Err(error) = result {
             eprintln!("acp2api: cannot write state change: {error}");
         }
@@ -368,12 +363,15 @@ impl Journal {
         late: bool,
         clock: &dyn crate::Clock,
     ) {
-        let result = timestamp(clock.wall()).and_then(|time| self.emit_to_file_then_stdout_under_writer_lock(&serde_json::json!({
-            "time": time,
-            "session": session.chars().take(12).collect::<String>(),
-            "event": if late { "late_upstream_error" } else { "upstream_error" },
-            "code": error.code, "status": redact_error(&error.status), "message": redact_error(&error.message),
-        })));
+        let result = timestamp(clock.wall()).and_then(|time| {
+            let record = serde_json::json!({
+                "time": time,
+                "session": session.chars().take(12).collect::<String>(),
+                "event": if late { "late_upstream_error" } else { "upstream_error" },
+                "code": error.code, "status": redact_error(&error.status), "message": redact_error(&error.message),
+            });
+            self.emit_to_file_then_stdout_under_writer_lock(&record, serde_json::to_string(&record)?)
+        });
         if let Err(error) = result {
             eprintln!("acp2api: cannot write upstream error: {error}");
         }
@@ -397,7 +395,7 @@ impl Journal {
         let mut record = serde_json::to_value(diagnostic)?;
         record["time"] = timestamp(clock.wall())?.into();
         record["request_id"] = request.id.clone().into();
-        self.emit_to_file_then_stdout_under_writer_lock(&record)
+        self.emit_to_file_then_stdout_under_writer_lock(&record, serde_json::to_string(&record)?)
     }
     pub(crate) fn safety(&self, report: SafetyReport, clock: &dyn crate::Clock) {
         if let Err(error) = self.safety_line(report, clock) {
@@ -412,11 +410,12 @@ impl Journal {
             "event":report.kind,
             "tool":report.tool,
         });
-        self.emit_to_file_then_stdout_under_writer_lock(&record)
+        self.emit_to_file_then_stdout_under_writer_lock(&record, serde_json::to_string(&record)?)
     }
     fn emit_to_file_then_stdout_under_writer_lock(
         &self,
         record: &impl Serialize,
+        terminal_line: impl std::fmt::Display,
     ) -> io::Result<()> {
         let mut writer = self
             .0
@@ -426,7 +425,7 @@ impl Journal {
         writer.write(record)?;
         use std::io::Write;
         let mut terminal = std::io::stdout().lock();
-        writeln!(terminal, "acp2api: {}", serde_json::to_string(record)?)?;
+        writeln!(terminal, "acp2api: {terminal_line}")?;
         terminal.flush()
     }
     pub(crate) fn open(folder: &Path, wall: SystemTime) -> io::Result<Self> {
@@ -493,7 +492,7 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
-        self.emit_to_file_then_stdout_under_writer_lock(&record)
+        self.emit_to_file_then_stdout_under_writer_lock(&record, serde_json::to_string(&record)?)
     }
 }
 #[cfg(test)]

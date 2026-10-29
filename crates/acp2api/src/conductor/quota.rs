@@ -90,7 +90,7 @@ pub(super) fn reset_time(text: &str, wall: SystemTime) -> Option<SystemTime> {
         reset
             .split_whitespace()
             .next()?
-            .trim_end_matches(|c| matches!(c, ')' | '"' | '\'' | ',' | ';')),
+            .trim_end_matches([')', '"', '\'', ',', ';']),
     )
     .or_else(|| {
         let (date, _) = reset.split_once(" UTC")?;
@@ -178,10 +178,13 @@ fn rfc3339(text: &str) -> Option<SystemTime> {
 fn calendar(date: [u32; 3], time: [u32; 3], nanos: u32, offset: i64) -> Option<SystemTime> {
     let [year, month, day] = date;
     let [hour, minute, second] = time;
-    let leap = |y: u32| y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400));
     let months = [
         31,
-        if leap(year) { 29 } else { 28 },
+        if crate::journal::is_leap_year(u64::from(year)) {
+            29
+        } else {
+            28
+        },
         31,
         30,
         31,
