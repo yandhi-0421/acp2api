@@ -2346,7 +2346,9 @@ impl Core {
         self.end_request(id, Failure::at(error, now), now, commands);
     }
     fn retire(&mut self, active: &Active) {
-        if let Phase::AwaitingQuotaEnd { wait, .. } = &active.phase {
+        if let Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } =
+            &active.phase
+        {
             self.enqueue_reset_query(wait.clone(), Some(active.model.clone()));
         }
     }
@@ -2415,6 +2417,9 @@ impl Core {
             }
             work => {
                 let mut active = work.into_active().unwrap();
+                if result.is_err() {
+                    self.retire(&active);
+                }
                 match std::mem::replace(&mut active.phase, Phase::Completing) {
                     Phase::QuotaSettling { wait, .. } if result.is_ok() => {
                         let session = active.session.clone();
@@ -3237,6 +3242,154 @@ mod tests {
                 .iter()
                 .chain(&prepared)
                 .any(|command| matches!(command, Command::Emit(_, _)))
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn a_non_quota_error_while_quota_settles_keeps_the_reset_query() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-quota-settling-error-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::Failed(crate::messages::Message::UpstreamHttp(
+                    crate::messages::HttpError {
+                        code: 429,
+                        status: "RESOURCE_EXHAUSTED".into(),
+                        message: "Quota exhausted; no reset time.".into(),
+                    },
+                )),
+            }),
+            60_000,
+            std::time::UNIX_EPOCH,
+        );
+        let ended = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 503,
+                    status: "UNAVAILABLE".into(),
+                    message: "Temporary failure".into(),
+                },
+            }),
+            60_001,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(ended.iter().filter(|command| matches!(command,
+            Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error))))
+                if error.code == 503 && error.message == "Temporary failure"
+        )).count(), 1, "the non-quota error still ends the API request once");
+        let mut prepared = Vec::new();
+        for command in &ended {
+            if let Command::Prepare { work, .. } = command {
+                let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+                let catalog =
+                    crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+                prepared.extend(core.handle(
+                    Event::Runtime(RuntimeEvent::Prepared {
+                        work: work.clone(),
+                        result: Ok(("quota-query".into(), catalog)),
+                    }),
+                    60_001,
+                    std::time::UNIX_EPOCH,
+                ));
+            }
+        }
+        assert_eq!(
+            prepared
+                .iter()
+                .filter(|command| matches!(command,
+                    Command::Usage { session, .. } if session == "quota-query"
+                ))
+                .count(),
+            1,
+            "FR-036/FR-052 preserve exactly one reset query after the settling error"
+        );
+        assert!(
+            !ended
+                .iter()
+                .any(|command| matches!(command, Command::Cancel(_))),
+            "the prompt has already ended"
+        );
+        assert!(
+            !prepared
+                .iter()
+                .any(|command| matches!(command, Command::Emit(_, _) | Command::Complete(_)))
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn a_runtime_failure_while_awaiting_quota_end_keeps_the_reset_query() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-quota-runtime-failure-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 429,
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: "Quota exhausted; no reset time.".into(),
+                },
+            }),
+            60_000,
+            std::time::UNIX_EPOCH,
+        );
+        let ended = core.handle(
+            Event::Runtime(RuntimeEvent::Failed("runtime failed".into())),
+            60_001,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            ended
+                .iter()
+                .filter(|command| matches!(command,
+                    Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::Upstream(error))))
+                        if error == "runtime failed"
+                ))
+                .count(),
+            1,
+            "the runtime failure still ends the API request once"
+        );
+        let mut prepared = Vec::new();
+        for command in &ended {
+            if let Command::Prepare { work, .. } = command {
+                let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+                let catalog =
+                    crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+                prepared.extend(core.handle(
+                    Event::Runtime(RuntimeEvent::Prepared {
+                        work: work.clone(),
+                        result: Ok(("quota-query".into(), catalog)),
+                    }),
+                    60_001,
+                    std::time::UNIX_EPOCH,
+                ));
+            }
+        }
+        assert_eq!(
+            prepared
+                .iter()
+                .filter(|command| matches!(command,
+                    Command::Usage { session, .. } if session == "quota-query"
+                ))
+                .count(),
+            1,
+            "FR-036/FR-052 preserve exactly one reset query after the runtime failure"
+        );
+        assert!(
+            !prepared
+                .iter()
+                .any(|command| matches!(command, Command::Emit(_, _) | Command::Complete(_)))
         );
         std::fs::remove_dir_all(folder).unwrap();
     }
