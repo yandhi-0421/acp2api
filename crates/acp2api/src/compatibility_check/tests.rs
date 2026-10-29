@@ -139,6 +139,20 @@ fn initialize(
         }
     }
 }
+fn prompt(
+    number: u8,
+    change: impl Fn(&Value, &mut Vec<Value>) + Send,
+) -> impl FnMut(&Value, &mut Vec<Value>, &Path) + Send {
+    let mut seen = 0;
+    move |call, replies, _| {
+        if call["method"] == "session/prompt" {
+            seen += 1;
+            if seen == number {
+                change(call, replies);
+            }
+        }
+    }
+}
 fn incompatible(result: Result<String, Failure>) {
     assert!(
         matches!(result, Err(Failure::Incompatible(_))),
@@ -189,6 +203,147 @@ async fn rejects_files_changed_in_the_owners_gemini_folder() {
                 .unwrap();
             }
         })
+        .await,
+    );
+}
+
+#[tokio::test]
+async fn rejects_another_acp_version() {
+    incompatible(exercise(initialize("/result/protocolVersion", 2.into())).await);
+}
+#[tokio::test]
+async fn rejects_missing_session_load_support() {
+    incompatible(
+        exercise(initialize(
+            "/result/agentCapabilities/loadSession",
+            false.into(),
+        ))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_missing_personal_oauth() {
+    incompatible(exercise(initialize("/result/authMethods", json!([]))).await);
+}
+#[tokio::test]
+async fn rejects_missing_build_version() {
+    incompatible(exercise(initialize("/result/agentInfo/version", Value::Null)).await);
+}
+#[tokio::test]
+async fn rejects_a_reply_without_the_system_codeword() {
+    incompatible(
+        exercise(prompt(1, |_, replies| {
+            replies[0]["params"]["update"]["content"]["text"] = "no codeword".into();
+        }))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_a_missing_client_tool_call() {
+    incompatible(
+        exercise(prompt(2, |call, replies| {
+            *replies =
+                vec![json!({"jsonrpc":"2.0","id":call["id"],"result":{"stopReason":"end_turn"}})];
+        }))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_a_built_in_tool_that_runs() {
+    incompatible(exercise(prompt(1, |_, replies| {
+        replies.insert(0,json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"checked-session","update":{"sessionUpdate":"tool_call","toolCallId":"builtin","title":"view_file","status":"completed"}}}));
+    })).await);
+}
+#[tokio::test]
+async fn rejects_a_permission_without_the_run_title() {
+    incompatible(
+        exercise(prompt(2, |_, replies| {
+            replies[0]["params"]["toolCall"]["title"] = "Unexpected title".into();
+        }))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_a_permission_without_object_arguments() {
+    incompatible(
+        exercise(prompt(2, |_, replies| {
+            replies[0]["params"]["toolCall"]["rawInput"] = "invalid arguments".into();
+        }))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_a_prompt_that_does_not_end_as_cancelled() {
+    incompatible(
+        exercise(|call, replies, _| {
+            if call["method"] == "session/cancel" {
+                replies[0]["result"]["stopReason"] = "end_turn".into();
+            }
+        })
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_a_failed_session_load() {
+    incompatible(
+        exercise(|call, replies, _| {
+            if call["method"] == "session/load" {
+                replies[0].as_object_mut().unwrap().remove("result");
+                replies[0]["error"] = json!({"code":-32002,"message":"Session not found"});
+            }
+        })
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_an_unexpected_event_during_load() {
+    incompatible(exercise(|call,replies,_| {
+        if call["method"] == "session/load" {
+            replies.insert(0,json!({"jsonrpc":"2.0","id":"unexpected-permission","method":"session/request_permission","params":{}}));
+        }
+    }).await);
+}
+#[tokio::test]
+async fn rejects_a_reply_without_the_textual_tool_result() {
+    incompatible(
+        exercise(prompt(3, |_, replies| {
+            replies[0]["params"]["update"]["content"]["text"] = "no result".into();
+        }))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_an_acp_prompt_error() {
+    incompatible(
+        exercise(prompt(1, |_, replies| {
+            replies[1].as_object_mut().unwrap().remove("result");
+            replies[1]["error"] = json!({"code":-32000,"message":"prompt failed"});
+        }))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_an_invalid_permission_message() {
+    incompatible(exercise(prompt(1, |_, replies| {
+        replies.insert(0,json!({"jsonrpc":"2.0","id":"invalid-permission","method":"session/request_permission","params":{}}));
+    })).await);
+}
+
+#[tokio::test]
+async fn rejects_a_tool_outside_the_supplied_client_tools() {
+    incompatible(
+        exercise(prompt(2, |_, replies| {
+            replies[0]["params"]["toolCall"]["title"] = "Run unknown_tool?".into();
+        }))
+        .await,
+    );
+}
+#[tokio::test]
+async fn rejects_tool_arguments_that_do_not_match_the_prompt() {
+    incompatible(
+        exercise(prompt(2, |_, replies| {
+            replies[0]["params"]["toolCall"]["rawInput"] = json!({"value":"wrong text"});
+        }))
         .await,
     );
 }

@@ -113,9 +113,14 @@ pub(crate) async fn run(
                 "the reply did not contain the system codeword".into(),
             ));
         }
-        let (_, call) = check_prompt(&mut runtime, start, &session, "Call the supplied client tool with a value of your choice. Do not use a built-in tool.").await?;
+        let (_, call) = check_prompt(&mut runtime, start, &session, "Call the supplied client tool with exactly {\"value\":\"checked text\"}. Do not use a built-in tool.").await?;
         let call =
             call.ok_or_else(|| Failure::Incompatible("no client tool permission request".into()))?;
+        if call.arguments != r#"{"value":"checked text"}"# {
+            return Err(Failure::Incompatible(
+                "the client tool arguments did not match the prompt".into(),
+            ));
+        }
         let cwd = runtime.session_cwd(&session).to_owned();
         runtime.forget(&session);
         start
