@@ -66,8 +66,14 @@ pub(crate) enum Selection {
 pub(crate) enum LaunchFailure {
     NoExecutable,
     NotAccepted,
+    Io(std::io::Error),
     Runtime(String),
     Stopped,
+}
+impl From<std::io::Error> for LaunchFailure {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 impl std::fmt::Display for LaunchFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -76,6 +82,7 @@ impl std::fmt::Display for LaunchFailure {
                 f.write_str("acp2api found no executable of the official runtime")
             }
             Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
+            Self::Io(error) => error.fmt(f),
             Self::Runtime(error) => f.write_str(error),
             Self::Stopped => f.write_str("acp2api is exiting"),
         }
@@ -147,9 +154,9 @@ impl Builds {
             match fs::read(&path) {
                 Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(LaunchFailure::Runtime(format!(
-                    "cannot read {}: {error}",
-                    path.display()
+                Err(error) => Err(LaunchFailure::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("cannot read {}: {error}", path.display()),
                 ))),
             }
         };
@@ -312,7 +319,7 @@ impl Builds {
     }
     pub(crate) fn copy(&self, source: PathBuf) -> Result<(), LaunchFailure> {
         let copy = self.start.data.join(COPY);
-        let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
+        let source = fs::canonicalize(source)?;
         if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
             let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
             let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
@@ -320,22 +327,21 @@ impl Builds {
                 .start
                 .data
                 .join(format!(".official-runtime-old-{suffix}"));
-            fs::create_dir(&staging).map_err(|error| error.to_string())?;
+            fs::create_dir(&staging)?;
             let result = (|| {
                 for name in [SERVER, HARNESS] {
-                    fs::copy(source.join(name), staging.join(name))
-                        .map_err(|error| error.to_string())?;
+                    fs::copy(source.join(name), staging.join(name))?;
                 }
                 self.identify(&staging)?;
                 let previous = copy.exists();
                 if previous {
-                    fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
+                    fs::rename(&copy, &backup)?;
                 }
                 if let Err(error) = fs::rename(&staging, &copy) {
                     if previous {
-                        fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
+                        fs::rename(&backup, &copy)?;
                     }
-                    return Err(LaunchFailure::Runtime(error.to_string()));
+                    return Err(LaunchFailure::Io(error));
                 }
                 if previous {
                     let _ = fs::remove_dir_all(backup);
@@ -343,7 +349,7 @@ impl Builds {
                 Ok(())
             })();
             if staging.exists() {
-                fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
+                fs::remove_dir_all(&staging)?;
             }
             result?;
         }
