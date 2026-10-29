@@ -1,6 +1,35 @@
 use crate::{Moment, messages::Message};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub(super) fn has_quota(text: &str, model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    let group = if model.starts_with("gemini") {
+        "- **Gemini Models**"
+    } else if model.starts_with("claude") || model.starts_with("gpt") {
+        "- **Claude and GPT models**"
+    } else {
+        return false;
+    };
+    let Some((_, rest)) = text.split_once(group) else {
+        return false;
+    };
+    let section = rest.split("\n- **").next().unwrap();
+    let mut limits = section
+        .lines()
+        .filter_map(|line| {
+            line.split_once("Limit Remaining:** ")
+                .map(|(_, value)| value)
+        })
+        .peekable();
+    limits.peek().is_some()
+        && limits.all(|value| {
+            value
+                .split_once("% remaining")
+                .and_then(|(percent, _)| percent.parse::<u8>().ok())
+                .is_some_and(|percent| (1..=100).contains(&percent))
+        })
+}
+
 pub(super) fn error_text(message: &Message) -> Option<&str> {
     match message {
         Message::UpstreamHttp(error)
@@ -181,6 +210,14 @@ fn calendar(date: [u32; 3], time: [u32; 3], nanos: u32, offset: i64) -> Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quota_is_available_only_when_all_limits_of_the_model_group_are_positive() {
+        let text = "### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 12:34 UTC)\n  - **Five Hour Limit Remaining:** 0% remaining (resets Oct 17, 2026, 17:34 UTC)\n- **Claude and GPT models**\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 24, 2026, 14:03 UTC)\n  - **Five Hour Limit Remaining:** 25% remaining (resets Oct 17, 2026, 19:03 UTC)";
+        assert_eq!(
+            ["gemini-3.8-flash", "claude-sonnet", "unknown"].map(|model| has_quota(text, model)),
+            [false, true, false]
+        );
+    }
     #[test]
     fn an_expired_rfc3339_reset_before_the_epoch_is_still_usable() {
         let until = reset_time("resets 1969-12-31T23:59:59Z").unwrap();

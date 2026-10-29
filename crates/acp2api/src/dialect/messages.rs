@@ -129,6 +129,7 @@ fn stop_reason(w: &Encoding) -> &'static str {
         match w.stop {
             Stop::EndTurn => "end_turn",
             Stop::MaxTokens => "max_tokens",
+            Stop::Refusal => "refusal",
             Stop::Sequence(_) => "stop_sequence",
         }
     }

@@ -37,7 +37,7 @@ impl Responses {
     fn response(&self, w: &Encoding, usage: Option<&Usage>) -> Value {
         let status = if usage.is_some() {
             match w.stop {
-                Stop::MaxTokens => "incomplete",
+                Stop::MaxTokens | Stop::Refusal => "incomplete",
                 Stop::EndTurn | Stop::Sequence(_) => "completed",
             }
         } else {
@@ -59,7 +59,7 @@ impl Responses {
             "created_at": w.created,
             "status": status,
             "error": null,
-            "incomplete_details": match w.stop { Stop::MaxTokens => json!({"reason":"max_output_tokens"}), Stop::EndTurn | Stop::Sequence(_) => Value::Null },
+            "incomplete_details": match w.stop { Stop::MaxTokens => json!({"reason":"max_output_tokens"}), Stop::Refusal => json!({"reason":"content_filter"}), Stop::EndTurn | Stop::Sequence(_) => Value::Null },
             "instructions": null,
             "max_output_tokens": null,
             "model": w.model,
@@ -180,7 +180,7 @@ impl WireDialect for Responses {
         }
         events.push(w.event(
             match w.stop {
-                Stop::MaxTokens => "response.incomplete",
+                Stop::MaxTokens | Stop::Refusal => "response.incomplete",
                 Stop::EndTurn | Stop::Sequence(_) => "response.completed",
             },
             json!({"response":self.response(w,Some(usage))}),

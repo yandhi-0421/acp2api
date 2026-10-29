@@ -15,6 +15,7 @@ impl Chat {
             match w.stop {
                 Stop::EndTurn | Stop::Sequence(_) => "stop",
                 Stop::MaxTokens => "length",
+                Stop::Refusal => "content_filter",
             }
         }
     }

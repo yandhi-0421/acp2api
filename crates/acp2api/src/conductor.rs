@@ -16,6 +16,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot, watch};
 #[derive(Clone)]
 pub(crate) struct Conductor {
+    quota_result: watch::Receiver<Arc<Option<QuotaResult>>>,
     send: mpsc::Sender<Input>,
     builds: crate::runtime_builds::Builds,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
@@ -23,10 +24,15 @@ pub(crate) struct Conductor {
     pub(crate) highest: u8,
 }
 pub(crate) enum OwnerAction {
+    RefreshQuota,
     NewLocalApiKey,
     SetPasswordHash(String),
     SetConcurrencyLimit(u8),
     DismissNotice(String),
+}
+pub(crate) struct QuotaResult {
+    pub(crate) text: String,
+    pub(crate) time: String,
 }
 #[derive(Clone)]
 pub(crate) struct Notice {
@@ -114,8 +120,18 @@ enum Work {
 }
 struct QuotaQuery {
     work: String,
-    wait: quota::Wait,
-    response: Option<Active>,
+    purpose: QuotaPurpose,
+}
+enum QuotaPurpose {
+    Refresh(oneshot::Sender<Result<(), String>>),
+    Reset {
+        wait: quota::Wait,
+        response: Option<Active>,
+    },
+    Refusal {
+        model: String,
+        response: Option<Active>,
+    },
 }
 enum QuotaPhase {
     Preparing,
@@ -232,6 +248,7 @@ struct Active {
     text: String,
     thought_dropped: bool,
     input_tokens: u64,
+    model: String,
     phase: Phase,
     tool_call: Option<crate::conversation::ToolCall>,
     stop: crate::conversation::Stop,
@@ -307,6 +324,8 @@ enum RuntimeState {
     Stopping,
 }
 struct Core {
+    quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
+    last_refresh: Option<Moment>,
     quota_wait: Option<quota::Wait>,
     next_quota: quota::TimerId,
     runtime_state: RuntimeState,
@@ -328,6 +347,7 @@ struct Core {
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
+    RefreshQuota(oneshot::Sender<Result<(), String>>),
     RetireRuntime,
     RuntimeFailure,
     Stop,
@@ -695,23 +715,46 @@ impl Core {
     fn owner_action(
         &mut self,
         action: OwnerAction,
+        reply: oneshot::Sender<Result<(), String>>,
         settings: &watch::Sender<Arc<crate::store::Settings>>,
         configuration: &std::path::Path,
         clock: &dyn Clock,
-    ) -> Result<Vec<Command>, String> {
+    ) -> Vec<Command> {
         let mut changed = (**settings.borrow()).clone();
-        match action {
-            OwnerAction::NewLocalApiKey => changed.local_api_key = crate::store::random_key()?,
-            OwnerAction::SetPasswordHash(hash) => changed.management_password_hash = hash,
-            OwnerAction::SetConcurrencyLimit(limit) => changed.concurrency_limit = limit,
+        let change = match action {
+            OwnerAction::RefreshQuota => {
+                return self.handle(Event::RefreshQuota(reply), clock.now(), clock.wall());
+            }
             OwnerAction::DismissNotice(id) => {
-                return Ok(self.handle(Event::DismissNotice(id), clock.now(), clock.wall()));
+                let commands = self.handle(Event::DismissNotice(id), clock.now(), clock.wall());
+                let _ = reply.send(Ok(()));
+                return commands;
+            }
+            OwnerAction::NewLocalApiKey => {
+                crate::store::random_key().map(|key| changed.local_api_key = key)
+            }
+            OwnerAction::SetPasswordHash(hash) => {
+                changed.management_password_hash = hash;
+                Ok(())
+            }
+            OwnerAction::SetConcurrencyLimit(limit) => {
+                changed.concurrency_limit = limit;
+                Ok(())
+            }
+        };
+        match change.and_then(|()| crate::store::save(configuration, &changed)) {
+            Ok(()) => {
+                let limit = changed.concurrency_limit;
+                settings.send_replace(Arc::new(changed));
+                let commands = self.handle(Event::Limit(limit), clock.now(), clock.wall());
+                let _ = reply.send(Ok(()));
+                commands
+            }
+            Err(error) => {
+                let _ = reply.send(Err(error));
+                Vec::new()
             }
         }
-        crate::store::save(configuration, &changed)?;
-        let limit = changed.concurrency_limit;
-        settings.send_replace(Arc::new(changed));
-        Ok(self.handle(Event::Limit(limit), clock.now(), clock.wall()))
     }
     fn admit(
         &self,
@@ -727,7 +770,7 @@ impl Core {
         if self
             .work
             .values()
-            .filter(|work| matches!(work, Work::AcceptedQueued(_)))
+            .filter(|work| matches!(work, Work::AcceptedQueued(_) | Work::QuotaQueued { .. }))
             .count()
             == QUEUE_CAPACITY
         {
@@ -793,6 +836,36 @@ impl Core {
             self.quota_wait = None;
         }
         match event {
+            Event::RefreshQuota(reply) => {
+                let error = if let RuntimeState::Unavailable(message) = &self.runtime_state {
+                    Some(message.clone())
+                } else if matches!(self.runtime_state, RuntimeState::Stopping) {
+                    Some(crate::messages::Message::Stopped.to_string())
+                } else if self
+                    .last_refresh
+                    .is_some_and(|at| now.saturating_sub(at) < 60_000)
+                {
+                    Some("Wait 60 s between quota refreshes.".into())
+                } else if self
+                    .work
+                    .values()
+                    .filter(|work| {
+                        matches!(work, Work::AcceptedQueued(_) | Work::QuotaQueued { .. })
+                    })
+                    .count()
+                    == QUEUE_CAPACITY
+                {
+                    Some(crate::messages::Message::QueueFull.to_string())
+                } else {
+                    None
+                };
+                if let Some(error) = error {
+                    let _ = reply.send(Err(error));
+                } else {
+                    self.last_refresh = Some(now);
+                    self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
+                }
+            }
             Event::Stop => {
                 self.runtime_state = RuntimeState::Stopping;
                 self.cancels.clear();
@@ -849,7 +922,12 @@ impl Core {
                 } else if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
                     self.work.get_mut(&id).unwrap()
                 {
-                    let active = query.response.take().unwrap();
+                    let response = match &mut query.purpose {
+                        QuotaPurpose::Reset { response, .. }
+                        | QuotaPurpose::Refusal { response, .. } => response,
+                        QuotaPurpose::Refresh(_) => unreachable!(),
+                    };
+                    let active = response.take().unwrap();
                     commands.push(Command::Complete(crate::journal::Completion {
                         request: active.request,
                         session: active.session,
@@ -963,7 +1041,13 @@ impl Core {
                                             can_continue: false,
                                             result: Ok(()),
                                         };
-                                        self.enqueue_quota(wait, Some(active), None);
+                                        self.enqueue_quota(
+                                            QuotaPurpose::Reset {
+                                                wait,
+                                                response: Some(active),
+                                            },
+                                            None,
+                                        );
                                     }
                                 } else {
                                     self.finish(id, Err(error), &mut commands);
@@ -1033,7 +1117,13 @@ impl Core {
                                 };
                             }
                         } else if reset.is_none() {
-                            self.enqueue_quota(wait, None, None);
+                            self.enqueue_quota(
+                                QuotaPurpose::Reset {
+                                    wait,
+                                    response: None,
+                                },
+                                None,
+                            );
                         }
                     } else {
                         self.records.retain(|record| record.session != session);
@@ -1042,7 +1132,13 @@ impl Core {
                         }
                         commands.push(Command::Forget(session));
                         if reset.is_none() {
-                            self.enqueue_quota(wait, None, None);
+                            self.enqueue_quota(
+                                QuotaPurpose::Reset {
+                                    wait,
+                                    response: None,
+                                },
+                                None,
+                            );
                         }
                     }
                 } else if let Some(id) = id {
@@ -1200,6 +1296,7 @@ impl Core {
                 model: request.model.model,
                 level: request.model.level,
             };
+            let model = prompt.model.clone();
             let ready = match matched {
                 Some((index, _)) => {
                     let record = self.records.remove(index);
@@ -1254,6 +1351,7 @@ impl Core {
                     text: String::new(),
                     thought_dropped: false,
                     input_tokens: request.turn.input_tokens,
+                    model,
                     phase,
                     tool_call: None,
                     stop: crate::conversation::Stop::EndTurn,
@@ -1268,18 +1366,12 @@ impl Core {
         }
         commands
     }
-    fn enqueue_quota(
-        &mut self,
-        wait: quota::Wait,
-        response: Option<Active>,
-        session: Option<String>,
-    ) {
+    fn enqueue_quota(&mut self, purpose: QuotaPurpose, session: Option<String>) {
         let id = self.next_work;
         self.next_work += 1;
         let query = QuotaQuery {
             work: format!("quota-{id}"),
-            wait,
-            response,
+            purpose,
         };
         self.work.insert(id, Work::QuotaQueued { query, session });
     }
@@ -1320,11 +1412,8 @@ impl Core {
                 commands.push(Command::Permission(request))
             }
             TurnUpdate::UnpermittedTool(name) => {
-                self.cancel(session, now, commands);
-                let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() else {
-                    unreachable!()
-                };
                 *result = Err(crate::messages::Message::BuiltInToolRan(name));
+                self.cancel(session, now, commands);
             }
             TurnUpdate::Usage(_) | TurnUpdate::ThoughtDropped => {}
         }
@@ -1347,25 +1436,50 @@ impl Core {
             unreachable!()
         };
         let result = result.and(recorded);
-        if result.is_ok()
-            && let Some(until) = quota::reset_time(&text)
-        {
-            query.wait = quota::Wait::new(until, now, wall, query.wait.timer);
-            if self
-                .quota_wait
-                .as_ref()
-                .is_some_and(|wait| wait.timer == query.wait.timer)
-            {
-                self.quota_wait = Some(query.wait.clone());
+        self.quota_result.send_replace(Arc::new(Some(QuotaResult {
+            text: match &result {
+                Ok(()) => text.clone(),
+                Err(error) => error.to_string(),
+            },
+            time: crate::journal::timestamp(wall).expect("quota result time in UTC"),
+        })));
+        let end = match &mut query.purpose {
+            QuotaPurpose::Refresh(_) => result,
+            QuotaPurpose::Reset { wait, .. } => {
+                if result.is_ok()
+                    && let Some(until) = quota::reset_time(&text)
+                {
+                    *wait = quota::Wait::new(until, now, wall, wait.timer);
+                    if self
+                        .quota_wait
+                        .as_ref()
+                        .is_some_and(|current| current.timer == wait.timer)
+                    {
+                        self.quota_wait = Some(wait.clone());
+                    }
+                }
+                Err(self.refusal(now).unwrap_or_else(|| wait.message(now)))
             }
-        }
-        let message = self.refusal(now).unwrap_or_else(|| query.wait.message(now));
-        self.complete_quota(
-            query,
-            phase.session().map(str::to_owned),
-            Err(message),
-            commands,
-        );
+            QuotaPurpose::Refusal { model, .. } => {
+                if result.is_ok() && quota::has_quota(&text, model) {
+                    Ok(())
+                } else {
+                    let until = if result.is_ok() {
+                        quota::reset_time(&text)
+                    } else {
+                        None
+                    };
+                    let wait = self.start_quota(
+                        until.unwrap_or(wall + std::time::Duration::from_secs(3600)),
+                        now,
+                        wall,
+                        commands,
+                    );
+                    Err(self.refusal(now).unwrap_or_else(|| wait.message(now)))
+                }
+            }
+        };
+        self.complete_quota(query, phase.session().map(str::to_owned), end, commands);
     }
     fn complete_quota(
         &mut self,
@@ -1374,7 +1488,17 @@ impl Core {
         result: Result<(), crate::messages::Message>,
         commands: &mut Vec<Command>,
     ) {
-        if let Some(active) = query.response {
+        let response = match query.purpose {
+            QuotaPurpose::Refresh(reply) => {
+                let _ = reply.send(result.map_err(|message| message.to_string()));
+                commands.extend(session.map(Command::Forget));
+                return;
+            }
+            QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                response
+            }
+        };
+        if let Some(active) = response {
             let forget = self.complete_request(active, result, commands);
             commands.extend(
                 session
@@ -1477,6 +1601,9 @@ impl Core {
                 }
             }
             TurnUpdate::PromptEnded { stop_reason } => {
+                if stop_reason == Some(StopReason::Refusal) {
+                    active.stop = crate::conversation::Stop::Refusal;
+                }
                 if stop_reason == Some(StopReason::MaxTokens) && active.stop.sequence().is_none() {
                     active.stop = crate::conversation::Stop::MaxTokens;
                 }
@@ -1674,10 +1801,28 @@ impl Core {
                             can_continue: false,
                             result: Ok(()),
                         };
-                        self.enqueue_quota(wait, Some(active), session);
+                        self.enqueue_quota(
+                            QuotaPurpose::Reset {
+                                wait,
+                                response: Some(active),
+                            },
+                            session,
+                        );
                         return;
                     }
                     phase => active.phase = phase,
+                }
+                if result.is_ok() && matches!(active.stop, crate::conversation::Stop::Refusal) {
+                    let model = active.model.clone();
+                    let session = active.session.clone();
+                    self.enqueue_quota(
+                        QuotaPurpose::Refusal {
+                            model,
+                            response: Some(active),
+                        },
+                        session,
+                    );
+                    return;
                 }
                 let forget = self.complete_request(active, result, commands);
                 commands.extend(forget.map(Command::Forget));
@@ -1788,9 +1933,12 @@ impl Conductor {
         let limit = settings.concurrency_limit;
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
+        let (quota_result, quota_watch) = watch::channel(Arc::new(None));
         let task = tokio::spawn(async move {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
+                quota_result,
+                last_refresh: None,
                 quota_wait: None,
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
@@ -1941,10 +2089,15 @@ impl Conductor {
                             Some((request.request.id.clone(), request.output.clone()))
                         }
                         Work::Retiring(_) => None,
-                        Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => query
-                            .response
-                            .as_ref()
-                            .map(|active| (query.work.clone(), active.output.clone())),
+                        Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => {
+                            match &query.purpose {
+                                QuotaPurpose::Reset { response, .. }
+                                | QuotaPurpose::Refusal { response, .. } => response
+                                    .as_ref()
+                                    .map(|active| (query.work.clone(), active.output.clone())),
+                                QuotaPurpose::Refresh(_) => None,
+                            }
+                        }
                     })
                     .collect();
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
@@ -1981,17 +2134,7 @@ impl Conductor {
                                 continue;
                             }
                             Input::Owner { action, reply, hold } => {
-                                let result = core.owner_action(
-                                    action,
-                                    &publish,
-                                    &configuration,
-                                    clock.as_ref(),
-                                );
-                                let (result, mut commands) = match result {
-                                    Ok(commands) => (Ok(()), commands.into()),
-                                    Err(error) => (Err(error), VecDeque::new()),
-                                };
-                                let _ = reply.send(result);
+                                let mut commands = core.owner_action(action, reply, &publish, &configuration, clock.as_ref()).into();
                                 Self::commands(
                                     &mut core,
                                     &mut runtime,
@@ -2039,6 +2182,7 @@ impl Conductor {
         });
         (
             Self {
+                quota_result: quota_watch,
                 send,
                 builds,
                 settings: settings_watch,
@@ -2175,6 +2319,9 @@ impl Conductor {
     }
     pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
         self.notices.borrow().clone()
+    }
+    pub(crate) fn quota_result(&self) -> Arc<Option<QuotaResult>> {
+        self.quota_result.borrow().clone()
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
@@ -2517,6 +2664,30 @@ mod tests {
             "FR-036 runtime recovery clears only runtime unavailable, and preparation must check the remaining condition before prompt dispatch"
         );
     }
+    fn answer_quota(core: &mut Core, mut commands: Vec<Command>, now: Moment) -> Vec<Command> {
+        let sessions: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Usage { session, .. } => Some(session.clone()),
+                _ => None,
+            })
+            .collect();
+        for session in sessions {
+            commands.extend(core.handle(Event::Runtime(RuntimeEvent::Turn { session:session.clone(), update:TurnUpdate::Text("### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 12:34 UTC)".into()) }), now + 1, std::time::UNIX_EPOCH));
+            commands.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session,
+                    update: TurnUpdate::PromptEnded {
+                        stop_reason: Some(StopReason::EndTurn),
+                    },
+                }),
+                now + 1,
+                std::time::UNIX_EPOCH,
+            ));
+            commands.extend(core.handle(Event::Deadline, now + 201, std::time::UNIX_EPOCH));
+        }
+        commands
+    }
     struct Facts(Vec<crate::ListedBuild>);
     impl crate::ReleaseFacts for Facts {
         fn version(&self) -> &str {
@@ -2544,6 +2715,8 @@ mod tests {
         [mpsc::UnboundedReceiver<(TurnEvent, Hold)>; 2],
     ) {
         let mut core = Core {
+            quota_result: watch::channel(Arc::new(None)).0,
+            last_refresh: None,
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
@@ -3243,7 +3416,7 @@ mod tests {
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let mut core = Core {
-                quota_wait:None, next_quota: quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
                 cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
                 work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
                 use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
@@ -3473,6 +3646,7 @@ mod tests {
                     .unwrap()
                     .settings;
                 let conductor = Conductor {
+                    quota_result: watch::channel(Arc::new(None)).1,
                     send,
                     builds: crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
                     settings: watch::channel(Arc::new(settings)).1,
@@ -3799,6 +3973,8 @@ mod tests {
         let work = request.id.clone();
         let (output, ticket) = mpsc::unbounded_channel();
         let mut core = Core {
+            quota_result: watch::channel(Arc::new(None)).0,
+            last_refresh: None,
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
@@ -3911,6 +4087,8 @@ mod tests {
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
+                quota_result: watch::channel(Arc::new(None)).0,
+                last_refresh: None,
                 quota_wait: None,
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
@@ -4012,12 +4190,14 @@ mod tests {
             None,
         ] {
             let turn = crate::dialect::CHAT
-                .parse(br#"{"model":"m","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[{"role":"user","content":"First"}]}"#)
+                .parse(br#"{"model":"gemini-3.8-flash","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[{"role":"user","content":"First"}]}"#)
                 .ok()
                 .unwrap()
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
+                quota_result: watch::channel(Arc::new(None)).0,
+                last_refresh: None,
                 quota_wait: None,
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
@@ -4042,6 +4222,7 @@ mod tests {
                         text: String::new(),
                         thought_dropped: false,
                         input_tokens: turn.input_tokens,
+                        model: "gemini-3.8-flash".into(),
                         phase: Phase::Prompt,
                         tool_call: Some(crate::conversation::ToolCall {
                             name: "read".into(),
@@ -4069,8 +4250,9 @@ mod tests {
                 0,
                 std::time::UNIX_EPOCH,
             );
-            core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH);
-            let next = crate::dialect::CHAT.parse(br#"{"model":"m","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[
+            let commands = core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH);
+            answer_quota(&mut core, commands, 200);
+            let next = crate::dialect::CHAT.parse(br#"{"model":"gemini-3.8-flash","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[
                 {"role":"user","content":"First"},
                 {"role":"assistant","content":"Before","tool_calls":[{"id":"call-id","function":{"name":"read","arguments":"{}"}}]},
                 {"role":"tool","tool_call_id":"call-id","content":"Done"},
@@ -4080,7 +4262,7 @@ mod tests {
                 core.handle(
                     Event::Accepted(Box::new(Accepted {
                         model: crate::catalog::SelectedModel {
-                            model: "m".into(),
+                            model: "gemini-3.8-flash".into(),
                             level: None,
                             level_from_name: false,
                         },
@@ -4133,6 +4315,8 @@ mod tests {
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         let mut core = Core {
+            quota_result: watch::channel(Arc::new(None)).0,
+            last_refresh: None,
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
@@ -4176,6 +4360,8 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
+            quota_result: watch::channel(Arc::new(None)).0,
+            last_refresh: None,
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
@@ -4197,7 +4383,7 @@ mod tests {
         let mut forgotten = Vec::new();
         let mut turn = |core: &mut Core, system: &str, session: &str, ends: TurnUpdate| {
             let body = format!(
-                r#"{{"model":"m","messages":[{{"role":"system","content":"{system}"}},{{"role":"user","content":"Hi"}}]}}"#
+                r#"{{"model":"gemini-3.8-flash","messages":[{{"role":"system","content":"{system}"}},{{"role":"user","content":"Hi"}}]}}"#
             );
             let turn = crate::dialect::CHAT
                 .parse(body.as_bytes())
@@ -4211,7 +4397,7 @@ mod tests {
             let mut commands = core.handle(
                 Event::Accepted(Box::new(Accepted {
                     model: crate::catalog::SelectedModel {
-                        model: "m".into(),
+                        model: "gemini-3.8-flash".into(),
                         level: None,
                         level_from_name: false,
                     },
@@ -4222,7 +4408,7 @@ mod tests {
                 0,
                 std::time::UNIX_EPOCH,
             );
-            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"gemini-3.8-flash","options":[{"value":"gemini-3.8-flash","name":"M"}]}]});
             let catalog = crate::catalog::Catalog::decode(&options, clock.wall()).unwrap();
             let prepared = Ok((session.to_owned(), catalog));
             commands.extend(core.handle(
@@ -4243,6 +4429,7 @@ mod tests {
                 std::time::UNIX_EPOCH,
             ));
             commands.extend(core.handle(Event::Deadline, 1000, std::time::UNIX_EPOCH));
+            commands = answer_quota(core, commands, 1000);
             forgotten.extend(commands.into_iter().filter_map(|command| match command {
                 Command::Forget(session) => Some(session),
                 _ => None,
@@ -4276,6 +4463,8 @@ mod tests {
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
+            quota_result: watch::channel(Arc::new(None)).0,
+            last_refresh: None,
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
@@ -4323,6 +4512,8 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
+            quota_result: watch::channel(Arc::new(None)).0,
+            last_refresh: None,
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
