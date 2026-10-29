@@ -3129,6 +3129,51 @@ mod tests {
     }
 
     #[test]
+    fn a_non_quota_error_cancels_a_prompt_awaiting_quota_end() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-quota-error-cancel-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 429,
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: "Quota exhausted; no reset time.".into(),
+                },
+            }),
+            60_000,
+            std::time::UNIX_EPOCH,
+        );
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 503,
+                    status: "UNAVAILABLE".into(),
+                    message: "Temporary failure".into(),
+                },
+            }),
+            60_001,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(
+                    |command| matches!(command, Command::Cancel(session) if session == "running")
+                )
+                .count(),
+            1,
+            "a non-quota error cancels the prompt while it awaits the quota end"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
     fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
         let folder = std::env::temp_dir().join(format!(
             "acp2api-idle-quota-reset-{}",
