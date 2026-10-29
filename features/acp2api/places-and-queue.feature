@@ -140,7 +140,7 @@ Feature: Places and queue
       | 31    | the request waits in the queue                                                                                      |
       | 32    | acp2api refuses the request at once with HTTP 529, the header "retry-after: 10", and the message "acp2api: the queue is full (32 requests). Send the request again later." |
 
-  @FR-051 @issue-65 @wip
+  @FR-051 @issue-65
   Scenario Outline: A prompt turn with no update for 5 minutes ends with M-19
     Given the next prompt turn sends updates with a gap of <gap>
     When an API client sends a valid request to "POST /v1/messages" with "stream" set to false

@@ -86,7 +86,7 @@ Feature: Endpoints and streams
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
-  @FR-011 @issue-65 @wip
+  @FR-011 @issue-65
   Scenario Outline: A stream gets keep-alive events while its request waits in the queue
     Given each place holds a prompt turn for the next 330 s
     When an API client sends a valid request with a stream to "<endpoint>"
@@ -100,7 +100,7 @@ Feature: Endpoints and streams
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
-  @FR-011 @issue-65 @wip
+  @FR-011 @issue-65
   Scenario Outline: A stream gets keep-alive events while its prompt turn sends no update
     Given the official runtime sends the text chunks "Hel" and "lo", and then sends no update until acp2api cancels the prompt turn
     When an API client sends a valid request with a stream to "<endpoint>"
@@ -114,14 +114,14 @@ Feature: Endpoints and streams
       | POST /v1/responses        |
       | POST /v1/chat/completions |
 
-  @FR-011 @issue-65 @wip
+  @FR-011 @issue-65
   Scenario: The keep-alive event of the Anthropic Messages API is ping
     Given each place holds a prompt turn for the next 330 s
     When an API client sends a valid request with a stream to "POST /v1/messages"
     Then the stream has "ping" events in the wait
     And each event of the stream in the wait, other than "message_start", is a "ping" event
 
-  @FR-011 @issue-65 @wip
+  @FR-011 @issue-65
   Scenario: The keep-alive event of the OpenAI Responses API is an event of that API
     Given each place holds a prompt turn for the next 330 s
     When an API client sends a valid request with a stream to "POST /v1/responses"
