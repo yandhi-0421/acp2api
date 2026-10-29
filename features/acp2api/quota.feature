@@ -9,7 +9,7 @@ Feature: Quota
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
-  @FR-036 @issue-61 @wip
+  @FR-036 @issue-61
   Scenario: A request in a quota wait gets HTTP 429 and starts no prompt turn
     Given a prompt turn ended with the stderr error line 429 "RESOURCE_EXHAUSTED" with a reset time 2 minutes away
     When an API client sends a valid request to "POST /v1/messages"
@@ -17,13 +17,13 @@ Feature: Quota
     And the header "retry-after" has a value of 120 or less
     And the official runtime gets no prompt
 
-  @FR-036 @issue-61 @wip
+  @FR-036 @issue-61
   Scenario: The first request after the reset time runs
     Given a prompt turn ended with the stderr error line 429 "RESOURCE_EXHAUSTED" with a reset time 2 minutes away
     When an API client sends a valid request 2 minutes and 1 second later
     Then the official runtime gets a prompt for the request
 
-  @FR-036 @issue-61 @wip
+  @FR-036 @issue-61
   Scenario: acp2api reads the reset time from /usage when the error text has none
     Given a prompt turn ended with the stderr error line 429 "RESOURCE_EXHAUSTED" with no reset time
     And "/usage" gives a reset time 10 minutes away
@@ -32,14 +32,14 @@ Feature: Quota
     And the header "retry-after" has a value of 600 or less
     And the official runtime got "/usage" one time
 
-  @FR-036 @FR-052 @issue-61 @wip
+  @FR-036 @FR-052 @issue-61
   Scenario: acp2api sends no quota query when the error text has a reset time
     Given a prompt turn ended with the stderr error line 429 "RESOURCE_EXHAUSTED" with a reset time 2 minutes away
     When an API client sends a valid request
     Then acp2api refuses the request with HTTP 429
     And the official runtime got no "/usage"
 
-  @FR-036 @issue-61 @wip
+  @FR-036 @issue-61
   Scenario Outline: With no reset time anywhere, the quota wait lasts 60 minutes
     Given a prompt turn ended with the stderr error line 429 "RESOURCE_EXHAUSTED" with no reset time
     And "/usage" gives no reset time
@@ -52,7 +52,7 @@ Feature: Quota
       | 60 minutes          | the official runtime gets a prompt for the request |
       | 60 minutes plus 1 ms | the official runtime gets a prompt for the request |
 
-  @FR-036 @issue-61 @wip
+  @FR-036 @issue-61
   Scenario: A new quota signal after a quota wait starts a new quota wait
     Given a quota wait ended at its reset time
     When a prompt turn ends with the stderr error line 402

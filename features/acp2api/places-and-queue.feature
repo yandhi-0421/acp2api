@@ -164,7 +164,7 @@ Feature: Places and queue
       | the stderr error line 401                         | sign-in required    | 400    |
       | the third failure of the runtime process in 10 minutes | runtime unavailable | 400 |
 
-  @FR-037 @issue-61 @wip
+  @FR-037 @issue-61
   Scenario: The prompt turns that run continue to their end at the start of a quota wait
     Given the concurrency limit is 2
     And the prompt turns of the requests "A" and "B" run
