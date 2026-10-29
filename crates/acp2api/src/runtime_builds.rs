@@ -17,6 +17,7 @@ pub(crate) struct Builds {
     port: u16,
     found: Arc<Mutex<Vec<Found>>>,
     checked: Arc<Mutex<Vec<ListedBuild>>>,
+    source: Arc<Mutex<Option<PathBuf>>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BuildIdentity {
@@ -58,11 +59,16 @@ pub(crate) struct BuildRow {
     pub(crate) acceptance: Option<&'static str>,
 }
 pub(crate) struct Summary {
-    pub(crate) current: Option<String>,
+    pub(crate) current: Option<CurrentBuild>,
     pub(crate) found: Vec<BuildRow>,
     pub(crate) release: Vec<String>,
     pub(crate) choices: Vec<(String, String)>,
     pub(crate) newer: Option<String>,
+}
+pub(crate) struct CurrentBuild {
+    pub(crate) version: String,
+    pub(crate) acceptance: &'static str,
+    pub(crate) source: PathBuf,
 }
 pub(crate) enum Action {
     Initial,
@@ -143,6 +149,7 @@ impl Builds {
             port,
             found: Arc::default(),
             checked: Arc::default(),
+            source: Arc::default(),
         }
     }
     #[cfg(test)]
@@ -370,6 +377,7 @@ impl Builds {
                 fs::remove_dir_all(&staging)?;
             }
             result?;
+            *self.source.lock().unwrap() = Some(source.join(SERVER));
         }
         Ok(())
     }
@@ -526,8 +534,30 @@ impl Builds {
             self.port
         )
     }
+    fn acceptance(&self, build: &ListedBuild) -> &'static str {
+        if self
+            .start
+            .release
+            .listed_builds()
+            .iter()
+            .any(|listed| listed.platform == build.platform && identity(listed) == identity(build))
+        {
+            "On the release list"
+        } else {
+            "Checked on this computer"
+        }
+    }
     pub(crate) fn summary(&self) -> Result<Summary, String> {
-        let current = self.accepted_copy()?.map(|build| build.version);
+        let current = self.accepted_copy()?.map(|build| CurrentBuild {
+            acceptance: self.acceptance(&build),
+            version: build.version,
+            source: self
+                .source
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| self.start.data.join(COPY).join(SERVER)),
+        });
         let found = self.found.lock().unwrap();
         let rows = found
             .iter()
@@ -535,22 +565,14 @@ impl Builds {
                 path: found.folder.join(SERVER),
                 version: found.listed.as_ref().map(|build| build.version.clone()),
                 identity: found.identity.to_string(),
-                acceptance: found.listed.as_ref().map(|build| {
-                    if self.start.release.listed_builds().iter().any(|listed| {
-                        listed.platform == build.platform && identity(listed) == identity(build)
-                    }) {
-                        "On the release list"
-                    } else {
-                        "Checked on this computer"
-                    }
-                }),
+                acceptance: found.listed.as_ref().map(|build| self.acceptance(build)),
             })
             .collect();
         let newer = current.as_ref().and_then(|current| {
             found
                 .iter()
                 .filter_map(|found| found.listed.as_ref())
-                .filter(|build| version(&build.version) > version(current))
+                .filter(|build| version(&build.version) > version(&current.version))
                 .max_by_key(|build| version(&build.version))
                 .map(|build| build.version.clone())
         });

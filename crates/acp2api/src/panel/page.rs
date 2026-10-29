@@ -68,7 +68,7 @@ pub(super) fn settings(
     highest: u8,
     notice: Option<&str>,
     notices: &[crate::conductor::Notice],
-    builds: Result<crate::runtime_builds::Summary, String>,
+    runtime: &str,
     quota_result: &Option<crate::conductor::QuotaResult>,
     sign_in_section: &str,
 ) -> String {
@@ -92,7 +92,6 @@ pub(super) fn settings(
         r#"<section><h2>Runtime notice</h2><p role="status">{}</p><form method="post" action="/manage/notice"><input type="hidden" name="notice_id" value="{}"><button type="submit">Dismiss notice</button></form></section>"#,
         escape(&notice.text()),escape(&notice.id)
     )).collect::<String>();
-    let runtime = runtime(builds, settings);
     let result = quota_result.as_ref().map(|result| format!(r#"<p>Last result: <time datetime="{time}">{time}</time></p><pre class="quota-result">{text}</pre>"#,time=escape(&result.time),text=escape(&result.text))).unwrap_or_else(|| "<p>No quota result yet.</p>".into());
     let quota = format!(
         r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p></section>"#
@@ -102,12 +101,13 @@ pub(super) fn settings(
     ))
 }
 
-fn runtime(
+pub(super) fn runtime(
     builds: Result<crate::runtime_builds::Summary, String>,
     settings: &crate::store::Settings,
+    process: &str,
 ) -> String {
     let crate::runtime_builds::Summary {
-        current: _,
+        current,
         found,
         release,
         newer,
@@ -121,6 +121,16 @@ fn runtime(
             );
         }
     };
+    let current = current
+        .map(|build| {
+            format!(
+                "<p>Build in use <span>{}</span> — {}</p><p>Source: <code>{}</code></p>",
+                escape(&build.version),
+                build.acceptance,
+                escape(&build.source.display().to_string())
+            )
+        })
+        .unwrap_or_else(|| "<p>No build in use.</p>".into());
     let release = release
         .iter()
         .map(|version| format!("<li>{} — On the release list</li>", escape(version)))
@@ -163,6 +173,6 @@ fn runtime(
         .map(|path| escape(&path.display().to_string()))
         .unwrap_or_default();
     format!(
-        r#"<section><h2>Official runtime</h2>{newer}<ul>{release}</ul><form method="post" action="/manage/retry"><button type="submit">Retry</button></form><form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><p id="compatibility-cost">A compatibility check uses 3 to 4 model requests through your Google account.</p><p id="compatibility-risks">The check does not check the stderr lines of the lockout signals, three prompt turns at the same time, or the memory that decides N.</p><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
+        r#"<section><h2>Official runtime</h2>{current}<p>Runtime process <span>{process}</span></p>{newer}<ul>{release}</ul><form method="post" action="/manage/retry"><button type="submit">Retry</button></form><form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><p id="compatibility-cost">A compatibility check uses 3 to 4 model requests through your Google account.</p><p id="compatibility-risks">The check does not check the stderr lines of the lockout signals, three prompt turns at the same time, or the memory that decides N.</p><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
     )
 }
