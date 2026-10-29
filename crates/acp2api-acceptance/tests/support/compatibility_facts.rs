@@ -29,7 +29,7 @@ fn initialize(entries: &[Entry], _: &Value) -> Value {
         .unwrap()
         .event["hello"]["version"]
         .clone();
-    json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"name":"fake-acp-agent","version":version}})
+    json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"name":"fake-acp-agent","version":version}})
 }
 
 fn messages(entries: &[Entry]) -> impl DoubleEndedIterator<Item = Value> + '_ {
@@ -42,6 +42,24 @@ fn messages(entries: &[Entry]) -> impl DoubleEndedIterator<Item = Value> + '_ {
 }
 
 fn load(entries: &[Entry], call: &Value) -> Value {
+    let home = entries
+        .iter()
+        .rev()
+        .find(|entry| entry.event["hello"]["role"] == "server")
+        .unwrap()
+        .event["hello"]["GEMINI_HOME"]
+        .as_str()
+        .unwrap();
+    let folder = std::path::Path::new(home).join("antigravity-acp/conversations");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join(format!(
+            "{}.db",
+            call["params"]["sessionId"].as_str().unwrap()
+        )),
+        b"fake compatibility-check session",
+    )
+    .unwrap();
     messages(entries)
         .rev()
         .find(|message| message["result"]["sessionId"] == call["params"]["sessionId"])
