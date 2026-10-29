@@ -1797,7 +1797,11 @@ impl Core {
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
             runtime_process: self.runtime_state.process_word(),
-            places,
+            places: self
+                .work
+                .values()
+                .filter(|work| work.occupies_place())
+                .count(),
             queued: self.work.values().filter(|work| work.is_queued()).count(),
         }));
     }
