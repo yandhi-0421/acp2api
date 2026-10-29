@@ -1,5 +1,6 @@
 mod quota;
 mod records;
+pub(crate) mod sign_in;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
@@ -27,7 +28,7 @@ pub(crate) struct Conductor {
 pub(crate) struct View {
     pub(crate) state: &'static str,
     pub(crate) queued: usize,
-    pub(crate) sign_in_wait: Option<SignInWait>,
+    pub(crate) sign_in_wait: Option<sign_in::Wait>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -37,11 +38,6 @@ impl Default for View {
             sign_in_wait: None,
         }
     }
-}
-#[derive(Clone)]
-pub(crate) struct SignInWait {
-    pub(crate) deadline: Moment,
-    pub(crate) address: Option<String>,
 }
 pub(crate) enum OwnerAction {
     SignIn,
@@ -106,11 +102,8 @@ enum Input {
     },
 }
 struct TurnWork {
-    turn: TurnRequest,
-    request: crate::journal::Request,
+    pending: PendingRequest,
     hold: Hold,
-    admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
-    connection: mpsc::UnboundedSender<()>,
 }
 struct PendingRequest {
     turn: TurnRequest,
@@ -161,6 +154,23 @@ struct QuotaQuery {
     work: String,
     purpose: QuotaPurpose,
 }
+impl QuotaQuery {
+    fn disconnect(&mut self, commands: &mut Vec<Command>) {
+        let response = match &mut self.purpose {
+            QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                response
+            }
+            QuotaPurpose::Refresh(_) => unreachable!(),
+        };
+        let active = response.take().unwrap();
+        commands.push(Command::Complete(crate::journal::Completion {
+            request: active.request,
+            session: active.session,
+            session_use: Some(active.kind),
+            outcome: crate::journal::Outcome::Disconnected,
+        }));
+    }
+}
 enum QuotaPurpose {
     Refresh(oneshot::Sender<Result<(), String>>),
     Reset {
@@ -194,7 +204,7 @@ struct OutstandingWork {
 }
 enum PendingCompletion {
     Disconnected(Option<crate::journal::SessionUse>),
-    Written,
+    AlreadyCompleted,
 }
 impl Work {
     fn key(&self) -> &str {
@@ -249,6 +259,12 @@ impl Work {
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. } => None,
         }
+    }
+    fn is_queued(&self) -> bool {
+        matches!(
+            self,
+            Self::CheckQueued(_) | Self::AcceptedQueued(_) | Self::QuotaQueued { .. }
+        )
     }
     fn occupies_place(&self) -> bool {
         matches!(
@@ -397,7 +413,7 @@ enum RuntimeState {
 }
 struct Core {
     sign_in_required: bool,
-    sign_in_wait: Option<SignInWait>,
+    sign_in_wait: Option<sign_in::Wait>,
     sign_in_entry: String,
     view: watch::Sender<Arc<View>>,
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
@@ -430,7 +446,7 @@ enum Event {
         session: String,
     },
     RuntimeReady {
-        signed_out: bool,
+        sign_in_required: bool,
     },
     StartSignIn,
     EndSignInWait,
@@ -653,13 +669,13 @@ impl Core {
             self.cleanup_before_start = true;
             match builds.launch(retained).await {
                 Ok((started, catalog)) => {
-                    let signed_out = catalog.is_none();
+                    let sign_in_required = catalog.is_none();
                     let session = catalog.as_ref().map(|_| started.session_id().into());
                     self.replaced(session, catalog);
                     *runtime = Some(started);
                     *read_open = true;
                     self.apply(
-                        Event::RuntimeReady { signed_out },
+                        Event::RuntimeReady { sign_in_required },
                         runtime,
                         read_open,
                         clock,
@@ -793,19 +809,6 @@ impl Core {
             .filter(|wait| wait.deadline > now)
             .map(|wait| wait.message(now))
     }
-    fn sign_in_message(&self) -> crate::messages::Message {
-        crate::messages::Message::SignInRequired(self.sign_in_entry.clone())
-    }
-    fn require_sign_in(&mut self, commands: &mut Vec<Command>) {
-        if !self.sign_in_required {
-            self.sign_in_required = true;
-            self.refuse_queued(
-                crate::journal::Outcome::Refused("sign_in_required"),
-                self.sign_in_message(),
-                commands,
-            );
-        }
-    }
     fn start_quota(
         &mut self,
         until: std::time::SystemTime,
@@ -829,6 +832,16 @@ impl Core {
             );
         }
         wait
+    }
+    fn check(
+        &self,
+        turn: &TurnRequest,
+        now: Moment,
+    ) -> Result<crate::catalog::SelectedModel, crate::messages::Refusal> {
+        match self.refusal(now) {
+            Some(message) => Err(message.into()),
+            None => self.check_model(turn),
+        }
     }
     fn check_model(
         &self,
@@ -923,16 +936,7 @@ impl Core {
         }
     }
     fn queue_full(&self) -> bool {
-        self.work
-            .values()
-            .filter(|work| {
-                matches!(
-                    work,
-                    Work::CheckQueued(_) | Work::AcceptedQueued(_) | Work::QuotaQueued { .. }
-                )
-            })
-            .count()
-            == QUEUE_CAPACITY
+        self.work.values().filter(|work| work.is_queued()).count() == QUEUE_CAPACITY
     }
     fn quota_signal(
         &mut self,
@@ -952,20 +956,8 @@ impl Core {
         journal: &crate::journal::Journal,
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
-        let TurnWork {
-            turn,
-            request,
-            hold,
-            admission,
-            connection,
-        } = work;
-        let pending = PendingRequest {
-            turn,
-            request,
-            admission,
-            connection,
-        };
-        if (self.sign_in_required) && !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+        let TurnWork { pending, hold } = work;
+        if self.sign_in_required && !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
             if !self.queue_full() {
                 return Some((Event::CheckPending(Box::new(pending)), hold));
             }
@@ -977,10 +969,7 @@ impl Core {
             );
             return None;
         }
-        let mut checked = match self.refusal(clock.now()) {
-            Some(message) => Err(message.into()),
-            None => self.check_model(&pending.turn),
-        };
+        let mut checked = self.check(&pending.turn, clock.now());
         if self.queue_full() {
             checked = checked.and(Err(crate::messages::Message::QueueFull.into()));
         }
@@ -1040,12 +1029,7 @@ impl Core {
             output,
         })
     }
-    fn handle(
-        &mut self,
-        mut event: Event,
-        now: Moment,
-        wall: std::time::SystemTime,
-    ) -> Vec<Command> {
+    fn handle(&mut self, event: Event, now: Moment, wall: std::time::SystemTime) -> Vec<Command> {
         if matches!(event, Event::Deadline) && self.cancels.values().any(|at| *at <= now) {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
@@ -1059,21 +1043,6 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
-        match &mut event {
-            Event::Runtime(
-                RuntimeEvent::Prepared {
-                    result: Err(error), ..
-                }
-                | RuntimeEvent::Turn {
-                    update: TurnUpdate::Failed(error),
-                    ..
-                },
-            ) if error.requires_sign_in() => {
-                self.require_sign_in(&mut commands);
-                *error = self.refusal(now).unwrap();
-            }
-            _ => {}
-        }
         if self
             .quota_wait
             .as_ref()
@@ -1126,10 +1095,7 @@ impl Core {
                 }
             }
             (None, Event::StartSignIn) => {
-                self.sign_in_wait = Some(SignInWait {
-                    deadline: now + 600_000,
-                    address: None,
-                });
+                self.sign_in_wait = Some(sign_in::Wait::new(now));
                 commands.push(Command::Authenticate);
             }
             (None, Event::EndSignInWait) => {
@@ -1149,15 +1115,13 @@ impl Core {
                 match result {
                     Ok(()) => self.sign_in_required = false,
                     Err(error) => {
-                        if error.requires_sign_in() {
-                            self.require_sign_in(&mut commands);
-                        }
+                        self.sign_in_error(error, now, &mut commands);
                     }
                 }
             }
-            (None, Event::RuntimeReady { signed_out }) => {
+            (None, Event::RuntimeReady { sign_in_required }) => {
                 self.runtime_state = RuntimeState::Serving;
-                if signed_out {
+                if sign_in_required {
                     self.require_sign_in(&mut commands);
                 } else {
                     self.sign_in_required = false;
@@ -1255,13 +1219,16 @@ impl Core {
             }
             (None, Event::Disconnected(request_id)) => {
                 let id = self.by_request(&request_id).unwrap();
-                if matches!(self.work[&id], Work::CheckQueued(_) | Work::Checking(_)) {
-                    let work = self.work.remove(&id).unwrap();
-                    let checking = matches!(work, Work::Checking(_));
-                    let (Work::CheckQueued(request) | Work::Checking(request)) = work else {
-                        unreachable!()
-                    };
-                    if checking {
+                match self.work.remove(&id).unwrap() {
+                    Work::CheckQueued(request) => {
+                        commands.push(Command::Complete(crate::journal::Completion {
+                            request: request.request,
+                            session: None,
+                            session_use: None,
+                            outcome: crate::journal::Outcome::Disconnected,
+                        }))
+                    }
+                    Work::Checking(request) => {
                         self.work.insert(
                             id,
                             Work::Retiring(OutstandingWork {
@@ -1271,53 +1238,55 @@ impl Core {
                                 completion: PendingCompletion::Disconnected(None),
                             }),
                         );
-                    } else {
-                        commands.push(Command::Complete(crate::journal::Completion {
-                            request: request.request,
-                            session: None,
-                            session_use: None,
-                            outcome: crate::journal::Outcome::Disconnected,
-                        }));
                     }
-                } else if matches!(self.work[&id], Work::AcceptedQueued(_)) {
-                    let request = self.work.remove(&id).unwrap().into_queued().unwrap();
-                    Self::drop_queued(request, &mut commands);
-                } else if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
-                    self.work.get_mut(&id).unwrap()
-                {
-                    let response = match &mut query.purpose {
-                        QuotaPurpose::Reset { response, .. }
-                        | QuotaPurpose::Refusal { response, .. } => response,
-                        QuotaPurpose::Refresh(_) => unreachable!(),
-                    };
-                    let active = response.take().unwrap();
-                    commands.push(Command::Complete(crate::journal::Completion {
-                        request: active.request,
-                        session: active.session,
-                        session_use: Some(active.kind),
-                        outcome: crate::journal::Outcome::Disconnected,
-                    }));
-                } else {
-                    let active = self.work.remove(&id).unwrap().into_active().unwrap();
-                    let ended = matches!(
-                        active.phase,
-                        Phase::Settling { .. } | Phase::QuotaSettling { .. }
-                    );
-                    if matches!(active.phase, Phase::Prompt) {
-                        self.cancel(active.session.as_ref().unwrap().clone(), now, &mut commands);
+                    Work::AcceptedQueued(request) => Self::drop_queued(request, &mut commands),
+                    Work::QuotaQueued { mut query, session } => {
+                        query.disconnect(&mut commands);
+                        self.work.insert(id, Work::QuotaQueued { query, session });
                     }
-                    self.work.insert(
-                        id,
-                        Work::Retiring(OutstandingWork {
-                            model: active.model,
-                            request: active.request,
-                            session: active.session,
-                            completion: PendingCompletion::Disconnected(Some(active.kind)),
-                        }),
-                    );
-                    if ended {
-                        self.finish(id, Ok(()), &mut commands);
+                    Work::QuotaWorking {
+                        mut query,
+                        phase,
+                        text,
+                        result,
+                    } => {
+                        query.disconnect(&mut commands);
+                        self.work.insert(
+                            id,
+                            Work::QuotaWorking {
+                                query,
+                                phase,
+                                text,
+                                result,
+                            },
+                        );
                     }
+                    Work::AcceptedWorking(active) => {
+                        let ended = matches!(
+                            active.phase,
+                            Phase::Settling { .. } | Phase::QuotaSettling { .. }
+                        );
+                        if matches!(active.phase, Phase::Prompt) {
+                            self.cancel(
+                                active.session.as_ref().unwrap().clone(),
+                                now,
+                                &mut commands,
+                            );
+                        }
+                        self.work.insert(
+                            id,
+                            Work::Retiring(OutstandingWork {
+                                model: active.model,
+                                request: active.request,
+                                session: active.session,
+                                completion: PendingCompletion::Disconnected(Some(active.kind)),
+                            }),
+                        );
+                        if ended {
+                            self.finish(id, Ok(()), &mut commands);
+                        }
+                    }
+                    Work::Retiring(_) => unreachable!(),
                 }
             }
             (None, Event::StartFailed(_, error)) => {
@@ -1330,6 +1299,7 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Prepared { work, result })) => {
+                let result = result.map_err(|error| self.sign_in_error(error, now, &mut commands));
                 if let Some(id) = work_id {
                     match result {
                         Ok((session, catalog)) => {
@@ -1421,6 +1391,12 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Turn { session, update })) => {
+                let update = match update {
+                    TurnUpdate::Failed(error) => {
+                        TurnUpdate::Failed(self.sign_in_error(error, now, &mut commands))
+                    }
+                    update => update,
+                };
                 if let Some(id) = work_id {
                     self.update(id, session, update, now, wall, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
@@ -1431,11 +1407,11 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::UpstreamError { session, error })) => {
                 let id = work_id;
-                let mut message = crate::messages::Message::UpstreamHttp(error);
-                if message.requires_sign_in() {
-                    self.require_sign_in(&mut commands);
-                    message = self.refusal(now).unwrap();
-                }
+                let message = self.sign_in_error(
+                    crate::messages::Message::UpstreamHttp(error),
+                    now,
+                    &mut commands,
+                );
                 if let Some((wait, known)) = self.quota_signal(&message, now, wall, &mut commands) {
                     if let Some(id) = id {
                         if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
@@ -1631,16 +1607,7 @@ impl Core {
         self.view.send_replace(Arc::new(View {
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
-            queued: self
-                .work
-                .values()
-                .filter(|work| {
-                    matches!(
-                        work,
-                        Work::CheckQueued(_) | Work::AcceptedQueued(_) | Work::QuotaQueued { .. }
-                    )
-                })
-                .count(),
+            queued: self.work.values().filter(|work| work.is_queued()).count(),
         }));
         commands
     }
@@ -1773,13 +1740,26 @@ impl Core {
                     *phase = QuotaPhase::Prompt(session.clone());
                     commands.push(Command::Usage { work, session });
                 }
-                Err(error) => self.finish_quota(id, Err(error), now, wall, commands),
+                Err(error) => {
+                    let error = self.sign_in_error(error, now, commands);
+                    self.finish_quota(id, Err(error), now, wall, commands);
+                }
             },
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
+                let update = match update {
+                    TurnUpdate::Failed(error) => {
+                        TurnUpdate::Failed(self.sign_in_error(error, now, commands))
+                    }
+                    update => update,
+                };
                 self.update_quota(id, session, update, now, commands)
             }
             Event::Runtime(RuntimeEvent::UpstreamError { error, .. }) => {
-                let message = crate::messages::Message::UpstreamHttp(error);
+                let message = self.sign_in_error(
+                    crate::messages::Message::UpstreamHttp(error),
+                    now,
+                    commands,
+                );
                 let _ = self.quota_signal(&message, now, wall, commands);
                 let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() else {
                     unreachable!()
@@ -2187,7 +2167,7 @@ impl Core {
             model: active.model.clone(),
             request: active.request.clone(),
             session: active.session.clone(),
-            completion: PendingCompletion::Written,
+            completion: PendingCompletion::AlreadyCompleted,
         };
         let forget = self.complete_request(active, Err(error), commands);
         if ended {
@@ -2369,7 +2349,7 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Input>(32);
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
-        let sign_in_entry = format!("http://127.0.0.1:{}/#sign-in", settings.port);
+        let sign_in_entry = format!("http://127.0.0.1:{}/#{}", settings.port, sign_in::ENTRY_ID);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
@@ -2674,10 +2654,7 @@ impl Conductor {
                     let Work::Checking(request) = core.work.remove(&id).unwrap() else {
                         unreachable!()
                     };
-                    let checked = match core.refusal(clock.now()) {
-                        Some(error) => Err(error.into()),
-                        None => core.check_model(&request.turn),
-                    };
+                    let checked = core.check(&request.turn, clock.now());
                     let accepted = core
                         .accept(request, checked, journal, clock.as_ref())
                         .map(Box::new);
@@ -2862,11 +2839,13 @@ impl Conductor {
         let (connection, lease) = mpsc::unbounded_channel();
         self.send
             .send(Input::Turn(Box::new(TurnWork {
-                turn,
-                request,
+                pending: PendingRequest {
+                    turn,
+                    request,
+                    admission,
+                    connection,
+                },
                 hold,
-                admission,
-                connection,
             })))
             .await
             .map_err(stopped)?;
@@ -2914,6 +2893,35 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    impl Core {
+        fn fixture(limit: u8) -> Self {
+            Self {
+                quota_result: watch::channel(Arc::new(None)).0,
+                last_refresh: None,
+                quota_wait: None,
+                next_quota: quota::TimerId::default(),
+                runtime_state: RuntimeState::Serving,
+                sign_in_required: false,
+                sign_in_wait: None,
+                sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+                view: watch::channel(Arc::new(View::default())).0,
+                failures: VecDeque::new(),
+                cleanup_before_start: false,
+                cancels: BTreeMap::new(),
+                changes: VecDeque::new(),
+                replacement: None,
+                catalog: None,
+                work: BTreeMap::new(),
+                next_work: 0,
+                records: Vec::new(),
+                startup_session: None,
+                use_sequence: 0,
+                limit,
+                notices: watch::channel(Arc::new(Vec::new())).0,
+            }
+        }
+    }
+
     #[test]
     fn runtime_unavailable_ends_each_kind_of_queued_quota_query() {
         let folder = std::env::temp_dir().join(format!(
@@ -3278,28 +3286,8 @@ mod tests {
         [mpsc::UnboundedReceiver<(TurnEvent, Hold)>; 2],
     ) {
         let mut core = Core {
-            quota_result: watch::channel(Arc::new(None)).0,
-            last_refresh: None,
-            quota_wait: None,
-            next_quota: quota::TimerId::default(),
-            runtime_state: RuntimeState::Serving,
-            sign_in_required: false,
-            sign_in_wait: None,
-            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-            view: watch::channel(Arc::new(View::default())).0,
-            failures: VecDeque::new(),
-            cleanup_before_start: false,
-            cancels: BTreeMap::new(),
-            changes: VecDeque::new(),
-            replacement: None,
-            catalog: None,
-            work: BTreeMap::new(),
-            next_work: 0,
-            records: Vec::new(),
             startup_session: Some("running".into()),
-            use_sequence: 0,
-            limit: 1,
-            notices: watch::channel(Arc::new(Vec::new())).0,
+            ..Core::fixture(1)
         };
         let mut tickets = Vec::new();
         let mut queued = String::new();
@@ -3982,12 +3970,7 @@ mod tests {
             std::fs::remove_file(source.join(crate::runtime_builds::HARNESS)).unwrap();
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
-            let mut core = Core {
-                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, sign_in_required:false, sign_in_wait:None, sign_in_entry:"http://127.0.0.1:8329/#sign-in".into(), view:watch::channel(Arc::new(View::default())).0, failures:VecDeque::new(), cleanup_before_start:false,
-                cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
-                work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
-                use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
-            };
+            let mut core = Core::fixture(1);
             core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
             let (reply, result) = oneshot::channel();
             core.replacement = Some(Replacement::Build { reply, source:selected, initial:true });
@@ -4543,30 +4526,7 @@ mod tests {
         let request = journal.begin(crate::journal::Api::Chat, 0);
         let work = request.id.clone();
         let (output, ticket) = mpsc::unbounded_channel();
-        let mut core = Core {
-            quota_result: watch::channel(Arc::new(None)).0,
-            last_refresh: None,
-            quota_wait: None,
-            next_quota: quota::TimerId::default(),
-            runtime_state: RuntimeState::Serving,
-            sign_in_required: false,
-            sign_in_wait: None,
-            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-            view: watch::channel(Arc::new(View::default())).0,
-            failures: VecDeque::new(),
-            cleanup_before_start: false,
-            cancels: BTreeMap::new(),
-            changes: VecDeque::new(),
-            replacement: None,
-            catalog: None,
-            work: BTreeMap::new(),
-            next_work: 0,
-            records: Vec::new(),
-            startup_session: None,
-            use_sequence: 0,
-            limit: 1,
-            notices: watch::channel(Arc::new(Vec::new())).0,
-        };
+        let mut core = Core::fixture(1);
         let commands = core.handle(
             Event::Accepted(Box::new(Accepted {
                 turn,
@@ -4662,28 +4622,8 @@ mod tests {
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
-                quota_result: watch::channel(Arc::new(None)).0,
-                last_refresh: None,
-                quota_wait: None,
-                next_quota: quota::TimerId::default(),
-                runtime_state: RuntimeState::Serving,
-                sign_in_required: false,
-                sign_in_wait: None,
-                sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-                view: watch::channel(Arc::new(View::default())).0,
-                failures: VecDeque::new(),
-                cleanup_before_start: false,
-                cancels: BTreeMap::new(),
-                changes: VecDeque::new(),
-                replacement: None,
-                catalog: None,
-                work: BTreeMap::new(),
-                next_work: 0,
-                records: Vec::new(),
                 startup_session: Some("session".into()),
-                use_sequence: 0,
-                limit: 1,
-                notices: watch::channel(Arc::new(Vec::new())).0,
+                ..Core::fixture(1)
             };
             core.handle(
                 Event::Accepted(Box::new(Accepted {
@@ -4776,21 +4716,6 @@ mod tests {
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
-                quota_result: watch::channel(Arc::new(None)).0,
-                last_refresh: None,
-                quota_wait: None,
-                next_quota: quota::TimerId::default(),
-                runtime_state: RuntimeState::Serving,
-                sign_in_required: false,
-                sign_in_wait: None,
-                sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-                view: watch::channel(Arc::new(View::default())).0,
-                failures: VecDeque::new(),
-                cleanup_before_start: false,
-                cancels: BTreeMap::new(),
-                changes: VecDeque::new(),
-                replacement: None,
-                catalog: None,
                 work: BTreeMap::from([(
                     0,
                     Work::AcceptedWorking(Active {
@@ -4820,11 +4745,8 @@ mod tests {
                     }),
                 )]),
                 next_work: 1,
-                records: Vec::new(),
-                startup_session: None,
                 use_sequence: 1,
-                limit: 1,
-                notices: watch::channel(Arc::new(Vec::new())).0,
+                ..Core::fixture(1)
             };
             core.handle(
                 Event::Runtime(RuntimeEvent::Turn {
@@ -4899,28 +4821,8 @@ mod tests {
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         let mut core = Core {
-            quota_result: watch::channel(Arc::new(None)).0,
-            last_refresh: None,
-            quota_wait: None,
-            next_quota: quota::TimerId::default(),
-            runtime_state: RuntimeState::Serving,
-            sign_in_required: false,
-            sign_in_wait: None,
-            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-            view: watch::channel(Arc::new(View::default())).0,
-            failures: VecDeque::new(),
-            cleanup_before_start: false,
-            cancels: BTreeMap::new(),
-            changes: VecDeque::new(),
-            replacement: None,
             catalog: Some(catalog),
-            work: BTreeMap::new(),
-            next_work: 0,
-            records: Vec::new(),
-            startup_session: None,
-            use_sequence: 0,
-            limit: 1,
-            notices: watch::channel(Arc::new(Vec::new())).0,
+            ..Core::fixture(1)
         };
         assert_eq!(core.model_entries(0).ok().unwrap().len(), 1);
         let missing = crate::dialect::CHAT
@@ -4947,30 +4849,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
-        let mut core = Core {
-            quota_result: watch::channel(Arc::new(None)).0,
-            last_refresh: None,
-            quota_wait: None,
-            next_quota: quota::TimerId::default(),
-            runtime_state: RuntimeState::Serving,
-            sign_in_required: false,
-            sign_in_wait: None,
-            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-            view: watch::channel(Arc::new(View::default())).0,
-            failures: VecDeque::new(),
-            cleanup_before_start: false,
-            cancels: BTreeMap::new(),
-            changes: VecDeque::new(),
-            replacement: None,
-            catalog: None,
-            work: BTreeMap::new(),
-            next_work: 0,
-            records: Vec::new(),
-            startup_session: None,
-            use_sequence: 0,
-            limit: 1,
-            notices: watch::channel(Arc::new(Vec::new())).0,
-        };
+        let mut core = Core::fixture(1);
         let mut outputs = Vec::new();
         let mut forgotten = Vec::new();
         let mut turn = |core: &mut Core, system: &str, session: &str, ends: TurnUpdate| {
@@ -5055,23 +4934,6 @@ mod tests {
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
-            quota_result: watch::channel(Arc::new(None)).0,
-            last_refresh: None,
-            quota_wait: None,
-            next_quota: quota::TimerId::default(),
-            runtime_state: RuntimeState::Serving,
-            sign_in_required: false,
-            sign_in_wait: None,
-            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-            view: watch::channel(Arc::new(View::default())).0,
-            failures: VecDeque::new(),
-            cleanup_before_start: false,
-            cancels: BTreeMap::new(),
-            changes: VecDeque::new(),
-            replacement: None,
-            catalog: None,
-            work: BTreeMap::new(),
-            next_work: 0,
             records: vec![records::Record {
                 location: records::Location::Loaded,
                 session: "idle".into(),
@@ -5080,10 +4942,8 @@ mod tests {
                 used: 1,
                 expires: 24 * 60 * 60 * 1000,
             }],
-            startup_session: None,
             use_sequence: 1,
-            limit: 1,
-            notices: watch::channel(Arc::new(Vec::new())).0,
+            ..Core::fixture(1)
         };
         let mut forgotten = Vec::new();
         if let Some(at) = core.next_deadline()
@@ -5107,30 +4967,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
-        let mut core = Core {
-            quota_result: watch::channel(Arc::new(None)).0,
-            last_refresh: None,
-            quota_wait: None,
-            next_quota: quota::TimerId::default(),
-            runtime_state: RuntimeState::Serving,
-            sign_in_required: false,
-            sign_in_wait: None,
-            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
-            view: watch::channel(Arc::new(View::default())).0,
-            failures: VecDeque::new(),
-            cleanup_before_start: false,
-            cancels: BTreeMap::new(),
-            changes: VecDeque::new(),
-            replacement: None,
-            catalog: None,
-            work: BTreeMap::new(),
-            next_work: 0,
-            records: Vec::new(),
-            startup_session: None,
-            use_sequence: 0,
-            limit: 1,
-            notices: watch::channel(Arc::new(Vec::new())).0,
-        };
+        let mut core = Core::fixture(1);
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello"},{"role":"user","content":"Again"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let request = journal.begin(crate::journal::Api::Chat, 0);
@@ -5233,11 +5070,13 @@ mod tests {
         conductor
             .send
             .send(Input::Turn(Box::new(TurnWork {
-                turn: turn(),
-                request: request(),
+                pending: PendingRequest {
+                    turn: turn(),
+                    request: request(),
+                    admission,
+                    connection: mpsc::unbounded_channel().0,
+                },
                 hold: clock.hold(HoldKind::HttpRequest),
-                admission,
-                connection: mpsc::unbounded_channel().0,
             })))
             .await
             .ok()
@@ -5356,7 +5195,9 @@ mod tests {
         );
         core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
         core.handle(
-            Event::RuntimeReady { signed_out: false },
+            Event::RuntimeReady {
+                sign_in_required: false,
+            },
             30_000,
             std::time::UNIX_EPOCH,
         );
@@ -5400,7 +5241,7 @@ mod tests {
         std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]
-    fn a_signed_out_replacement_refuses_the_queue_before_it_can_dispatch() {
+    fn a_sign_in_required_replacement_refuses_the_queue_before_it_can_dispatch() {
         let folder = std::env::temp_dir().join(format!(
             "acp2api-sign-in-replacement-{}",
             crate::random_hex::<12>().unwrap()
@@ -5409,7 +5250,9 @@ mod tests {
         let (mut core, queued, _tickets) = prompting_with_waiter(&journal);
         core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
         let commands = core.handle(
-            Event::RuntimeReady { signed_out: true },
+            Event::RuntimeReady {
+                sign_in_required: true,
+            },
             1,
             std::time::UNIX_EPOCH,
         );

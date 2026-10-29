@@ -240,3 +240,26 @@ pub async fn queue_count(w: &mut World, expected: usize) {
         "FR-050 panel queue figure must be {expected}"
     );
 }
+
+pub fn model_list_refusal(w: &World, answer: &Answer) {
+    assert_eq!(
+        answer.status, 400,
+        "FR-038 model list refuses while sign-in is required"
+    );
+    assert_eq!(
+        answer.json(),
+        json!({"error":{"message":message(w),"type":"invalid_request_error","param":null,"code":"sign_in_required"}}),
+        "FR-038 GET /v1/models uses the OpenAI error envelope with M-13"
+    );
+    assert!(
+        answer.events.is_empty(),
+        "FR-026 refusal has no stream event"
+    );
+    assert!(
+        !answer
+            .headers
+            .get("content-type")
+            .is_some_and(|value| value.starts_with("text/event-stream")),
+        "FR-026 refusal has no stream response"
+    );
+}

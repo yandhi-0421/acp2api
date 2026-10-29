@@ -39,19 +39,18 @@ fn limit_rows(group: &str) -> impl Iterator<Item = (u8, &str)> {
 }
 
 pub(super) fn error_text(message: &Message) -> Option<&str> {
+    if message.is_lockout_signal() || message.requires_sign_in() {
+        return None;
+    }
     match message {
         Message::UpstreamHttp(error)
-            if !matches!(error.code, 401 | 403)
-                && !error.message.contains("Terms of Service")
-                && (matches!(error.code, 402 | 429) || error.status == "RESOURCE_EXHAUSTED") =>
+            if (matches!(error.code, 402 | 429) || error.status == "RESOURCE_EXHAUSTED") =>
         {
             Some(&error.message)
         }
         Message::UpstreamAcp(error)
-            if !matches!(error.code, 401 | 403)
-                && !error.message.contains("Terms of Service")
-                && (matches!(error.code, 402 | 429)
-                    || error.message.contains("RESOURCE_EXHAUSTED")) =>
+            if (matches!(error.code, 402 | 429)
+                || error.message.contains("RESOURCE_EXHAUSTED")) =>
         {
             Some(&error.message)
         }

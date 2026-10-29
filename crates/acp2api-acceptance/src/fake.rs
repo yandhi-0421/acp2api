@@ -162,7 +162,13 @@ pub struct ModelSpec {
 }
 impl FakeRuntime {
     pub fn set_signed_in(&self, signed_in: bool) {
-        self.hub.shared.0.lock().unwrap().fake.signed_in = signed_in;
+        self.hub
+            .shared
+            .0
+            .lock()
+            .unwrap()
+            .fake
+            .set_signed_in(signed_in);
     }
     pub fn release_call(&self, gate: &str) {
         let mut state = self.hub.shared.0.lock().unwrap();
@@ -274,8 +280,8 @@ impl FakeRuntime {
     }
 }
 impl FakeState {
-    pub(crate) fn signed_in_after_authentication(&mut self) {
-        self.signed_in = true;
+    pub(crate) fn set_signed_in(&mut self, signed_in: bool) {
+        self.signed_in = signed_in;
     }
 }
 fn result(id: Value, value: Value) -> Value {
@@ -402,7 +408,7 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
             let plan = match command {
                 Some(command @ "/logout") => {
                     s.record(json!({"kind":"slash-command","name":command}));
-                    s.fake.signed_in = false;
+                    s.fake.set_signed_in(false);
                     TurnPlan::new().chunk("Signed out.")
                 }
                 Some(command @ "/usage") => {

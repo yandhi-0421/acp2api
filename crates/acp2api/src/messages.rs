@@ -58,7 +58,25 @@ pub(crate) enum Message {
     BuiltInToolRan(String),
 }
 impl Message {
+    pub(crate) fn is_lockout_signal(&self) -> bool {
+        let (code, message, status) = match self {
+            Self::UpstreamHttp(error) => (
+                i64::from(error.code),
+                error.message.as_str(),
+                Some(error.status.as_str()),
+            ),
+            Self::UpstreamAcp(error) => (error.code, error.message.as_str(), None),
+            _ => return false,
+        };
+        code == 403
+            || status == Some("PERMISSION_DENIED")
+            || message.contains("PERMISSION_DENIED")
+            || message.contains("Terms of Service")
+    }
     pub(crate) fn requires_sign_in(&self) -> bool {
+        if self.is_lockout_signal() {
+            return false;
+        }
         let (code, message, status, reason) = match self {
             Self::UpstreamHttp(error) => (
                 i64::from(error.code),
@@ -74,16 +92,12 @@ impl Message {
             ),
             _ => return false,
         };
-        code != 403
-            && status != Some("PERMISSION_DENIED")
-            && !message.contains("PERMISSION_DENIED")
-            && !message.contains("Terms of Service")
-            && (code == 401
-                || status == Some("UNAUTHENTICATED")
-                || message.contains("UNAUTHENTICATED")
-                || code == -32000 && message.contains("Authentication required")
-                || reason == Some("logged_out")
-                || message.contains("logged_out"))
+        code == 401
+            || status == Some("UNAUTHENTICATED")
+            || message.contains("UNAUTHENTICATED")
+            || code == -32000 && message.contains("Authentication required")
+            || reason == Some("logged_out")
+            || message.contains("logged_out")
     }
 }
 pub(crate) enum Row {

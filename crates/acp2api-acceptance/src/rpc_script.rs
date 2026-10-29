@@ -34,16 +34,7 @@ pub(crate) fn respond(state: &mut State, label: &str, call: &Value) -> bool {
         return false;
     };
     let reply = if let RpcReply::FromCall(make) = reply {
-        assert!(
-            call.to_string().len() <= 64 * 1024,
-            "scripted ACP input cap: 64 KiB"
-        );
-        let reply = make(&state.entries, call);
-        assert!(
-            format!("{reply:?}").len() <= 128 * 1024,
-            "scripted ACP reply cap: 128 KiB"
-        );
-        reply
+        from_call(state, call, make)
     } else {
         reply
     };
@@ -84,7 +75,7 @@ pub(crate) fn respond(state: &mut State, label: &str, call: &Value) -> bool {
                 assert!(token.len() <= 128, "synthetic token cap: 128 bytes");
                 state.out(label, json!({"op":"KeepToken","token":token}));
             }
-            state.fake.signed_in_after_authentication();
+            state.fake.set_signed_in(true);
             RpcReply::Reply {
                 updates: vec![],
                 result,
@@ -93,19 +84,17 @@ pub(crate) fn respond(state: &mut State, label: &str, call: &Value) -> bool {
         other => other,
     };
     let reply = if let RpcReply::FromRequest(make) = reply {
-        assert!(
-            call.to_string().len() <= 64 * 1024,
-            "scripted ACP input cap: 64 KiB"
-        );
-        let result = make(&state.entries, call);
-        assert!(
-            result.to_string().len() <= 64 * 1024,
-            "scripted ACP result cap: 64 KiB"
-        );
-        RpcReply::Reply {
-            updates: vec![],
-            result,
-        }
+        from_call(state, call, |entries, call| {
+            let result = make(entries, call);
+            assert!(
+                result.to_string().len() <= 64 * 1024,
+                "scripted ACP result cap: 64 KiB"
+            );
+            RpcReply::Reply {
+                updates: vec![],
+                result,
+            }
+        })
     } else {
         reply
     };
@@ -131,4 +120,21 @@ pub(crate) fn respond(state: &mut State, label: &str, call: &Value) -> bool {
         state.out(label, json!({"op":"Out","line":response.to_string()}));
     }
     true
+}
+
+fn from_call(
+    state: &State,
+    call: &Value,
+    make: impl FnOnce(&[crate::hub::Entry], &Value) -> RpcReply,
+) -> RpcReply {
+    assert!(
+        call.to_string().len() <= 64 * 1024,
+        "scripted ACP input cap: 64 KiB"
+    );
+    let reply = make(&state.entries, call);
+    assert!(
+        format!("{reply:?}").len() <= 128 * 1024,
+        "scripted ACP reply cap: 128 KiB"
+    );
+    reply
 }

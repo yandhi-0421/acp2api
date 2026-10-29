@@ -12,9 +12,19 @@ use axum::{
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 mod page;
+static CONTENT_SECURITY_POLICY: LazyLock<axum::http::HeaderValue> = LazyLock::new(|| {
+    use base64::Engine;
+    use sha2::Digest;
+    let hash =
+        base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(page::COUNTDOWN));
+    let policy = format!(
+        "default-src 'none'; script-src 'sha256-{hash}'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    );
+    policy.parse().unwrap()
+});
 const LIFETIME: u64 = 12 * 60 * 60 * 1000;
 const COOKIE: &str = "acp2api_session";
 const ARGON2_CHECKS_AT_ONCE: usize = 1;
@@ -148,16 +158,10 @@ async fn guard(
             axum::http::HeaderValue::from_static(value),
         );
     }
-    use base64::Engine;
-    use sha2::Digest;
-    let hash =
-        base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(page::COUNTDOWN));
-    let policy = format!(
-        "default-src 'none'; script-src 'sha256-{hash}'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        CONTENT_SECURITY_POLICY.clone(),
     );
-    response
-        .headers_mut()
-        .insert(header::CONTENT_SECURITY_POLICY, policy.parse().unwrap());
     response
 }
 async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
@@ -214,7 +218,8 @@ async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Respon
         },
     );
     let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
-    let mut response = Redirect::to("/#sign-in").into_response();
+    let mut response =
+        Redirect::to(&format!("/#{}", crate::conductor::sign_in::ENTRY_ID)).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
         cookie.parse().expect("generated cookie"),
@@ -246,6 +251,7 @@ async fn cancel_sign_in(State(panel): State<Panel>) -> Response {
 }
 impl Panel {
     async fn sign_in_action(&self, action: OwnerAction) -> Response {
+        // Keep the HTTP hold through page rendering. The action acknowledges the wait immediately.
         match self
             .conductor
             .owner(action, self.clock.hold(crate::HoldKind::TurnEvent))

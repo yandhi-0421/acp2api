@@ -239,26 +239,7 @@ async fn repeated(w: &mut World) {
 #[then("acp2api is not in the state \"runtime unavailable\"")]
 async fn available(w: &mut World) {
     let answer = w.panel.api(&w.scenario.root.key).await;
-    assert_eq!(
-        answer.status, 400,
-        "FR-038 model list refuses while sign-in is required"
-    );
-    assert_eq!(
-        answer.json(),
-        json!({"error":{"message":support::message(w),"type":"invalid_request_error","param":null,"code":"sign_in_required"}}),
-        "FR-038 GET /v1/models uses the OpenAI error envelope with M-13"
-    );
-    assert!(
-        answer.events.is_empty(),
-        "FR-026 refusal has no stream event"
-    );
-    assert!(
-        !answer
-            .headers
-            .get("content-type")
-            .is_some_and(|value| value.starts_with("text/event-stream")),
-        "FR-026 refusal has no stream response"
-    );
+    support::model_list_refusal(w, &answer);
     assert_eq!(
         process::servers(w).len(),
         4,
@@ -342,25 +323,17 @@ fn editor(w: &mut World) {
     w.scenario.fake().set_signed_in(false);
 }
 
+#[when(expr = "request {string} arrives with a stream")]
 #[given(expr = "the sign-in check of the request {string} runs")]
 #[given(expr = "the sign-in check of request {string} waits for a runtime reply")]
-async fn failing_check(w: &mut World, name: String) {
+async fn the_sign_in_check_waits_for_a_runtime_reply(w: &mut World, name: String) {
     support::held_check(w, &name, false).await;
 }
 
 #[given(expr = "request {string} holds a place for its sign-in check")]
-async fn passing_check(w: &mut World, name: String) {
-    support::held_check(w, &name, true).await;
-}
-
 #[given(expr = "request {string} waits for its own sign-in check")]
-async fn second_check(w: &mut World, name: String) {
+async fn the_request_waits_for_its_sign_in_check(w: &mut World, name: String) {
     support::held_check(w, &name, true).await;
-}
-
-#[when(expr = "request {string} arrives with a stream")]
-async fn second_failed_check(w: &mut World, name: String) {
-    support::held_check(w, &name, false).await;
 }
 
 #[then(
