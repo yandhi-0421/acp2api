@@ -163,7 +163,7 @@ async fn product_stop_closes_only_its_undelivered_lines() {
         .await;
         send_signal(pid, libc::SIGSTOP);
         wait_for(&s.hub, deadline, || process_is_stopped(pid)).await;
-        // Each fake has one input and one output in flight when Windows would kill it.
+        // Each fake has one input and one output in flight when the process is killed.
         child.stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\",\"params\":{\"sessionId\":\"finished\"}}\n").await.unwrap();
         s.hub.command(label, json!({"op":"Out","line":r#"{"jsonrpc":"2.0","id":136,"result":{"stopReason":"cancelled"}}"#}));
         children.push(child);

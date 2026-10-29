@@ -206,8 +206,9 @@ impl AsyncRead for CountRead {
                 .filter(|b| **b == b'\n')
                 .count();
             if lines > 0 {
-                self.link
-                    .call(json!({"op":"io","direction":"stdout","lines":lines,"process":self.process,"reader":reader_id()}));
+                self.link.call(
+                    json!({"op":"io","direction":"stdout","lines":lines,"process":self.process,"reader":reader_id()}),
+                );
             }
         }
         result

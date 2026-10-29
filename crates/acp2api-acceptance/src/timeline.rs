@@ -1,6 +1,6 @@
 use crate::hub::{Hub, HubLink, send};
 use crate::real_limit;
-use crate::time_limits::REAL_TIME_CAP;
+use crate::time_limits::SETTLE_CAP;
 use serde_json::json;
 use std::time::Instant;
 #[derive(Clone, Debug)]
@@ -70,7 +70,7 @@ impl TimeLine {
     }
 }
 fn settle_blocking(hub: &Hub) {
-    let deadline = Instant::now() + real_limit(REAL_TIME_CAP);
+    let deadline = Instant::now() + real_limit(SETTLE_CAP);
     let link = HubLink::new(hub);
     let mut previous = None;
     loop {
@@ -86,7 +86,7 @@ fn settle_blocking(hub: &Hub) {
         if Instant::now() >= deadline {
             panic!(
                 "settle {} s cap: open channels {counts:?}",
-                REAL_TIME_CAP.as_secs()
+                SETTLE_CAP.as_secs()
             );
         }
         hub.wait_change(deadline);

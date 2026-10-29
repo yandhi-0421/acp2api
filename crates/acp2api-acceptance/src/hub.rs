@@ -1,6 +1,6 @@
 use crate::fake::FakeState;
 use crate::real_limit;
-use crate::time_limits::REAL_TIME_CAP;
+use crate::time_limits::SETTLE_CAP;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -28,10 +28,14 @@ pub struct Counts {
     pub ordered: u64,
     pub read: u64,
     pub processed: u64,
-    pub stdin_closed: u64,
-    pub read_closed: u64,
-    pub processed_closed: u64,
-    pub open_process_io: u64,
+    /// Derived stdin lines closed after a product stop and control connection end.
+    pub derived_stdin_closed: u64,
+    /// Derived ordered output lines that no longer need to be read after that stop.
+    pub derived_read_closed: u64,
+    /// Derived ordered output lines that no longer need completion after that stop.
+    pub derived_processed_closed: u64,
+    /// Derived number of processes whose deliverable IO remains unbalanced.
+    pub derived_open_process_io: u64,
     pub http_sent: u64,
     pub http_started: u64,
     pub mcp_started: u64,
@@ -47,10 +51,10 @@ pub struct Counts {
 impl Counts {
     pub fn balanced(self) -> bool {
         self.holds == 0
-            && self.stdin_written == self.stdin_got + self.stdin_closed
-            && self.ordered == self.read + self.read_closed
-            && self.ordered == self.processed + self.processed_closed
-            && self.open_process_io == 0
+            && self.stdin_written == self.stdin_got + self.derived_stdin_closed
+            && self.ordered == self.read + self.derived_read_closed
+            && self.ordered == self.processed + self.derived_processed_closed
+            && self.derived_open_process_io == 0
             && self.http_sent + self.fake_mcp_sent == self.http_started + self.mcp_started
             && self.client_read == self.client_consumed
             && !self.client_available
@@ -87,7 +91,8 @@ pub(crate) struct State {
     process_io: Vec<ProcessIo>,
     pending_processes: HashMap<u64, usize>,
     server_processes: HashMap<String, usize>,
-    readers: HashMap<String, usize>,
+    // The reading task creates each RuntimeLine hold before it sends the line to the conductor.
+    last_read_process_by_task: HashMap<String, usize>,
     pub entries: Vec<Entry>,
     pub bytes: usize,
     pub failure: Option<String>,
@@ -127,7 +132,6 @@ impl State {
                 .filter(|b| *b == b'\n')
                 .count() as u64
                 + 1;
-            self.counts.ordered += lines;
             if let Some(process) = self.server_processes.get(label) {
                 self.process_io[*process].ordered += lines;
             }
@@ -173,7 +177,7 @@ impl Hub {
                 process_io: Vec::new(),
                 pending_processes: HashMap::new(),
                 server_processes: HashMap::new(),
-                readers: HashMap::new(),
+                last_read_process_by_task: HashMap::new(),
                 entries: Vec::new(),
                 bytes: 0,
                 failure: None,
@@ -317,7 +321,6 @@ impl Hub {
                     json!({"ok":true})
                 }
                 "Got" => {
-                    state.counts.stdin_got += 1;
                     state.process_io[process.expect("fake Hello precedes Got")].stdin_got += 1;
                     if let Some(line) = message["line"].as_str() {
                         match serde_json::from_str::<Value>(line) {
@@ -349,7 +352,7 @@ impl Hub {
                     let add = message["add"].as_bool().unwrap_or(false);
                     let reader = message["reader"].as_str().unwrap_or("<missing>");
                     let line_process = if add && kind == "RuntimeLine" {
-                        state.readers.get(reader).copied()
+                        state.last_read_process_by_task.get(reader).copied()
                     } else {
                         None
                     };
@@ -371,7 +374,6 @@ impl Hub {
                             state.counts.holds =
                                 state.counts.holds.checked_sub(1).expect("balanced holds");
                             if kind == "RuntimeLine" {
-                                state.counts.processed += 1;
                                 let process = message["process"].as_u64().unwrap() as usize;
                                 state.process_io[process].processed += 1;
                             }
@@ -386,13 +388,11 @@ impl Hub {
                     let n = message["lines"].as_u64().unwrap_or(0);
                     let process = message["process"].as_u64().unwrap() as usize;
                     if message["direction"] == "stdin" {
-                        state.counts.stdin_written += n;
                         state.process_io[process].stdin_written += n;
                     } else {
-                        state.counts.read += n;
                         state.process_io[process].read += n;
                         state
-                            .readers
+                            .last_read_process_by_task
                             .insert(message["reader"].as_str().unwrap().to_owned(), process);
                     }
                     json!({"ok":true})
@@ -402,14 +402,14 @@ impl Hub {
                     let (registered, timeout) = self
                         .shared
                         .1
-                        .wait_timeout_while(state, real_limit(REAL_TIME_CAP), |state| {
+                        .wait_timeout_while(state, real_limit(SETTLE_CAP), |state| {
                             !state.pending_processes.contains_key(&pid)
                         })
                         .unwrap();
                     state = registered;
                     if timeout.timed_out() {
                         let message =
-                            format!("fake Hello {} s cap: pid {pid}", REAL_TIME_CAP.as_secs());
+                            format!("fake Hello {} s cap: pid {pid}", SETTLE_CAP.as_secs());
                         state.failure = Some(message.clone());
                         json!({"error":message})
                     } else {
@@ -519,15 +519,22 @@ impl Hub {
         let s = self.shared.0.lock().unwrap();
         let mut counts = s.counts;
         for process in &s.process_io {
+            counts.stdin_written += process.stdin_written;
+            counts.stdin_got += process.stdin_got;
+            counts.ordered += process.ordered;
+            counts.read += process.read;
+            counts.processed += process.processed;
             if process.stop_requested && process.ended {
-                counts.stdin_closed += process.stdin_written.saturating_sub(process.stdin_got);
-                counts.read_closed += process.ordered.saturating_sub(process.read);
-                counts.processed_closed += process.ordered.saturating_sub(process.processed);
+                counts.derived_stdin_closed +=
+                    process.stdin_written.saturating_sub(process.stdin_got);
+                counts.derived_read_closed += process.ordered.saturating_sub(process.read);
+                counts.derived_processed_closed +=
+                    process.ordered.saturating_sub(process.processed);
             } else if process.stdin_written != process.stdin_got
                 || process.ordered != process.read
                 || process.ordered != process.processed
             {
-                counts.open_process_io += 1;
+                counts.derived_open_process_io += 1;
             }
         }
         for socket in s.client_sockets.values() {
@@ -624,7 +631,7 @@ impl HubLink {
     fn open(&self) -> std::io::Result<TcpStream> {
         let stream = TcpStream::connect(&self.address)?;
         stream.set_read_timeout(Some(real_limit(Duration::from_secs(300))))?;
-        stream.set_write_timeout(Some(real_limit(REAL_TIME_CAP)))?;
+        stream.set_write_timeout(Some(real_limit(Duration::from_secs(10))))?;
         Ok(stream)
     }
     pub fn connect(&self, mut message: Value) -> std::io::Result<BufReader<TcpStream>> {
@@ -691,17 +698,13 @@ impl std::fmt::Debug for HubLink {
 
 impl Hub {
     pub async fn prepare_restart(&self) {
-        let deadline = Instant::now() + real_limit(REAL_TIME_CAP);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(10));
         while crate::fake::FakeRuntime::new(self.clone())
             .record()
             .processes_alive()
             > 0
         {
-            assert!(
-                Instant::now() < deadline,
-                "restart process-drain cap: {} s",
-                REAL_TIME_CAP.as_secs()
-            );
+            assert!(Instant::now() < deadline, "restart process-drain cap: 10 s");
             let hub = self.clone();
             tokio::task::spawn_blocking(move || hub.wait_change(deadline))
                 .await
