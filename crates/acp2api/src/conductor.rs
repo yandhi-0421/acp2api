@@ -5475,6 +5475,157 @@ mod tests {
         std::fs::remove_dir_all(folder).unwrap();
     }
 
+    async fn assert_compatibility_lockout(
+        check_answers: Vec<serde_json::Value>,
+        stderr: &str,
+        signal: &str,
+        original: &str,
+    ) {
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Output(std::io::Cursor<Vec<u8>>);
+        impl tokio::io::AsyncRead for Output {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                if self.0.position() < self.0.get_ref().len() as u64 {
+                    std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+                } else {
+                    std::task::Poll::Pending
+                }
+            }
+        }
+        struct Tree(Arc<AtomicUsize>);
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            }
+        }
+        struct Launcher {
+            check_answers: Vec<serde_json::Value>,
+            stderr: Vec<u8>,
+            starts: AtomicUsize,
+            checks: AtomicUsize,
+            check_stops: Arc<AtomicUsize>,
+        }
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, spec: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                let check = spec
+                    .program
+                    .parent()
+                    .unwrap()
+                    .ends_with("official-runtime-check");
+                let answers = if check {
+                    assert_eq!(
+                        self.checks.fetch_add(1, Ordering::SeqCst),
+                        0,
+                        "one check start cap"
+                    );
+                    self.check_answers.clone()
+                } else {
+                    assert!(
+                        self.starts.fetch_add(1, Ordering::SeqCst) < 2,
+                        "one initial start and one erroneous restoration cap"
+                    );
+                    vec![
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"version":"1.4.0"}}}),
+                        serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"serving","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                    ]
+                };
+                assert!(answers.len() <= 3, "three ACP answers per process cap");
+                let stdout = answers
+                    .iter()
+                    .map(|answer| format!("{answer}\n"))
+                    .collect::<String>();
+                let stderr = if check {
+                    self.stderr.clone()
+                } else {
+                    Vec::new()
+                };
+                assert!(stdout.len() + stderr.len() <= 4096, "four KiB output cap");
+                Ok(Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(Output(std::io::Cursor::new(stdout.into_bytes()))),
+                    stderr: Box::pin(std::io::Cursor::new(stderr)),
+                    tree: Box::new(Tree(if check {
+                        self.check_stops.clone()
+                    } else {
+                        Arc::new(AtomicUsize::new(0))
+                    })),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            use sha2::{Digest, Sha256};
+            let root = std::env::temp_dir().join(format!("acp2api-check-lockout-{}", crate::random_hex::<12>().unwrap()));
+            let source = root.join("exe");
+            for (folder, bytes) in [(&source, b"candidate".as_slice()), (&root.join("official-runtime"), b"accepted".as_slice())] {
+                std::fs::create_dir_all(folder).unwrap();
+                for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(folder.join(name), bytes).unwrap(); }
+            }
+            let launcher = Arc::new(Launcher { check_answers, stderr: stderr.as_bytes().to_vec(), starts: AtomicUsize::new(0), checks: AtomicUsize::new(0), check_stops: Arc::new(AtomicUsize::new(0)) });
+            let mut ports = crate::Ports::production();
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            ports.release = Arc::new(Facts(vec![crate::ListedBuild { version: "1.4.0".into(), platform: ports.release.platform().into(), agy_acp_server_sha256: hash.clone(), localharness_external_sha256: hash }]));
+            ports.launcher = launcher.clone();
+            let (stopped, stop) = watch::channel(false);
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root: root.join("account"), temp: root.join("temp"), home: Some(root.join("home")), local_app_data: None, path: Vec::new(), exe_dir: source }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), stop, 0);
+            let configuration = root.join("config.toml");
+            let settings = crate::store::read(&configuration, 1).unwrap().settings;
+            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
+            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
+            let _check_result = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
+            let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|evidence| (evidence.signal, evidence.original_error_text));
+            let refused = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string().starts_with("acp2api: lockout since "));
+            let actual = (conductor.view().state, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.check_stops.load(Ordering::SeqCst), evidence, refused);
+            stopped.send(true).unwrap();
+            task.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true)), "FR-034/FR-035: a check lockout persists redacted evidence and prevents restoration");
+        }).await.expect("compatibility lockout cap: five seconds, three processes, three ACP answers and four KiB output per process");
+    }
+
+    #[tokio::test]
+    async fn a_compatibility_prompt_acp_lockout_prevents_restoration() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"PERMISSION_DENIED: Account name%40example.com; Bearer abcdefghijklmnopqrstuvwxyz012345; appeal https://example.com/appeal"}}),
+            ],
+            "",
+            "PERMISSION_DENIED",
+            "acp2api: upstream ACP error -32603: PERMISSION_DENIED: Account <REDACTED>; Bearer <REDACTED>; appeal https://example.com/appeal",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn a_compatibility_prompt_stderr_lockout_prevents_restoration() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+            ],
+            concat!(
+                "Antigravity SDK error processing prompt for session checked\n",
+                "Error 403, Message: Account name%40example.com; Bearer abcdefghijklmnopqrstuvwxyz012345; appeal https://example.com/appeal, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "403",
+            "acp2api: upstream error 403 PERMISSION_DENIED: Account <REDACTED>; Bearer <REDACTED>; appeal https://example.com/appeal",
+        ).await;
+    }
+
     async fn failed_checks(timeout: bool, restart_fails: bool) {
         use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree, ReleaseFacts};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
