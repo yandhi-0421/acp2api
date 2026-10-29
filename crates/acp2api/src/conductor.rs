@@ -342,6 +342,7 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
+    State(&'static str),
     Usage {
         work: String,
         session: String,
@@ -370,6 +371,15 @@ enum Command {
     Forget(String),
 }
 impl Core {
+    fn state(&self) -> &'static str {
+        if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+            "Runtime unavailable"
+        } else if self.quota_wait.is_some() {
+            "Quota wait"
+        } else {
+            "Running"
+        }
+    }
     async fn apply(
         &mut self,
         event: Event,
@@ -773,6 +783,7 @@ impl Core {
         if matches!(event, Event::Deadline) && self.cancels.values().any(|at| *at <= now) {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
+        let previous = self.state();
         let mut commands = Vec::new();
         if self
             .quota_wait
@@ -1251,6 +1262,9 @@ impl Core {
                 }),
             );
             places += 1;
+        }
+        if self.state() != previous {
+            commands.insert(0, Command::State(self.state()));
         }
         commands
     }
@@ -1795,6 +1809,7 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
+            journal.state(core.state(), clock.as_ref());
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
@@ -2043,6 +2058,7 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::State(state) => journal.state(state, clock.as_ref()),
                 Command::Usage { work, session } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => {
@@ -2344,6 +2360,51 @@ mod tests {
         assert_eq!(
             queries, 1,
             "FR-036/FR-052 a lost API reply does not discard a global quota signal or its reset query"
+        );
+    }
+    #[test]
+    fn quota_expiry_on_an_owner_event_keeps_runtime_unavailable_and_reports_state_changes() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-quota-state-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        let mut commands = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 429,
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: "resets 1970-01-01T00:02:00Z".into(),
+                },
+            }),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        commands.extend(core.handle(
+            Event::RuntimeUnavailable("unavailable".into()),
+            1,
+            std::time::UNIX_EPOCH,
+        ));
+        commands.extend(core.handle(Event::Limit(2), 120_000, std::time::UNIX_EPOCH));
+        assert!(matches!(
+            core.refusal(120_000),
+            Some(crate::messages::Message::RuntimeUnavailable(_))
+        ));
+        commands.extend(core.handle(Event::ResumeRuntime, 120_000, std::time::UNIX_EPOCH));
+        let states: Vec<_> = commands
+            .into_iter()
+            .filter_map(|command| match command {
+                Command::State(state) => Some(state),
+                _ => None,
+            })
+            .collect();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            states,
+            ["Quota wait", "Runtime unavailable", "Running"],
+            "FR-002/FR-056 each condition keeps its own end rule, including expiry during an owner action"
         );
     }
     #[test]

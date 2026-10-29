@@ -350,6 +350,24 @@ fn redact_error(text: &str) -> String {
     output
 }
 impl Journal {
+    pub(crate) fn state(&self, state: &str, clock: &dyn crate::Clock) {
+        let result = (|| -> io::Result<()> {
+            let time = timestamp(clock.wall())?;
+            let mut writer = self
+                .0
+                .writer
+                .lock()
+                .map_err(|_| io::Error::other("journal writer failed"))?;
+            writer.write(&serde_json::json!({"time":time,"event":"state_change","state":state}))?;
+            use std::io::Write;
+            let mut terminal = std::io::stdout().lock();
+            writeln!(terminal, "acp2api: {time} state {state}")?;
+            terminal.flush()
+        })();
+        if let Err(error) = result {
+            eprintln!("acp2api: cannot write state change: {error}");
+        }
+    }
     pub(crate) fn upstream(
         &self,
         session: &str,
