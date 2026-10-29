@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 pub fn configure(fake: &FakeRuntime, first: fn(&[Entry], &Value) -> TurnPlan) {
     fake.script_call("", RpcReply::Silent);
     metadata(fake);
-    for make in [first, permission, echo, echo] {
+    for make in [first, permission, echo] {
         fake.script_call("session/prompt", RpcReply::Prompt(make));
     }
 }
