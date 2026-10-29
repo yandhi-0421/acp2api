@@ -29,7 +29,6 @@ pub(crate) struct Conductor {
     settings: watch::Receiver<Arc<crate::store::Settings>>,
     notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
-    pub(crate) data_folder: PathBuf,
 }
 pub(crate) struct View {
     pub(crate) state: &'static str,
@@ -512,6 +511,16 @@ enum RuntimeState {
     Restarting,
     Unavailable(UnavailableReason),
     Stopping,
+}
+impl RuntimeState {
+    fn process_word(&self) -> &'static str {
+        match self {
+            Self::Serving => "running",
+            Self::Retiring { .. } => "stopping",
+            Self::Restarting => "starting",
+            Self::Unavailable(_) | Self::Stopping => "stopped",
+        }
+    }
 }
 struct Core {
     sign_in_required: bool,
@@ -1771,12 +1780,7 @@ impl Core {
         self.view.send_replace(Arc::new(View {
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
-            runtime_process: match self.runtime_state {
-                RuntimeState::Serving => "running",
-                RuntimeState::Retiring { .. } => "stopping",
-                RuntimeState::Restarting => "starting",
-                RuntimeState::Unavailable(_) | RuntimeState::Stopping => "stopped",
-            },
+            runtime_process: self.runtime_state.process_word(),
             places,
             queued: self.work.values().filter(|work| work.is_queued()).count(),
         }));
@@ -2870,7 +2874,6 @@ impl Conductor {
                 view: view_watch,
                 quota_result: quota_watch,
                 send,
-                data_folder: builds.start.data.clone(),
                 builds,
                 settings: settings_watch,
                 notices: notices_watch,
@@ -3037,6 +3040,9 @@ impl Conductor {
     }
     pub(crate) fn builds_summary(&self) -> Result<crate::runtime_builds::Summary, String> {
         self.builds.summary()
+    }
+    pub(crate) fn data_folder(&self) -> &std::path::Path {
+        self.builds.data_folder()
     }
     pub(crate) fn notices(&self) -> Arc<Vec<Notice>> {
         self.notices.borrow().clone()
@@ -5640,7 +5646,6 @@ mod tests {
                     settings: watch::channel(Arc::new(settings)).1,
                     notices: watch::channel(Arc::new(Vec::new())).1,
                     highest: 1,
-                    data_folder: folder.clone(),
                 };
                 let result = conductor
                     .builds(crate::runtime_builds::Action::Search, Hold::empty())

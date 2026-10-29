@@ -103,28 +103,18 @@ impl Panel {
         (status, Html(self.html(Some(notice)))).into_response()
     }
     fn html(&self, notice: Option<&str>) -> String {
-        let settings = self.conductor.settings();
-        let view = self.conductor.view();
-        let builds = self.conductor.builds_summary();
-        let first_tile = page::sign_in_section(
-            &view,
-            self.clock.now(),
-            builds
-                .as_ref()
-                .ok()
-                .and_then(|builds| builds.current.as_ref())
-                .map(|build| build.version.as_str()),
-        );
-        let runtime = page::runtime(builds, &settings, view.runtime_process);
-        page::settings(
-            &settings,
-            self,
+        page::settings(page::Page {
+            settings: &self.conductor.settings(),
+            highest: self.conductor.highest,
+            port: self.port,
+            data_folder: self.conductor.data_folder(),
             notice,
-            &self.conductor.notices(),
-            &runtime,
-            &self.conductor.quota_result(),
-            &first_tile,
-        )
+            notices: &self.conductor.notices(),
+            builds: self.conductor.builds_summary(),
+            quota_result: &self.conductor.quota_result(),
+            view: &self.conductor.view(),
+            now: self.clock.now(),
+        })
     }
 }
 async fn guard(
@@ -441,7 +431,7 @@ mod tests {
             let status = answer.status().as_u16();
             let body = axum::body::to_bytes(answer.into_body(), 1 << 16).await;
             let body = String::from_utf8(body.unwrap().to_vec()).unwrap();
-            pages.push((status, body.contains("<h1>Settings</h1>")));
+            pages.push((status, body.contains("<h1>Management panel</h1>")));
         }
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(pages, [(500, true), (422, true), (422, true)]);

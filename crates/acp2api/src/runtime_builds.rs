@@ -562,10 +562,14 @@ impl Builds {
             "Checked on this computer"
         }
     }
+    pub(crate) fn data_folder(&self) -> &Path {
+        &self.start.data
+    }
     pub(crate) fn summary(&self) -> Result<Summary, String> {
         let current = self.accepted_copy()?.map(|build| CurrentBuild {
             acceptance: self.acceptance(&build),
             version: build.version,
+            // A removed source folder cannot be reconstructed from the local copy.
             source: self.source.lock().unwrap().clone(),
         });
         let found = self.found.lock().unwrap();
