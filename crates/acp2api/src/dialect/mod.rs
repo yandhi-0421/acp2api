@@ -5,11 +5,16 @@ use crate::{
 };
 use axum::{
     Json,
+    body::{Body, Bytes},
     response::{IntoResponse, Response, Sse, sse::Event},
 };
-use futures_util::stream;
+use futures_util::{StreamExt, stream};
 use serde_json::{Value, json};
-use std::{collections::VecDeque, convert::Infallible, sync::Arc};
+use std::{
+    collections::VecDeque,
+    convert::Infallible,
+    sync::{Arc, Mutex},
+};
 mod chat;
 mod content;
 mod fields;
@@ -122,16 +127,22 @@ impl<T: WireDialect + 'static> Dialect for T {
                 };
             if stream {
                 let initial = self.start(&mut wire).into();
+                let output_hold = Arc::new(Mutex::new(None));
                 let state = StreamState {
                     events,
                     wire,
                     pending: initial,
                     hold: Some(hold),
+                    output_hold: output_hold.clone(),
                     ended: false,
                 };
                 let events = stream::unfold(state, move |mut state| async move {
                     loop {
                         if let Some(event) = state.pending.pop_front() {
+                            // Sse encodes one event per frame in this poll; ordered batches need only their last frame to retain the hold.
+                            if state.pending.is_empty() {
+                                *state.output_hold.lock().unwrap() = state.hold.take();
+                            }
                             return Some((Ok::<_, Infallible>(event), state));
                         }
                         state.hold.take();
@@ -162,7 +173,14 @@ impl<T: WireDialect + 'static> Dialect for T {
                         }
                     }
                 });
-                Sse::new(events).into_response()
+                let (parts, body) = Sse::new(events).into_response().into_parts();
+                let bytes = body.into_data_stream().map(move |data| {
+                    data.map(|bytes| match output_hold.lock().unwrap().take() {
+                        Some(hold) => Bytes::from_owner(HeldBytes { bytes, _hold: hold }),
+                        None => bytes,
+                    })
+                });
+                Response::from_parts(parts, Body::from_stream(bytes))
             } else {
                 drop(hold);
                 while let Some((event, _hold)) = events.recv().await {
@@ -189,7 +207,18 @@ struct StreamState {
     wire: Encoding,
     pending: VecDeque<Event>,
     hold: Option<Hold>,
+    output_hold: Arc<Mutex<Option<Hold>>>,
     ended: bool,
+}
+// Retain the hold through the socket write so virtual time cannot move before the client has the bytes.
+struct HeldBytes {
+    bytes: Bytes,
+    _hold: Hold,
+}
+impl AsRef<[u8]> for HeldBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 struct Encoding {
     stop: Stop,
@@ -301,6 +330,65 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn flagged_hold() -> (Arc<AtomicBool>, Hold) {
+        let released = Arc::new(AtomicBool::new(false));
+        let flag = released.clone();
+        (
+            released,
+            Hold::on_drop(move || flag.store(true, Ordering::SeqCst)),
+        )
+    }
+
+    #[tokio::test]
+    async fn stream_bytes_keep_work_live_until_the_transport_releases_the_batch() {
+        let (send, events) = tokio::sync::mpsc::unbounded_channel();
+        let (initial_released, hold) = flagged_hold();
+        let response = MESSAGES
+            .respond(
+                ReplyForm {
+                    stream: true,
+                    include_usage: false,
+                    input_tokens: 1,
+                    model_name: "buffered-stream".into(),
+                    tools: Vec::new(),
+                    tool_choice: ToolChoice::Auto,
+                },
+                Ticket { events, hold },
+                Arc::new(crate::os::SystemClock::default()),
+            )
+            .await;
+        let mut body = response.into_body().into_data_stream();
+        let initial = body.next().await.unwrap().unwrap();
+        assert!(initial.starts_with(b"event: message_start\n"));
+        assert!(futures_util::poll!(body.next()).is_pending());
+        assert!(
+            !initial_released.load(Ordering::SeqCst),
+            "a pending socket write still owns the initial event"
+        );
+        drop(initial);
+        assert!(initial_released.load(Ordering::SeqCst));
+
+        let (text_released, hold) = flagged_hold();
+        send.send((TurnEvent::Text("buffered".into()), hold))
+            .ok()
+            .unwrap();
+        let start = body.next().await.unwrap().unwrap();
+        let delta = body.next().await.unwrap().unwrap();
+        assert!(start.starts_with(b"event: content_block_start\n"));
+        assert!(delta.starts_with(b"event: content_block_delta\n"));
+        assert!(futures_util::poll!(body.next()).is_pending());
+        drop(start);
+        drop(body);
+        assert!(
+            !text_released.load(Ordering::SeqCst),
+            "disconnect cannot release bytes still owned by the transport"
+        );
+        drop(delta);
+        assert!(text_released.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn runtime_unavailable_refusals_tell_each_client_not_to_retry() {
         let refusal = Message::RuntimeUnavailable("acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.".into()).into();

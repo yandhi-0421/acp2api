@@ -21,10 +21,10 @@ Each item gives the decision, its reason, its effect, and its way back. The appr
    - Effect: the tests run the same `run` function as the release, but not the same `main`. A change to frozen harness lines needs approval.
    - ADR-0008 records this choice and the choice of virtual time below.
    - Way back: before the freeze of #36, a change of one file. After the freeze, a change of frozen harness files, which is stop reason 1 of `bdd`.
-2. **Tests use virtual time, and production code takes holds at four input points.**
-   - Decision: all waits of acp2api go through the `Clock` port. In tests, time moves only when a step moves it. Production code takes a `Hold` at four input points (section "Virtual time").
+2. **Tests use virtual time, and four hold kinds track work in progress.**
+   - Decision: all waits of acp2api go through the `Clock` port. In tests, time moves only when a step moves it. Production code takes holds at the points in section "Virtual time".
    - Reason: about 40 scenarios need 5 minutes to 30 days. Real waits are not possible. A real 200 ms window is not stable on a slow CI runner.
-   - Effect: four kinds of messages in the product carry a `Hold`. The production `Hold` does nothing.
+   - Effect: four hold kinds identify work in progress. The production `Hold` does nothing.
    - Way back: the same as for decision 1.
 3. **Stored data.** Section "Stored data" gives each item:
    - the layout of the data folder;
@@ -618,7 +618,7 @@ impl RuntimeProcess {
    Then it answers `Refused` or `Accepted`.
 4. With a place, the core chooses the ACP session: continue, load, or new, with the N rule. When the model ID changed, it sends `session/set_config_option`. Then it sends `session/prompt` with the result of `conversation::prompt` (ADR-0003, FR-021).
 5. `runtime_driver` gives each update, permission request, result, and error line as an event. The machine of the prompt turn in the core gives `TurnEvent`s to the ticket.
-6. `dialect.respond` writes each `TurnEvent` to the API client. Each write takes and drops a `TurnEvent` hold.
+6. `dialect.respond` writes each `TurnEvent` to the API client. The conductor supplies each event with a `TurnEvent` hold. For a stream, the last byte frame of each ordered batch retains that hold through the HTTP/1 socket write. Thus virtual time cannot pass before the API client can read the bytes.
 7. At the end of the prompt turn, the core changes the record, the retry wait, and the mode (R1). It frees the place and starts the next request of the queue. `journal` writes the request line (FR-056).
 
 ### Owner of each piece of state
@@ -822,6 +822,8 @@ The fake tracks active prompt turns and cancellation state by ACP session. A can
 The hub owns the virtual time `now`. The wall time is a fixed epoch of the scenario plus `now`.
 
 - `HarnessClock`, the test adapter of `Clock`, reports each deadline of acp2api to the hub. It counts live holds and wakes sleepers only in the deadline phase.
+- `HarnessClock` takes a `TurnEvent` hold before it publishes a timer. It releases that hold after it constructs the sleep future and starts the wake listener.
+- `RuntimeStart` takes a `TurnEvent` hold before deadline timer construction. It releases that hold after the first poll of the answer future.
 - `GuardedLauncher` counts the lines on stdin, stdout, and stderr of each fake process. The fake reports the lines that it got, and the hub knows the lines that it ordered.
   Each fake must balance its own input, output read, and output completion counts.
   After the product stops its process, the end of its control connection closes that fake's pending lines in separate counters.
