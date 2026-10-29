@@ -1975,7 +1975,8 @@ impl Core {
                 error: error.clone(),
             });
         }
-        if result.is_err() {
+        if matches!(&result, Err((error, _)) if !matches!(error, crate::messages::Message::MaxTurnRequests))
+        {
             active.held = None;
         }
         active.release_or_cut_reply(None, commands);
@@ -2950,6 +2951,94 @@ mod tests {
             );
         }
         (core, queued, tickets.try_into().ok().unwrap())
+    }
+
+    #[tokio::test]
+    async fn max_turn_requests_releases_the_last_chunk_before_the_error() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-max-turn-chunk-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for stream in [false, true] {
+            let (mut core, _, [events, _queued]) = prompting_with_waiter(&journal);
+            let form = crate::dialect::CHAT
+                .parse(
+                    &serde_json::to_vec(&serde_json::json!({
+                        "model":"m", "messages":[{"role":"user","content":"First"}], "stream":stream
+                    }))
+                    .unwrap(),
+                )
+                .ok()
+                .unwrap()
+                .form;
+            let mut commands = Vec::new();
+            for update in [
+                TurnUpdate::Text("Last reply chunk".into()),
+                TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::MaxTurnRequests),
+                },
+            ] {
+                commands.extend(core.handle(
+                    Event::Runtime(RuntimeEvent::Turn {
+                        session: "running".into(),
+                        update,
+                    }),
+                    0,
+                    std::time::UNIX_EPOCH,
+                ));
+            }
+            commands.extend(core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH));
+            let emitted: Vec<_> = commands
+                .iter()
+                .filter_map(|command| match command {
+                    Command::Emit(_, TurnEvent::Text(text)) => Some(text.as_str()),
+                    Command::Emit(
+                        _,
+                        TurnEvent::End(Err(crate::messages::Message::MaxTurnRequests)),
+                    ) => Some("M-21"),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                emitted,
+                ["Last reply chunk", "M-21"],
+                "FR-028: stream={stream}"
+            );
+            let clock = crate::Ports::production().clock;
+            for command in commands {
+                if let Command::Emit(output, event) = command {
+                    let _ = output.send((event, clock.hold(HoldKind::TurnEvent)));
+                }
+            }
+            let response = crate::dialect::CHAT
+                .respond(
+                    form,
+                    Ticket {
+                        events,
+                        hold: clock.hold(HoldKind::TurnEvent),
+                    },
+                    clock,
+                )
+                .await;
+            assert_eq!(response.status().as_u16(), if stream { 200 } else { 502 });
+            let body = axum::body::to_bytes(response.into_body(), 65_536)
+                .await
+                .unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            if stream {
+                assert!(
+                    body.find("Last reply chunk").unwrap()
+                        < body.find("max_turn_requests").unwrap()
+                );
+            } else {
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"]["code"],
+                    "max_turn_requests"
+                );
+            }
+        }
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
