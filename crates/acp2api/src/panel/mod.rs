@@ -40,6 +40,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/concurrency", post(concurrency))
         .route("/manage/notice", post(dismiss_notice))
         .route("/manage/search", post(search))
+        .route("/manage/retry", post(search))
         .route("/manage/runtime-path", post(runtime_path))
         .route("/manage/build", post(build))
         .route("/manage/compatibility-check", post(compatibility_check))
