@@ -745,6 +745,84 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timer_construction_keeps_virtual_time_at_zero_until_the_future_is_built() {
+        use acp2api::Clock;
+        use std::sync::mpsc;
+
+        let hub = Hub::new("timer-construction-test".into());
+        let link = HubLink::new(&hub);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        *link.connection.lock().unwrap() = Some(BufReader::new(socket));
+        let (published, publication) = tokio::sync::oneshot::channel();
+        let (release, released) = mpsc::sync_channel(1);
+        let upstream = HubLink::new(&hub);
+        let peer = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(real_limit(Duration::from_secs(3))))
+                .unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut published = Some(published);
+            let deadline = Instant::now() + real_limit(Duration::from_secs(3));
+            for _ in 0..8 {
+                assert!(Instant::now() < deadline, "timer proxy run cap: 3 s");
+                let mut line = String::new();
+                let n = reader.by_ref().take(4097).read_line(&mut line).unwrap();
+                assert!(n <= 4096, "timer proxy frame cap: 4 KiB");
+                if n == 0 {
+                    return;
+                }
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let reply = upstream.call(request.clone());
+                if request["op"] == "sleep" {
+                    published.take().unwrap().send(()).unwrap();
+                    released
+                        .recv_timeout(real_limit(Duration::from_secs(3)))
+                        .unwrap();
+                }
+                send(reader.get_mut(), &reply).unwrap();
+            }
+            panic!("timer proxy request cap: 8");
+        });
+        let building = tokio::task::spawn_blocking(move || {
+            crate::adapters::HarnessClock::new(link).sleep_until(50)
+        });
+        tokio::time::timeout(real_limit(Duration::from_secs(3)), publication)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut time = crate::timeline::TimeLine::new(hub.clone());
+        let mut advancing = tokio::spawn(async move { time.advance_to(50).await });
+        let blocked = tokio::time::timeout(real_limit(Duration::from_millis(100)), &mut advancing)
+            .await
+            .is_err();
+        let during_construction = hub.now();
+        release.send(()).unwrap();
+        let timer = building.await.unwrap();
+        let completed = tokio::spawn(async move {
+            drop(timer.await);
+        });
+        tokio::time::timeout(real_limit(Duration::from_secs(3)), &mut advancing)
+            .await
+            .unwrap()
+            .unwrap();
+        completed.await.unwrap();
+        peer.join().unwrap();
+        let after_construction = hub.now();
+        hub.close();
+        assert!(blocked, "advance must wait for timer construction");
+        assert_eq!(
+            during_construction, 0,
+            "an incomplete timer is work in progress"
+        );
+        assert_eq!(after_construction, 50);
+    }
+
     #[test]
     fn ended_shared_handler_closes_its_socket() {
         let hub = Hub::new("local-handler-test".into());

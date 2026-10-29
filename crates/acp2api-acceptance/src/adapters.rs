@@ -28,6 +28,7 @@ impl Clock for HarnessClock {
         UNIX_EPOCH + Duration::from_millis(1_792_281_600_000 + self.now())
     }
     fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
+        let _building = self.hold(HoldKind::TurnEvent);
         let id = self.link.call(json!({"op":"sleep","at":at}))["id"]
             .as_u64()
             .unwrap();
