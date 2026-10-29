@@ -45,7 +45,7 @@ Feature: The conversation in each prompt
     And the first prompt of the new ACP session is "Good morning"
     And the log has no rebuild line
 
-  @FR-021 @issue-66 @wip
+  @FR-021 @issue-66
   Scenario Outline: The next request after an event that stops an ACP session does a rebuild
     Given the next prompt turn in the ACP session "S1" ends with <event>
     And 30 s pass after that end

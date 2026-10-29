@@ -58,13 +58,13 @@ Feature: Quota
     When a prompt turn ends with the stderr error line 402
     Then acp2api is in the state "quota wait"
 
-  @FR-052 @issue-66 @wip
+  @FR-052 @issue-66
   Scenario: An open management panel with no refresh sends no quota query
     Given the owner has the management panel open
     When one hour passes with no refresh of the quota and no API request
     Then the official runtime gets no "/usage"
 
-  @FR-052 @issue-66 @wip
+  @FR-052 @issue-66
   Scenario Outline: acp2api refuses a second refresh of the quota in 60 s
     Given the owner refreshed the quota in the management panel
     When the owner refreshes the quota again <time> later
@@ -76,7 +76,7 @@ Feature: Quota
       | 60 s     | two times |
       | 60001 ms | two times |
 
-  @FR-052 @issue-66 @wip
+  @FR-052 @issue-66
   Scenario: The management panel shows the last result of /usage and its time
     Given "/usage" gives a result
     When the owner refreshes the quota in the management panel

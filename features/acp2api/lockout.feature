@@ -47,7 +47,7 @@ Feature: Lockout
     When an API client sends a valid request
     Then acp2api is in the state "lockout"
 
-  @FR-034 @issue-66 @wip
+  @FR-034 @issue-66
   Scenario Outline: The stop reason refusal gives one quota query
     Given the next prompt turn ends with the stop reason "refusal", and no error channel has a quota text
     And "/usage" shows <quota> for the model of the request
