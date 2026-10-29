@@ -1382,6 +1382,17 @@ impl Conductor {
                             }
                             Ok(selection) => {
                                 publish.send_replace(Arc::new(changed));
+                                let selection = match selection {
+                                    crate::runtime_builds::Selection::Keep
+                                        if matches!(
+                                            core.runtime_state,
+                                            RuntimeState::Unavailable(_)
+                                        ) =>
+                                    {
+                                        crate::runtime_builds::Selection::Start(None)
+                                    }
+                                    selection => selection,
+                                };
                                 match selection {
                                     crate::runtime_builds::Selection::Keep => {
                                         let _ = reply.send(Ok(String::new()));
