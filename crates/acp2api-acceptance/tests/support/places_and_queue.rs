@@ -82,6 +82,7 @@ pub async fn send(w: &mut World, call: ApiCall) -> Call {
 }
 
 pub async fn held(w: &mut World, name: &str, updates: bool) {
+    let before = w.scenario.fake().record().prompts().len();
     let mut plan = TurnPlan::new();
     if updates {
         for _ in 0..15 {
@@ -103,6 +104,7 @@ pub async fn held(w: &mut World, name: &str, updates: bool) {
     )
     .await;
     w.places.calls.push((name.into(), Some(live)));
+    w.record_prompt_session(name, before);
 }
 
 pub fn prompts(w: &World) -> Vec<String> {

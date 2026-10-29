@@ -87,6 +87,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    prompt_sessions: std::collections::HashMap<String, String>,
     lockout: lockout_support::LockoutState,
     keep_alive: keep_alive_support::KeepAliveState,
     sign_in: sign_in_support::SignInState,
@@ -118,6 +119,16 @@ struct World {
     tools: client_tools::ToolState,
     custom_tools: custom_tools::CustomToolState,
     tool_results: tool_result_support::ToolResultState,
+}
+impl World {
+    fn record_prompt_session(&mut self, name: &str, before: usize) {
+        let prompts = self.scenario.fake().record().prompts();
+        if let Some(prompt) = prompts.get(before) {
+            assert_eq!(prompts.len(), before + 1, "one prompt starts for {name}");
+            self.prompt_sessions
+                .insert(name.into(), prompt.session.clone());
+        }
+    }
 }
 #[path = "steps/access_protection.rs"]
 mod access_protection;
