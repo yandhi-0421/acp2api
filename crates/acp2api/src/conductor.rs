@@ -803,6 +803,21 @@ impl Core {
                     self.apply(Event::RuntimeFailure, runtime, read_open, clock, journal)
                         .await;
                 }
+                Err(LaunchFailure::Lockout { signal, error }) => {
+                    self.apply(
+                        Event::Lockout {
+                            signal,
+                            error,
+                            signalling_work: None,
+                        },
+                        runtime,
+                        read_open,
+                        clock,
+                        journal,
+                    )
+                    .await;
+                    return;
+                }
                 Err(LaunchFailure::Stopped) => {
                     self.apply(Event::Stop, runtime, read_open, clock, journal)
                         .await;
@@ -3235,6 +3250,134 @@ mod tests {
             status: "RESOURCE_EXHAUSTED".into(),
             message: "Quota exhausted; no reset time.".into(),
         }
+    }
+
+    async fn assert_start_lockout(stdout: &str, stderr: &str, original: &str) {
+        use crate::{
+            BoxFuture, LaunchError, LaunchSpec, Launched, ProcessLauncher, ProcessTree,
+            ReleaseFacts,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Tree(Arc<AtomicUsize>);
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
+            }
+        }
+        struct Launcher {
+            stdout: Vec<u8>,
+            stderr: Vec<u8>,
+            starts: AtomicUsize,
+            stops: Arc<AtomicUsize>,
+        }
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: LaunchSpec) -> Result<Launched, LaunchError> {
+                assert!(
+                    self.starts.fetch_add(1, Ordering::SeqCst) < 3,
+                    "three starts cap"
+                );
+                Ok(Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(std::io::Cursor::new(self.stdout.clone())),
+                    stderr: Box::pin(std::io::Cursor::new(self.stderr.clone())),
+                    tree: Box::new(Tree(self.stops.clone())),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            use sha2::{Digest, Sha256};
+            assert!(stdout.len() + stderr.len() <= 4096, "four KiB output cap");
+            assert!(stdout.lines().count() <= 2, "two ACP answers per start cap");
+            let folder = std::env::temp_dir().join(format!("acp2api-start-lockout-{}", crate::random_hex::<12>().unwrap()));
+            let clock = crate::Ports::production().clock;
+            let mut builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            let launcher = Arc::new(Launcher { stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), starts: AtomicUsize::new(0), stops: Arc::new(AtomicUsize::new(0)) });
+            builds.start.launcher = launcher.clone();
+            let copy = folder.join("official-runtime");
+            std::fs::create_dir_all(&copy).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] {
+                std::fs::write(copy.join(name), b"accepted").unwrap();
+            }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            builds.start.release = Arc::new(Facts(vec![crate::ListedBuild { version: "1.4.0".into(), platform: Facts(Vec::new()).platform().into(), agy_acp_server_sha256: hash.clone(), localharness_external_sha256: hash }]));
+            let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let mut core = Core { state_path: folder.join(crate::store::STATE_FILE), runtime_state: RuntimeState::Restarting, ..Core::fixture(1) };
+            let mut runtime = None;
+            core.launch(&mut runtime, &mut false, &clock, &journal, &builds).await;
+            let evidence = crate::store::StateFile::read(&core.state_path).unwrap().lockout;
+            let actual = (core.state(), launcher.starts.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst), evidence.map(|e| (e.signal, e.original_error_text)));
+            if let Some(runtime) = runtime { runtime.stop().await; }
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, ("Lockout", 1, 1, Some(("403".into(), original.into()))), "FR-034/FR-035: startup lockout stops and persists without a replacement");
+        }).await.expect("startup lockout cap: five seconds, three starts, two ACP answers and four KiB per start");
+    }
+
+    #[tokio::test]
+    async fn an_initialize_lockout_stops_without_replacement_and_persists_evidence() {
+        assert_start_lockout(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":403,\"message\":\"Account name%40example.com suspended; appeal https://example.com/appeal\"}}\n",
+            "",
+            "acp2api: upstream ACP error 403: Account <REDACTED> suspended; appeal https://example.com/appeal",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn a_session_new_lockout_stops_without_replacement_and_persists_evidence() {
+        assert_start_lockout(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"agentInfo\":{\"version\":\"1.4.0\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Authentication required: 403 Terms of Service\"}}\n",
+            ),
+            "",
+            "acp2api: upstream ACP error -32000: Authentication required: 403 Terms of Service",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn stderr_during_initialize_starts_lockout_without_replacement() {
+        assert_start_lockout(
+            "",
+            concat!(
+                "Antigravity SDK error processing prompt for session startup\n",
+                "Error 403, Message: Account name%40example.com suspended, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "acp2api: upstream error 403 PERMISSION_DENIED: Account <REDACTED> suspended",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn stderr_during_session_new_starts_lockout_without_replacement() {
+        assert_start_lockout(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"agentInfo\":{\"version\":\"1.4.0\"}}}\n",
+            concat!(
+                "Antigravity SDK error processing prompt for session startup\n",
+                "Error 403, Message: Verify your account, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "acp2api: upstream error 403 PERMISSION_DENIED: Verify your account",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_buffered_stderr_lockout_wins_over_a_startup_acp_failure() {
+        assert_start_lockout(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"agentInfo\":{\"version\":\"1.4.0\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}\n",
+            ),
+            concat!(
+                "Antigravity SDK error processing prompt for session startup\n",
+                "Error 403, Message: Verify your account, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "acp2api: upstream error 403 PERMISSION_DENIED: Verify your account",
+        ).await;
     }
 
     fn prepare_quota_queries(core: &mut Core, commands: &[Command], now: Moment) -> Vec<Command> {

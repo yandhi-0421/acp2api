@@ -164,13 +164,24 @@ impl Runtime {
             match runtime.new_session(&[], None).await {
                 Ok(catalog) => Ok(Some(catalog)),
                 Err(error) if error.requires_sign_in() => Ok(None),
-                Err(error) => Err(LaunchFailure::Runtime(error.to_string())),
+                Err(error) => Err(error.into()),
             }
         };
         let result = start.before_deadline(ANSWER_TIMEOUT, starting).await;
         match result {
             Ok(catalog) => Ok((runtime, catalog)),
-            Err(error) => {
+            Err(mut error) => {
+                if !matches!(error, LaunchFailure::Lockout { .. }) {
+                    // Stdout has priority, so its failure can precede buffered stderr evidence.
+                    while let Ok((line, _hold)) = runtime.lines.try_recv() {
+                        if let Line::Stderr(line) = line
+                            && let Some(lockout) = runtime.stderr_lockout(&line)
+                        {
+                            error = lockout.into();
+                            break;
+                        }
+                    }
+                }
                 runtime.stop().await;
                 Err(error)
             }
@@ -266,7 +277,7 @@ impl Runtime {
             "protocolVersion": 1,
             "clientInfo": {"name":"acp2api", "title":"acp2api", "version":start.release.version()},
             "clientCapabilities": {}
-        })).await.map_err(|error| LaunchFailure::Runtime(error.to_string()))
+        })).await.map_err(LaunchFailure::from)
     }
     pub(crate) async fn new_session(
         &mut self,
@@ -431,7 +442,12 @@ impl Runtime {
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
                 Line::Stdout(value) => value.map_err(Message::Upstream)?,
-                Line::Stderr(_) => continue,
+                Line::Stderr(line) => {
+                    if let Some(error) = self.stderr_lockout(&line) {
+                        return Err(error);
+                    }
+                    continue;
+                }
                 Line::Closed => {
                     return Err(Message::Upstream("runtime stdout closed".into()));
                 }
@@ -552,6 +568,14 @@ impl Runtime {
             Line::Stdout(Ok(value)) => self.decode(value).await,
         };
         (event, hold)
+    }
+    fn stderr_lockout(&mut self, line: &[u8]) -> Option<Message> {
+        let RuntimeEvent::UpstreamError { error, .. } = self.stderr(&String::from_utf8_lossy(line))
+        else {
+            return None;
+        };
+        let error = Message::UpstreamHttp(error);
+        error.lockout_signal().map(|_| error)
     }
     fn stderr(&mut self, line: &str) -> RuntimeEvent {
         if let Some(address) = line

@@ -85,6 +85,10 @@ pub(crate) enum LaunchFailure {
     NotAccepted,
     Io(std::io::Error),
     Runtime(String),
+    Lockout {
+        signal: &'static str,
+        error: crate::messages::Message,
+    },
     Stopped,
 }
 impl LaunchFailure {
@@ -109,6 +113,7 @@ impl std::fmt::Display for LaunchFailure {
             Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
             Self::Io(error) => error.fmt(f),
             Self::Runtime(error) => f.write_str(error),
+            Self::Lockout { error, .. } => error.fmt(f),
             Self::Stopped => f.write_str("acp2api is exiting"),
         }
     }
@@ -116,6 +121,14 @@ impl std::fmt::Display for LaunchFailure {
 impl From<String> for LaunchFailure {
     fn from(error: String) -> Self {
         Self::Runtime(error)
+    }
+}
+impl From<crate::messages::Message> for LaunchFailure {
+    fn from(error: crate::messages::Message) -> Self {
+        match error.lockout_signal() {
+            Some(signal) => Self::Lockout { signal, error },
+            None => Self::Runtime(error.to_string()),
+        }
     }
 }
 impl Builds {
