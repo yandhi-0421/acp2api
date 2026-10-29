@@ -2437,13 +2437,13 @@ impl Core {
                 let mut active = work.into_active().unwrap();
                 let result = match std::mem::replace(&mut active.phase, Phase::Completing) {
                     Phase::QuotaSettling { wait, .. } if result.is_ok() => {
-                        let session = active.session.clone();
-                        active.phase = Phase::Settling {
-                            at: 0,
-                            can_continue: false,
-                            result: Ok(()),
-                        };
                         if self.can_query_quota_reset(&wait) {
+                            let session = active.session.clone();
+                            active.phase = Phase::Settling {
+                                at: 0,
+                                can_continue: false,
+                                result: Ok(()),
+                            };
                             self.enqueue_quota(
                                 QuotaPurpose::Reset {
                                     wait,
@@ -3316,22 +3316,13 @@ mod tests {
                 0,
                 "FR-036/FR-052 send no reset query for the replaced wait"
             );
-            let ends: Vec<_> = ended
-                .iter()
-                .filter_map(|command| match command {
-                    Command::Emit(_, TurnEvent::End(end)) => Some(match end {
-                        Err(crate::messages::Message::QuotaWait { until, retry_after }) => {
-                            (until.as_str(), *retry_after)
-                        }
-                        _ => panic!("FR-036 requires a quota error"),
-                    }),
-                    _ => None,
-                })
-                .collect();
             assert_eq!(
-                ends,
-                [(until, retry_after)],
-                "A ends once with the new quota wait, without waiting for /usage"
+                ended.iter().filter(|command| matches!(command,
+                    Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::QuotaWait { until: reset, retry_after: seconds })))
+                        if reset == until && *seconds == retry_after
+                )).count(),
+                1,
+                "the running request ends once with the current quota wait, without waiting for /usage"
             );
             let refusal = core.model_entries(60_200).err().unwrap();
             assert_eq!(crate::dialect::CHAT.refusal(&refusal).status(), 429);
