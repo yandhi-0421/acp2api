@@ -126,6 +126,7 @@ enum QuotaPurpose {
     Refresh(oneshot::Sender<Result<(), String>>),
     Reset {
         wait: quota::Wait,
+        model: Option<String>,
         response: Option<Active>,
     },
     Refusal {
@@ -147,6 +148,7 @@ impl QuotaPhase {
     }
 }
 struct OutstandingWork {
+    model: String,
     request: crate::journal::Request,
     session: Option<String>,
     completion: Option<crate::journal::SessionUse>,
@@ -946,6 +948,7 @@ impl Core {
                     self.work.insert(
                         id,
                         Work::Retiring(OutstandingWork {
+                            model: active.model,
                             request: active.request,
                             session: active.session,
                             completion: Some(active.kind),
@@ -1044,6 +1047,7 @@ impl Core {
                                         self.enqueue_quota(
                                             QuotaPurpose::Reset {
                                                 wait,
+                                                model: Some(active.model.clone()),
                                                 response: Some(active),
                                             },
                                             None,
@@ -1117,9 +1121,14 @@ impl Core {
                                 };
                             }
                         } else if reset.is_none() {
+                            let Work::Retiring(outstanding) = &self.work[&id] else {
+                                unreachable!()
+                            };
+                            let model = Some(outstanding.model.clone());
                             self.enqueue_quota(
                                 QuotaPurpose::Reset {
                                     wait,
+                                    model,
                                     response: None,
                                 },
                                 None,
@@ -1135,6 +1144,7 @@ impl Core {
                             self.enqueue_quota(
                                 QuotaPurpose::Reset {
                                     wait,
+                                    model: None,
                                     response: None,
                                 },
                                 None,
@@ -1445,9 +1455,11 @@ impl Core {
         })));
         let end = match &mut query.purpose {
             QuotaPurpose::Refresh(_) => result,
-            QuotaPurpose::Reset { wait, .. } => {
+            QuotaPurpose::Reset { wait, model, .. } => {
                 if result.is_ok()
-                    && let Some(until) = quota::reset_time(&text)
+                    && let Some(until) = model
+                        .as_deref()
+                        .and_then(|model| quota::usage_reset(&text, model))
                 {
                     *wait = quota::Wait::new(until, now, wall, wait.timer);
                     if self
@@ -1465,7 +1477,7 @@ impl Core {
                     Ok(())
                 } else {
                     let until = if result.is_ok() {
-                        quota::reset_time(&text)
+                        quota::usage_reset(&text, model)
                     } else {
                         None
                     };
@@ -1754,6 +1766,7 @@ impl Core {
             Phase::Settling { .. } | Phase::QuotaSettling { .. }
         );
         let outstanding = OutstandingWork {
+            model: active.model.clone(),
             request: active.request.clone(),
             session: active.session.clone(),
             completion: None,
@@ -1804,6 +1817,7 @@ impl Core {
                         self.enqueue_quota(
                             QuotaPurpose::Reset {
                                 wait,
+                                model: Some(active.model.clone()),
                                 response: Some(active),
                             },
                             session,
@@ -2673,7 +2687,7 @@ mod tests {
             })
             .collect();
         for session in sessions {
-            commands.extend(core.handle(Event::Runtime(RuntimeEvent::Turn { session:session.clone(), update:TurnUpdate::Text("### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 12:34 UTC)".into()) }), now + 1, std::time::UNIX_EPOCH));
+            commands.extend(core.handle(Event::Runtime(RuntimeEvent::Turn { session:session.clone(), update:TurnUpdate::Text("### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 12:34 UTC)".into()) }), now + 1, std::time::UNIX_EPOCH));
             commands.extend(core.handle(
                 Event::Runtime(RuntimeEvent::Turn {
                     session,

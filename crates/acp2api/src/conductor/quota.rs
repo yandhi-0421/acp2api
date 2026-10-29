@@ -2,32 +2,40 @@ use crate::{Moment, messages::Message};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(super) fn has_quota(text: &str, model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    let group = if model.starts_with("gemini") {
-        "- **Gemini Models**"
-    } else if model.starts_with("claude") || model.starts_with("gpt") {
-        "- **Claude and GPT models**"
-    } else {
-        return false;
-    };
-    let Some((_, rest)) = text.split_once(group) else {
-        return false;
-    };
-    let section = rest.split("\n- **").next().unwrap();
-    let mut limits = section
-        .lines()
-        .filter_map(|line| {
-            line.split_once("Limit Remaining:** ")
-                .map(|(_, value)| value)
+    model_group(text, model)
+        .is_some_and(|group| !limit_rows(group).any(|(remaining, _)| remaining == 0))
+}
+
+pub(super) fn usage_reset(text: &str, model: &str) -> Option<SystemTime> {
+    limit_rows(model_group(text, model)?)
+        .filter(|(remaining, _)| *remaining == 0)
+        .filter_map(|(_, row)| reset_time(row))
+        .max()
+}
+
+fn model_group<'a>(text: &'a str, model: &str) -> Option<&'a str> {
+    text.split("\n- **").find(|group| {
+        group.lines().any(|line| {
+            line.trim()
+                .strip_prefix("*(Models within this group: ")
+                .and_then(|line| line.strip_suffix(")*"))
+                .is_some_and(|names| {
+                    names.split(", ").any(|name| {
+                        let mut parts = model.split(|c: char| !c.is_ascii_alphanumeric());
+                        name.split(|c: char| !c.is_ascii_alphanumeric())
+                            .all(|word| parts.any(|part| part.eq_ignore_ascii_case(word)))
+                    })
+                })
         })
-        .peekable();
-    limits.peek().is_some()
-        && limits.all(|value| {
-            value
-                .split_once("% remaining")
-                .and_then(|(percent, _)| percent.parse::<u8>().ok())
-                .is_some_and(|percent| (1..=100).contains(&percent))
-        })
+    })
+}
+
+fn limit_rows(group: &str) -> impl Iterator<Item = (u8, &str)> {
+    group.lines().filter_map(|line| {
+        let (_, value) = line.split_once("Limit Remaining:** ")?;
+        let (remaining, _) = value.split_once("% remaining")?;
+        Some((remaining.parse().ok()?, line))
+    })
 }
 
 pub(super) fn error_text(message: &Message) -> Option<&str> {
@@ -211,8 +219,50 @@ fn calendar(date: [u32; 3], time: [u32; 3], nanos: u32, offset: i64) -> Option<S
 mod tests {
     use super::*;
     #[test]
+    fn usage_reset_waits_for_the_latest_exhausted_limit() {
+        let text = GROUPS.replace(
+            "75% remaining (resets Oct 24, 2026, 14:03 UTC)",
+            "0% remaining (resets Oct 18, 2026, 00:05 UTC)",
+        );
+        assert_eq!(
+            usage_reset(&text, "gemini-3.8-flash"),
+            reset_time("resets Oct 18, 2026, 00:10 UTC")
+        );
+    }
+    #[test]
+    fn quota_requires_the_request_model_in_the_group_model_line() {
+        let text = GROUPS
+            .replace("Gemini Flash, ", "")
+            .replace("0% remaining", "50% remaining");
+        assert!(
+            !has_quota(&text, "gemini-3.8-flash"),
+            "FR-034 no group names the requested model"
+        );
+    }
+    const GROUPS: &str = "### Session Usage
+- **Session total:** data not available yet
+
+### Quota Limits
+- **Claude and GPT models**
+  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*
+  - **Weekly Limit Remaining:** 0% remaining (resets Oct 24, 2026, 12:34 UTC)
+  - **Five Hour Limit Remaining:** 75% remaining (resets Oct 18, 2026, 00:20 UTC)
+- **Gemini Models**
+  *(Models within this group: Gemini Flash, Gemini Pro)*
+  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 14:03 UTC)
+  - **Five Hour Limit Remaining:** 0% remaining (resets Oct 18, 2026, 00:10 UTC)";
+
+    #[test]
+    fn usage_reset_uses_the_exhausted_rows_of_the_named_model_group() {
+        assert_eq!(
+            usage_reset(GROUPS, "gemini-3.8-flash"),
+            reset_time("resets Oct 18, 2026, 00:10 UTC"),
+            "FR-036 ignores another group and the non-exhausted weekly row"
+        );
+    }
+    #[test]
     fn quota_is_available_only_when_all_limits_of_the_model_group_are_positive() {
-        let text = "### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 12:34 UTC)\n  - **Five Hour Limit Remaining:** 0% remaining (resets Oct 17, 2026, 17:34 UTC)\n- **Claude and GPT models**\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 24, 2026, 14:03 UTC)\n  - **Five Hour Limit Remaining:** 25% remaining (resets Oct 17, 2026, 19:03 UTC)";
+        let text = "### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 12:34 UTC)\n  - **Five Hour Limit Remaining:** 0% remaining (resets Oct 17, 2026, 17:34 UTC)\n- **Claude and GPT models**\n  *(Models within this group: Claude Opus, Claude Sonnet, GPT-OSS)*\n  - **Weekly Limit Remaining:** 100% remaining (resets Oct 24, 2026, 14:03 UTC)\n  - **Five Hour Limit Remaining:** 25% remaining (resets Oct 17, 2026, 19:03 UTC)";
         assert_eq!(
             ["gemini-3.8-flash", "claude-sonnet", "unknown"].map(|model| has_quota(text, model)),
             [false, true, false]

@@ -12,7 +12,7 @@ async fn signal(w: &mut World, reset: String) {
 #[given("\"/usage\" gives a reset time 10 minutes away")]
 async fn usage_reset(w: &mut World) {
     // Captured grammar; time and percentage are synthetic scenario values.
-    quota::usage(w, "### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 0% remaining (resets Oct 18, 2026, 00:10 UTC)").await;
+    quota::usage(w, "### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 0% remaining (resets Oct 18, 2026, 00:10 UTC)").await;
 }
 
 #[given("\"/usage\" gives no reset time")]
