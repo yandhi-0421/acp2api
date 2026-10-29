@@ -70,6 +70,7 @@ impl Notice {
     }
 }
 enum Replacement {
+    SignIn,
     Build {
         reply: oneshot::Sender<Result<String, LaunchFailure>>,
         source: Option<SelectedBuild>,
@@ -391,7 +392,6 @@ enum RuntimeState {
     Serving,
     Retiring,
     Restarting,
-    ReplacingSignIn,
     Unavailable(UnavailableReason),
     Stopping,
 }
@@ -434,7 +434,6 @@ enum Event {
     },
     StartSignIn,
     EndSignInWait,
-    SignInReplaced,
     RefreshQuota(oneshot::Sender<Result<(), String>>),
     RetireRuntime,
     RuntimeFailure,
@@ -520,6 +519,11 @@ impl Core {
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) -> Option<CompatibilityCheck> {
         let (reply, source, initial) = match self.replacement.take().unwrap() {
+            Replacement::SignIn => {
+                self.restart(runtime, read_open, clock, journal, builds)
+                    .await;
+                return None;
+            }
             Replacement::Build {
                 reply,
                 source,
@@ -574,8 +578,7 @@ impl Core {
             }
             return None;
         }
-        self.stop_runtime(runtime, read_open).await;
-        self.launch(runtime, read_open, clock, journal, builds)
+        self.restart(runtime, read_open, clock, journal, builds)
             .await;
         if matches!(self.runtime_state, RuntimeState::Stopping) {
             let _ = reply.send(Err(LaunchFailure::Stopped));
@@ -709,6 +712,18 @@ impl Core {
             journal,
         )
         .await;
+    }
+    async fn restart(
+        &mut self,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+    ) {
+        self.stop_runtime(runtime, read_open).await;
+        self.launch(runtime, read_open, clock, journal, builds)
+            .await;
     }
     async fn stop_runtime(&mut self, runtime: &mut Option<Runtime>, read_open: &mut bool) {
         *read_open = false;
@@ -1122,16 +1137,9 @@ impl Core {
             }
             (None, Event::EndSignInWait) => {
                 self.sign_in_wait = None;
-                self.require_sign_in(&mut commands);
-                self.runtime_state = RuntimeState::ReplacingSignIn;
-            }
-            (None, Event::SignInReplaced) => {
-                while let Some(id) = self
-                    .work
-                    .iter()
-                    .find_map(|(id, work)| work.occupies_place().then_some(*id))
-                {
-                    self.finish(id, Err(self.sign_in_message()), &mut commands);
+                if matches!(self.runtime_state, RuntimeState::Serving) {
+                    self.runtime_state = RuntimeState::Retiring;
+                    self.replacement.get_or_insert(Replacement::SignIn);
                 }
             }
             (None, Event::Runtime(RuntimeEvent::SignInAddress(address))) => {
@@ -1199,6 +1207,10 @@ impl Core {
                 }
             }
             (None, Event::RuntimeUnavailable(reason)) => {
+                self.sign_in_wait = None;
+                if matches!(self.replacement, Some(Replacement::SignIn)) {
+                    self.replacement = None;
+                }
                 let error = crate::messages::Message::RuntimeUnavailable(reason.message.clone());
                 self.runtime_state = RuntimeState::Unavailable(reason);
                 self.refuse_queued(
@@ -1218,6 +1230,7 @@ impl Core {
                 }
             }
             (None, Event::RetireRuntime) => {
+                self.sign_in_wait = None;
                 if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
                     self.runtime_state = RuntimeState::Retiring;
                 }
@@ -2398,25 +2411,10 @@ impl Conductor {
                         break;
                     }
                 }
-                if matches!(
-                    core.runtime_state,
-                    RuntimeState::Restarting | RuntimeState::ReplacingSignIn
-                ) && core.replacement.is_none()
+                if matches!(core.runtime_state, RuntimeState::Restarting)
+                    && core.replacement.is_none()
                 {
-                    let sign_in_replacement =
-                        matches!(core.runtime_state, RuntimeState::ReplacingSignIn);
-                    core.stop_runtime(&mut runtime, &mut read_open).await;
-                    if sign_in_replacement {
-                        core.apply(
-                            Event::SignInReplaced,
-                            &mut runtime,
-                            &mut read_open,
-                            &clock,
-                            &journal,
-                        )
-                        .await;
-                    }
-                    core.launch(
+                    core.restart(
                         &mut runtime,
                         &mut read_open,
                         &clock,
@@ -5414,6 +5412,127 @@ mod tests {
         );
         assert!(commands.iter().any(|command| matches!(command, Command::Complete(done) if done.request.id == queued && matches!(done.outcome, crate::journal::Outcome::Refused("sign_in_required")))), "FR-037 the queued request gets the condition that started");
         assert_eq!(core.state(), "Sign-in required");
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn retirement_and_unavailability_end_the_sign_in_wait_in_either_order() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-retirement-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for unavailable in [false, true] {
+            for wait_ends_first in [false, true] {
+                for deadline in [false, true] {
+                    let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+                    core.work.clear();
+                    core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+                    let end = |core: &mut Core| {
+                        if deadline {
+                            core.handle(Event::Deadline, 600_000, std::time::UNIX_EPOCH);
+                        } else if core.sign_in_wait.is_some() {
+                            core.handle(Event::EndSignInWait, 1, std::time::UNIX_EPOCH);
+                        }
+                    };
+                    if wait_ends_first {
+                        end(&mut core);
+                    }
+                    if unavailable {
+                        core.handle(
+                            Event::RuntimeUnavailable(UnavailableReason {
+                                message: "runtime missing".into(),
+                                cause: None,
+                            }),
+                            1,
+                            std::time::UNIX_EPOCH,
+                        );
+                    } else {
+                        core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
+                        core.replacement = Some(Replacement::Build {
+                            reply: oneshot::channel().0,
+                            source: None,
+                            initial: false,
+                        });
+                    }
+                    if !wait_ends_first {
+                        end(&mut core);
+                    }
+                    assert!(
+                        core.sign_in_wait.is_none(),
+                        "retirement or unavailability ends the sign-in wait"
+                    );
+                    if unavailable {
+                        assert!(
+                            matches!(core.runtime_state, RuntimeState::Unavailable(_)),
+                            "FR-040 a wait cannot restart an unavailable runtime"
+                        );
+                        assert!(
+                            core.replacement.is_none(),
+                            "FR-040 no automatic replacement remains"
+                        );
+                    } else {
+                        assert!(
+                            matches!(core.runtime_state, RuntimeState::Retiring),
+                            "a wait cannot overwrite the build retirement"
+                        );
+                        assert!(
+                            core.replacement_ready(),
+                            "the existing build replacement can proceed"
+                        );
+                        assert!(matches!(core.replacement, Some(Replacement::Build { .. })));
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn a_sign_in_replacement_waits_for_running_prompt_turns() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-active-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+        let commands = core.handle(Event::EndSignInWait, 1, std::time::UNIX_EPOCH);
+        assert!(
+            core.replacement.is_some(),
+            "FR-039 sign-in uses the ordinary replacement path"
+        );
+        assert!(
+            !core.replacement_ready(),
+            "FR-037 the running prompt retains its runtime"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, Command::Cancel(_) | Command::Emit(_, TurnEvent::End(_))))
+        );
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::PromptEnded { stop_reason: None },
+            }),
+            2,
+            std::time::UNIX_EPOCH,
+        );
+        let commands = core.handle(Event::Deadline, 202, std::time::UNIX_EPOCH);
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, Command::Emit(_, TurnEvent::End(Ok(_))))),
+            "FR-037 the running prompt ends normally"
+        );
+        assert!(
+            core.replacement_ready(),
+            "FR-039 the replacement proceeds after the prompt ends"
+        );
+        assert!(
+            core.failures.is_empty(),
+            "FR-039 planned replacement is not a runtime failure"
+        );
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
