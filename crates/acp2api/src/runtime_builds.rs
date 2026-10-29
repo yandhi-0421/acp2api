@@ -376,7 +376,15 @@ impl Builds {
             .clean_sessions(retained)
             .await
             .map_err(crate::compatibility_check::Failure::Internal)?;
-        crate::compatibility_check::run(&self.start, program).await
+        crate::compatibility_check::run(
+            &self.start,
+            program,
+            self.environment
+                .home
+                .as_ref()
+                .map(|home| home.join(".gemini")),
+        )
+        .await
     }
     pub(crate) fn finish_check(
         &self,

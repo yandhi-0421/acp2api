@@ -1872,7 +1872,7 @@ mod tests {
             let mut ports = crate::Ports::production();
             ports.launcher = Arc::new(Launcher(AtomicUsize::new(0), stopped.clone()));
             let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment {
-                account_root:root.join("account"), temp:root.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:source
+                account_root:root.join("account"), temp:root.join("temp"), home:Some(root.join("home")), local_app_data:None, path:vec![], exe_dir:source
             }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
             let configuration = root.join("config.toml");
             let settings = crate::store::read(&configuration, 1).unwrap().settings;

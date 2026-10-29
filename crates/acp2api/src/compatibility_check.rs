@@ -4,7 +4,11 @@ use crate::{
 };
 use agent_client_protocol_schema::v1::StopReason;
 use serde_json::json;
-use std::path::PathBuf;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 pub(crate) enum Failure {
     Incompatible(String),
     Runtime(LaunchFailure),
@@ -25,7 +29,14 @@ impl From<crate::runtime_driver::CommandError> for Failure {
         }
     }
 }
-pub(crate) async fn run(start: &RuntimeStart, program: PathBuf) -> Result<String, Failure> {
+pub(crate) async fn run(
+    start: &RuntimeStart,
+    program: PathBuf,
+    gemini: Option<PathBuf>,
+) -> Result<String, Failure> {
+    let gemini = gemini
+        .ok_or_else(|| Failure::Internal("cannot locate the owner's Gemini folder".into()))?;
+    let before = files(&gemini).map_err(|error| Failure::Internal(error.to_string()))?;
     let mut runtime = Runtime::open(start, program)
         .await
         .map_err(Failure::Runtime)?;
@@ -35,6 +46,18 @@ pub(crate) async fn run(start: &RuntimeStart, program: PathBuf) -> Result<String
                 runtime.initialize(start).await.map_err(Failure::Runtime)
             })
             .await?;
+        if initialized["agentCapabilities"]["mcpCapabilities"]["http"] != true {
+            return Err(Failure::Incompatible(
+                "initialize does not declare MCP over HTTP".into(),
+            ));
+        }
+        if initialized["agentCapabilities"]["_meta"]["antigravity"]["systemPrompt"]["append"]
+            != true
+        {
+            return Err(Failure::Incompatible(
+                "initialize does not declare the system prompt addition".into(),
+            ));
+        }
         if initialized["protocolVersion"] != 1
             || initialized["agentCapabilities"]["loadSession"] != true
             || !initialized["authMethods"]
@@ -140,10 +163,28 @@ pub(crate) async fn run(start: &RuntimeStart, program: PathBuf) -> Result<String
                 "the reply did not contain the tool result sent as text".into(),
             ));
         }
+        let folder = start
+            .data
+            .join("runtime-home/antigravity-acp/conversations");
+        let sessions = files(&folder).map_err(|error| Failure::Internal(error.to_string()))?;
+        if !sessions
+            .get(&folder.join(format!("{session}.db")))
+            .is_some_and(|(_, _, kind)| kind.is_file())
+        {
+            return Err(Failure::Incompatible(
+                "the check session has no file in the runtime home".into(),
+            ));
+        }
         Ok(version)
     };
     let result = checking.await;
     runtime.stop().await;
+    let after = files(&gemini).map_err(|error| Failure::Internal(error.to_string()))?;
+    if before != after {
+        return Err(Failure::Incompatible(
+            "the check changed files in the owner's Gemini folder".into(),
+        ));
+    }
     result
 }
 async fn check_prompt(
@@ -233,3 +274,32 @@ async fn check_prompt(
         }
     }
 }
+
+type Files = BTreeMap<PathBuf, (u64, SystemTime, std::fs::FileType)>;
+fn files(folder: &Path) -> std::io::Result<Files> {
+    let mut result = BTreeMap::new();
+    let entries = match std::fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(result),
+        Err(error) => return Err(error),
+    };
+    let metadata = std::fs::metadata(folder)?;
+    result.insert(
+        folder.to_owned(),
+        (metadata.len(), metadata.modified()?, metadata.file_type()),
+    );
+    for entry in entries {
+        let entry = entry?;
+        let metadata = entry.path().symlink_metadata()?;
+        result.insert(
+            entry.path(),
+            (metadata.len(), metadata.modified()?, metadata.file_type()),
+        );
+        if metadata.is_dir() {
+            result.extend(files(&entry.path())?);
+        }
+    }
+    Ok(result)
+}
+#[cfg(test)]
+mod tests;
