@@ -109,7 +109,7 @@ Feature: Builds of the official runtime
     Then that build is not an accepted version
     And acp2api is in the state "runtime unavailable"
 
-  @FR-044 @issue-62 @wip
+  @FR-044 @issue-62
   Scenario: The management panel shows the cost and the unchecked risks before a compatibility check
     Given acp2api found the build 1.6.0, which is not an accepted version
     When the owner opens the compatibility check for 1.6.0 in the management panel
@@ -120,14 +120,14 @@ Feature: Builds of the official runtime
       | three prompt turns at the same time        |
       | the memory that decides N                  |
 
-  @FR-044 @issue-62 @wip
+  @FR-044 @issue-62
   Scenario: A compatibility check runs as a replacement of the runtime process, and new requests wait in the queue
     Given the runtime process runs from the copy of the build 1.4.0
     When the owner starts the compatibility check for the build 1.6.0
     And an API client sends a request during the check
     Then the request waits in the queue until the end of the check
 
-  @FR-044 @issue-62 @wip
+  @FR-044 @issue-62
   Scenario: A passed compatibility check makes the build an accepted version on this computer
     Given acp2api found the build 1.6.0, and the official runtime of that build gives each fact that acp2api needs
     When the owner runs the compatibility check for 1.6.0
@@ -136,7 +136,7 @@ Feature: Builds of the official runtime
     And the management panel shows the build 1.6.0 with the label "Checked on this computer"
     And the management panel shows each build of the list of the release with the label "On the release list"
 
-  @FR-044 @issue-62 @wip
+  @FR-044 @issue-62
   Scenario: A failed compatibility check starts the earlier accepted version again
     Given the runtime process runs from the copy of the build 1.4.0
     And the official runtime of the found build 1.6.0 runs a built-in tool in the check
