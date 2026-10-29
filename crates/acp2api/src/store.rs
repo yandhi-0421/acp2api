@@ -13,12 +13,20 @@ pub(crate) struct StateFile {
     lockout: Option<Lockout>,
     pub(crate) checked_builds: Vec<CheckedBuild>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Lockout {
-    since: String,
-    signal: String,
-    original_error_text: String,
+pub(crate) struct Lockout {
+    pub(crate) since: String,
+    pub(crate) signal: String,
+    pub(crate) original_error_text: String,
+}
+impl Lockout {
+    pub(crate) fn message(&self, address: &str) -> crate::messages::Message {
+        crate::messages::Message::Lockout(format!(
+            "acp2api: lockout since {} after {}; acp2api sends no request to the official runtime until the owner ends the lockout at {address}.",
+            self.since, self.signal
+        ))
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

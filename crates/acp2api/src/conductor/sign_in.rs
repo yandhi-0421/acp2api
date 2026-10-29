@@ -21,7 +21,7 @@ impl Wait {
 }
 impl Core {
     pub(super) fn sign_in_message(&self) -> Message {
-        Message::SignInRequired(self.sign_in_entry.clone())
+        Message::SignInRequired(format!("{}#{}", self.panel_address, ENTRY_ID))
     }
     pub(super) fn require_sign_in(&mut self, commands: &mut Vec<Command>) {
         if !self.sign_in_required {

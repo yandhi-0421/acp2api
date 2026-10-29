@@ -586,7 +586,7 @@ mod tests {
         let clock = crate::os::SystemClock::default();
         let journal = Journal::open(&folder, clock.wall()).unwrap();
         let error = crate::messages::HttpError {
-            code: 503, status: "UNAVAILABLE".into(),
+            code: Some(503), status: "UNAVAILABLE".into(),
             message: "Account (first.last+tag@sub.example.org), second%40example.org; Header Bearer short; Key ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ.".into(),
         };
         journal.upstream("s1", &error, false, &clock);

@@ -509,9 +509,10 @@ enum RuntimeState {
     Stopping,
 }
 struct Core {
+    lockout: Option<crate::store::Lockout>,
     sign_in_required: bool,
     sign_in_wait: Option<sign_in::Wait>,
-    sign_in_entry: String,
+    panel_address: String,
     view: watch::Sender<Arc<View>>,
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
     last_refresh: Option<Moment>,
@@ -564,6 +565,7 @@ enum Event {
 }
 enum Command {
     Authenticate,
+    StopRuntime,
     AdmitChecked {
         id: WorkId,
         session: String,
@@ -602,7 +604,9 @@ enum Command {
 }
 impl Core {
     fn state(&self) -> &'static str {
-        if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+        if self.lockout.is_some() {
+            "Lockout"
+        } else if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
             "Runtime unavailable"
         } else if self.sign_in_required {
             "Sign-in required"
@@ -855,10 +859,14 @@ impl Core {
         self.replaced(None, None);
     }
     fn replacement_ready(&self) -> bool {
-        matches!(
-            self.runtime_state,
-            RuntimeState::Retiring { .. } | RuntimeState::Restarting | RuntimeState::Unavailable(_)
-        ) && !self.work.values().any(Work::occupies_place)
+        self.lockout.is_none()
+            && matches!(
+                self.runtime_state,
+                RuntimeState::Retiring { .. }
+                    | RuntimeState::Restarting
+                    | RuntimeState::Unavailable(_)
+            )
+            && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
         self.startup_session = session;
@@ -897,6 +905,9 @@ impl Core {
             .min()
     }
     fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
+        if let Some(evidence) = &self.lockout {
+            return Some(evidence.message(&self.panel_address));
+        }
         if let RuntimeState::Unavailable(reason) = &self.runtime_state {
             return Some(crate::messages::Message::RuntimeUnavailable(
                 reason.message.clone(),
@@ -986,7 +997,8 @@ impl Core {
         let mut changed = (**settings.borrow()).clone();
         let change = match action {
             OwnerAction::SignIn => {
-                if self.sign_in_wait.is_some()
+                if self.lockout.is_some()
+                    || self.sign_in_wait.is_some()
                     || !matches!(self.runtime_state, RuntimeState::Serving)
                 {
                     let _ = reply.send(Err(sign_in::CANNOT_START.into()));
@@ -1061,7 +1073,10 @@ impl Core {
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let TurnWork { pending, hold } = work;
-        if self.sign_in_required && !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+        if self.sign_in_required
+            && self.lockout.is_none()
+            && !matches!(self.runtime_state, RuntimeState::Unavailable(_))
+        {
             if !self.queue_full() {
                 return Some((Event::CheckPending(Box::new(pending)), hold));
             }
@@ -1168,12 +1183,92 @@ impl Core {
                     ..
                 },
             ) => Some(error),
-            Event::Runtime(RuntimeEvent::UpstreamError { error, .. }) => {
-                Some(upstream_error.insert(crate::messages::Message::UpstreamHttp(error.clone())))
+            Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
+                let original = error.clone();
+                let mut error = error.clone();
+                if let Some(active) = self
+                    .by_session(session)
+                    .and_then(|id| self.work[&id].execution())
+                {
+                    error.message.push_str(&format!(
+                        "\n{}{}{}",
+                        active.text,
+                        active.stop_prefix,
+                        active.held.as_deref().unwrap_or("")
+                    ));
+                }
+                let error = crate::messages::Message::UpstreamHttp(error);
+                let error = if error.lockout_signal().is_some() {
+                    error
+                } else {
+                    crate::messages::Message::UpstreamHttp(original)
+                };
+                Some(upstream_error.insert(error))
             }
             _ => None,
         };
         if let Some(error) = error {
+            if let Some(signal) = error.lockout_signal()
+                && self.lockout.is_none()
+            {
+                let evidence = crate::store::Lockout {
+                    since: crate::journal::timestamp(wall).expect("clock after the Unix epoch"),
+                    signal: signal.into(),
+                    original_error_text: error.to_string(),
+                };
+                let message = evidence.message(&self.panel_address);
+                let first_message = crate::messages::Message::Lockout(format!(
+                    "{message} Original error: {}",
+                    evidence.original_error_text
+                ));
+                let trigger = match &event {
+                    Event::Runtime(RuntimeEvent::Prepared { work, .. }) => self.by_request(work),
+                    Event::Runtime(
+                        RuntimeEvent::Turn { session, .. }
+                        | RuntimeEvent::UpstreamError { session, .. },
+                    ) => self.by_session(session),
+                    _ => None,
+                };
+                self.lockout = Some(evidence);
+                self.sign_in_wait = None;
+                self.cancels.clear();
+                for work in self.work.values() {
+                    if let Work::QuotaWorking {
+                        phase: QuotaPhase::Prompt(session),
+                        ..
+                    } = work
+                    {
+                        commands.push(Command::Cancel(session.clone()));
+                    }
+                    if let Some(active) = work.execution()
+                        && active.phase.update_deadline().is_some()
+                        && let Some(session) = &active.session
+                    {
+                        commands.push(Command::Cancel(session.clone()));
+                    }
+                }
+                commands.push(Command::StopRuntime);
+                commands.push(Command::State(self.state(), None));
+                self.refuse_queued(
+                    crate::journal::Outcome::Refused("lockout"),
+                    message.clone(),
+                    &mut commands,
+                );
+                while let Some(id) = self.work.keys().next().copied() {
+                    let error = if trigger == Some(id) {
+                        first_message.clone()
+                    } else {
+                        message.clone()
+                    };
+                    self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
+                }
+                self.view.send_replace(Arc::new(View {
+                    state: self.state(),
+                    queued: 0,
+                    sign_in_wait: None,
+                }));
+                return commands;
+            }
             *error = self.sign_in_error(error.clone(), now, &mut commands);
         }
         self.retry_waits.retain(|wait| wait.deadline > now);
@@ -1681,7 +1776,8 @@ impl Core {
             .values()
             .filter(|work| work.occupies_place())
             .count();
-        while matches!(self.runtime_state, RuntimeState::Serving)
+        while self.lockout.is_none()
+            && matches!(self.runtime_state, RuntimeState::Serving)
             && places < usize::from(self.limit)
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
@@ -2318,7 +2414,7 @@ impl Core {
         now: Moment,
         wall: std::time::SystemTime,
     ) -> Vec<Command> {
-        if matches!(self.runtime_state, RuntimeState::Restarting) {
+        if self.lockout.is_some() || matches!(self.runtime_state, RuntimeState::Restarting) {
             return Vec::new();
         }
         let event = match error {
@@ -2599,7 +2695,7 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Input>(32);
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
-        let sign_in_entry = format!("http://127.0.0.1:{}/#{}", settings.port, sign_in::ENTRY_ID);
+        let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
@@ -2613,9 +2709,10 @@ impl Conductor {
                 retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
+                lockout: None,
                 sign_in_required: false,
                 sign_in_wait: None,
-                sign_in_entry,
+                panel_address,
                 view,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -2651,7 +2748,8 @@ impl Conductor {
                         break;
                     }
                 }
-                if matches!(core.runtime_state, RuntimeState::Restarting)
+                if core.lockout.is_none()
+                    && matches!(core.runtime_state, RuntimeState::Restarting)
                     && core.replacement.is_none()
                 {
                     core.restart(
@@ -2876,6 +2974,7 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::StopRuntime => core.stop_runtime(runtime, read_open).await,
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
                         commands.extend(core.command_failed(
@@ -3140,9 +3239,10 @@ mod tests {
                 retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
+                lockout: None,
                 sign_in_required: false,
                 sign_in_wait: None,
-                sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+                panel_address: "http://127.0.0.1:8329/".into(),
                 view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -3163,7 +3263,7 @@ mod tests {
 
     fn quota_error_without_reset_time() -> crate::messages::HttpError {
         crate::messages::HttpError {
-            code: 429,
+            code: Some(429),
             status: "RESOURCE_EXHAUSTED".into(),
             message: "Quota exhausted; no reset time.".into(),
         }
@@ -3210,7 +3310,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -3260,7 +3360,7 @@ mod tests {
             ),
             (
                 crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -3369,7 +3469,7 @@ mod tests {
             (
                 "other",
                 crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:01:01Z".into(),
                 },
@@ -3497,7 +3597,7 @@ mod tests {
                 Event::Runtime(RuntimeEvent::UpstreamError {
                     session: "other".into(),
                     error: crate::messages::HttpError {
-                        code: 429,
+                        code: Some(429),
                         status: "RESOURCE_EXHAUSTED".into(),
                         message: "resets 1970-01-01T00:02:00Z".into(),
                     },
@@ -3696,7 +3796,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 503,
+                    code: Some(503),
                     status: "UNAVAILABLE".into(),
                     message: "Temporary failure".into(),
                 },
@@ -3706,7 +3806,7 @@ mod tests {
         );
         assert_eq!(ended.iter().filter(|command| matches!(command,
             Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error))))
-                if error.code == 503 && error.message == "Temporary failure"
+                if error.code == Some(503) && error.message == "Temporary failure"
         )).count(), 1, "the non-quota error still ends the API request once");
         assert_eq!(core.work.values().filter(|work| matches!(work,
             Work::QuotaWorking { query: QuotaQuery { purpose: QuotaPurpose::Reset { wait, model: Some(model), response: None }, .. }, phase: QuotaPhase::Preparing, .. }
@@ -3780,7 +3880,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 503,
+                    code: Some(503),
                     status: "UNAVAILABLE".into(),
                     message: "Temporary failure".into(),
                 },
@@ -3910,7 +4010,7 @@ mod tests {
                 Event::Runtime(RuntimeEvent::UpstreamError {
                     session: "running".into(),
                     error: crate::messages::HttpError {
-                        code: 429,
+                        code: Some(429),
                         status: "RESOURCE_EXHAUSTED".into(),
                         message: "Quota exhausted".into(),
                     },
@@ -4056,7 +4156,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -4127,7 +4227,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -4221,7 +4321,7 @@ mod tests {
                     Event::Runtime(RuntimeEvent::UpstreamError {
                         session: "running".into(),
                         error: crate::messages::HttpError {
-                            code: 429,
+                            code: Some(429),
                             status: "RESOURCE_EXHAUSTED".into(),
                             message: "resets 1970-01-01T00:02:00Z".into(),
                         },
@@ -5823,7 +5923,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 503,
+                    code: Some(503),
                     status: "UNAVAILABLE".into(),
                     message: "HTTP failure".into(),
                 },
@@ -5841,7 +5941,7 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, Command::Cancel(session) if session == "running"))
         );
-        assert!(commands.iter().any(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error)))) if error.code == 503 && error.message == "HTTP failure")));
+        assert!(commands.iter().any(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error)))) if error.code == Some(503) && error.message == "HTTP failure")));
         assert!(
             !commands
                 .iter()
@@ -6079,7 +6179,7 @@ mod tests {
                     Event::Runtime(RuntimeEvent::UpstreamError {
                         session: "session".into(),
                         error: crate::messages::HttpError {
-                            code: 503,
+                            code: Some(503),
                             status: "UNAVAILABLE".into(),
                             message: "HTTP failure".into(),
                         },
