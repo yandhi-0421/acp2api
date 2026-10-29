@@ -1173,6 +1173,7 @@ impl Core {
         let previous = self.state();
         let mut commands = Vec::new();
         let mut upstream_error = None;
+        let mut failed_reply_signal = None;
         let error = match &mut event {
             Event::Runtime(
                 RuntimeEvent::Authenticated(Err(error))
@@ -1185,37 +1186,32 @@ impl Core {
                 },
             ) => Some(error),
             Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
-                let original = error.clone();
-                let mut error = error.clone();
                 if let Some(active) = self
                     .by_session(session)
                     .and_then(|id| self.work[&id].execution())
                 {
-                    error.message.push_str(&format!(
-                        "\n{}{}{}",
+                    let reply = format!(
+                        "{}{}{}",
                         active.text,
                         active.stop_prefix,
                         active.held.as_deref().unwrap_or("")
-                    ));
+                    );
+                    if reply.contains("Terms of Service") {
+                        failed_reply_signal = Some("Terms of Service");
+                    }
                 }
-                let error = crate::messages::Message::UpstreamHttp(error);
-                let error = if error.lockout_signal().is_some() {
-                    error
-                } else {
-                    crate::messages::Message::UpstreamHttp(original)
-                };
-                Some(upstream_error.insert(error))
+                Some(upstream_error.insert(crate::messages::Message::UpstreamHttp(error.clone())))
             }
             _ => None,
         };
         if let Some(error) = error {
-            if let Some(signal) = error.lockout_signal()
+            if let Some(signal) = error.lockout_signal().or(failed_reply_signal)
                 && self.lockout.is_none()
             {
                 let evidence = crate::store::Lockout {
                     since: crate::journal::timestamp(wall).expect("clock after the Unix epoch"),
                     signal: signal.into(),
-                    original_error_text: error.to_string(),
+                    original_error_text: crate::journal::redact_error(&error.to_string()),
                 };
                 let message = evidence.message(&self.panel_address);
                 let first_message = crate::messages::Message::Lockout(format!(
@@ -3397,6 +3393,57 @@ mod tests {
             state, "Quota wait",
             "FR-034: an identifier in the error is not an HTTP status"
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_reply_classifies_terms_without_copying_private_text() {
+        let (mut core, commands, folder) = error_after_reply(
+            "Terms of Service: PRIVATE-REPLY my small secret",
+            crate::messages::HttpError {
+                code: Some(400),
+                status: "INVALID_ARGUMENT".into(),
+                message: "Account name%40example.com failed".into(),
+            },
+        );
+        let first = commands
+            .iter()
+            .find_map(|command| match command {
+                Command::Emit(_, TurnEvent::End(Err(error)))
+                    if error.to_string().contains(" Original error: ") =>
+                {
+                    Some(error.to_string())
+                }
+                _ => None,
+            })
+            .expect("the signalling response has the Google error");
+        let journal =
+            crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let state_text = std::fs::read_to_string(&core.state_path).unwrap();
+        let state: serde_json::Value = serde_json::from_str(&state_text).unwrap();
+        let original = state["lockout"]["original_error_text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response_original = first.split_once(" Original error: ").unwrap().1.to_owned();
+        std::fs::remove_dir_all(folder).unwrap();
+        let expected =
+            "acp2api: upstream error 400 INVALID_ARGUMENT: Account <REDACTED> failed".to_owned();
+        assert_eq!(
+            (original, response_original),
+            (expected.clone(), expected),
+            "FR-035/FR-056: evidence and the first response contain only the redacted error channel"
+        );
+        assert!(!state_text.contains("PRIVATE-REPLY"));
     }
 
     #[test]
