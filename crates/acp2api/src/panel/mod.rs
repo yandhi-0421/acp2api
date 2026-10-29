@@ -100,16 +100,18 @@ impl Panel {
         )
     }
     fn page(&self, status: StatusCode, notice: &str) -> Response {
-        let page = page::settings(
+        (status, Html(self.html(Some(notice)))).into_response()
+    }
+    fn html(&self, notice: Option<&str>) -> String {
+        page::settings(
             &self.conductor.settings(),
             self.conductor.highest,
-            Some(notice),
+            notice,
             &self.conductor.notices(),
             self.conductor.builds_summary(),
             &self.conductor.quota_result(),
             &page::sign_in_section(&self.conductor.view(), self.clock.now()),
-        );
-        (status, Html(page)).into_response()
+        )
     }
 }
 async fn guard(
@@ -166,15 +168,7 @@ async fn guard(
 }
 async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
     Html(if panel.session(&headers) {
-        page::settings(
-            &panel.conductor.settings(),
-            panel.conductor.highest,
-            None,
-            &panel.conductor.notices(),
-            panel.conductor.builds_summary(),
-            &panel.conductor.quota_result(),
-            &page::sign_in_section(&panel.conductor.view(), panel.clock.now()),
-        )
+        panel.html(None)
     } else {
         page::login(None)
     })
