@@ -113,6 +113,7 @@ enum SessionResult {
 }
 #[derive(Debug)]
 pub(crate) struct FakeState {
+    usage_plans: VecDeque<TurnPlan>,
     pub(crate) rpc_replies: HashMap<String, VecDeque<crate::rpc_script::RpcReply>>,
     session_result: SessionResult,
     catalog: Option<Vec<ModelSpec>>,
@@ -130,6 +131,7 @@ pub(crate) struct FakeState {
 impl Default for FakeState {
     fn default() -> Self {
         Self {
+            usage_plans: VecDeque::new(),
             rpc_replies: HashMap::new(),
             plans: VecDeque::new(),
             catalog: None,
@@ -157,6 +159,15 @@ pub struct ModelSpec {
     pub levels: Vec<String>,
 }
 impl FakeRuntime {
+    pub fn next_usage(&self, plan: TurnPlan) {
+        assert!(
+            plan.steps.len() <= 16 && format!("{plan:?}").len() <= 128 * 1024,
+            "fake /usage reply cap: 16 steps, 128 KiB"
+        );
+        let mut state = self.hub.shared.0.lock().unwrap();
+        assert!(state.fake.usage_plans.len() < 8, "fake /usage queue cap: 8");
+        state.fake.usage_plans.push_back(plan);
+    }
     pub fn script_call(&self, method: &str, reply: crate::rpc_script::RpcReply) {
         let mut state = self.hub.shared.0.lock().unwrap();
         let replies = state.fake.rpc_replies.entry(method.into()).or_default();
@@ -374,7 +385,10 @@ pub(crate) fn respond(s: &mut State, label: &str, call: Value) {
                 }
                 Some(command @ "/usage") => {
                     s.record(json!({"kind":"slash-command","name":command}));
-                    TurnPlan::new().chunk("Quota information.")
+                    s.fake
+                        .usage_plans
+                        .pop_front()
+                        .unwrap_or_else(|| TurnPlan::new().chunk("Quota information."))
                 }
                 _ => s.fake.plans.pop_front().unwrap_or_default(),
             };
