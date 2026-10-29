@@ -78,6 +78,12 @@ impl SseReader {
         Ok(events)
     }
 }
+#[derive(Clone, Debug, Default)]
+pub struct WireTrace {
+    pub head_at: Option<u64>,
+    pub end_at: Option<u64>,
+    pub frames: Vec<(u64, Vec<u8>)>,
+}
 #[derive(Clone)]
 pub struct ApiClient {
     address: String,
@@ -86,6 +92,7 @@ pub struct ApiClient {
     hub: Hub,
     requests: Arc<AtomicUsize>,
     status: Arc<Mutex<Option<u16>>>,
+    wire: Arc<Mutex<WireTrace>>,
 }
 #[derive(Clone, Debug)]
 pub struct Answer {
@@ -118,6 +125,7 @@ impl ApiCall {
 }
 pub struct Call {
     status: Arc<Mutex<Option<u16>>>,
+    wire: Arc<Mutex<WireTrace>>,
     task: tokio::task::JoinHandle<Result<Answer, String>>,
     hub: Hub,
     progress: Arc<Mutex<Vec<SseEvent>>>,
@@ -128,6 +136,9 @@ impl Drop for Call {
     }
 }
 impl Call {
+    pub fn wire(&self) -> Arc<Mutex<WireTrace>> {
+        self.wire.clone()
+    }
     pub fn status(&self) -> Option<u16> {
         *self.status.lock().unwrap()
     }
@@ -178,6 +189,7 @@ impl ApiClient {
             hub,
             requests: Arc::new(AtomicUsize::new(0)),
             status: Arc::new(Mutex::new(None)),
+            wire: Arc::new(Mutex::new(WireTrace::default())),
         }
     }
     pub fn without_local_api_key(&self) -> Self {
@@ -209,8 +221,10 @@ impl ApiClient {
         self.hub.shared.0.lock().unwrap().counts.http_sent += 1;
         let client = self.clone();
         let status = Arc::new(Mutex::new(None));
+        let wire = Arc::new(Mutex::new(WireTrace::default()));
         let client = Self {
             status: status.clone(),
+            wire: wire.clone(),
             ..client
         };
         let progress = Arc::new(Mutex::new(Vec::new()));
@@ -227,6 +241,7 @@ impl ApiClient {
             result
         });
         Call {
+            wire,
             status,
             task,
             hub: self.hub.clone(),
@@ -321,6 +336,7 @@ impl ApiClient {
             .map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
         *self.status.lock().unwrap() = Some(status);
+        self.wire.lock().unwrap().head_at = Some(self.hub.now());
         let headers = response
             .headers()
             .iter()
@@ -347,6 +363,11 @@ impl ApiClient {
                 }
                 bytes.extend_from_slice(&data);
                 if is_sse {
+                    self.wire
+                        .lock()
+                        .unwrap()
+                        .frames
+                        .push((self.hub.now(), data.to_vec()));
                     let batch = sse.feed(&data, self.hub.now())?;
                     progress.lock().unwrap().extend(batch.clone());
                     events.extend(batch);
@@ -360,6 +381,7 @@ impl ApiClient {
                 self.hub.shared.1.notify_all();
             }
         }
+        self.wire.lock().unwrap().end_at = Some(self.hub.now());
         drop(sender);
         drop(connection);
         drop(lease);
@@ -612,6 +634,8 @@ mod tests {
 data: first
 data: second
 
+: keep-alive
+
 data: done
 
 "
@@ -643,6 +667,19 @@ Connection: close
                 assert!(answer.unwrap_err().contains("API answer cap"));
             } else {
                 let answer = answer.unwrap();
+                let wire = client.wire.lock().unwrap();
+                assert_eq!(wire.head_at, Some(0));
+                assert_eq!(wire.end_at, Some(0));
+                let raw: Vec<u8> = wire
+                    .frames
+                    .iter()
+                    .flat_map(|(_, bytes)| bytes.clone())
+                    .collect();
+                assert_eq!(
+                    raw,
+                    b"event: chunk\ndata: first\ndata: second\n\n: keep-alive\n\ndata: done\n\n"
+                );
+                assert!(wire.frames.iter().all(|(at, _)| *at == 0));
                 assert_eq!(answer.events.len(), 2);
                 assert_eq!(
                     answer.events[0].data,
