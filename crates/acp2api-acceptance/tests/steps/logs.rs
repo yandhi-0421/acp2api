@@ -151,7 +151,32 @@ async fn age_fixture(w: &mut World, age: String) {
 }
 #[when("the owner restarts acp2api")]
 async fn restart(w: &mut World) {
-    w.scenario.restart().await;
+    let outcome = w.scenario.restart_outcome().await;
+    assert!(
+        outcome.is_ok(),
+        "FR-035 restart keeps acp2api running to serve the management panel and API requests; actual: {outcome:?}"
+    );
+    let owner = acp2api_acceptance::client::Owner::new(w.scenario.client().await.clone());
+    let page = owner.page().finish(&mut w.scenario.time).await;
+    assert_eq!(page.status, 200, "restart serves the management panel");
+    assert!(
+        page.headers
+            .get("content-type")
+            .is_some_and(|value| value.starts_with("text/html")),
+        "restart serves the panel as HTML"
+    );
+    let live = w.scenario.client().await.model_names();
+    let answer = live.finish(&mut w.scenario.time).await;
+    assert!(
+        matches!(answer.status, 200 | 400),
+        "restart serves API requests with a catalog or state refusal: {}",
+        answer.status
+    );
+    let body = answer.json();
+    assert!(
+        body["data"].is_array() || body["error"].is_object(),
+        "restart serves the API response envelope"
+    );
 }
 #[then(regex = r"^that log file is (gone|still there)$")]
 fn age_result(w: &mut World, result: String) {

@@ -285,7 +285,7 @@ fn rpc_envelope(w: &mut World) {
 }
 
 #[then(expr = "the error message is {string}")]
-#[then(expr = "the error body holds the message {string}")]
+#[then(regex = r#"^the error body holds the message "(acp2api: upstream .*)"$"#)]
 fn message(w: &mut World, expected: String) {
     assert_eq!(
         w.scenario.answer.as_ref().unwrap().json()["error"]["message"],

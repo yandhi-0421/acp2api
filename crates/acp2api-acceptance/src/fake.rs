@@ -161,6 +161,16 @@ pub struct ModelSpec {
     pub levels: Vec<String>,
 }
 impl FakeRuntime {
+    pub fn finish_gate(&self, gate: &str, plan: TurnPlan) {
+        assert!(
+            plan.steps.len() <= 16 && format!("{plan:?}").len() <= 128 * 1024,
+            "fake gate completion cap: 16 steps, 128 KiB"
+        );
+        let mut state = self.hub.shared.0.lock().unwrap();
+        let paused = state.fake.gates.remove(gate).expect("pending fake gate");
+        run_plan(&mut state, &paused.label, paused.id, paused.session, plan);
+        self.hub.shared.1.notify_all();
+    }
     pub fn set_signed_in(&self, signed_in: bool) {
         self.hub
             .shared

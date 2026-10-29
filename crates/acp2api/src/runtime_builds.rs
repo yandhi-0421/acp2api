@@ -259,8 +259,8 @@ impl Builds {
     ) -> Result<Selection, String> {
         let initial = matches!(action, Action::Initial);
         if initial {
-            let state =
-                crate::store::StateFile::read(&self.start.data.join(crate::store::STATE_FILE))?;
+            let path = self.start.data.join(crate::store::STATE_FILE);
+            let state = crate::store::StateFile::read(&path).map_err(|error| error.to_string())?;
             *self.checked.lock().unwrap() = state
                 .checked_builds
                 .into_iter()
@@ -473,7 +473,7 @@ impl Builds {
             localharness_external_sha256: hashes.harness.clone(),
         };
         let path = self.start.data.join(crate::store::STATE_FILE);
-        let mut state = crate::store::StateFile::read(&path)?;
+        let mut state = crate::store::StateFile::read(&path).map_err(|error| error.to_string())?;
         state.checked_builds.retain(|checked| {
             !(checked.build.platform == build.platform && identity(&checked.build) == *hashes)
         });
@@ -482,7 +482,7 @@ impl Builds {
             checked_at: crate::journal::timestamp(self.start.clock.wall())
                 .map_err(|error| error.to_string())?,
         });
-        state.save(&path)?;
+        state.save(&path).map_err(|error| error.to_string())?;
         *self.checked.lock().unwrap() = state
             .checked_builds
             .into_iter()

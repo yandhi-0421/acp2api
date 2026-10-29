@@ -1,4 +1,5 @@
 mod keep_alive;
+mod lockout;
 mod quota;
 mod records;
 mod retry;
@@ -523,9 +524,11 @@ impl RuntimeState {
     }
 }
 struct Core {
+    lockout: Option<crate::store::Lockout>,
     sign_in_required: bool,
     sign_in_wait: Option<sign_in::Wait>,
-    sign_in_entry: String,
+    panel_address: String,
+    state_path: PathBuf,
     view: watch::Sender<Arc<View>>,
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
     last_refresh: Option<Moment>,
@@ -551,6 +554,11 @@ struct Core {
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
+    Lockout {
+        signal: &'static str,
+        error: crate::messages::Message,
+        signalling_work: Option<WorkId>,
+    },
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -578,6 +586,11 @@ enum Event {
 }
 enum Command {
     Authenticate,
+    Lockout(crate::store::Lockout),
+    RefuseBuildChange {
+        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        error: crate::messages::Message,
+    },
     AdmitChecked {
         id: WorkId,
         session: String,
@@ -616,7 +629,9 @@ enum Command {
 }
 impl Core {
     fn state(&self) -> &'static str {
-        if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+        if self.lockout.is_some() {
+            "Lockout"
+        } else if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
             "Runtime unavailable"
         } else if self.sign_in_required {
             "Sign-in required"
@@ -869,10 +884,14 @@ impl Core {
         self.replaced(None, None);
     }
     fn replacement_ready(&self) -> bool {
-        matches!(
-            self.runtime_state,
-            RuntimeState::Retiring { .. } | RuntimeState::Restarting | RuntimeState::Unavailable(_)
-        ) && !self.work.values().any(Work::occupies_place)
+        self.lockout.is_none()
+            && matches!(
+                self.runtime_state,
+                RuntimeState::Retiring { .. }
+                    | RuntimeState::Restarting
+                    | RuntimeState::Unavailable(_)
+            )
+            && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
         self.startup_session = session;
@@ -911,6 +930,13 @@ impl Core {
             .min()
     }
     fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
+        if let Some(evidence) = &self.lockout {
+            return Some(crate::messages::Message::lockout(
+                evidence,
+                &self.panel_address,
+                false,
+            ));
+        }
         if let RuntimeState::Unavailable(reason) = &self.runtime_state {
             return Some(crate::messages::Message::RuntimeUnavailable(
                 reason.message.clone(),
@@ -1000,7 +1026,8 @@ impl Core {
         let mut changed = (**settings.borrow()).clone();
         let change = match action {
             OwnerAction::SignIn => {
-                if self.sign_in_wait.is_some()
+                if self.lockout.is_some()
+                    || self.sign_in_wait.is_some()
                     || !matches!(self.runtime_state, RuntimeState::Serving)
                 {
                     let _ = reply.send(Err(sign_in::CANNOT_START.into()));
@@ -1075,7 +1102,10 @@ impl Core {
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let TurnWork { pending, hold } = work;
-        if self.sign_in_required && !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+        if self.sign_in_required
+            && self.lockout.is_none()
+            && !matches!(self.runtime_state, RuntimeState::Unavailable(_))
+        {
             if !self.queue_full() {
                 return Some((Event::CheckPending(Box::new(pending)), hold));
             }
@@ -1170,26 +1200,7 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
-        let mut upstream_error = None;
-        let error = match &mut event {
-            Event::Runtime(
-                RuntimeEvent::Authenticated(Err(error))
-                | RuntimeEvent::Prepared {
-                    result: Err(error), ..
-                }
-                | RuntimeEvent::Turn {
-                    update: TurnUpdate::Failed(error),
-                    ..
-                },
-            ) => Some(error),
-            Event::Runtime(RuntimeEvent::UpstreamError { error, .. }) => {
-                Some(upstream_error.insert(crate::messages::Message::UpstreamHttp(error.clone())))
-            }
-            _ => None,
-        };
-        if let Some(error) = error {
-            *error = self.sign_in_error(error.clone(), now, &mut commands);
-        }
+        let upstream_error = self.upstream_error(&mut event, now, &mut commands);
         self.retry_waits.retain(|wait| wait.deadline > now);
         if self
             .quota_wait
@@ -1223,6 +1234,16 @@ impl Core {
         }
         let quota_work = work_id.filter(|id| matches!(self.work[id], Work::QuotaWorking { .. }));
         match (quota_work, event) {
+            (
+                None,
+                Event::Lockout {
+                    signal,
+                    error,
+                    signalling_work,
+                },
+            ) => {
+                self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
+            }
             (None, Event::CheckPending(request)) => {
                 self.work
                     .insert(self.next_work, Work::CheckQueued(*request));
@@ -1278,7 +1299,12 @@ impl Core {
                 self.quota_event(id, event, upstream_error, now, wall, &mut commands)
             }
             (None, Event::RefreshQuota(reply)) => {
-                let error = if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+                let error = if let Some(evidence) = &self.lockout {
+                    Some(
+                        crate::messages::Message::lockout(evidence, &self.panel_address, false)
+                            .to_string(),
+                    )
+                } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
                     Some(reason.message.clone())
                 } else if matches!(self.runtime_state, RuntimeState::Stopping) {
                     Some(crate::messages::Message::Stopped.to_string())
@@ -1304,27 +1330,12 @@ impl Core {
             (None, Event::Stop) => {
                 self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Stopping;
-                self.cancels.clear();
-                self.refuse_queued(
-                    crate::journal::Outcome::Refused("stopped"),
-                    crate::messages::Message::Stopped,
+                self.end_all_work(
+                    "stopped",
+                    |_| crate::messages::Message::Stopped,
+                    now,
                     &mut commands,
                 );
-                let ids: Vec<_> = self.work.keys().copied().collect();
-                for id in ids {
-                    if let Some(active) = self.work[&id].execution()
-                        && matches!(active.phase, Phase::Prompt { .. })
-                        && let Some(session) = &active.session
-                    {
-                        commands.push(Command::Cancel(session.clone()));
-                    }
-                    self.finish(
-                        id,
-                        Err(Failure::at(crate::messages::Message::Stopped, now)),
-                        now,
-                        &mut commands,
-                    );
-                }
             }
             (None, Event::RuntimeUnavailable(reason)) => {
                 self.sign_in_wait = None;
@@ -1695,7 +1706,8 @@ impl Core {
             .values()
             .filter(|work| work.occupies_place())
             .count();
-        while matches!(self.runtime_state, RuntimeState::Serving)
+        while self.lockout.is_none()
+            && matches!(self.runtime_state, RuntimeState::Serving)
             && places < usize::from(self.limit)
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
@@ -1777,6 +1789,10 @@ impl Core {
             };
             commands.insert(0, Command::State(self.state(), cause));
         }
+        self.publish_view();
+        commands
+    }
+    fn publish_view(&self) {
         self.view.send_replace(Arc::new(View {
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
@@ -1784,7 +1800,44 @@ impl Core {
             places,
             queued: self.work.values().filter(|work| work.is_queued()).count(),
         }));
-        commands
+    }
+    fn end_all_work(
+        &mut self,
+        refusal: &'static str,
+        message: impl Fn(WorkId) -> crate::messages::Message,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        self.cancels.clear();
+        for work in self.work.values() {
+            if let Work::QuotaWorking {
+                phase: QuotaPhase::Prompt(session),
+                ..
+            } = work
+            {
+                commands.push(Command::Cancel(session.clone()));
+            }
+            if let Some(active) = work.execution()
+                && active.phase.update_deadline().is_some()
+                && let Some(session) = &active.session
+            {
+                commands.push(Command::Cancel(session.clone()));
+            }
+        }
+        while let Some(id) = self.work.keys().next().copied() {
+            let error = message(id);
+            if matches!(self.work[&id], Work::AcceptedQueued(_)) {
+                let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+                Self::refuse_request(
+                    request,
+                    crate::journal::Outcome::Refused(refusal),
+                    error,
+                    commands,
+                );
+            } else {
+                self.finish(id, Err(Failure::at(error, now)), now, commands);
+            }
+        }
     }
     fn start_request(
         &mut self,
@@ -2334,7 +2387,7 @@ impl Core {
         now: Moment,
         wall: std::time::SystemTime,
     ) -> Vec<Command> {
-        if matches!(self.runtime_state, RuntimeState::Restarting) {
+        if self.lockout.is_some() || matches!(self.runtime_state, RuntimeState::Restarting) {
             return Vec::new();
         }
         let event = match error {
@@ -2615,7 +2668,9 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Input>(32);
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
-        let sign_in_entry = format!("http://127.0.0.1:{}/#{}", settings.port, sign_in::ENTRY_ID);
+        let state_path = builds.start.data.join(crate::store::STATE_FILE);
+        let lockout = lockout::load(&state_path, clock.as_ref(), &journal);
+        let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
@@ -2629,9 +2684,11 @@ impl Conductor {
                 retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
+                lockout,
                 sign_in_required: false,
                 sign_in_wait: None,
-                sign_in_entry,
+                panel_address,
+                state_path,
                 view,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -2648,6 +2705,7 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
+            core.publish_view();
             journal.state(core.state(), None, clock.as_ref());
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
@@ -2667,7 +2725,8 @@ impl Conductor {
                         break;
                     }
                 }
-                if matches!(core.runtime_state, RuntimeState::Restarting)
+                if core.lockout.is_none()
+                    && matches!(core.runtime_state, RuntimeState::Restarting)
                     && core.replacement.is_none()
                 {
                     core.restart(
@@ -2809,7 +2868,7 @@ impl Conductor {
                         };
                         match work {
                             Input::Builds { action, reply, hold } => {
-                                core.changes.push_back((action, reply));
+                                core.build_change(action, reply);
                                 drop(hold);
                                 continue;
                             }
@@ -2892,6 +2951,13 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::RefuseBuildChange { reply, error } => {
+                    let _ = reply.send(Err(LaunchFailure::Runtime(error.to_string())));
+                }
+                Command::Lockout(evidence) => {
+                    lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
+                    core.stop_runtime(runtime, read_open).await;
+                }
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
                         commands.extend(core.command_failed(
@@ -3159,9 +3225,11 @@ mod tests {
                 retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
+                lockout: None,
                 sign_in_required: false,
                 sign_in_wait: None,
-                sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+                panel_address: "http://127.0.0.1:8329/".into(),
+                state_path: PathBuf::new(),
                 view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -3204,7 +3272,7 @@ mod tests {
 
     fn quota_error_without_reset_time() -> crate::messages::HttpError {
         crate::messages::HttpError {
-            code: 429,
+            code: Some(429),
             status: "RESOURCE_EXHAUSTED".into(),
             message: "Quota exhausted; no reset time.".into(),
         }
@@ -3230,6 +3298,499 @@ mod tests {
         prepared
     }
 
+    fn error_after_reply(
+        reply: &str,
+        error: crate::messages::HttpError,
+    ) -> (Core, Vec<Command>, PathBuf) {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-lockout-error-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal =
+            crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.state_path = folder.join(crate::store::STATE_FILE);
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::Text(reply.into()),
+            }),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error,
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        (core, commands, folder)
+    }
+
+    #[test]
+    fn a_503_with_order_14030_in_the_error_does_not_start_lockout() {
+        let (core, _, folder) = error_after_reply(
+            "",
+            crate::messages::HttpError {
+                code: Some(503),
+                status: "UNAVAILABLE".into(),
+                message: "order 14030".into(),
+            },
+        );
+        let state = core.state();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            state, "Running",
+            "FR-034: a longer number in an error is not an HTTP status"
+        );
+    }
+
+    #[test]
+    fn a_429_with_7f403a_in_the_error_starts_quota_wait() {
+        let (core, _, folder) = error_after_reply(
+            "",
+            crate::messages::HttpError {
+                code: Some(429),
+                status: "RESOURCE_EXHAUSTED".into(),
+                message: "request 7f403a; resets 1970-01-01T00:02:00Z".into(),
+            },
+        );
+        let state = core.state();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            state, "Quota wait",
+            "FR-034: an identifier in the error is not an HTTP status"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_reply_classifies_terms_without_copying_private_text() {
+        let (mut core, commands, folder) = error_after_reply(
+            "Terms of Service: PRIVATE-REPLY my small secret",
+            crate::messages::HttpError {
+                code: Some(400),
+                status: "INVALID_ARGUMENT".into(),
+                message: "Account name%40example.com failed".into(),
+            },
+        );
+        let first = commands
+            .iter()
+            .find_map(|command| match command {
+                Command::Emit(_, TurnEvent::End(Err(error)))
+                    if error.to_string().contains(" Original error: ") =>
+                {
+                    Some(error.to_string())
+                }
+                _ => None,
+            })
+            .expect("the signalling response has the Google error");
+        let journal =
+            crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let state_text = std::fs::read_to_string(&core.state_path).unwrap();
+        let state: serde_json::Value = serde_json::from_str(&state_text).unwrap();
+        let original = state["lockout"]["original_error_text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response_original = first.split_once(" Original error: ").unwrap().1.to_owned();
+        std::fs::remove_dir_all(folder).unwrap();
+        let expected =
+            "acp2api: upstream error 400 INVALID_ARGUMENT: Account <REDACTED> failed".to_owned();
+        assert_eq!(
+            (original, response_original),
+            (expected.clone(), expected),
+            "FR-035/FR-056: evidence and the first response contain only the redacted error channel"
+        );
+        assert!(!state_text.contains("PRIVATE-REPLY"));
+    }
+
+    #[test]
+    fn a_stderr_failed_reply_uses_all_lockout_signals_but_only_error_channel_evidence() {
+        for (reply, signal) in [
+            (
+                "PERMISSION_DENIED: Verify your account PRIVATE-REPLY",
+                Some("PERMISSION_DENIED"),
+            ),
+            ("Error 403. PRIVATE-REPLY", Some("403")),
+            ("Terms of Service PRIVATE-REPLY", Some("Terms of Service")),
+            ("backend latency 1.403 s", None),
+            ("v2.403", None),
+            ("req-403", None),
+            ("order 14030", None),
+        ] {
+            let (core, commands, folder) = error_after_reply(
+                reply,
+                crate::messages::HttpError {
+                    code: Some(400),
+                    status: "INVALID_ARGUMENT".into(),
+                    message: "Account name%40example.com failed".into(),
+                },
+            );
+            let evidence = core
+                .lockout
+                .map(|evidence| (evidence.signal, evidence.original_error_text));
+            let response = commands.iter().find_map(|command| match command {
+                Command::Emit(_, TurnEvent::End(Err(error))) => error
+                    .to_string()
+                    .split_once(" Original error: ")
+                    .map(|(_, original)| original.to_owned()),
+                _ => None,
+            });
+            std::fs::remove_dir_all(folder).unwrap();
+            let original =
+                "acp2api: upstream error 400 INVALID_ARGUMENT: Account <REDACTED> failed";
+            assert_eq!(
+                (evidence, response),
+                (
+                    signal.map(|signal| (signal.to_owned(), original.to_owned())),
+                    signal.map(|_| original.to_owned())
+                ),
+                "FR-034 classifies the failed reply; FR-035/FR-056 keep only the error channel: {reply}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lockout_answers_the_waiting_and_queued_build_changes() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-lockout-owner-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.state_path = folder.join(crate::store::STATE_FILE);
+        let (waiting, mut waiting_reply) = oneshot::channel();
+        let (queued, mut queued_reply) = oneshot::channel();
+        core.runtime_state = RuntimeState::Retiring {
+            sign_in_wait_ended: false,
+        };
+        core.replacement = Some(Replacement::Build {
+            reply: waiting,
+            source: None,
+            initial: false,
+        });
+        core.changes
+            .push_back((crate::runtime_builds::Action::Search, queued));
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: Some(403),
+                    status: "PERMISSION_DENIED".into(),
+                    message: "Account suspended".into(),
+                },
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let responses = [waiting_reply.try_recv(), queued_reply.try_recv()];
+        std::fs::remove_dir_all(folder).unwrap();
+        for response in responses {
+            assert!(
+                matches!(response, Ok(Err(ref error)) if error.to_string().starts_with("acp2api: lockout since ") && !error.to_string().contains("Original error:")),
+                "a waiting owner request receives M-12: {response:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_lockout_save_is_journaled_and_keeps_lockout_in_memory() {
+        let (mut core, commands, folder) = error_after_reply(
+            "",
+            crate::messages::HttpError {
+                code: Some(403),
+                status: "PERMISSION_DENIED".into(),
+                message: "Account suspended".into(),
+            },
+        );
+        std::fs::create_dir(&core.state_path).unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let records: Vec<serde_json::Value> = std::fs::read_dir(folder.join("logs"))
+            .unwrap()
+            .flat_map(|entry| {
+                std::fs::read_to_string(entry.unwrap().path())
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let state = core.state();
+        let later = core.refusal(1).unwrap().to_string();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(state, "Lockout");
+        assert!(later.starts_with("acp2api: lockout since "));
+        assert!(
+            records
+                .iter()
+                .any(|record| record["event"] == "state_file_read_failed"
+                    && record["operation"] == "lockout"),
+            "a failed lockout persistence is recorded in the journal: {records:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn state_file_failures_log_only_the_os_category_and_the_failed_access() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for access in ["read", "write"] {
+            let (mut core, commands, folder) = error_after_reply(
+                "",
+                crate::messages::HttpError {
+                    code: Some(403),
+                    status: "PERMISSION_DENIED".into(),
+                    message: "Account suspended".into(),
+                },
+            );
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let journal =
+                crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let category = if access == "read" {
+                core.state_path = folder.join(r"C:\Users\PRIVATE-OWNER\state.json");
+                std::fs::create_dir(&core.state_path).unwrap();
+                std::fs::read(&core.state_path).unwrap_err().kind()
+            } else {
+                std::fs::write(
+                    &core.state_path,
+                    br#"{"format":1,"lockout":null,"checked_builds":[]}"#,
+                )
+                .unwrap();
+                std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+                std::io::ErrorKind::PermissionDenied
+            };
+            Conductor::commands(
+                &mut core,
+                &mut None,
+                &mut false,
+                &clock,
+                &journal,
+                &mut commands.into(),
+            )
+            .await;
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+            for entry in std::fs::read_dir(folder.join("logs")).unwrap() {
+                for line in std::fs::read_to_string(entry.unwrap().path())
+                    .unwrap()
+                    .lines()
+                {
+                    let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+                    if record["event"]
+                        .as_str()
+                        .is_some_and(|event| event.starts_with("state_file_"))
+                    {
+                        record.as_object_mut().unwrap().remove("time");
+                        actual.push(record);
+                    }
+                }
+            }
+            std::fs::remove_dir_all(folder).unwrap();
+            expected.push(serde_json::json!({
+                "event": format!("state_file_{access}_failed"),
+                "operation": "lockout", "cause": format!("{category:?}"),
+            }));
+        }
+        assert_eq!(
+            actual, expected,
+            "FR-056 logs the OS category without an owner path"
+        );
+    }
+
+    #[test]
+    fn stopping_cancels_a_prompt_still_awaiting_its_quota_end() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-stop-quota-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: quota_error_without_reset_time(),
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        let stopped = core.handle(Event::Stop, 2, std::time::UNIX_EPOCH);
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            stopped
+                .iter()
+                .filter(|command| matches!(command,
+                    Command::Cancel(session) if session == "running"
+                ))
+                .count(),
+            1,
+            "FR-045 cancels a live prompt even after a quota signal"
+        );
+        assert!(
+            stopped.iter().any(|command| matches!(
+                command,
+                Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::Stopped)))
+            )),
+            "FR-045 ends the response with M-15"
+        );
+    }
+
+    #[test]
+    fn stopping_cancels_the_running_usage_prompt_and_answers_its_owner() {
+        let mut core = Core {
+            startup_session: Some("usage".into()),
+            ..Core::fixture(1)
+        };
+        let (reply, mut answer) = oneshot::channel();
+        let started = core.handle(Event::RefreshQuota(reply), 0, std::time::UNIX_EPOCH);
+        assert!(
+            started.iter().any(|command| matches!(command,
+                Command::Usage { session, .. } if session == "usage"
+            )),
+            "FR-052 starts the owner refresh as a prompt turn"
+        );
+        let stopped = core.handle(Event::Stop, 1, std::time::UNIX_EPOCH);
+        assert_eq!(
+            stopped
+                .iter()
+                .filter(|command| matches!(command,
+                    Command::Cancel(session) if session == "usage"
+                ))
+                .count(),
+            1,
+            "FR-045 cancels every live prompt, including /usage"
+        );
+        assert_eq!(
+            answer.try_recv(),
+            Ok(Err(crate::messages::Message::Stopped.to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_ends_each_running_and_queued_response_once_with_m15() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-stop-responses-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let (mut core, _, tickets) = prompting_with_waiter(&journal);
+        let commands = core.handle(Event::Stop, 1, clock.wall());
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let responses: Vec<_> = tickets
+            .into_iter()
+            .map(|mut ticket| {
+                std::iter::from_fn(|| ticket.try_recv().ok())
+                    .map(|(event, _)| match event {
+                        TurnEvent::End(Err(error)) => error.to_string(),
+                        _ => "unexpected response event".into(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let late = core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::Cancelled),
+                },
+            }),
+            2,
+            clock.wall(),
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+        let stopped = crate::messages::Message::Stopped.to_string();
+        assert_eq!(
+            responses,
+            [vec![stopped.clone()], vec![stopped]],
+            "FR-045 and R3 end both responses once; their relative order is not a contract"
+        );
+        assert!(
+            !late
+                .iter()
+                .any(|command| matches!(command, Command::Emit(_, _))),
+            "a late runtime end sends no second response"
+        );
+        assert!(core.work.is_empty());
+    }
+
+    #[test]
+    fn lockout_records_state_and_cancels_and_persists_before_any_response_ends() {
+        let (_, commands, folder) = error_after_reply(
+            "",
+            crate::messages::HttpError {
+                code: Some(403),
+                status: "PERMISSION_DENIED".into(),
+                message: "Account suspended".into(),
+            },
+        );
+        let state = commands
+            .iter()
+            .position(|command| matches!(command, Command::State("Lockout", _)))
+            .unwrap();
+        let cancel = commands
+            .iter()
+            .position(|command| matches!(command, Command::Cancel(_)))
+            .unwrap();
+        let persist_and_stop = commands
+            .iter()
+            .position(|command| matches!(command, Command::Lockout(_)))
+            .unwrap();
+        let first_end = commands
+            .iter()
+            .position(|command| matches!(command, Command::Emit(_, TurnEvent::End(_))))
+            .unwrap();
+        let state_notices = commands
+            .iter()
+            .filter(|command| matches!(command, Command::State("Lockout", _)))
+            .count();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(state_notices, 1);
+        assert!(
+            state < first_end && cancel < persist_and_stop && persist_and_stop < first_end,
+            "FR-035 and R1 require the state, cancellation, persistence, and runtime stop before a response ends"
+        );
+    }
+
     #[test]
     fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
         let folder = std::env::temp_dir().join(format!(
@@ -3251,7 +3812,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -3301,7 +3862,7 @@ mod tests {
             ),
             (
                 crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -3410,7 +3971,7 @@ mod tests {
             (
                 "other",
                 crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:01:01Z".into(),
                 },
@@ -3538,7 +4099,7 @@ mod tests {
                 Event::Runtime(RuntimeEvent::UpstreamError {
                     session: "other".into(),
                     error: crate::messages::HttpError {
-                        code: 429,
+                        code: Some(429),
                         status: "RESOURCE_EXHAUSTED".into(),
                         message: "resets 1970-01-01T00:02:00Z".into(),
                     },
@@ -3737,7 +4298,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 503,
+                    code: Some(503),
                     status: "UNAVAILABLE".into(),
                     message: "Temporary failure".into(),
                 },
@@ -3747,7 +4308,7 @@ mod tests {
         );
         assert_eq!(ended.iter().filter(|command| matches!(command,
             Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error))))
-                if error.code == 503 && error.message == "Temporary failure"
+                if error.code == Some(503) && error.message == "Temporary failure"
         )).count(), 1, "the non-quota error still ends the API request once");
         assert_eq!(core.work.values().filter(|work| matches!(work,
             Work::QuotaWorking { query: QuotaQuery { purpose: QuotaPurpose::Reset { wait, model: Some(model), response: None }, .. }, phase: QuotaPhase::Preparing, .. }
@@ -3821,7 +4382,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 503,
+                    code: Some(503),
                     status: "UNAVAILABLE".into(),
                     message: "Temporary failure".into(),
                 },
@@ -3951,7 +4512,7 @@ mod tests {
                 Event::Runtime(RuntimeEvent::UpstreamError {
                     session: "running".into(),
                     error: crate::messages::HttpError {
-                        code: 429,
+                        code: Some(429),
                         status: "RESOURCE_EXHAUSTED".into(),
                         message: "Quota exhausted".into(),
                     },
@@ -4097,7 +4658,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -4168,7 +4729,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 429,
+                    code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
                     message: "resets 1970-01-01T00:02:00Z".into(),
                 },
@@ -4262,7 +4823,7 @@ mod tests {
                     Event::Runtime(RuntimeEvent::UpstreamError {
                         session: "running".into(),
                         error: crate::messages::HttpError {
-                            code: 429,
+                            code: Some(429),
                             status: "RESOURCE_EXHAUSTED".into(),
                             message: "resets 1970-01-01T00:02:00Z".into(),
                         },
@@ -5864,7 +6425,7 @@ mod tests {
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
                 error: crate::messages::HttpError {
-                    code: 503,
+                    code: Some(503),
                     status: "UNAVAILABLE".into(),
                     message: "HTTP failure".into(),
                 },
@@ -5882,7 +6443,7 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, Command::Cancel(session) if session == "running"))
         );
-        assert!(commands.iter().any(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error)))) if error.code == 503 && error.message == "HTTP failure")));
+        assert!(commands.iter().any(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error)))) if error.code == Some(503) && error.message == "HTTP failure")));
         assert!(
             !commands
                 .iter()
@@ -6120,7 +6681,7 @@ mod tests {
                     Event::Runtime(RuntimeEvent::UpstreamError {
                         session: "session".into(),
                         error: crate::messages::HttpError {
-                            code: 503,
+                            code: Some(503),
                             status: "UNAVAILABLE".into(),
                             message: "HTTP failure".into(),
                         },
@@ -6279,6 +6840,58 @@ mod tests {
             3,
         )
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_start_without_state_survives_an_unwritable_data_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!(
+                "acp2api-state-create-failure-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            std::fs::create_dir_all(&folder).unwrap();
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let journal =
+                crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            let configuration = folder.join("config.toml");
+            let settings = crate::store::read(&configuration, 3).unwrap().settings;
+            let state_path = folder.join(crate::store::STATE_FILE);
+            assert!(!state_path.exists());
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let (conductor, task) =
+                Conductor::start(builds, clock.clone(), journal, settings, configuration, 3);
+            let result = conductor
+                .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+                .await;
+            let state = conductor.view().state;
+            let file_exists = state_path.exists();
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+            drop(conductor);
+            task.await.unwrap();
+            let logged = std::fs::read_dir(folder.join("logs"))
+                .unwrap()
+                .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+                .collect::<String>();
+            std::fs::remove_dir_all(folder).unwrap();
+            assert!(
+                result.is_ok(),
+                "the start keeps serving after a state-file write failure: {result:?}"
+            );
+            assert_eq!(
+                state, "Runtime unavailable",
+                "the missing executable, rather than lockout, stops runtime work"
+            );
+            assert!(!file_exists);
+            assert!(
+                logged.contains("state_file_write_failed"),
+                "the journal reports the failed state-file creation"
+            );
+        })
+        .await
+        .expect("state-file startup test cap: five seconds, no runtime launches");
+    }
+
     #[test]
     fn models_are_empty_after_a_runtime_closes() {
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});

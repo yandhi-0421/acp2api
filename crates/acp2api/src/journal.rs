@@ -288,7 +288,7 @@ pub(crate) enum Diagnostic {
     UnknownEffort { value: serde_json::Value },
     DroppedThoughtText,
 }
-fn redact_error(text: &str) -> String {
+pub(crate) fn redact_error(text: &str) -> String {
     let local_char = |c: char| c.is_alphanumeric() || "-_.+%".contains(c);
     let domain_char = |c: char| c.is_alphanumeric() || "-.".contains(c);
     let mut remaining = text;
@@ -370,6 +370,27 @@ impl Journal {
         });
         if let Err(error) = result {
             eprintln!("acp2api: cannot write state change: {error}");
+        }
+    }
+    pub(crate) fn state_file_failure(
+        &self,
+        event: &str,
+        operation: &str,
+        cause: io::ErrorKind,
+        clock: &dyn crate::Clock,
+    ) {
+        let result = timestamp(clock.wall()).and_then(|time| {
+            let record = serde_json::json!({
+                "time": time, "event": event, "operation": operation,
+                "cause": os_error_category(cause),
+            });
+            self.emit_to_file_then_stdout_under_writer_lock(
+                &record,
+                serde_json::to_string(&record)?,
+            )
+        });
+        if let Err(error) = result {
+            eprintln!("acp2api: cannot write state-file failure: {error}");
         }
     }
     pub(crate) fn upstream(
@@ -586,7 +607,7 @@ mod tests {
         let clock = crate::os::SystemClock::default();
         let journal = Journal::open(&folder, clock.wall()).unwrap();
         let error = crate::messages::HttpError {
-            code: 503, status: "UNAVAILABLE".into(),
+            code: Some(503), status: "UNAVAILABLE".into(),
             message: "Account (first.last+tag@sub.example.org), second%40example.org; Header Bearer short; Key ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ.".into(),
         };
         journal.upstream("s1", &error, false, &clock);
