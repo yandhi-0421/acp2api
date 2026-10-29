@@ -507,6 +507,7 @@ struct UnavailableReason {
     cause: Option<std::io::ErrorKind>,
 }
 enum RuntimeState {
+    Stopped,
     Serving,
     Retiring { sign_in_wait_ended: bool },
     Restarting,
@@ -519,7 +520,7 @@ impl RuntimeState {
             Self::Serving => "running",
             Self::Retiring { .. } => "stopping",
             Self::Restarting => "starting",
-            Self::Unavailable(_) | Self::Stopping => "stopped",
+            Self::Stopped | Self::Unavailable(_) | Self::Stopping => "stopped",
         }
     }
 }
@@ -2687,7 +2688,11 @@ impl Conductor {
                 quota_wait: None,
                 retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
-                runtime_state: RuntimeState::Serving,
+                runtime_state: if lockout.is_some() {
+                    RuntimeState::Stopped
+                } else {
+                    RuntimeState::Serving
+                },
                 lockout,
                 sign_in_required: false,
                 sign_in_wait: None,
@@ -2961,6 +2966,8 @@ impl Conductor {
                 Command::Lockout(evidence) => {
                     lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
                     core.stop_runtime(runtime, read_open).await;
+                    core.runtime_state = RuntimeState::Stopped;
+                    core.publish_view();
                 }
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
@@ -3517,6 +3524,79 @@ mod tests {
                 "a waiting owner request receives M-12: {response:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_lockout_publishes_the_stopped_runtime_process() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (mut core, commands, folder) = error_after_reply(
+                "",
+                crate::messages::HttpError {
+                    code: Some(403),
+                    status: "PERMISSION_DENIED".into(),
+                    message: "Synthetic account suspension".into(),
+                },
+            );
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let journal =
+                crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            Conductor::commands(
+                &mut core,
+                &mut None,
+                &mut false,
+                &clock,
+                &journal,
+                &mut commands.into(),
+            )
+            .await;
+            let view = core.view.borrow().clone();
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(
+                (view.state, view.runtime_process),
+                ("Lockout", "stopped"),
+                "FR-035 and FR-054 publish a stopped process after the lockout stop completes"
+            );
+        })
+        .await
+        .expect(
+            "lockout view cap: five seconds, no child processes or requests, existing journal caps",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stored_lockout_starts_with_the_runtime_process_stopped() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let folder = std::env::temp_dir().join(format!(
+                "acp2api-stored-lockout-view-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+            let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let path = folder.join(crate::store::STATE_FILE);
+            let mut state = crate::store::StateFile::read(&path).unwrap();
+            state.lockout = Some(crate::store::Lockout {
+                since: "2026-10-18T12:00:00Z".into(),
+                signal: "403 PERMISSION_DENIED".into(),
+                original_error_text: "Synthetic account suspension".into(),
+            });
+            state.save(&path).unwrap();
+            let (conductor, task) = start_without_runtime(&clock, &journal, &folder);
+            conductor
+                .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+                .await
+                .unwrap();
+            let view = conductor.view();
+            drop(conductor);
+            task.await.unwrap();
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(
+                (view.state, view.runtime_process),
+                ("Lockout", "stopped"),
+                "FR-035 and FR-054 publish no running process at a start in stored lockout"
+            );
+        })
+        .await
+        .expect("stored lockout view cap: five seconds, no runtime launches or requests, existing journal caps");
     }
 
     #[tokio::test]
