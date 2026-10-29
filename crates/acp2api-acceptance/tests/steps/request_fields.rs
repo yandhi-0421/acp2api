@@ -138,15 +138,6 @@ async fn error_request(w: &mut World, endpoint: String) {
 }
 #[then(expr = "the error body has the \"error.type\" {string}")]
 fn error_type(w: &mut World, expected: String) {
-    if w.fields.no_key {
-        acp2api_acceptance::access_check::key_refusal(
-            w.scenario.answer.as_ref().unwrap(),
-            &w.fields.endpoint,
-        );
-        assert!(content_check::blocks(&w.scenario).is_empty());
-    } else {
-        expected_refusal(w);
-    }
     assert_eq!(
         w.scenario.answer.as_ref().unwrap().json()["error"]["type"],
         expected

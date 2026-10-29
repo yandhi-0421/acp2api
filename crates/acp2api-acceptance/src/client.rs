@@ -187,6 +187,12 @@ impl ApiClient {
         }
     }
     pub fn send(&self, call: ApiCall) -> Call {
+        let prompts_before = crate::fake::FakeRuntime::new(self.hub.clone())
+            .record()
+            .prompts()
+            .len();
+        self.hub.shared.0.lock().unwrap().active_request =
+            Some((prompts_before, call.body.clone()));
         assert!(
             self.requests.fetch_add(1, Ordering::SeqCst) < 300,
             "API request cap: 300"

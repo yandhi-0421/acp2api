@@ -179,7 +179,12 @@ fn refusal(w: &mut World, message: String) {
 }
 #[then("the official runtime gets no prompt")]
 fn no_prompt(w: &mut World) {
-    assert!(c::blocks(&w.scenario).is_empty(), "no ACP prompt");
+    let (before, _) = w.scenario.hub.active_request();
+    assert_eq!(
+        w.scenario.fake().record().prompts().len(),
+        before,
+        "no ACP prompt after the active request"
+    );
 }
 #[then(expr = "acp2api sends no HTTP request to {string}")]
 async fn no_fetch(w: &mut World, host: String) {
