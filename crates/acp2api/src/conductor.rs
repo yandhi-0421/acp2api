@@ -27,16 +27,25 @@ pub(crate) struct Conductor {
 pub(crate) struct View {
     pub(crate) state: &'static str,
     pub(crate) queued: usize,
+    pub(crate) sign_in_wait: Option<SignInWait>,
 }
 impl Default for View {
     fn default() -> Self {
         Self {
             state: "Running",
             queued: 0,
+            sign_in_wait: None,
         }
     }
 }
+#[derive(Clone)]
+pub(crate) struct SignInWait {
+    pub(crate) deadline: Moment,
+    pub(crate) address: Option<String>,
+}
 pub(crate) enum OwnerAction {
+    SignIn,
+    CancelSignIn,
     RefreshQuota,
     NewLocalApiKey,
     SetPasswordHash(String),
@@ -382,11 +391,13 @@ enum RuntimeState {
     Serving,
     Retiring,
     Restarting,
+    ReplacingSignIn,
     Unavailable(UnavailableReason),
     Stopping,
 }
 struct Core {
     sign_in_required: bool,
+    sign_in_wait: Option<SignInWait>,
     sign_in_entry: String,
     view: watch::Sender<Arc<View>>,
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
@@ -418,7 +429,12 @@ enum Event {
         accepted: Option<Box<Accepted>>,
         session: String,
     },
-    SignInRequired,
+    RuntimeReady {
+        signed_out: bool,
+    },
+    StartSignIn,
+    EndSignInWait,
+    SignInReplaced,
     RefreshQuota(oneshot::Sender<Result<(), String>>),
     RetireRuntime,
     RuntimeFailure,
@@ -434,6 +450,7 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
+    Authenticate,
     AdmitChecked {
         id: WorkId,
         session: String,
@@ -474,7 +491,7 @@ impl Core {
     fn state(&self) -> &'static str {
         if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
             "Runtime unavailable"
-        } else if self.sign_in_required {
+        } else if self.sign_in_required || self.sign_in_wait.is_some() {
             "Sign-in required"
         } else if self.quota_wait.is_some() {
             "Quota wait"
@@ -638,12 +655,14 @@ impl Core {
                     self.replaced(session, catalog);
                     *runtime = Some(started);
                     *read_open = true;
-                    self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
-                        .await;
-                    if signed_out {
-                        self.apply(Event::SignInRequired, runtime, read_open, clock, journal)
-                            .await;
-                    }
+                    self.apply(
+                        Event::RuntimeReady { signed_out },
+                        runtime,
+                        read_open,
+                        clock,
+                        journal,
+                    )
+                    .await;
                     return;
                 }
                 Err(LaunchFailure::Runtime(_) | LaunchFailure::Io(_)) => {
@@ -742,6 +761,7 @@ impl Core {
             .chain(self.records.iter().map(|record| record.expires))
             .chain(self.cancels.values().copied())
             .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
+            .chain(self.sign_in_wait.as_ref().map(|wait| wait.deadline))
             .min()
     }
     fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
@@ -750,7 +770,7 @@ impl Core {
                 reason.message.clone(),
             ));
         }
-        if self.sign_in_required {
+        if self.sign_in_required || self.sign_in_wait.is_some() {
             return Some(self.sign_in_message());
         }
         self.quota_wait
@@ -833,6 +853,26 @@ impl Core {
     ) -> Vec<Command> {
         let mut changed = (**settings.borrow()).clone();
         let change = match action {
+            OwnerAction::SignIn => {
+                if self.sign_in_wait.is_some()
+                    || !matches!(self.runtime_state, RuntimeState::Serving)
+                {
+                    let _ = reply.send(Err("Sign-in cannot start while a sign-in or runtime replacement is in progress.".into()));
+                    return Vec::new();
+                }
+                let commands = self.handle(Event::StartSignIn, clock.now(), clock.wall());
+                let _ = reply.send(Ok(()));
+                return commands;
+            }
+            OwnerAction::CancelSignIn => {
+                let commands = if self.sign_in_wait.is_some() {
+                    self.handle(Event::EndSignInWait, clock.now(), clock.wall())
+                } else {
+                    Vec::new()
+                };
+                let _ = reply.send(Ok(()));
+                return commands;
+            }
             OwnerAction::RefreshQuota => {
                 return self.handle(Event::RefreshQuota(reply), clock.now(), clock.wall());
             }
@@ -910,7 +950,9 @@ impl Core {
             admission,
             connection,
         };
-        if self.sign_in_required && !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+        if (self.sign_in_required || self.sign_in_wait.is_some())
+            && !matches!(self.runtime_state, RuntimeState::Unavailable(_))
+        {
             if !self.queue_full() {
                 return Some((Event::CheckPending(Box::new(pending)), hold));
             }
@@ -994,6 +1036,14 @@ impl Core {
         if matches!(event, Event::Deadline) && self.cancels.values().any(|at| *at <= now) {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
+        if matches!(event, Event::Deadline)
+            && self
+                .sign_in_wait
+                .as_ref()
+                .is_some_and(|wait| wait.deadline <= now)
+        {
+            return self.handle(Event::EndSignInWait, now, wall);
+        }
         let previous = self.state();
         let mut commands = Vec::new();
         match &mut event {
@@ -1062,8 +1112,46 @@ impl Core {
                     commands.push(Command::Forget(session));
                 }
             }
-            (None, Event::SignInRequired) => {
+            (None, Event::StartSignIn) => {
                 self.require_sign_in(&mut commands);
+                self.sign_in_wait = Some(SignInWait {
+                    deadline: now + 600_000,
+                    address: None,
+                });
+                commands.push(Command::Authenticate);
+            }
+            (None, Event::EndSignInWait) => {
+                self.sign_in_wait = None;
+                self.require_sign_in(&mut commands);
+                self.runtime_state = RuntimeState::ReplacingSignIn;
+            }
+            (None, Event::SignInReplaced) => {
+                while let Some(id) = self
+                    .work
+                    .iter()
+                    .find_map(|(id, work)| work.occupies_place().then_some(*id))
+                {
+                    self.finish(id, Err(self.sign_in_message()), &mut commands);
+                }
+            }
+            (None, Event::Runtime(RuntimeEvent::SignInAddress(address))) => {
+                if let Some(wait) = &mut self.sign_in_wait {
+                    wait.address = Some(address);
+                }
+            }
+            (None, Event::Runtime(RuntimeEvent::Authenticated(result))) => {
+                self.sign_in_wait = None;
+                if result.is_ok() {
+                    self.sign_in_required = false;
+                }
+            }
+            (None, Event::RuntimeReady { signed_out }) => {
+                self.runtime_state = RuntimeState::Serving;
+                if signed_out {
+                    self.require_sign_in(&mut commands);
+                } else {
+                    self.sign_in_required = false;
+                }
             }
             (Some(id), event) => self.quota_event(id, event, now, wall, &mut commands),
             (None, Event::RefreshQuota(reply)) => {
@@ -1071,7 +1159,7 @@ impl Core {
                     Some(reason.message.clone())
                 } else if matches!(self.runtime_state, RuntimeState::Stopping) {
                     Some(crate::messages::Message::Stopped.to_string())
-                } else if self.sign_in_required {
+                } else if self.sign_in_required || self.sign_in_wait.is_some() {
                     Some(self.sign_in_message().to_string())
                 } else if self
                     .last_refresh
@@ -1091,6 +1179,7 @@ impl Core {
                 }
             }
             (None, Event::Stop) => {
+                self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Stopping;
                 self.cancels.clear();
                 self.refuse_queued(
@@ -1391,6 +1480,7 @@ impl Core {
             (None, Event::Runtime(RuntimeEvent::Closed))
                 if matches!(self.runtime_state, RuntimeState::Restarting) => {}
             (None, Event::Runtime(RuntimeEvent::Closed) | Event::RuntimeFailure) => {
+                self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Restarting;
                 self.cancels.clear();
                 self.failures
@@ -1445,8 +1535,16 @@ impl Core {
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
                 Work::CheckQueued(_) => Some(*id),
-                Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
-                Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
+                Work::QuotaQueued { .. }
+                    if !self.sign_in_required && self.sign_in_wait.is_none() =>
+                {
+                    Some(*id)
+                }
+                Work::AcceptedQueued(_)
+                    if !self.sign_in_required
+                        && self.sign_in_wait.is_none()
+                        && self.quota_wait.is_none() =>
+                {
                     Some(*id)
                 }
                 _ => None,
@@ -1509,6 +1607,7 @@ impl Core {
             commands.insert(0, Command::State(self.state(), cause));
         }
         self.view.send_replace(Arc::new(View {
+            sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
             queued: self
                 .work
@@ -2262,6 +2361,7 @@ impl Conductor {
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 sign_in_required: false,
+                sign_in_wait: None,
                 sign_in_entry,
                 view,
                 failures: VecDeque::new(),
@@ -2298,10 +2398,24 @@ impl Conductor {
                         break;
                     }
                 }
-                if matches!(core.runtime_state, RuntimeState::Restarting)
-                    && core.replacement.is_none()
+                if matches!(
+                    core.runtime_state,
+                    RuntimeState::Restarting | RuntimeState::ReplacingSignIn
+                ) && core.replacement.is_none()
                 {
+                    let sign_in_replacement =
+                        matches!(core.runtime_state, RuntimeState::ReplacingSignIn);
                     core.stop_runtime(&mut runtime, &mut read_open).await;
+                    if sign_in_replacement {
+                        core.apply(
+                            Event::SignInReplaced,
+                            &mut runtime,
+                            &mut read_open,
+                            &clock,
+                            &journal,
+                        )
+                        .await;
+                    }
                     core.launch(
                         &mut runtime,
                         &mut read_open,
@@ -2539,6 +2653,16 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::Authenticate => {
+                    if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
+                        commands.extend(core.command_failed(
+                            None,
+                            error,
+                            clock.now(),
+                            clock.wall(),
+                        ));
+                    }
+                }
                 Command::AdmitChecked { id, session } => {
                     let Work::Checking(request) = core.work.remove(&id).unwrap() else {
                         unreachable!()
@@ -3153,6 +3277,7 @@ mod tests {
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             sign_in_required: false,
+            sign_in_wait: None,
             sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
             view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
@@ -3851,7 +3976,7 @@ mod tests {
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let mut core = Core {
-                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, sign_in_required:false, sign_in_entry:"http://127.0.0.1:8329/#sign-in".into(), view:watch::channel(Arc::new(View::default())).0, failures:VecDeque::new(), cleanup_before_start:false,
+                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, sign_in_required:false, sign_in_wait:None, sign_in_entry:"http://127.0.0.1:8329/#sign-in".into(), view:watch::channel(Arc::new(View::default())).0, failures:VecDeque::new(), cleanup_before_start:false,
                 cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
                 work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
                 use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
@@ -4418,6 +4543,7 @@ mod tests {
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             sign_in_required: false,
+            sign_in_wait: None,
             sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
             view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
@@ -4535,6 +4661,7 @@ mod tests {
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 sign_in_required: false,
+                sign_in_wait: None,
                 sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
                 view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
@@ -4648,6 +4775,7 @@ mod tests {
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 sign_in_required: false,
+                sign_in_wait: None,
                 sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
                 view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
@@ -4770,6 +4898,7 @@ mod tests {
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             sign_in_required: false,
+            sign_in_wait: None,
             sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
             view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
@@ -4818,6 +4947,7 @@ mod tests {
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             sign_in_required: false,
+            sign_in_wait: None,
             sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
             view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
@@ -4924,6 +5054,7 @@ mod tests {
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             sign_in_required: false,
+            sign_in_wait: None,
             sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
             view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
@@ -4976,6 +5107,7 @@ mod tests {
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             sign_in_required: false,
+            sign_in_wait: None,
             sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
             view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
@@ -5198,6 +5330,90 @@ mod tests {
             "FR-049 ACP completion releases the place"
         );
         assert!(commands.iter().any(|command| matches!(command, Command::Complete(done) if done.request.id == ids[0] && done.session_use.is_none())), "FR-031 the pending request retains its journal completion");
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn a_successful_sign_in_ends_only_its_own_condition() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-conditions-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.work.clear();
+        core.start_quota(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(120),
+            0,
+            std::time::UNIX_EPOCH,
+            &mut Vec::new(),
+        );
+        core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+        core.handle(
+            Event::RuntimeReady { signed_out: false },
+            30_000,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            core.state(),
+            "Sign-in required",
+            "a request check does not end the owner's wait"
+        );
+        assert_eq!(core.sign_in_wait.as_ref().unwrap().deadline, 600_000);
+        core.handle(
+            Event::Runtime(RuntimeEvent::Authenticated(Ok(()))),
+            30_000,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            core.state(),
+            "Quota wait",
+            "FR-038 sign-in preserves the unexpired quota wait"
+        );
+        assert_eq!(core.next_deadline(), Some(120_000));
+        core.handle(Event::StartSignIn, 40_000, std::time::UNIX_EPOCH);
+        core.handle(
+            Event::RuntimeUnavailable(UnavailableReason {
+                message: "runtime missing".into(),
+                cause: None,
+            }),
+            40_000,
+            std::time::UNIX_EPOCH,
+        );
+        core.handle(
+            Event::Runtime(RuntimeEvent::Authenticated(Ok(()))),
+            40_000,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            core.state(),
+            "Runtime unavailable",
+            "sign-in cannot clear runtime unavailability"
+        );
+        assert_eq!(core.quota_wait.as_ref().unwrap().deadline, 120_000);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn a_signed_out_replacement_refuses_the_queue_before_it_can_dispatch() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-replacement-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, queued, _tickets) = prompting_with_waiter(&journal);
+        core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+        let commands = core.handle(
+            Event::RuntimeReady { signed_out: true },
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, Command::Prepare { .. } | Command::Prompt { .. })),
+            "FR-038 a signed-out runtime starts no queued request"
+        );
+        assert!(commands.iter().any(|command| matches!(command, Command::Complete(done) if done.request.id == queued && matches!(done.outcome, crate::journal::Outcome::Refused("sign_in_required")))), "FR-037 the queued request gets the condition that started");
+        assert_eq!(core.state(), "Sign-in required");
         std::fs::remove_dir_all(folder).unwrap();
     }
 }

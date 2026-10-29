@@ -172,6 +172,8 @@ async fn next(runtime: &mut Runtime) -> String {
         RuntimeEvent::Retired { .. } => "retired".into(),
         RuntimeEvent::Failed(error) => format!("failed {error}"),
         RuntimeEvent::Stderr => "stderr".into(),
+        RuntimeEvent::SignInAddress(_) => "sign-in address".into(),
+        RuntimeEvent::Authenticated(_) => "authenticated".into(),
         RuntimeEvent::UpstreamError { error, .. } => format!("upstream {}", error.code),
         RuntimeEvent::Other => "other".into(),
         RuntimeEvent::Closed => "closed".into(),

@@ -1,3 +1,38 @@
+pub(super) const COUNTDOWN: &str = r#"const timer = document.getElementById('sign-in-time');
+const seconds = Number(timer.dataset.seconds);
+const started = performance.now();
+function update() {
+    const left = Math.max(0, seconds - Math.floor((performance.now() - started) / 1000));
+    timer.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    if (left > 0) setTimeout(update, 1000);
+}
+update();"#;
+pub(super) fn status(view: &crate::conductor::View, now: crate::Moment) -> String {
+    let sign_in = if let Some(wait) = &view.sign_in_wait {
+        let seconds = wait.deadline.saturating_sub(now).div_ceil(1000);
+        let address = wait
+            .address
+            .as_ref()
+            .map(|address| {
+                format!(
+                    " If no browser opened, copy this address: <a href=\"{0}\">{0}</a>",
+                    escape(address)
+                )
+            })
+            .unwrap_or_default();
+        format!(
+            r#"<p>acp2api waits for the sign-in in the browser: <span id="sign-in-time" role="timer" data-seconds="{seconds}">{}:{:02}</span> left.{address}</p><form method="post" action="/manage/cancel-sign-in"><button type="submit">Cancel the sign-in</button></form><script>{COUNTDOWN}</script>"#,
+            seconds / 60,
+            seconds % 60
+        )
+    } else {
+        r#"<form method="post" action="/manage/sign-in"><button type="submit">Sign in</button></form>"#.into()
+    };
+    format!(
+        r#"<section id="sign-in"><h2>{}</h2><p>Requests in the queue <span>{}</span></p>{sign_in}</section>"#,
+        view.state, view.queued
+    )
+}
 fn document(content: &str) -> String {
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>acp2api</title><style>
@@ -27,7 +62,7 @@ pub(super) fn settings(
     notices: &[crate::conductor::Notice],
     builds: Result<crate::runtime_builds::Summary, String>,
     quota_result: &Option<crate::conductor::QuotaResult>,
-    view: &crate::conductor::View,
+    state: &str,
 ) -> String {
     let key = escape(&settings.local_api_key);
     let options = (1..=highest)
@@ -50,10 +85,6 @@ pub(super) fn settings(
         escape(&notice.text()),escape(&notice.id)
     )).collect::<String>();
     let runtime = runtime(builds, settings);
-    let state = format!(
-        r#"<section id="sign-in"><h2>{}</h2><p>Requests in the queue <span>{}</span></p></section>"#,
-        view.state, view.queued
-    );
     let result = quota_result.as_ref().map(|result| format!(r#"<p>Last result: <time datetime="{time}">{time}</time></p><pre class="quota-result">{text}</pre>"#,time=escape(&result.time),text=escape(&result.text))).unwrap_or_else(|| "<p>No quota result yet.</p>".into());
     let quota = format!(
         r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p></section>"#

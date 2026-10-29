@@ -125,6 +125,7 @@ pub(crate) struct Runtime {
     config: std::collections::HashMap<(String, String), String>,
     configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
     stderr_session: Option<String>,
+    authentication: Option<u64>,
 }
 struct CreatingSession {
     work: String,
@@ -243,6 +244,7 @@ impl Runtime {
             config: std::collections::HashMap::new(),
             configuring: std::collections::HashMap::new(),
             stderr_session: None,
+            authentication: None,
         };
         Ok(runtime)
     }
@@ -530,6 +532,13 @@ impl Runtime {
         self.prompts.insert(id, session.into());
         Ok(())
     }
+    pub(crate) async fn authenticate(&mut self) -> Result<(), CommandError> {
+        let id = self
+            .send("authenticate", json!({"methodId":"oauth-personal"}))
+            .await?;
+        self.authentication = Some(id);
+        Ok(())
+    }
     pub(crate) async fn next(&mut self) -> (RuntimeEvent, Hold) {
         let Some((line, hold)) = self.lines.recv().await else {
             return (RuntimeEvent::Closed, self.clock.hold(HoldKind::TurnEvent));
@@ -543,6 +552,15 @@ impl Runtime {
         (event, hold)
     }
     fn stderr(&mut self, line: &str) -> RuntimeEvent {
+        if let Some(address) = line
+            .trim()
+            .strip_prefix("Open the following link to authenticate the ACP server: ")
+            && let Ok(uri) = address.parse::<axum::http::Uri>()
+            && matches!(uri.scheme_str(), Some("http" | "https"))
+            && uri.authority().is_some()
+        {
+            return RuntimeEvent::SignInAddress(address.into());
+        }
         if let Some((_, session)) =
             line.split_once("Antigravity SDK error processing prompt for session ")
         {
@@ -569,6 +587,13 @@ impl Runtime {
         if value.get("method").is_none()
             && let Some(id) = value["id"].as_u64()
         {
+            if self.authentication == Some(id) {
+                self.authentication = None;
+                return RuntimeEvent::Authenticated(match value.get("error") {
+                    Some(error) => Err(acp_error(error)),
+                    None => Ok(()),
+                });
+            }
             if let Some(pending) = self.configuring.remove(&id) {
                 let session = pending.session;
                 if let Some(error) = value.get("error") {
@@ -797,6 +822,8 @@ enum Line {
     Closed,
 }
 pub(crate) enum RuntimeEvent {
+    SignInAddress(String),
+    Authenticated(Result<(), crate::messages::Message>),
     UpstreamError {
         session: String,
         error: crate::messages::HttpError,
