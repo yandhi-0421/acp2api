@@ -343,14 +343,29 @@ fn redact_error(text: &str) -> String {
     }
     output
 }
+/// Uses the ErrorKind Debug name published by the design as the log value.
+fn os_error_category(cause: io::ErrorKind) -> String {
+    format!("{cause:?}")
+}
+
 impl Journal {
-    pub(crate) fn state(&self, state: &str, clock: &dyn crate::Clock) {
+    pub(crate) fn state(
+        &self,
+        state: &str,
+        cause: Option<io::ErrorKind>,
+        clock: &dyn crate::Clock,
+    ) {
         let result = timestamp(clock.wall()).and_then(|time| {
-            let record = serde_json::json!({"time":time,"event":"state_change","state":state});
-            self.emit_to_file_then_stdout_under_writer_lock(
-                &record,
-                format_args!("{time} state {state}"),
-            )
+            let mut record = serde_json::json!({"time":time,"event":"state_change","state":state});
+            let terminal = match cause {
+                Some(cause) => {
+                    let cause = os_error_category(cause);
+                    record["cause"] = serde_json::json!(cause);
+                    format!("{time} state {state}: {cause}")
+                }
+                None => format!("{time} state {state}"),
+            };
+            self.emit_to_file_then_stdout_under_writer_lock(&record, terminal)
         });
         if let Err(error) = result {
             eprintln!("acp2api: cannot write state change: {error}");

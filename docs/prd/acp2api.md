@@ -684,6 +684,7 @@ acp2api has no runtime process that it can use, so it starts no prompt turn. It 
 
 - acp2api found no executable of the official runtime;
 - acp2api found only builds that are not accepted versions;
+- acp2api found an accepted build, but its automatic copy failed at a start (FR-043);
 - the runtime process had 3 failures in 10 minutes (FR-041).
 
 The condition ends when a start of a runtime process succeeds. Other conditions remain until their own end. In this state, acp2api starts no runtime process by itself. These events start a new try:
@@ -693,7 +694,7 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
 - a new path, or a new search;
 - a passed compatibility check.
 
-**Pass:** each reason gives the state and M-14 with that reason. After the retry entry and a successful start, the next request runs when no other condition stops it.
+**Pass:** each reason in the list gives the state and M-14 with that reason. A failed automatic copy at a start names the accepted version, with no path. After the retry entry and a successful start, the next request runs when no other condition stops it.
 
 ### Official runtime
 
@@ -940,6 +941,8 @@ A log holds only metadata:
 - one line for each change of state;
 - the lines that other FRs name, for example for a rebuild.
 
+After a failed automatic copy at a start (FR-043), the state-change line for "runtime unavailable" also holds the OS error category. The line holds no path of the owner and no other new field.
+
 For a refused request, the log line has the `model` value of the body when the body parses and that value is a string of at most 256 bytes. Otherwise, the log line has `model: null`.
 
 No log line, no terminal line, and no state file holds these items:
@@ -957,7 +960,11 @@ For the error texts of the official runtime:
   - a run of 32 or more characters from the set `A-Z a-z 0-9 - _ . + / =`.
 - v1 has no setting for a log of the content of the requests.
 
-**Pass:** a test request with a marker string in each content field leaves no marker in the logs, the terminal, or the state file. A stderr line with `name%40example.com` gives `<REDACTED>` in the log.
+**Pass:**
+
+- A test request with a marker string in each content field leaves no marker in the logs, the terminal, or the state file.
+- A stderr line with `name%40example.com` gives `<REDACTED>` in the log.
+- A failed automatic copy at a start gives one state-change line with its OS error category, no owner path, and no other new field.
 
 #### FR-057 — Log size
 
@@ -1003,7 +1010,12 @@ The age of a log file is the time since its last modification.
 | M-28 | Unreadable or damaged account coordination data | `acp2api: cannot use the account coordination data at <path>.` |
 | M-29 | A session config option that the official runtime did not apply | `acp2api: the official runtime did not apply the <option> value <value>, so acp2api ended the prompt turn.` |
 
-The reasons of M-14 are `acp2api found no executable of the official runtime`, `no build that acp2api found is an accepted version`, and `the runtime process failed 3 times in 10 minutes`.
+The reasons of M-14 are:
+
+- `acp2api found no executable of the official runtime`;
+- `no build that acp2api found is an accepted version`;
+- `the copy of the accepted build <version> failed`;
+- `the runtime process failed 3 times in 10 minutes`.
 
 ### Texts of the management panel
 

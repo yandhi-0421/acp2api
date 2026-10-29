@@ -34,6 +34,23 @@ struct Found {
     listed: Option<ListedBuild>,
     identity: BuildIdentity,
 }
+impl Found {
+    fn selected_build(&self) -> SelectedBuild {
+        SelectedBuild {
+            folder: self.folder.clone(),
+            version: self
+                .listed
+                .as_ref()
+                .expect("selected builds are listed")
+                .version
+                .clone(),
+        }
+    }
+}
+pub(crate) struct SelectedBuild {
+    pub(crate) folder: PathBuf,
+    pub(crate) version: String,
+}
 pub(crate) struct BuildRow {
     pub(crate) path: PathBuf,
     pub(crate) version: Option<String>,
@@ -56,7 +73,7 @@ pub(crate) enum Action {
 pub(crate) enum Selection {
     Keep,
     Notice(&'static str),
-    Start(Option<PathBuf>),
+    Start(Option<SelectedBuild>),
     Check {
         folder: PathBuf,
         identity: BuildIdentity,
@@ -66,8 +83,22 @@ pub(crate) enum Selection {
 pub(crate) enum LaunchFailure {
     NoExecutable,
     NotAccepted,
+    Io(std::io::Error),
     Runtime(String),
     Stopped,
+}
+impl LaunchFailure {
+    pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
+        match self {
+            Self::Io(error) => Some(error.kind()),
+            _ => None,
+        }
+    }
+}
+impl From<std::io::Error> for LaunchFailure {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 impl std::fmt::Display for LaunchFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -76,6 +107,7 @@ impl std::fmt::Display for LaunchFailure {
                 f.write_str("acp2api found no executable of the official runtime")
             }
             Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
+            Self::Io(error) => error.fmt(f),
             Self::Runtime(error) => f.write_str(error),
             Self::Stopped => f.write_str("acp2api is exiting"),
         }
@@ -147,9 +179,9 @@ impl Builds {
             match fs::read(&path) {
                 Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(error) => Err(LaunchFailure::Runtime(format!(
-                    "cannot read {}: {error}",
-                    path.display()
+                Err(error) => Err(LaunchFailure::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("cannot read {}: {error}", path.display()),
                 ))),
             }
         };
@@ -284,7 +316,7 @@ impl Builds {
                             .is_some_and(|build| identity(build).to_string() == choice)
                     })
                     .ok_or("Choose an accepted build from the search results.")?;
-                return Ok(Selection::Start(Some(selected.folder.clone())));
+                return Ok(Selection::Start(Some(selected.selected_build())));
             }
             Action::Initial if self.accepted_copy()?.is_some() => {
                 return Ok(Selection::Start(None));
@@ -300,11 +332,11 @@ impl Builds {
             .iter()
             .filter(|found| found.listed.is_some())
             .max_by_key(|found| version(&found.listed.as_ref().unwrap().version));
-        Ok(Selection::Start(best.map(|found| found.folder.clone())))
+        Ok(Selection::Start(best.map(Found::selected_build)))
     }
     pub(crate) fn copy(&self, source: PathBuf) -> Result<(), LaunchFailure> {
         let copy = self.start.data.join(COPY);
-        let source = fs::canonicalize(source).map_err(|error| error.to_string())?;
+        let source = fs::canonicalize(source)?;
         if fs::canonicalize(&copy).ok().as_ref() != Some(&source) {
             let suffix = crate::random_hex::<12>().map_err(|error| error.to_string())?;
             let staging = self.start.data.join(format!(".official-runtime-{suffix}"));
@@ -312,22 +344,21 @@ impl Builds {
                 .start
                 .data
                 .join(format!(".official-runtime-old-{suffix}"));
-            fs::create_dir(&staging).map_err(|error| error.to_string())?;
+            fs::create_dir(&staging)?;
             let result = (|| {
                 for name in [SERVER, HARNESS] {
-                    fs::copy(source.join(name), staging.join(name))
-                        .map_err(|error| error.to_string())?;
+                    fs::copy(source.join(name), staging.join(name))?;
                 }
                 self.identify(&staging)?;
                 let previous = copy.exists();
                 if previous {
-                    fs::rename(&copy, &backup).map_err(|error| error.to_string())?;
+                    fs::rename(&copy, &backup)?;
                 }
                 if let Err(error) = fs::rename(&staging, &copy) {
                     if previous {
-                        fs::rename(&backup, &copy).map_err(|error| error.to_string())?;
+                        fs::rename(&backup, &copy)?;
                     }
-                    return Err(LaunchFailure::Runtime(error.to_string()));
+                    return Err(LaunchFailure::Io(error));
                 }
                 if previous {
                     let _ = fs::remove_dir_all(backup);
@@ -335,7 +366,7 @@ impl Builds {
                 Ok(())
             })();
             if staging.exists() {
-                fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
+                fs::remove_dir_all(&staging)?;
             }
             result?;
         }
@@ -878,7 +909,7 @@ mod tests {
             .await
             .ok()
             .and_then(|selection| match selection {
-                Selection::Start(path) => path,
+                Selection::Start(build) => build.map(|build| build.folder),
                 Selection::Keep | Selection::Notice(_) | Selection::Check { .. } => None,
             });
         fs::remove_dir_all(&root).unwrap();
@@ -1265,7 +1296,9 @@ mod tests {
             else {
                 panic!("the listed build must be selectable")
             };
-            builds.copy(source.expect("selected build source")).unwrap();
+            builds
+                .copy(source.expect("selected build source").folder)
+                .unwrap();
             let _ = builds.launch(None).await;
             let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());
             fs::remove_dir_all(&root).unwrap();

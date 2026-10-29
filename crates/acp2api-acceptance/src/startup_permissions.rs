@@ -1,6 +1,6 @@
 #[cfg(windows)]
 pub fn assert_owner_only(path: &std::path::Path) {
-    use std::{os::windows::ffi::OsStrExt, ptr};
+    use std::ptr;
     use windows_sys::Win32::{
         Foundation::{CloseHandle, LocalFree},
         Security::{
@@ -12,7 +12,7 @@ pub fn assert_owner_only(path: &std::path::Path) {
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     };
     unsafe {
-        let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let path = wide(path);
         let mut owner = ptr::null_mut();
         let mut acl = ptr::null_mut();
         let mut descriptor = ptr::null_mut();
@@ -76,4 +76,10 @@ pub fn assert_owner_only(path: &std::path::Path) {
         assert_ne!(ace.Mask & 0x0001, 0, "owner must have file read access");
         LocalFree(descriptor);
     }
+}
+
+#[cfg(windows)]
+pub fn wide(path: &std::path::Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
 }

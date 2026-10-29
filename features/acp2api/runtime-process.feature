@@ -5,6 +5,17 @@ Feature: Runtime process
   N is the number of ACP sessions after which acp2api replaces the runtime process. OD-1 of the PRD decides its value.
   In a quoted message, a value in angle brackets is a value that acp2api fills in, as the section "Message texts" of the PRD gives.
 
+  @FR-040 @issue-131
+  Scenario: A failed automatic copy names the accepted build in M-14
+    Given acp2api has no copy of the official runtime
+    And the install folder of Zed holds the accepted build 1.4.0
+    And the data folder denies creation of the automatic copy
+    When the owner starts acp2api
+    Then the result of the search lists the build in the install folder of Zed
+    And acp2api is in the state "runtime unavailable"
+    And a request gets the message "acp2api: the official runtime is unavailable: the copy of the accepted build 1.4.0 failed. Accepted versions: <versions>. See <address of the management panel>."
+    And the official runtime gets no prompt
+
   @FR-040 @FR-042 @issue-58
   Scenario: With no build anywhere, acp2api is in the state runtime unavailable
     Given no place that acp2api searches holds a build of the official runtime

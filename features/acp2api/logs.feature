@@ -8,6 +8,15 @@ Feature: Logs
     Given acp2api is in the normal state
     And the official runtime offers the model name "gemini-3.8-flash"
 
+  @FR-056 @issue-131
+  Scenario: A failed automatic copy logs its OS error category without a path
+    Given acp2api has no copy of the official runtime
+    And the install folder of Zed holds the accepted build 1.4.0
+    And the data folder denies creation of the automatic copy
+    When the owner starts acp2api
+    Then the log has one line for the change to "runtime unavailable" with the cause "PermissionDenied" and no path or other new field
+    And the terminal has one line for the change to "runtime unavailable" with the cause "PermissionDenied" and no path
+
   @FR-056 @issue-42
   Scenario: A request gives one log line with its metadata
     When an API client sends a valid request to "POST /v1/chat/completions" with the model "gemini-3.8-flash" and the unknown field "example_field"

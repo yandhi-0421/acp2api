@@ -496,6 +496,7 @@ The core has these parts. Each part is a private module with a pure interface.
 - **`signals`.** The table of FR-034 over the error of each ACP call and the stderr error lines.
 - **`quota`.** `/usage` (FR-052), the parse of the reset time, and the limit of one refresh in 60 s.
 - **`owner`.** The owner actions of FR-053, the sign-in wait of FR-039, the script of the compatibility check of FR-044, and the notices of FR-047.
+  After a copy error, an owner action answers 422 and keeps the current unavailable reason. These actions are retry, new search, and new path.
 
 Rules of the core:
 
@@ -1042,6 +1043,7 @@ The release workflow writes this file from the result of the acceptance test (SC
 
 **Addresses (M-12, M-13, M-14, M-24).**
 
+- M-14 uses the reasons in the PRD, section "Message texts". For a failed automatic copy at a start, `<version>` is the selected accepted version.
 - The address of the management panel is `http://127.0.0.1:<port>/`.
 - The address of the sign-in entry is `http://127.0.0.1:<port>/#sign-in`. The page puts the sign-in entry in the element with the ID `sign-in`. After the entry of the password, the page goes back to the same fragment.
 - The management endpoints are `POST /manage/<action>`, one for each action of FR-053.
@@ -1066,6 +1068,9 @@ The release workflow writes this file from the result of the acceptance test (SC
   - the duration in ms, and the input and output tokens;
   - the result, the error code, and the names of the unknown fields.
 - Each change of state, also the first state after a start: `acp2api: <time> state <state>`. `<state>` is the English name of the panel text, for example `Running` or `Quota wait`. A lockout line adds `: ` and the notice M-12.
+- At a start, after a failed automatic copy, the state line adds `: <category>` to `Runtime unavailable`. FR-056 excludes paths.
+- The category is the Rust `std::io::ErrorKind` variant name, for example `PermissionDenied` or `StorageFull`. This rule applies to every variant, so no separate fallback category exists.
+- The JSON log line uses the fields `time`, `event: "state_change"`, and `state: "Runtime unavailable"`, plus `cause: "<category>"`. It has no other new field.
 - A step that checks the state of acp2api reads the last state line.
 
 **Request ID header (FR-056).** Each response of an API endpoint has the header `x-request-id`. Its value is the request ID of the request line.

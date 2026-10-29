@@ -4,7 +4,7 @@ use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
     conversation::{EffortAsk, Prompt, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
-    runtime_builds::{BuildIdentity, LaunchFailure},
+    runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use agent_client_protocol_schema::v1::StopReason;
@@ -50,7 +50,7 @@ impl Notice {
 enum Replacement {
     Build {
         reply: oneshot::Sender<Result<String, LaunchFailure>>,
-        source: Option<PathBuf>,
+        source: Option<SelectedBuild>,
         initial: bool,
     },
     Check {
@@ -93,6 +93,11 @@ pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const MAX_RUNTIME_FAILURES: usize = 3;
 const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 const REPEATED_FAILURES: &str = "the runtime process failed 3 times in 10 minutes";
+
+fn copy_failed_reason(version: &str) -> String {
+    format!("the copy of the accepted build {version} failed")
+}
+
 const UNAVAILABLE: &str = "official runtime is not available";
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
@@ -320,11 +325,15 @@ impl Active {
         false
     }
 }
+struct UnavailableReason {
+    message: String,
+    cause: Option<std::io::ErrorKind>,
+}
 enum RuntimeState {
     Serving,
     Retiring,
     Restarting,
-    Unavailable(String),
+    Unavailable(UnavailableReason),
     Stopping,
 }
 struct Core {
@@ -355,7 +364,7 @@ enum Event {
     RetireRuntime,
     RuntimeFailure,
     Stop,
-    RuntimeUnavailable(String),
+    RuntimeUnavailable(UnavailableReason),
     ResumeRuntime,
     Accepted(Box<Accepted>),
     Runtime(RuntimeEvent),
@@ -366,7 +375,7 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
-    State(&'static str),
+    State(&'static str, Option<std::io::ErrorKind>),
     Usage {
         work: String,
         session: String,
@@ -457,13 +466,26 @@ impl Core {
                 }
             },
         };
-        if let Some(source) = source
-            && let Err(error) = builds.copy(source)
-            && !initial
+        if let Some(selected) = source
+            && let Err(error) = builds.copy(selected.folder)
         {
-            self.resume_after_copy_error(runtime, read_open, clock, journal)
+            if initial {
+                self.make_unavailable(
+                    &copy_failed_reason(&selected.version),
+                    error.io_kind(),
+                    runtime,
+                    read_open,
+                    journal,
+                    builds,
+                )
                 .await;
-            let _ = reply.send(Err(error));
+                // Startup must keep the management panel available after a failed copy.
+                let _ = reply.send(Ok(String::new()));
+            } else {
+                self.resume_after_copy_error(runtime, read_open, clock, journal)
+                    .await;
+                let _ = reply.send(Err(error));
+            }
             return None;
         }
         self.stop_runtime(runtime, read_open).await;
@@ -534,15 +556,8 @@ impl Core {
             if matches!(self.runtime_state, RuntimeState::Restarting)
                 && self.failures.len() >= MAX_RUNTIME_FAILURES
             {
-                self.make_unavailable(
-                    REPEATED_FAILURES,
-                    runtime,
-                    read_open,
-                    clock,
-                    journal,
-                    builds,
-                )
-                .await;
+                self.make_unavailable(REPEATED_FAILURES, None, runtime, read_open, journal, builds)
+                    .await;
                 return;
             }
             let retained = self.cleanup_before_start.then(|| self.retained_sessions());
@@ -556,7 +571,7 @@ impl Core {
                         .await;
                     return;
                 }
-                Err(LaunchFailure::Runtime(_)) => {
+                Err(LaunchFailure::Runtime(_) | LaunchFailure::Io(_)) => {
                     self.apply(Event::RuntimeFailure, runtime, read_open, clock, journal)
                         .await;
                 }
@@ -568,9 +583,9 @@ impl Core {
                 Err(error @ (LaunchFailure::NoExecutable | LaunchFailure::NotAccepted)) => {
                     self.make_unavailable(
                         &error.to_string(),
+                        None,
                         runtime,
                         read_open,
-                        clock,
                         journal,
                         builds,
                     )
@@ -583,17 +598,20 @@ impl Core {
     async fn make_unavailable(
         &mut self,
         reason: &str,
+        cause: Option<std::io::ErrorKind>,
         runtime: &mut Option<Runtime>,
         read_open: &mut bool,
-        clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
         builds: &crate::runtime_builds::Builds,
     ) {
         self.apply(
-            Event::RuntimeUnavailable(builds.unavailable(reason)),
+            Event::RuntimeUnavailable(UnavailableReason {
+                message: builds.unavailable(reason),
+                cause,
+            }),
             runtime,
             read_open,
-            clock,
+            &builds.start.clock,
             journal,
         )
         .await;
@@ -649,9 +667,9 @@ impl Core {
             .min()
     }
     fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
-        if let RuntimeState::Unavailable(message) = &self.runtime_state {
+        if let RuntimeState::Unavailable(reason) = &self.runtime_state {
             return Some(crate::messages::Message::RuntimeUnavailable(
-                message.clone(),
+                reason.message.clone(),
             ));
         }
         self.quota_wait
@@ -874,8 +892,8 @@ impl Core {
         match (quota_work, event) {
             (Some(id), event) => self.quota_event(id, event, now, wall, &mut commands),
             (None, Event::RefreshQuota(reply)) => {
-                let error = if let RuntimeState::Unavailable(message) = &self.runtime_state {
-                    Some(message.clone())
+                let error = if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+                    Some(reason.message.clone())
                 } else if matches!(self.runtime_state, RuntimeState::Stopping) {
                     Some(crate::messages::Message::Stopped.to_string())
                 } else if self
@@ -914,9 +932,9 @@ impl Core {
                     self.finish(id, Err(crate::messages::Message::Stopped), &mut commands);
                 }
             }
-            (None, Event::RuntimeUnavailable(message)) => {
-                self.runtime_state = RuntimeState::Unavailable(message.clone());
-                let error = crate::messages::Message::RuntimeUnavailable(message);
+            (None, Event::RuntimeUnavailable(reason)) => {
+                let error = crate::messages::Message::RuntimeUnavailable(reason.message.clone());
+                self.runtime_state = RuntimeState::Unavailable(reason);
                 self.refuse_queued(
                     crate::journal::Outcome::Refused("runtime_unavailable"),
                     error.clone(),
@@ -1355,7 +1373,11 @@ impl Core {
             places += 1;
         }
         if self.state() != previous {
-            commands.insert(0, Command::State(self.state()));
+            let cause = match &self.runtime_state {
+                RuntimeState::Unavailable(reason) => reason.cause,
+                _ => None,
+            };
+            commands.insert(0, Command::State(self.state(), cause));
         }
         commands
     }
@@ -1989,7 +2011,7 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
-            journal.state(core.state(), clock.as_ref());
+            journal.state(core.state(), None, clock.as_ref());
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
@@ -2234,7 +2256,7 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
-                Command::State(state) => journal.state(state, clock.as_ref()),
+                Command::State(state, cause) => journal.state(state, cause, clock.as_ref()),
                 Command::Usage { work, session } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => {
@@ -2475,7 +2497,10 @@ mod tests {
             };
             core.enqueue_quota(purpose, None);
             let commands = core.handle(
-                Event::RuntimeUnavailable("runtime missing".into()),
+                Event::RuntimeUnavailable(UnavailableReason {
+                    message: "runtime missing".into(),
+                    cause: None,
+                }),
                 0,
                 std::time::UNIX_EPOCH,
             );
@@ -2613,7 +2638,10 @@ mod tests {
             std::time::UNIX_EPOCH,
         );
         commands.extend(core.handle(
-            Event::RuntimeUnavailable("unavailable".into()),
+            Event::RuntimeUnavailable(UnavailableReason {
+                message: "unavailable".into(),
+                cause: None,
+            }),
             1,
             std::time::UNIX_EPOCH,
         ));
@@ -2626,7 +2654,7 @@ mod tests {
         let states: Vec<_> = commands
             .into_iter()
             .filter_map(|command| match command {
-                Command::State(state) => Some(state),
+                Command::State(state, _) => Some(state),
                 _ => None,
             })
             .collect();
@@ -2703,7 +2731,10 @@ mod tests {
                     std::time::UNIX_EPOCH,
                 );
                 core.handle(
-                    Event::RuntimeUnavailable("runtime unavailable".into()),
+                    Event::RuntimeUnavailable(UnavailableReason {
+                        message: "runtime unavailable".into(),
+                        cause: None,
+                    }),
                     1,
                     std::time::UNIX_EPOCH,
                 );
@@ -3511,10 +3542,10 @@ mod tests {
             let mut runtime = None;
             let mut read_open = false;
             core.replace(&mut runtime, &mut read_open, &clock, &journal, &builds, &settings).await;
-            let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason), _ => None };
+            let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason.message), _ => None };
             let actual = (result.await.unwrap().map_err(|error| error.to_string()), reason, runtime.is_none() && !read_open);
             std::fs::remove_dir_all(folder).unwrap();
-            assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: no build that acp2api found is an accepted version. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
+            assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: the copy of the accepted build 1.4.0 failed. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
         }).await.expect("initial-copy test cap: five seconds, one copy attempt, zero process launches");
     }
 
@@ -3615,7 +3646,7 @@ mod tests {
             let (build_reply, build_result) = oneshot::channel();
             let (check_reply, check_result) = oneshot::channel();
             for (replacement, result) in [
-                (Replacement::Build { reply:build_reply, source:Some(source.clone()), initial:false }, build_result),
+                (Replacement::Build { reply:build_reply, source:Some(SelectedBuild { folder:source.clone(), version:"1.4.0".into() }), initial:false }, build_result),
                 (Replacement::Check { reply:check_reply, folder:source, identity:crate::runtime_builds::identity(&ports.release.listed_builds()[0]) }, check_result),
             ] {
                 let (mut core, _, _tickets) = prompting_with_waiter(&journal);
@@ -3791,7 +3822,10 @@ mod tests {
         core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
         let message = "acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.";
         let commands = core.handle(
-            Event::RuntimeUnavailable(message.into()),
+            Event::RuntimeUnavailable(UnavailableReason {
+                message: message.into(),
+                cause: None,
+            }),
             2,
             std::time::UNIX_EPOCH,
         );
