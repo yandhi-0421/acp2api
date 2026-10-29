@@ -13,6 +13,25 @@ pub(crate) enum Failure {
     Runtime(LaunchFailure),
     Internal(String),
 }
+impl Failure {
+    fn lockout(event: &RuntimeEvent) -> Option<Self> {
+        let error = match event {
+            RuntimeEvent::Prepared {
+                result: Err(error), ..
+            }
+            | RuntimeEvent::Turn {
+                update: TurnUpdate::Failed(error),
+                ..
+            } => error.clone(),
+            RuntimeEvent::UpstreamError { error, .. } => {
+                crate::messages::Message::UpstreamHttp(error.clone())
+            }
+            _ => return None,
+        };
+        let signal = error.lockout_signal()?;
+        Some(Self::Runtime(LaunchFailure::Lockout { signal, error }))
+    }
+}
 impl From<LaunchFailure> for Failure {
     fn from(error: LaunchFailure) -> Self {
         Self::Runtime(error)
@@ -95,7 +114,7 @@ pub(crate) async fn run(
                 runtime
                     .new_session(&tools, Some(&system))
                     .await
-                    .map_err(|error| Failure::Runtime(error.to_string().into()))
+                    .map_err(|error| Failure::Runtime(error.into()))
             })
             .await?;
         let session = runtime.session_id().to_owned();
@@ -133,6 +152,9 @@ pub(crate) async fn run(
                     .await?;
                 loop {
                     let (event, _hold) = runtime.next().await;
+                    if let Some(error) = Failure::lockout(&event) {
+                        return Err(error);
+                    }
                     match event {
                         RuntimeEvent::Prepared { result, .. } => {
                             result.map_err(|error| Failure::Incompatible(error.to_string()))?;
@@ -213,6 +235,9 @@ async fn check_prompt(
                 Ok::<_, Failure>(runtime.next().await)
             })
             .await?;
+        if let Some(error) = Failure::lockout(&event) {
+            return Err(error);
+        }
         match event {
             RuntimeEvent::Turn { update, .. } => {
                 if call.is_none() {

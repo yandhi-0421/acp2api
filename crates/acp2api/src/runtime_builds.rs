@@ -440,7 +440,9 @@ impl Builds {
             Ok(version) => self
                 .accept_check(version.clone(), identity)
                 .map(|()| format!("The compatibility check passed for {version}.")),
-            Err(Failure::Runtime(LaunchFailure::Stopped)) => Err(LaunchFailure::Stopped),
+            Err(Failure::Runtime(
+                error @ (LaunchFailure::Stopped | LaunchFailure::Lockout { .. }),
+            )) => Err(error),
             Err(Failure::Runtime(error)) => Ok(format!("The compatibility check failed: {error}.")),
             Err(Failure::Incompatible(error)) => {
                 Ok(format!("The compatibility check failed: {error}."))

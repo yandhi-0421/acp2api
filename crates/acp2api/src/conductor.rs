@@ -756,7 +756,29 @@ impl Core {
         builds: &crate::runtime_builds::Builds,
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) {
-        let result = builds.finish_check(&check.identity, check.result);
+        let result = match builds.finish_check(&check.identity, check.result) {
+            Err(LaunchFailure::Lockout { signal, error }) => {
+                self.apply(
+                    Event::Lockout {
+                        signal,
+                        error,
+                        signalling_work: None,
+                    },
+                    runtime,
+                    read_open,
+                    &builds.start.clock,
+                    journal,
+                )
+                .await;
+                let _ = check.reply.send(Err(self
+                    .refusal(builds.start.clock.now())
+                    .unwrap()
+                    .to_string()
+                    .into()));
+                return;
+            }
+            result => result,
+        };
         self.launch(runtime, read_open, &builds.start.clock, journal, builds)
             .await;
         let configured = publish.borrow().agy_acp_server_path.clone();
@@ -5585,14 +5607,15 @@ mod tests {
             let (conductor, task) = Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
             conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
-            let _check_result = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
+            let check_result = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
+            let owner_lockout = matches!(check_result, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check failed") && !text.contains("Original error:"));
             let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|evidence| (evidence.signal, evidence.original_error_text));
             let refused = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string().starts_with("acp2api: lockout since "));
-            let actual = (conductor.view().state, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.check_stops.load(Ordering::SeqCst), evidence, refused);
+            let actual = (conductor.view().state, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.check_stops.load(Ordering::SeqCst), evidence, refused, owner_lockout);
             stopped.send(true).unwrap();
             task.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
-            assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true)), "FR-034/FR-035: a check lockout persists redacted evidence and prevents restoration");
+            assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12");
         }).await.expect("compatibility lockout cap: five seconds, three processes, three ACP answers and four KiB output per process");
     }
 
