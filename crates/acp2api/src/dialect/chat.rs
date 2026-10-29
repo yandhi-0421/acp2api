@@ -68,6 +68,9 @@ impl WireDialect for Chat {
     fn start(&self, _: &mut Encoding) -> Vec<Event> {
         Vec::new()
     }
+    fn keep_alive(&self, _: &mut Encoding) -> Event {
+        Event::default().comment("keep-alive")
+    }
     fn text(&self, w: &mut Encoding, text: &str) -> Vec<Event> {
         if text.is_empty() {
             return Vec::new();

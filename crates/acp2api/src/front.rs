@@ -142,7 +142,7 @@ async fn turn(
     request.unknown_fields = parsed.unknown_fields;
     match app
         .conductor
-        .admit(parsed.turn, hold, request.clone())
+        .admit(parsed.turn, hold, request.clone(), parsed.form.stream)
         .await
     {
         Ok(ticket) => dialect.respond(parsed.form, ticket, app.clock).await,

@@ -122,6 +122,12 @@ impl WireDialect for Responses {
             ),
         ]
     }
+    fn keep_alive(&self, w: &mut Encoding) -> Event {
+        w.event(
+            "response.in_progress",
+            json!({"response":self.response(w,None)}),
+        )
+    }
     fn text(&self, w: &mut Encoding, text: &str) -> Vec<Event> {
         if text.is_empty() {
             return Vec::new();

@@ -108,6 +108,7 @@ struct TurnWork {
     hold: Hold,
 }
 struct PendingRequest {
+    stream: bool,
     turn: TurnRequest,
     request: crate::journal::Request,
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
@@ -126,12 +127,17 @@ fn copy_failed_reason(version: &str) -> String {
 const UNAVAILABLE: &str = "official runtime is not available";
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
+const KEEP_ALIVE_INTERVAL: Moment = 15_000;
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
     model: crate::catalog::SelectedModel,
     request: crate::journal::Request,
+    reply: Reply,
+}
+struct Reply {
     output: Output,
+    keep_alive: Option<Moment>,
 }
 type WorkId = u64;
 type WorkTable = BTreeMap<WorkId, Work>;
@@ -277,7 +283,43 @@ impl Work {
                 | Self::QuotaWorking { .. }
         )
     }
+    fn reply(&self) -> Option<&Reply> {
+        match self {
+            Self::AcceptedQueued(request) => Some(&request.reply),
+            Self::AcceptedWorking(active) => Some(&active.reply),
+            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => match &query
+                .purpose
+            {
+                QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                    response.as_ref().map(|active| &active.reply)
+                }
+                QuotaPurpose::Refresh(_) => None,
+            },
+            Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
+        }
+    }
+    fn reply_mut(&mut self) -> Option<&mut Reply> {
+        match self {
+            Self::AcceptedQueued(request) => Some(&mut request.reply),
+            Self::AcceptedWorking(active) => Some(&mut active.reply),
+            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => match &mut query
+                .purpose
+            {
+                QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                    response.as_mut().map(|active| &mut active.reply)
+                }
+                QuotaPurpose::Refresh(_) => None,
+            },
+            Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
+        }
+    }
     fn deadline(&self) -> Option<Moment> {
+        self.completion_deadline()
+            .into_iter()
+            .chain(self.reply().and_then(|reply| reply.keep_alive))
+            .min()
+    }
+    fn completion_deadline(&self) -> Option<Moment> {
         match self {
             Self::AcceptedWorking(Active {
                 phase: Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. },
@@ -331,7 +373,7 @@ impl Failure {
     }
 }
 struct Active {
-    output: Output,
+    reply: Reply,
     request: crate::journal::Request,
     session: Option<String>,
     hashes: crate::conversation::RecordHashes,
@@ -396,7 +438,10 @@ impl Active {
         let remaining = text.split_off(end);
         if !text.is_empty() {
             self.text.push_str(&text);
-            commands.push(Command::Emit(self.output.clone(), TurnEvent::Text(text)));
+            commands.push(Command::Emit(
+                self.reply.output.clone(),
+                TurnEvent::Text(text),
+            ));
         }
         if !complete {
             self.stop_prefix = remaining;
@@ -1047,7 +1092,10 @@ impl Core {
             turn: pending.turn,
             model,
             request: pending.request,
-            output,
+            reply: Reply {
+                output,
+                keep_alive: pending.stream.then(|| clock.now() + KEEP_ALIVE_INTERVAL),
+            },
         })
     }
     fn handle(
@@ -1574,7 +1622,11 @@ impl Core {
                 let due: Vec<_> = self
                     .work
                     .iter()
-                    .filter_map(|(id, work)| work.deadline().filter(|at| *at <= now).map(|_| *id))
+                    .filter_map(|(id, work)| {
+                        work.completion_deadline()
+                            .filter(|at| *at <= now)
+                            .map(|_| *id)
+                    })
                     .collect();
                 for id in due {
                     match &self.work[&id] {
@@ -1660,6 +1712,21 @@ impl Core {
                 places += 1;
             }
         }
+        for work in self.work.values_mut() {
+            if let Some(reply) = work.reply_mut()
+                && let Some(at) = &mut reply.keep_alive
+            {
+                let emitted = commands.iter().any(|command| {
+                    matches!(command, Command::Emit(output, _) if output.same_channel(&reply.output))
+                });
+                if emitted {
+                    *at = now + KEEP_ALIVE_INTERVAL;
+                } else if *at <= now {
+                    commands.push(Command::Emit(reply.output.clone(), TurnEvent::KeepAlive));
+                    *at = now + KEEP_ALIVE_INTERVAL;
+                }
+            }
+        }
         if self.state() != previous {
             let cause = match &self.runtime_state {
                 RuntimeState::Unavailable(reason) => reason.cause,
@@ -1682,7 +1749,7 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) -> bool {
-        if request.output.is_closed() {
+        if request.reply.output.is_closed() {
             commands.extend(checked_session.map(Command::Forget));
             Self::drop_queued(request, commands);
             return false;
@@ -1767,7 +1834,7 @@ impl Core {
         self.work.insert(
             id,
             Work::AcceptedWorking(Active {
-                output: request.output,
+                reply: request.reply,
                 request: request.request,
                 session,
                 hashes,
@@ -2178,7 +2245,10 @@ impl Core {
             session_use: None,
             outcome,
         }));
-        commands.push(Command::Emit(request.output, TurnEvent::End(Err(message))));
+        commands.push(Command::Emit(
+            request.reply.output,
+            TurnEvent::End(Err(message)),
+        ));
     }
     fn drop_queued(request: Accepted, commands: &mut Vec<Command>) {
         commands.push(Command::Complete(crate::journal::Completion {
@@ -2354,7 +2424,7 @@ impl Core {
             if let Some(call) = active.tool_call.take() {
                 output.push_str(&call.arguments);
                 commands.push(Command::Emit(
-                    active.output.clone(),
+                    active.reply.output.clone(),
                     TurnEvent::ToolCall(call),
                 ));
             }
@@ -2408,11 +2478,11 @@ impl Core {
         }));
         if end.is_ok() {
             commands.push(Command::Emit(
-                active.output.clone(),
+                active.reply.output.clone(),
                 TurnEvent::Stop(active.stop),
             ));
         }
-        commands.push(Command::Emit(active.output, TurnEvent::End(end)));
+        commands.push(Command::Emit(active.reply.output, TurnEvent::End(end)));
         forget
     }
 }
@@ -2584,24 +2654,9 @@ impl Conductor {
                 let connected: Vec<_> = core
                     .work
                     .values()
-                    .filter_map(|work| match work {
-                        Work::AcceptedWorking(active) => {
-                            Some((active.request.id.clone(), active.output.clone()))
-                        }
-                        Work::AcceptedQueued(request) => {
-                            Some((request.request.id.clone(), request.output.clone()))
-                        }
-                        Work::Retiring(_) => None,
-                        Work::CheckQueued(_) | Work::Checking(_) => None,
-                        Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => {
-                            match &query.purpose {
-                                QuotaPurpose::Reset { response, .. }
-                                | QuotaPurpose::Refusal { response, .. } => response
-                                    .as_ref()
-                                    .map(|active| (query.work.clone(), active.output.clone())),
-                                QuotaPurpose::Refresh(_) => None,
-                            }
-                        }
+                    .filter_map(|work| {
+                        work.reply()
+                            .map(|reply| (work.key().to_owned(), reply.output.clone()))
                     })
                     .collect();
                 let pending: Vec<_> = core
@@ -2914,12 +2969,14 @@ impl Conductor {
         turn: TurnRequest,
         hold: Hold,
         request: crate::journal::Request,
+        stream: bool,
     ) -> Result<Ticket, crate::messages::Refusal> {
         let (admission, reply) = oneshot::channel();
         let (connection, lease) = mpsc::unbounded_channel();
         self.send
             .send(Input::Turn(Box::new(TurnWork {
                 pending: PendingRequest {
+                    stream,
                     turn,
                     request,
                     admission,
@@ -3392,7 +3449,10 @@ mod tests {
                         level_from_name: false,
                     },
                     request,
-                    output,
+                    reply: Reply {
+                        output,
+                        keep_alive: None,
+                    },
                 })),
                 0,
                 std::time::UNIX_EPOCH,
@@ -3528,6 +3588,7 @@ mod tests {
                 .admit(
                     TurnWork {
                         pending: PendingRequest {
+                            stream: false,
                             turn: turn("m", "high"),
                             request,
                             admission,
@@ -3565,6 +3626,7 @@ mod tests {
                     let _ = core.admit(
                         TurnWork {
                             pending: PendingRequest {
+                                stream: false,
                                 turn: turn(model, effort),
                                 request: journal.begin(crate::journal::Api::Chat, 0),
                                 admission,
@@ -3629,7 +3691,10 @@ mod tests {
                     level_from_name: false,
                 },
                 request: journal.begin(crate::journal::Api::Chat, 0),
-                output,
+                reply: Reply {
+                    output,
+                    keep_alive: None,
+                },
             }
         };
         let seed = request("read_file");
@@ -3955,7 +4020,7 @@ mod tests {
                 .ok()
                 .unwrap()
                 .turn;
-            let admission = conductor.admit(turn, Hold::empty(), request).await;
+            let admission = conductor.admit(turn, Hold::empty(), request, false).await;
             assert!(
                 admission.is_ok(),
                 "a request during a check must queue even when no earlier accepted runtime existed"
@@ -4094,11 +4159,11 @@ mod tests {
             let (conductor, task) = Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 1);
             conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
             let parse = |system: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"system","content":system},{"role":"user","content":"request"}]})).unwrap()).ok().unwrap().turn;
-            let mut a = conductor.admit(parse("A"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            let mut a = conductor.admit(parse("A"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), false).await.ok().unwrap();
             prompting_a.notified().await;
             let (reply, owner) = oneshot::channel();
             conductor.send.send(Input::Builds { action: crate::runtime_builds::Action::Build(choice.to_string()), reply, hold: Hold::empty() }).await.unwrap();
-            let mut b = conductor.admit(parse("B"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0)).await.ok().unwrap();
+            let mut b = conductor.admit(parse("B"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), false).await.ok().unwrap();
             let waiting = trace.lock().unwrap().clone();
             let deferred = !waiting.iter().any(|event| event == "stop:old" || event == "launch:new");
             if !deferred {
@@ -4179,7 +4244,10 @@ mod tests {
                     level_from_name: false,
                 },
                 request: journal.begin(crate::journal::Api::Chat, 203),
-                output,
+                reply: Reply {
+                    output,
+                    keep_alive: None,
+                },
             })),
             203,
             std::time::UNIX_EPOCH,
@@ -4888,7 +4956,10 @@ mod tests {
                     level_from_name: false,
                 },
                 request,
-                output,
+                reply: Reply {
+                    output,
+                    keep_alive: None,
+                },
             })),
             0,
             std::time::UNIX_EPOCH,
@@ -4919,7 +4990,10 @@ mod tests {
                         level_from_name: false
                     },
                     request: queued,
-                    output,
+                    reply: Reply {
+                        output,
+                        keep_alive: None
+                    },
                 })),
                 1,
                 std::time::UNIX_EPOCH
@@ -4986,7 +5060,10 @@ mod tests {
                         level_from_name: false,
                     },
                     request: journal.begin(crate::journal::Api::Chat, 0),
-                    output,
+                    reply: Reply {
+                        output,
+                        keep_alive: None,
+                    },
                 })),
                 0,
                 std::time::UNIX_EPOCH,
@@ -5071,7 +5148,10 @@ mod tests {
                 work: BTreeMap::from([(
                     0,
                     Work::AcceptedWorking(Active {
-                        output: output.clone(),
+                        reply: Reply {
+                            output: output.clone(),
+                            keep_alive: None,
+                        },
                         request: journal.begin(crate::journal::Api::Chat, 0),
                         session: Some("existing".into()),
                         hashes: crate::conversation::record_hashes(&turn.conversation),
@@ -5129,7 +5209,10 @@ mod tests {
                         },
                         turn: next,
                         request: journal.begin(crate::journal::Api::Chat, 200),
-                        output,
+                        reply: Reply {
+                            output,
+                            keep_alive: None,
+                        },
                     })),
                     200,
                     std::time::UNIX_EPOCH,
@@ -5229,7 +5312,10 @@ mod tests {
                     },
                     turn,
                     request,
-                    output,
+                    reply: Reply {
+                        output,
+                        keep_alive: None,
+                    },
                 })),
                 0,
                 std::time::UNIX_EPOCH,
@@ -5336,7 +5422,10 @@ mod tests {
             },
             turn,
             request,
-            output,
+            reply: Reply {
+                output,
+                keep_alive: None,
+            },
         }));
         assert!(matches!(
             &core.handle(accepted, 0, std::time::UNIX_EPOCH)[..],
@@ -5375,7 +5464,7 @@ mod tests {
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let request = journal.begin(crate::journal::Api::Chat, clock.now());
         let admitted = conductor
-            .admit(turn, clock.hold(HoldKind::HttpRequest), request)
+            .admit(turn, clock.hold(HoldKind::HttpRequest), request, false)
             .await;
         let end = match admitted {
             Ok(Ticket { mut events, hold }) => {
@@ -5426,6 +5515,7 @@ mod tests {
             .send
             .send(Input::Turn(Box::new(TurnWork {
                 pending: PendingRequest {
+                    stream: false,
                     turn: turn(),
                     request: request(),
                     admission,
@@ -5436,7 +5526,7 @@ mod tests {
             .await
             .ok()
             .unwrap();
-        let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request());
+        let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request(), false);
         assert!(next.await.is_ok(), "the conductor serves the next request");
         let lines: String = std::fs::read_dir(folder.join("logs"))
             .unwrap()
@@ -5478,6 +5568,7 @@ mod tests {
             leases.push(lease);
             core.handle(
                 Event::CheckPending(Box::new(PendingRequest {
+                    stream: false,
                     turn,
                     request,
                     admission,
@@ -5793,6 +5884,7 @@ mod tests {
                 let (connection, _lease) = mpsc::unbounded_channel();
                 core.handle(
                     Event::CheckPending(Box::new(PendingRequest {
+                        stream: false,
                         turn,
                         request,
                         admission,
@@ -5868,6 +5960,7 @@ mod tests {
             let (connection, _lease) = mpsc::unbounded_channel();
             core.handle(
                 Event::CheckPending(Box::new(PendingRequest {
+                    stream: false,
                     turn,
                     request,
                     admission,
@@ -5974,6 +6067,7 @@ mod tests {
         let (connection, _lease) = mpsc::unbounded_channel();
         core.handle(
             Event::CheckPending(Box::new(PendingRequest {
+                stream: false,
                 turn,
                 request,
                 admission,
