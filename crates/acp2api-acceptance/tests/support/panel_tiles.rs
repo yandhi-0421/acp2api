@@ -13,9 +13,7 @@ impl std::fmt::Debug for TileState {
 }
 
 pub fn html(w: &World) -> String {
-    let answer = w.panel.answer.as_ref().unwrap();
-    assert_eq!(answer.status, 200, "FR-054 management page is available");
-    panel_check::text(answer)
+    panel_check::text(w.panel.answer.as_ref().unwrap())
 }
 
 pub fn sections(html: &str) -> impl Iterator<Item = &str> {

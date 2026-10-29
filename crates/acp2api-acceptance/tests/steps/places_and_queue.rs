@@ -149,8 +149,7 @@ fn platform_maximum(w: &mut World, maximum: u8) {
 
 #[when("the owner opens the management panel with a panel session")]
 async fn panel(w: &mut World) {
-    queue::panel(w).await;
-    w.panel.answer = Some(w.panel.page("B1").await);
+    w.panel.answer = Some(queue::view(w).await);
 }
 
 #[then(regex = r"^the entry for the concurrency limit offers only (1|1 and 2|1, 2, and 3)$")]

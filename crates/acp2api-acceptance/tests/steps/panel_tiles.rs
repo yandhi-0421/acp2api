@@ -216,12 +216,11 @@ async fn account(w: &mut World, email: String) {
 
 #[when("the owner opens each page of the management panel with a panel session")]
 async fn all_pages(w: &mut World) {
-    queue::panel(w).await;
-    for owner in ["B1", "anonymous"] {
-        let answer = w.panel.page(owner).await;
-        assert_eq!(answer.status, 200, "management document is available");
-        w.panel_tiles.pages.push(panel_check::text(&answer));
-    }
+    let page = queue::view(w).await;
+    w.panel_tiles.pages.push(panel_check::text(&page));
+    let answer = w.panel.page("anonymous").await;
+    assert_eq!(answer.status, 200, "management document is available");
+    w.panel_tiles.pages.push(panel_check::text(&answer));
     w.panel.login("wrong", "synthetic-invalid-password").await;
     assert_eq!(w.panel.login_answer.as_ref().unwrap().status, 401);
     w.panel_tiles
@@ -256,14 +255,17 @@ fn no_email(w: &mut World, email: String) {
 )]
 async fn reload(w: &mut World, reloads: usize) {
     assert!(reloads <= 3, "panel reload request cap: 4");
-    queue::panel(w).await;
+    queue::bind_panel(w).await;
     w.panel_tiles.calls_before = tiles::runtime_calls(w);
     assert!(
         w.panel_tiles.calls_before > 0,
         "runtime call observer recorded startup"
     );
-    for _ in 0..=reloads {
-        let answer = w.panel.page("B1").await;
+    let mut answer = w.panel.view_session("B1").await;
+    for view in 0..=reloads {
+        if view > 0 {
+            answer = w.panel.page("B1").await;
+        }
         assert_eq!(answer.status, 200);
         assert!(
             panel_check::text(&answer).contains("id=\"local-api-key\""),
@@ -309,10 +311,7 @@ async fn during_start(w: &mut World, count: u8) {
         "measurement precedes the held initialize reply"
     );
     w.panel.scenario(&mut w.scenario).await;
-    w.panel.login_initial("B1").await;
-    assert_eq!(w.panel.login_answer.as_ref().unwrap().status, 303);
-    let page = w.panel.page("B1").await;
-    assert_eq!(page.status, 200);
+    let page = w.panel.view_session("B1").await;
     assert!(
         !w.scenario
             .hub
