@@ -1772,7 +1772,8 @@ impl Core {
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
             runtime_process: match self.runtime_state {
-                RuntimeState::Serving | RuntimeState::Retiring { .. } => "running",
+                RuntimeState::Serving => "running",
+                RuntimeState::Retiring { .. } => "stopping",
                 RuntimeState::Restarting => "starting",
                 RuntimeState::Unavailable(_) | RuntimeState::Stopping => "stopped",
             },
@@ -3171,6 +3172,28 @@ mod tests {
                 notices: watch::channel(Arc::new(Vec::new())).0,
             }
         }
+    }
+
+    #[test]
+    fn the_panel_process_word_changes_when_retirement_starts() {
+        let mut core = Core::fixture(2);
+        core.handle(
+            Event::RuntimeReady {
+                sign_in_required: false,
+            },
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let ready = core.view.borrow().runtime_process;
+        core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
+        let retiring = core.view.borrow().runtime_process;
+        core.handle(Event::Stop, 2, std::time::UNIX_EPOCH);
+        let stopped = core.view.borrow().runtime_process;
+        assert_eq!(
+            (ready, retiring, stopped),
+            ("running", "stopping", "stopped"),
+            "FR-054 a process being retired must not read running while its replacement is checked"
+        );
     }
 
     fn quota_error_without_reset_time() -> crate::messages::HttpError {
