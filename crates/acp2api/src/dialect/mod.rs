@@ -211,9 +211,9 @@ struct StreamState {
     ended: bool,
 }
 // Retain the hold through the socket write so virtual time cannot move before the client has the bytes.
-struct HeldBytes {
-    bytes: Bytes,
-    _hold: Hold,
+pub(crate) struct HeldBytes {
+    pub(crate) bytes: Bytes,
+    pub(crate) _hold: Hold,
 }
 impl AsRef<[u8]> for HeldBytes {
     fn as_ref(&self) -> &[u8] {

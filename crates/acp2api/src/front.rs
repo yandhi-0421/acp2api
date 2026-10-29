@@ -6,13 +6,38 @@ use crate::{
 };
 use axum::{
     Router,
-    body::Bytes,
+    body::{Body, Bytes, HttpBody},
     extract::{DefaultBodyLimit, Extension, FromRequest, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
-use std::sync::{Arc, Mutex};
+use futures_util::{StreamExt, future::poll_fn};
+use std::{
+    sync::{Arc, Mutex},
+    task::{Context, Wake, Waker},
+};
+
+// A woken handler is work before the executor polls it again.
+struct ResponseWake {
+    clock: Arc<dyn Clock>,
+    state: Mutex<(Option<crate::Hold>, Waker)>,
+}
+impl Wake for ResponseWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        let waker = {
+            let mut state = self.state.lock().unwrap();
+            state
+                .0
+                .get_or_insert_with(|| self.clock.hold(HoldKind::TurnEvent));
+            state.1.clone()
+        };
+        waker.wake();
+    }
+}
 #[derive(Clone)]
 pub(crate) struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
 impl RequestHold {
@@ -199,9 +224,50 @@ async fn input_hold(
     };
     let lease = RequestHold(Arc::new(Mutex::new(Some(clock.hold(kind)))));
     request.extensions_mut().insert(lease.clone());
-    let response = next.run(request).await;
+    let (response, hold) = {
+        let mut response_future = std::pin::pin!(next.run(request));
+        let mut wake = None;
+        poll_fn(|cx| {
+            let wake = wake.get_or_insert_with(|| {
+                Arc::new(ResponseWake {
+                    clock: clock.clone(),
+                    state: Mutex::new((None, cx.waker().clone())),
+                })
+            });
+            let hold = {
+                let mut state = wake.state.lock().unwrap();
+                state.1.clone_from(cx.waker());
+                state
+                    .0
+                    .take()
+                    .unwrap_or_else(|| clock.hold(HoldKind::TurnEvent))
+            };
+            let waker = Waker::from(wake.clone());
+            response_future
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .map(|response| (response, hold))
+        })
+        .await
+    };
     drop(lease);
-    response
+    let Some(length) = response.body().size_hint().exact() else {
+        return response;
+    };
+    // Keep the framing of the buffered reply when wrapping its bytes as a stream.
+    let (mut parts, body) = response.into_parts();
+    parts
+        .headers
+        .entry(axum::http::header::CONTENT_LENGTH)
+        .or_insert_with(|| length.into());
+    let mut hold = Some(hold);
+    let bytes = body.into_data_stream().map(move |data| {
+        data.map(|bytes| match hold.take() {
+            Some(hold) => Bytes::from_owner(dialect::HeldBytes { bytes, _hold: hold }),
+            None => bytes,
+        })
+    });
+    axum::response::Response::from_parts(parts, Body::from_stream(bytes))
 }
 
 fn refuse(
