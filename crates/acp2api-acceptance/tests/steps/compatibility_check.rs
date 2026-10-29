@@ -163,14 +163,15 @@ async fn run(w: &mut World) {
 #[then("the check passes")]
 fn passes(w: &mut World) {
     assert!(
-        check::checked(w).is_some(),
+        check::checked(w.compatibility.candidate.as_ref().unwrap(), &w.startup.data).is_some(),
         "FR-044 a passed check must make the candidate an accepted version in the actual state file"
     );
 }
 
 #[then("the state file holds the two hashes and the version of the build 1.6.0")]
 fn saved(w: &mut World) {
-    let entry = check::checked(w).expect("FR-044 both candidate hashes in state file");
+    let entry = check::checked(w.compatibility.candidate.as_ref().unwrap(), &w.startup.data)
+        .expect("FR-044 both candidate hashes in state file");
     assert_eq!(entry["version"], "1.6.0", "FR-044 saved version");
     assert_eq!(
         entry["platform"],
@@ -209,7 +210,7 @@ fn fails(w: &mut World) {
         "FR-044 failure must follow a built-in tool that actually runs in the candidate process"
     );
     assert!(
-        check::checked(w).is_none(),
+        check::checked(w.compatibility.candidate.as_ref().unwrap(), &w.startup.data).is_none(),
         "FR-044 failed check cannot accept the candidate"
     );
 }
@@ -249,7 +250,7 @@ async fn restored(w: &mut World) {
 #[then("the build 1.6.0 is not an accepted version")]
 async fn rejected(w: &mut World) {
     assert!(
-        check::checked(w).is_none(),
+        check::checked(w.compatibility.candidate.as_ref().unwrap(), &w.startup.data).is_none(),
         "FR-044 failed build stays unaccepted"
     );
     let html = build::page(w).await;

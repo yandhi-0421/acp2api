@@ -2,13 +2,10 @@ use crate::World;
 use acp2api_acceptance::{
     client::{ApiCall, ApiClient},
     panel_check,
+    setup::file_hash,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::PathBuf};
 
 #[derive(Debug, Default)]
 pub struct BuildState {
@@ -22,12 +19,6 @@ pub fn program() -> &'static str {
 }
 pub fn descriptor() -> &'static str {
     acp2api_acceptance::build_fixture::HARNESS
-}
-pub fn hash(path: &Path) -> String {
-    Sha256::digest(fs::read(path).unwrap())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 pub async fn prepare(w: &mut World) {
     w.startup.initialize().await;
@@ -101,8 +92,8 @@ pub fn install(w: &mut World, name: &str, version: &str, listed: bool) -> PathBu
         run.release.builds.push(acp2api::ListedBuild {
             version: version.into(),
             platform: run.release.platform.clone(),
-            agy_acp_server_sha256: hash(&folder.join(program())),
-            localharness_external_sha256: hash(&folder.join(descriptor())),
+            agy_acp_server_sha256: file_hash(&folder.join(program())),
+            localharness_external_sha256: file_hash(&folder.join(descriptor())),
         });
     }
     folder
@@ -138,13 +129,16 @@ pub async fn action(w: &mut World, path: &str, body: Value) {
 pub async fn search(w: &mut World) {
     action(w, "/manage/search", json!({})).await;
 }
-pub async fn request(w: &mut World) -> acp2api_acceptance::client::Answer {
-    let root = if w.builds.bound {
+pub fn root(w: &World) -> &acp2api_acceptance::setup::TestRoot {
+    if w.builds.bound {
         w.startup.root()
     } else {
         &w.scenario.root
-    };
+    }
+}
+pub async fn request(w: &mut World) -> acp2api_acceptance::client::Answer {
     w.request.queue_next(&w.scenario);
+    let root = root(w);
     ApiClient::new(
         format!("127.0.0.1:{}", root.port),
         root.key.clone(),
@@ -208,7 +202,10 @@ pub fn copied(w: &World, version: &str) {
         text.contains(&format!("version = \"{version}\"")),
         "FR-043 copied build must be {version}"
     );
-    let actual = [hash(&copy.join(program())), hash(&copy.join(descriptor()))];
+    let actual = [
+        file_hash(&copy.join(program())),
+        file_hash(&copy.join(descriptor())),
+    ];
     assert!(
         w.startup
             .run

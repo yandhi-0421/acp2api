@@ -1,7 +1,10 @@
 use crate::{World, build_support as build};
-use acp2api_acceptance::client::Call;
+use acp2api_acceptance::{client::Call, setup::file_hash};
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Default)]
 pub struct CompatibilityState {
@@ -29,22 +32,21 @@ pub async fn found(w: &mut World) {
     build::assert_found(w, "the install folder of Zed").await;
 }
 
-fn identity(w: &World) -> [String; 2] {
-    let folder = w.compatibility.candidate.as_ref().unwrap();
+pub fn identity(folder: &Path) -> [String; 2] {
     [
-        build::hash(&folder.join(build::program())),
-        build::hash(&folder.join(build::descriptor())),
+        file_hash(&folder.join(build::program())),
+        file_hash(&folder.join(build::descriptor())),
     ]
 }
 
-pub fn checked(w: &World) -> Option<Value> {
-    let path = w.startup.data.join("state.json");
+pub fn checked(folder: &Path, data: &Path) -> Option<Value> {
+    let path = data.join("state.json");
     if !path.exists() {
         return None;
     }
     let state: Value = serde_json::from_slice(&fs::read(path).expect("actual state file"))
         .expect("state file JSON");
-    let [server, harness] = identity(w);
+    let [server, harness] = identity(folder);
     state["checked_builds"]
         .as_array()
         .expect("checked_builds array")
@@ -58,7 +60,7 @@ pub fn checked(w: &World) -> Option<Value> {
 
 pub async fn begin(w: &mut World) {
     found(w).await;
-    let [server, harness] = identity(w);
+    let [server, harness] = identity(w.compatibility.candidate.as_ref().unwrap());
     let call = w.panel.owner("build-owner").submit(
         "/manage/compatibility-check",
         json!({"build":format!("{server}:{harness}")}),

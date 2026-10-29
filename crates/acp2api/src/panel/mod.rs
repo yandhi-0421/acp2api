@@ -40,6 +40,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/concurrency", post(concurrency))
         .route("/manage/notice", post(dismiss_notice))
         .route("/manage/search", post(search))
+        .route("/manage/retry", post(retry))
         .route("/manage/runtime-path", post(runtime_path))
         .route("/manage/build", post(build))
         .route("/manage/compatibility-check", post(compatibility_check))
@@ -292,6 +293,9 @@ async fn search(
     Extension(lease): Extension<crate::front::RequestHold>,
 ) -> Response {
     runtime_action(panel, crate::runtime_builds::Action::Search, lease).await
+}
+async fn retry(panel: State<Panel>, lease: Extension<crate::front::RequestHold>) -> Response {
+    search(panel, lease).await
 }
 #[derive(Deserialize)]
 struct RuntimePath {
