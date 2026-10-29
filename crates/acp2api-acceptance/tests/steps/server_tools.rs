@@ -65,7 +65,9 @@ async fn codex(w: &mut World, endpoint: String, kind: String) {
     let call = c::request(&endpoint, &kind, None);
     send(w, endpoint, call).await;
 }
-#[then(expr = "the message is {string}")]
+#[then(
+    regex = r#"^the message is "(Input tag '[^']+' found using 'type' does not match any of the expected tags)"$"#
+)]
 fn exact(w: &mut World, expected: String) {
     refusal(w, &expected);
 }
