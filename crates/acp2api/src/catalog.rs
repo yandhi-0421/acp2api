@@ -38,6 +38,14 @@ pub(crate) struct SelectedModel {
     pub level: Option<ThinkingLevel>,
     pub level_from_name: bool,
 }
+impl SelectedModel {
+    pub(crate) fn id(&self) -> String {
+        match self.level {
+            Some(level) => format!("{}-{}", self.model, level.as_str()),
+            None => self.model.clone(),
+        }
+    }
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Metadata {

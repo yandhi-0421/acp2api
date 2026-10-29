@@ -272,6 +272,7 @@ pub(crate) fn prompt(
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItemHash([u8; 32]);
+#[derive(Clone)]
 pub(crate) struct RecordHashes {
     pub system: ItemHash,
     pub messages: Vec<ItemHash>,

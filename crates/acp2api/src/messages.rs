@@ -50,6 +50,10 @@ pub(crate) enum Message {
     RuntimeUnavailable(String),
     RuntimeFailed,
     MaxTurnRequests,
+    RetryWait {
+        seconds: u64,
+        error: Box<Message>,
+    },
     Stopped,
     Upstream(String),
     UpstreamHttp(HttpError),
@@ -63,7 +67,7 @@ pub(crate) enum Row {
     QueueFull,
     Quota(u64),
     Other502,
-    Temporary503,
+    Temporary503(u64),
 }
 pub(crate) struct Refusal {
     pub message: Message,
@@ -89,15 +93,31 @@ impl Refusal {
         .into()
     }
     pub fn row(&self) -> Row {
-        match self.message {
+        self.message.row()
+    }
+    pub fn param(&self) -> Option<&str> {
+        match &self.message {
+            Message::Field { path, .. } => Some(path),
+            Message::Model { .. } => Some("model"),
+            _ => None,
+        }
+    }
+}
+impl Message {
+    pub(crate) fn row(&self) -> Row {
+        match self {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
             Message::QueueFull => Row::QueueFull,
-            Message::QuotaWait { retry_after, .. } => Row::Quota(retry_after),
-            Message::RuntimeFailed => Row::Temporary503,
-            Message::UpstreamHttp(ref error) if (500..600).contains(&error.code) => {
-                Row::Temporary503
+            Message::QuotaWait { retry_after, .. } => Row::Quota(*retry_after),
+            Message::RuntimeFailed => Row::Temporary503(30),
+            Message::UpstreamHttp(error) if (500..600).contains(&error.code) => {
+                Row::Temporary503(30)
             }
+            Message::RetryWait { seconds, error } => match error.row() {
+                Row::Temporary503(_) => Row::Temporary503(*seconds),
+                row => row,
+            },
             Message::UpstreamHttp(_)
             | Message::UpstreamAcp(_)
             | Message::Upstream(_)
@@ -120,13 +140,6 @@ impl Refusal {
             | Message::Prefill
             | Message::InvalidJson
             | Message::Invalid(_) => Row::Rejected,
-        }
-    }
-    pub fn param(&self) -> Option<&str> {
-        match &self.message {
-            Message::Field { path, .. } => Some(path),
-            Message::Model { .. } => Some("model"),
-            _ => None,
         }
     }
 }
@@ -179,6 +192,7 @@ impl fmt::Display for Message {
             Self::Stopped => f.write_str("acp2api: acp2api stopped before the end of this request."),
             Self::RuntimeFailed => f.write_str("acp2api: the runtime process failed, so acp2api ended the prompt turn."),
             Self::MaxTurnRequests => f.write_str("acp2api: the prompt turn reached the limit of model requests of the official runtime."),
+            Self::RetryWait { seconds, error } => write!(f, "acp2api: a request of this conversation failed less than 30 s ago. Send the request again in {seconds} s. The error was: {}", error.to_string().trim_start_matches("acp2api: ")),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::UpstreamHttp(error) => write!(f, "acp2api: upstream error {} {}: {}", error.code, error.status, error.message),

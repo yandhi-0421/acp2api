@@ -1,5 +1,6 @@
 mod quota;
 mod records;
+mod retry;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
@@ -241,7 +242,7 @@ enum Phase {
     Settling {
         at: Moment,
         can_continue: bool,
-        result: Result<(), crate::messages::Message>,
+        result: Result<(), (crate::messages::Message, Moment)>,
     },
 }
 struct Active {
@@ -250,6 +251,7 @@ struct Active {
     session: Option<String>,
     hashes: crate::conversation::RecordHashes,
     tools_hash: crate::conversation::ToolSetHash,
+    client_tools_hash: crate::conversation::ToolSetHash,
     kind: crate::journal::SessionUse,
     used: u64,
     expires: Moment,
@@ -259,6 +261,7 @@ struct Active {
     input_tokens: u64,
     model: String,
     phase: Phase,
+    model_id: String,
     tool_call: Option<crate::conversation::ToolCall>,
     stop: crate::conversation::Stop,
     stops: Vec<String>,
@@ -340,6 +343,7 @@ struct Core {
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
     last_refresh: Option<Moment>,
     quota_wait: Option<quota::Wait>,
+    retry_waits: Vec<retry::Wait>,
     next_quota: quota::TimerId,
     runtime_state: RuntimeState,
     failures: VecDeque<Moment>,
@@ -664,6 +668,7 @@ impl Core {
             .chain(self.records.iter().map(|record| record.expires))
             .chain(self.cancels.values().copied())
             .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
+            .chain(self.retry_waits.iter().map(|wait| wait.deadline))
             .min()
     }
     fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
@@ -801,7 +806,15 @@ impl Core {
         let (output, ticket) = mpsc::unbounded_channel();
         let mut checked = match self.refusal(clock.now()) {
             Some(message) => Err(message.into()),
-            None => self.check_model(&work.turn),
+            None => self.check_model(&work.turn).and_then(|model| {
+                if let Some(message) =
+                    retry::refusal(&self.retry_waits, &work.turn, &model, clock.now())
+                {
+                    Err(message.into())
+                } else {
+                    Ok(model)
+                }
+            }),
         };
         if self.queue_full() {
             checked = checked.and(Err(crate::messages::Message::QueueFull.into()));
@@ -858,6 +871,7 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
+        self.retry_waits.retain(|wait| wait.deadline > now);
         if self
             .quota_wait
             .as_ref()
@@ -929,7 +943,12 @@ impl Core {
                     {
                         commands.push(Command::Cancel(session.clone()));
                     }
-                    self.finish(id, Err(crate::messages::Message::Stopped), &mut commands);
+                    self.finish(
+                        id,
+                        Err(crate::messages::Message::Stopped),
+                        now,
+                        &mut commands,
+                    );
                 }
             }
             (None, Event::RuntimeUnavailable(reason)) => {
@@ -948,7 +967,7 @@ impl Core {
                     })
                     .collect();
                 for id in queries {
-                    self.finish(id, Err(error.clone()), &mut commands);
+                    self.finish(id, Err(error.clone()), now, &mut commands);
                 }
             }
             (None, Event::RetireRuntime) => {
@@ -1011,7 +1030,7 @@ impl Core {
                         }),
                     );
                     if ended {
-                        self.finish(id, Ok(()), &mut commands);
+                        self.finish(id, Ok(()), now, &mut commands);
                     }
                 }
             }
@@ -1020,6 +1039,7 @@ impl Core {
                     self.finish(
                         id,
                         Err(crate::messages::Message::Upstream(error)),
+                        now,
                         &mut commands,
                     );
                 }
@@ -1032,7 +1052,7 @@ impl Core {
                             match self.work.get_mut(&id).unwrap() {
                                 Work::Retiring(outstanding) => {
                                     outstanding.session = Some(session);
-                                    self.finish(id, Ok(()), &mut commands);
+                                    self.finish(id, Ok(()), now, &mut commands);
                                 }
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
@@ -1046,7 +1066,7 @@ impl Core {
                                         std::mem::replace(&mut active.phase, Phase::Prompt)
                                     {
                                         if let Some(message) = self.refusal(now) {
-                                            self.finish(id, Err(message), &mut commands);
+                                            self.finish(id, Err(message), now, &mut commands);
                                         } else {
                                             commands.push(Command::Prompt {
                                                 work,
@@ -1063,7 +1083,7 @@ impl Core {
                                 self.quota_signal(&error, now, wall, &mut commands)
                             {
                                 if known {
-                                    self.finish(id, Err(wait.message(now)), &mut commands);
+                                    self.finish(id, Err(wait.message(now)), now, &mut commands);
                                 } else {
                                     let mut active =
                                         self.work.remove(&id).unwrap().into_active().unwrap();
@@ -1082,7 +1102,7 @@ impl Core {
                                     );
                                 }
                             } else {
-                                self.finish(id, Err(error), &mut commands);
+                                self.finish(id, Err(error), now, &mut commands);
                             }
                         }
                     }
@@ -1093,7 +1113,7 @@ impl Core {
             (None, Event::Runtime(RuntimeEvent::Retired { session })) => {
                 self.cancels.remove(&session);
                 if let Some(id) = self.by_session(&session) {
-                    self.finish(id, Ok(()), &mut commands);
+                    self.finish(id, Ok(()), now, &mut commands);
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Turn { session, update })) => {
@@ -1112,7 +1132,7 @@ impl Core {
                     if let Some(id) = id {
                         if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
                             if known {
-                                self.end_request(id, wait.message(now), &mut commands);
+                                self.end_request(id, wait.message(now), now, &mut commands);
                             } else {
                                 active.phase = match active.phase {
                                     Phase::Settling { at, .. }
@@ -1175,6 +1195,7 @@ impl Core {
                     self.finish(
                         id,
                         Err(crate::messages::Message::Upstream(error.clone())),
+                        now,
                         &mut commands,
                     );
                 }
@@ -1197,6 +1218,7 @@ impl Core {
                     self.finish(
                         id,
                         Err(crate::messages::Message::RuntimeFailed),
+                        now,
                         &mut commands,
                     );
                 }
@@ -1213,7 +1235,7 @@ impl Core {
                         Work::QuotaWorking { .. } => {
                             self.quota_event(id, Event::Deadline, now, wall, &mut commands)
                         }
-                        _ => self.finish(id, Ok(()), &mut commands),
+                        _ => self.finish(id, Ok(()), now, &mut commands),
                     }
                 }
             }
@@ -1279,6 +1301,19 @@ impl Core {
                 Self::drop_queued(request, &mut commands);
                 continue;
             }
+            if let Some(message) =
+                retry::refusal(&self.retry_waits, &request.turn, &request.model, now)
+            {
+                commands.push(Command::Complete(crate::journal::Completion {
+                    request: request.request,
+                    session: None,
+                    session_use: None,
+                    outcome: crate::journal::Outcome::Refused("retry_wait"),
+                }));
+                commands.push(Command::Emit(request.output, TurnEvent::End(Err(message))));
+                continue;
+            }
+            let client_tools_hash = crate::conversation::tool_set_hash(&request.turn.tools);
             let settings = Session {
                 system: crate::conversation::system_prompt_addition(
                     &request.turn.conversation.system,
@@ -1302,6 +1337,7 @@ impl Core {
                 },
             };
             let (kind, prompt) = crate::conversation::prompt(prompt, &items);
+            let model_id = request.model.id();
             let prompt = PromptRequest {
                 blocks: prompt,
                 model: request.model.model,
@@ -1355,6 +1391,7 @@ impl Core {
                     session,
                     hashes,
                     tools_hash,
+                    client_tools_hash,
                     kind,
                     used: self.use_sequence,
                     expires: now.saturating_add(24 * 60 * 60 * 1000),
@@ -1364,6 +1401,7 @@ impl Core {
                     input_tokens: request.turn.input_tokens,
                     model,
                     phase,
+                    model_id,
                     tool_call: None,
                     stop: crate::conversation::Stop::EndTurn,
                     stops: request.turn.stop,
@@ -1538,13 +1576,20 @@ impl Core {
                 }
             }
         };
-        self.complete_quota(query, phase.session().map(str::to_owned), end, commands);
+        self.complete_quota(
+            query,
+            phase.session().map(str::to_owned),
+            end,
+            now,
+            commands,
+        );
     }
     fn complete_quota(
         &mut self,
         query: QuotaQuery,
         session: Option<String>,
         result: Result<(), crate::messages::Message>,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) {
         let response = match query.purpose {
@@ -1558,7 +1603,7 @@ impl Core {
             }
         };
         if let Some(active) = response {
-            let forget = self.complete_request(active, result, commands);
+            let forget = self.complete_request(active, result, now, commands);
             commands.extend(
                 session
                     .filter(|session| Some(session) != forget.as_ref())
@@ -1581,7 +1626,7 @@ impl Core {
         if matches!(self.work[&id], Work::Retiring(_)) {
             match update {
                 TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
-                    self.finish(id, Ok(()), commands);
+                    self.finish(id, Ok(()), now, commands);
                 }
                 TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } => {
@@ -1598,7 +1643,7 @@ impl Core {
             && let Some((wait, known)) = self.quota_signal(error, now, wall, commands)
         {
             if known {
-                self.finish(id, Err(wait.message(now)), commands);
+                self.finish(id, Err(wait.message(now)), now, commands);
             } else {
                 self.work
                     .get_mut(&id)
@@ -1662,7 +1707,7 @@ impl Core {
                 active.phase = Phase::Settling {
                     at: now.saturating_add(SETTLE_DELAY),
                     result: if stop_reason == Some(StopReason::MaxTurnRequests) {
-                        Err(crate::messages::Message::MaxTurnRequests)
+                        Err((crate::messages::Message::MaxTurnRequests, now))
                     } else {
                         Ok(())
                     },
@@ -1675,7 +1720,7 @@ impl Core {
                 active.phase = Phase::Settling {
                     at: now.saturating_add(SETTLE_DELAY),
                     can_continue: false,
-                    result: Err(error),
+                    result: Err((error, now)),
                 }
             }
             TurnUpdate::UnpermittedTool(name) => {
@@ -1796,12 +1841,13 @@ impl Core {
         if matches!(self.work[&id].execution().unwrap().phase, Phase::Prompt) {
             self.cancel(session, now, commands);
         }
-        self.end_request(id, error, commands);
+        self.end_request(id, error, now, commands);
     }
     fn end_request(
         &mut self,
         id: WorkId,
         error: crate::messages::Message,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
@@ -1815,7 +1861,7 @@ impl Core {
             session: active.session.clone(),
             completion: None,
         };
-        let forget = self.complete_request(active, Err(error), commands);
+        let forget = self.complete_request(active, Err(error), now, commands);
         if ended {
             commands.extend(forget.map(Command::Forget));
         } else {
@@ -1826,15 +1872,20 @@ impl Core {
         &mut self,
         id: WorkId,
         result: Result<(), crate::messages::Message>,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) {
         match self.work.remove(&id).unwrap() {
             Work::QuotaQueued { query, session } => {
-                self.complete_quota(query, session, result, commands)
+                self.complete_quota(query, session, result, now, commands)
             }
-            Work::QuotaWorking { query, phase, .. } => {
-                self.complete_quota(query, phase.session().map(str::to_owned), result, commands)
-            }
+            Work::QuotaWorking { query, phase, .. } => self.complete_quota(
+                query,
+                phase.session().map(str::to_owned),
+                result,
+                now,
+                commands,
+            ),
             Work::Retiring(outstanding) => {
                 if let Some(session) = &outstanding.session {
                     commands.push(Command::Forget(session.clone()));
@@ -1882,7 +1933,7 @@ impl Core {
                     );
                     return;
                 }
-                let forget = self.complete_request(active, result, commands);
+                let forget = self.complete_request(active, result, now, commands);
                 commands.extend(forget.map(Command::Forget));
             }
         }
@@ -1891,8 +1942,10 @@ impl Core {
         &mut self,
         mut active: Active,
         result: Result<(), crate::messages::Message>,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) -> Option<String> {
+        let result = result.map_err(|error| (error, now));
         let (can_continue, result) = match std::mem::replace(&mut active.phase, Phase::Prompt) {
             Phase::Settling {
                 can_continue,
@@ -1908,12 +1961,26 @@ impl Core {
             .tool_call
             .as_ref()
             .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
+        if let Err((error, at)) = &result
+            && matches!(
+                error.row(),
+                crate::messages::Row::Temporary503(_) | crate::messages::Row::Other502
+            )
+        {
+            self.retry_waits.push(retry::Wait {
+                hashes: active.hashes.clone(),
+                tools: active.client_tools_hash,
+                model: active.model_id.clone(),
+                deadline: at + 30_000,
+                error: error.clone(),
+            });
+        }
         if result.is_err() {
             active.held = None;
         }
         active.release_or_cut_reply(None, commands);
         let can_continue = can_continue && active.stop.sequence().is_none();
-        let end = result.map(|()| {
+        let end = result.map_err(|(error, _)| error).map(|()| {
             let mut output = active.text.clone();
             if let Some(call) = active.tool_call.take() {
                 output.push_str(&call.arguments);
@@ -1998,6 +2065,7 @@ impl Conductor {
                 quota_result,
                 last_refresh: None,
                 quota_wait: None,
+                retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
@@ -2836,6 +2904,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -2881,6 +2950,78 @@ mod tests {
             );
         }
         (core, queued, tickets.try_into().ok().unwrap())
+    }
+
+    #[test]
+    fn retry_wait_keeps_the_client_tool_set_when_tool_calls_are_disabled() {
+        let folder =
+            std::env::temp_dir().join(format!("acp2api-retry-tools-{}", std::process::id()));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _) = prompting_with_waiter(&journal);
+        core.work.clear();
+        let mut tickets = Vec::new();
+        let mut request = |tool: &str| {
+            let body = serde_json::json!({
+                "model":"m", "tool_choice":"none",
+                "tools":[{"type":"function","function":{"name":tool,"parameters":{}}}],
+                "messages":[{"role":"user","content":"Read a file"}]
+            });
+            let turn = crate::dialect::CHAT
+                .parse(&serde_json::to_vec(&body).unwrap())
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, ticket) = mpsc::unbounded_channel();
+            tickets.push(ticket);
+            Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 0),
+                output,
+            }
+        };
+        let seed = request("read_file");
+        let seed_id = seed.request.id.clone();
+        core.handle(Event::Accepted(Box::new(seed)), 0, std::time::UNIX_EPOCH);
+        core.handle(
+            Event::StartFailed(seed_id, "acp2api: session creation failed".into()),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let same = core.handle(
+            Event::Accepted(Box::new(request("read_file"))),
+            5000,
+            std::time::UNIX_EPOCH,
+        );
+        let changed = core.handle(
+            Event::Accepted(Box::new(request("list_files"))),
+            5000,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            (
+                same.iter()
+                    .filter(|command| matches!(
+                        command,
+                        Command::Emit(
+                            _,
+                            TurnEvent::End(Err(crate::messages::Message::RetryWait { .. }))
+                        )
+                    ))
+                    .count(),
+                changed
+                    .iter()
+                    .filter(|command| matches!(command, Command::Prepare { .. }))
+                    .count(),
+            ),
+            (1, 1),
+            "FR-029 keeps the request's client tool set in the retry match"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     async fn failed_checks(timeout: bool, restart_fails: bool) {
@@ -3534,7 +3675,7 @@ mod tests {
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let mut core = Core {
-                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, retry_waits:Vec::new(), next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
                 cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
                 work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
                 use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
@@ -4097,6 +4238,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4211,6 +4353,7 @@ mod tests {
                 quota_result: watch::channel(Arc::new(None)).0,
                 last_refresh: None,
                 quota_wait: None,
+                retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
@@ -4320,6 +4463,7 @@ mod tests {
                 quota_result: watch::channel(Arc::new(None)).0,
                 last_refresh: None,
                 quota_wait: None,
+                retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
@@ -4336,6 +4480,7 @@ mod tests {
                         session: Some("existing".into()),
                         hashes: crate::conversation::record_hashes(&turn.conversation),
                         tools_hash: crate::conversation::tool_set_hash(&turn.tools),
+                        client_tools_hash: crate::conversation::tool_set_hash(&turn.tools),
                         kind: crate::journal::SessionUse::New,
                         used: 1,
                         expires: 100_000,
@@ -4344,6 +4489,7 @@ mod tests {
                         thought_dropped: false,
                         input_tokens: turn.input_tokens,
                         model: "gemini-3.8-flash".into(),
+                        model_id: "gemini-3.8-flash".into(),
                         phase: Phase::Prompt,
                         tool_call: Some(crate::conversation::ToolCall {
                             name: "read".into(),
@@ -4439,6 +4585,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4484,6 +4631,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4587,6 +4735,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
@@ -4636,6 +4785,7 @@ mod tests {
             quota_result: watch::channel(Arc::new(None)).0,
             last_refresh: None,
             quota_wait: None,
+            retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
