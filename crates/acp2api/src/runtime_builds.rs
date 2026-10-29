@@ -34,6 +34,18 @@ struct Found {
     listed: Option<ListedBuild>,
     identity: BuildIdentity,
 }
+impl Found {
+    fn selected_build(&self) -> SelectedBuild {
+        SelectedBuild {
+            folder: self.folder.clone(),
+            version: self.listed.as_ref().unwrap().version.clone(),
+        }
+    }
+}
+pub(crate) struct SelectedBuild {
+    pub(crate) folder: PathBuf,
+    pub(crate) version: String,
+}
 pub(crate) struct BuildRow {
     pub(crate) path: PathBuf,
     pub(crate) version: Option<String>,
@@ -56,7 +68,7 @@ pub(crate) enum Action {
 pub(crate) enum Selection {
     Keep,
     Notice(&'static str),
-    Start(Option<(PathBuf, String)>),
+    Start(Option<SelectedBuild>),
     Check {
         folder: PathBuf,
         identity: BuildIdentity,
@@ -69,6 +81,14 @@ pub(crate) enum LaunchFailure {
     Io(std::io::Error),
     Runtime(String),
     Stopped,
+}
+impl LaunchFailure {
+    pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
+        match self {
+            Self::Io(error) => Some(error.kind()),
+            _ => None,
+        }
+    }
 }
 impl From<std::io::Error> for LaunchFailure {
     fn from(error: std::io::Error) -> Self {
@@ -291,10 +311,7 @@ impl Builds {
                             .is_some_and(|build| identity(build).to_string() == choice)
                     })
                     .ok_or("Choose an accepted build from the search results.")?;
-                return Ok(Selection::Start(Some((
-                    selected.folder.clone(),
-                    selected.listed.as_ref().unwrap().version.clone(),
-                ))));
+                return Ok(Selection::Start(Some(selected.selected_build())));
             }
             Action::Initial if self.accepted_copy()?.is_some() => {
                 return Ok(Selection::Start(None));
@@ -310,12 +327,7 @@ impl Builds {
             .iter()
             .filter(|found| found.listed.is_some())
             .max_by_key(|found| version(&found.listed.as_ref().unwrap().version));
-        Ok(Selection::Start(best.map(|found| {
-            (
-                found.folder.clone(),
-                found.listed.as_ref().unwrap().version.clone(),
-            )
-        })))
+        Ok(Selection::Start(best.map(Found::selected_build)))
     }
     pub(crate) fn copy(&self, source: PathBuf) -> Result<(), LaunchFailure> {
         let copy = self.start.data.join(COPY);
@@ -892,7 +904,7 @@ mod tests {
             .await
             .ok()
             .and_then(|selection| match selection {
-                Selection::Start(build) => build.map(|(path, _)| path),
+                Selection::Start(build) => build.map(|build| build.folder),
                 Selection::Keep | Selection::Notice(_) | Selection::Check { .. } => None,
             });
         fs::remove_dir_all(&root).unwrap();
@@ -1280,7 +1292,7 @@ mod tests {
                 panic!("the listed build must be selectable")
             };
             builds
-                .copy(source.expect("selected build source").0)
+                .copy(source.expect("selected build source").folder)
                 .unwrap();
             let _ = builds.launch(None).await;
             let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());

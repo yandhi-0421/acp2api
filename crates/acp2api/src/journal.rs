@@ -343,6 +343,10 @@ fn redact_error(text: &str) -> String {
     }
     output
 }
+fn os_error_category(cause: io::ErrorKind) -> String {
+    format!("{cause:?}")
+}
+
 impl Journal {
     pub(crate) fn state(
         &self,
@@ -354,7 +358,7 @@ impl Journal {
             let mut record = serde_json::json!({"time":time,"event":"state_change","state":state});
             let terminal = match cause {
                 Some(cause) => {
-                    let cause = format!("{cause:?}");
+                    let cause = os_error_category(cause);
                     record["cause"] = serde_json::json!(cause);
                     format!("{time} state {state}: {cause}")
                 }
