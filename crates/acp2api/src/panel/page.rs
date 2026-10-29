@@ -7,7 +7,11 @@ function update() {
     if (left > 0) setTimeout(update, 1000);
 }
 update();"#;
-pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment) -> String {
+pub(super) fn sign_in_section(
+    view: &crate::conductor::View,
+    now: crate::Moment,
+    build: Option<&str>,
+) -> String {
     let sign_in = if let Some(wait) = &view.sign_in_wait {
         let seconds = wait.deadline.saturating_sub(now).div_ceil(1000);
         let address = wait
@@ -29,9 +33,11 @@ pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment)
         r#"<form method="post" action="/manage/sign-in"><button type="submit">Sign in</button></form>"#.into()
     };
     format!(
-        r#"<section id="{entry_id}"><h2>{}</h2><p>Requests in the queue <span>{}</span></p>{sign_in}</section>"#,
+        r#"<section id="{entry_id}"><h2>{}</h2><p>Places in use <span>{}</span></p><p>Requests in the queue <span>{}</span></p><p>Build in use <span>{}</span></p>{sign_in}</section>"#,
         view.state,
+        view.places,
         view.queued,
+        escape(build.unwrap_or("—")),
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )
 }
@@ -101,6 +107,7 @@ fn runtime(
     settings: &crate::store::Settings,
 ) -> String {
     let crate::runtime_builds::Summary {
+        current: _,
         found,
         release,
         newer,

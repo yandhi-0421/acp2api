@@ -32,6 +32,7 @@ pub(crate) struct Conductor {
 }
 pub(crate) struct View {
     pub(crate) state: &'static str,
+    pub(crate) places: usize,
     pub(crate) queued: usize,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
 }
@@ -39,6 +40,7 @@ impl Default for View {
     fn default() -> Self {
         Self {
             state: "Running",
+            places: 0,
             queued: 0,
             sign_in_wait: None,
         }
@@ -1766,6 +1768,7 @@ impl Core {
         self.view.send_replace(Arc::new(View {
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
+            places,
             queued: self.work.values().filter(|work| work.is_queued()).count(),
         }));
         commands

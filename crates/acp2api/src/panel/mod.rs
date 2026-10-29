@@ -103,14 +103,23 @@ impl Panel {
         (status, Html(self.html(Some(notice)))).into_response()
     }
     fn html(&self, notice: Option<&str>) -> String {
+        let builds = self.conductor.builds_summary();
+        let first_tile = page::sign_in_section(
+            &self.conductor.view(),
+            self.clock.now(),
+            builds
+                .as_ref()
+                .ok()
+                .and_then(|builds| builds.current.as_deref()),
+        );
         page::settings(
             &self.conductor.settings(),
             self.conductor.highest,
             notice,
             &self.conductor.notices(),
-            self.conductor.builds_summary(),
+            builds,
             &self.conductor.quota_result(),
-            &page::sign_in_section(&self.conductor.view(), self.clock.now()),
+            &first_tile,
         )
     }
 }

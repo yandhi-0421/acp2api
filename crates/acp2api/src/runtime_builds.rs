@@ -58,6 +58,7 @@ pub(crate) struct BuildRow {
     pub(crate) acceptance: Option<&'static str>,
 }
 pub(crate) struct Summary {
+    pub(crate) current: Option<String>,
     pub(crate) found: Vec<BuildRow>,
     pub(crate) release: Vec<String>,
     pub(crate) choices: Vec<(String, String)>,
@@ -569,6 +570,7 @@ impl Builds {
             })
             .collect();
         Ok(Summary {
+            current,
             found: rows,
             release: self
                 .start
