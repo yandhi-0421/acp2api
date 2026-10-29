@@ -1,20 +1,17 @@
 use crate::{World, places_support as queue};
-use acp2api_acceptance::{TurnEndPlan, TurnPlan, client::WireTrace, endpoint_check};
+use acp2api_acceptance::{TurnEndPlan, TurnPlan, client::SseBlock as Block, endpoint_check};
 use serde_json::Value;
 use std::time::Duration;
+
+const MAX_EVENT_GAP: u64 = 5 * 60 * 1000;
+pub const NO_UPDATE_LIMIT: u64 = 5 * 60 * 1000;
+const QUEUE_WAIT: u64 = 330 * 1000;
+pub const UPDATE_GAP: Duration = Duration::from_secs(4 * 60);
 
 #[derive(Debug, Default)]
 pub struct KeepAliveState {
     pub queued: bool,
     pub observed: Option<Observation>,
-}
-
-#[derive(Debug)]
-pub struct Block {
-    pub at: u64,
-    pub event: String,
-    pub data: String,
-    pub comments: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -26,50 +23,16 @@ pub struct Observation {
     pub blocks: Vec<Block>,
 }
 
-pub fn blocks(trace: &WireTrace) -> Vec<Block> {
-    let mut pending: Vec<u8> = Vec::new();
-    let mut blocks = Vec::new();
-    for (at, bytes) in &trace.frames {
-        pending.extend(bytes);
-        while let Some(end) = pending.windows(2).position(|pair| pair == b"\n\n") {
-            let raw = String::from_utf8(pending.drain(..end + 2).collect()).unwrap();
-            let mut block = Block {
-                at: *at,
-                event: String::new(),
-                data: String::new(),
-                comments: Vec::new(),
-            };
-            for line in raw.lines() {
-                if let Some(comment) = line.strip_prefix(':') {
-                    block.comments.push(comment.trim_start().into());
-                } else if let Some(event) = line.strip_prefix("event:") {
-                    block.event = event.trim_start().into();
-                } else if let Some(data) = line.strip_prefix("data:") {
-                    if !block.data.is_empty() {
-                        block.data.push('\n');
-                    }
-                    block.data.push_str(data.trim_start());
-                }
-            }
-            if !block.data.is_empty() || !block.comments.is_empty() {
-                blocks.push(block);
-            }
-        }
-    }
-    assert!(pending.is_empty(), "complete SSE blocks at observation");
-    blocks
-}
-
 pub async fn occupy(w: &mut World, seconds: u64) {
-    assert_eq!(seconds, 330, "bounded queue fixture");
+    assert_eq!(seconds * 1000, QUEUE_WAIT, "bounded queue fixture");
     queue::start(w).await;
     for name in ["A", "B"] {
         // An update before five minutes keeps the occupied turns alive for all 330 s.
         w.request.plan = Some(
             TurnPlan::new()
-                .after(Duration::from_secs(240))
+                .after(UPDATE_GAP)
                 .usage(1000, 1_048_576)
-                .after(Duration::from_secs(seconds - 240))
+                .after(Duration::from_secs(seconds) - UPDATE_GAP)
                 .chunk(&format!("reply {name}")),
         );
         let live = queue::send(
@@ -103,7 +66,7 @@ pub async fn observe(w: &mut World) -> &Observation {
             .expect("accepted stream HTTP head");
         assert_eq!(live.status(), Some(200), "accepted HTTP stream");
         let waiting = w.keep_alive.queued;
-        let wait_end = accepted + if waiting { 330_000 } else { 300_000 };
+        let wait_end = accepted + if waiting { QUEUE_WAIT } else { NO_UPDATE_LIMIT };
         let target = wait_end + 200;
         w.scenario.time.advance_to(target).await;
 
@@ -111,7 +74,7 @@ pub async fn observe(w: &mut World) -> &Observation {
             let prompts = w.scenario.fake().record().prompts();
             assert_eq!(prompts.len(), 3, "queued request dispatches after release");
             assert!(
-                prompts[2].at >= accepted + 330_000,
+                prompts[2].at >= accepted + QUEUE_WAIT,
                 "request actually waits 330 s for a place"
             );
         }
@@ -120,13 +83,13 @@ pub async fn observe(w: &mut World) -> &Observation {
             w.scenario.answer = Some(live.finish(&mut w.scenario.time).await);
         }
         let trace = wire.lock().unwrap().clone();
-        let blocks = blocks(&trace);
+        assert!(!trace.incomplete, "complete SSE blocks at observation");
         w.keep_alive.observed = Some(Observation {
             accepted,
             end: trace.end_at,
             checked_until: target,
             wait_end,
-            blocks,
+            blocks: trace.blocks,
         });
     }
     w.keep_alive.observed.as_ref().unwrap()
@@ -156,8 +119,8 @@ pub fn adjacent(observation: &Observation) {
         largest = largest.max(observation.checked_until - last);
     }
     assert!(
-        largest < 300_000,
-        "FR-011 adjacent-event deadline: observed gap {largest} ms must be < 300000 ms"
+        largest < MAX_EVENT_GAP,
+        "FR-011 adjacent-event deadline: observed gap {largest} ms must be < {MAX_EVENT_GAP} ms"
     );
 }
 
@@ -165,8 +128,8 @@ pub fn first(observation: &Observation) {
     let first = observation.blocks.first().expect("FR-011 first event");
     let delay = first.at - observation.accepted;
     assert!(
-        delay < 300_000,
-        "FR-011 first-event deadline: {delay} ms must be < 300000 ms"
+        delay < MAX_EVENT_GAP,
+        "FR-011 first-event deadline: {delay} ms must be < {MAX_EVENT_GAP} ms"
     );
 }
 
@@ -175,8 +138,8 @@ pub fn end(observation: &Observation) {
     let last = observation.blocks.last().expect("FR-011 last event");
     let delay = end - last.at;
     assert!(
-        delay < 300_000,
-        "FR-011 response-end deadline: {delay} ms must be < 300000 ms"
+        delay < MAX_EVENT_GAP,
+        "FR-011 response-end deadline: {delay} ms must be < {MAX_EVENT_GAP} ms"
     );
 }
 

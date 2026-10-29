@@ -1,7 +1,6 @@
 use crate::{World, keep_alive_support as keep_alive};
 use acp2api_acceptance::{TurnEndPlan, TurnPlan, endpoint_check};
 use cucumber::{given, then};
-use std::time::Duration;
 
 #[given(expr = "each place holds a prompt turn for the next {int} s")]
 async fn occupied(w: &mut World, seconds: u64) {
@@ -77,9 +76,9 @@ fn update_gap(w: &mut World, minutes: u64) {
     let mut plan = TurnPlan::new().chunk("Hel");
     if minutes == 4 {
         plan = plan
-            .after(Duration::from_secs(240))
+            .after(keep_alive::UPDATE_GAP)
             .chunk("lo")
-            .after(Duration::from_secs(240));
+            .after(keep_alive::UPDATE_GAP);
     } else {
         plan.end = TurnEndPlan::Never;
     }
@@ -106,7 +105,7 @@ async fn no_update(w: &mut World, status: u16, message: String) {
     let live = w.endpoint.take_live();
     let prompts = w.scenario.fake().record().prompts();
     assert_eq!(prompts.len(), 1, "one prompt under the no-update check");
-    let deadline = prompts[0].at + 300_000;
+    let deadline = prompts[0].at + keep_alive::NO_UPDATE_LIMIT;
     w.scenario.time.advance_to(deadline - 1).await;
     assert!(
         w.scenario.fake().record().cancels().is_empty(),
@@ -117,7 +116,8 @@ async fn no_update(w: &mut World, status: u16, message: String) {
     assert_eq!(
         cancels.len(),
         1,
-        "FR-051 no-update deadline at 300000 ms requires session/cancel"
+        "FR-051 no-update deadline at {} ms requires session/cancel",
+        keep_alive::NO_UPDATE_LIMIT
     );
     assert_eq!(cancels[0]["params"]["sessionId"], prompts[0].session);
     let answer = live.finish(&mut w.scenario.time).await;

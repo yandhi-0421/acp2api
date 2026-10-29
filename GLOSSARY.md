@@ -136,6 +136,7 @@ The setup skill `/workflow-setup` writes the text between the two markers. Its n
 | sign-in required | 需要登录 | The state in which the official runtime has no valid sign-in, so acp2api starts no prompt turn on it. It ends when a sign-in succeeds. | signed out, logged out, unauthenticated, lockout (a sign-in error is not a lockout signal) |
 | fake ACP agent | 假 ACP agent | The test program that takes the place of the official runtime and speaks ACP to acp2api. Its behavior comes from the scenario. | fake official runtime, mock official runtime |
 | fake API client | 假 API 客户端 | The test program that sends HTTP requests to acp2api and reads its responses as an API client. | mock API client |
+| keep-alive event | 保活事件 | An event or SSE comment that acp2api sends to keep an accepted stream active while no reply update is available. | heartbeat, ping (the Anthropic form only) |
 | test host | 测试宿主 | The test executable that starts acp2api through the same entry point as the release executable, with the adapters of the test harness. | test server (the host is not an ACP agent) |
 | virtual time | 虚拟时间 | The shared time axis that the test harness controls for acp2api, the fake ACP agent, and the fake API client. | time scale (real time with a scale is different) |
 

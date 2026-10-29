@@ -111,16 +111,11 @@ impl WireDialect for Responses {
         self.response(w, Some(usage))
     }
     fn start(&self, w: &mut Encoding) -> Vec<Event> {
-        vec![
-            w.event(
-                "response.created",
-                json!({"response":self.response(w,None)}),
-            ),
-            w.event(
-                "response.in_progress",
-                json!({"response":self.response(w,None)}),
-            ),
-        ]
+        let created = w.event(
+            "response.created",
+            json!({"response":self.response(w,None)}),
+        );
+        vec![created, self.keep_alive(w)]
     }
     fn keep_alive(&self, w: &mut Encoding) -> Event {
         w.event(

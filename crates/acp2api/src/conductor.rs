@@ -1,3 +1,4 @@
+mod keep_alive;
 mod quota;
 mod records;
 mod retry;
@@ -10,6 +11,8 @@ use crate::{
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
 use agent_client_protocol_schema::v1::StopReason;
+use keep_alive::KEEP_ALIVE_INTERVAL;
+pub(crate) use keep_alive::NO_UPDATE_LIMIT;
 pub(crate) use retry::WAIT_SECONDS;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -107,8 +110,13 @@ struct TurnWork {
     pending: PendingRequest,
     hold: Hold,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum ResponseMode {
+    Body,
+    Stream,
+}
 struct PendingRequest {
-    stream: bool,
+    mode: ResponseMode,
     turn: TurnRequest,
     request: crate::journal::Request,
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
@@ -127,16 +135,14 @@ fn copy_failed_reason(version: &str) -> String {
 const UNAVAILABLE: &str = "official runtime is not available";
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
-const KEEP_ALIVE_INTERVAL: Moment = 15_000;
-const UPDATE_TIMEOUT: Moment = 300_000;
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
     model: crate::catalog::SelectedModel,
     request: crate::journal::Request,
-    reply: Reply,
+    reply: ResponseChannel,
 }
-struct Reply {
+struct ResponseChannel {
     output: Output,
     keep_alive: Option<Moment>,
 }
@@ -284,7 +290,7 @@ impl Work {
                 | Self::QuotaWorking { .. }
         )
     }
-    fn reply(&self) -> Option<&Reply> {
+    fn reply(&self) -> Option<&ResponseChannel> {
         match self {
             Self::AcceptedQueued(request) => Some(&request.reply),
             Self::AcceptedWorking(active) => Some(&active.reply),
@@ -299,7 +305,7 @@ impl Work {
             Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
         }
     }
-    fn reply_mut(&mut self) -> Option<&mut Reply> {
+    fn reply_mut(&mut self) -> Option<&mut ResponseChannel> {
         match self {
             Self::AcceptedQueued(request) => Some(&mut request.reply),
             Self::AcceptedWorking(active) => Some(&mut active.reply),
@@ -358,6 +364,7 @@ impl Session {
     }
 }
 enum Phase {
+    Completing,
     Preparing(PromptRequest),
     Prompt {
         update_deadline: Moment,
@@ -377,6 +384,11 @@ enum Phase {
     },
 }
 impl Phase {
+    fn prompt(now: Moment) -> Self {
+        Self::Prompt {
+            update_deadline: now + NO_UPDATE_LIMIT,
+        }
+    }
     fn update_deadline(&self) -> Option<Moment> {
         match self {
             Self::Prompt { update_deadline } => Some(*update_deadline),
@@ -397,7 +409,7 @@ impl Failure {
     }
 }
 struct Active {
-    reply: Reply,
+    reply: ResponseChannel,
     request: crate::journal::Request,
     session: Option<String>,
     hashes: crate::conversation::RecordHashes,
@@ -426,7 +438,12 @@ impl Active {
             .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
             .min_by_key(|(at, _)| *at)
     }
-    fn release_or_cut_reply(&mut self, next: Option<String>, commands: &mut Vec<Command>) -> bool {
+    fn release_or_cut_reply(
+        &mut self,
+        next: Option<String>,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) -> bool {
         let complete = next.is_none();
         if !complete && self.stop.sequence().is_some() {
             return false;
@@ -462,10 +479,7 @@ impl Active {
         let remaining = text.split_off(end);
         if !text.is_empty() {
             self.text.push_str(&text);
-            commands.push(Command::Emit(
-                self.reply.output.clone(),
-                TurnEvent::Text(text),
-            ));
+            self.reply.emit(TurnEvent::Text(text), now, commands);
         }
         if !complete {
             self.stop_prefix = remaining;
@@ -1116,9 +1130,10 @@ impl Core {
             turn: pending.turn,
             model,
             request: pending.request,
-            reply: Reply {
+            reply: ResponseChannel {
                 output,
-                keep_alive: pending.stream.then(|| clock.now() + KEEP_ALIVE_INTERVAL),
+                keep_alive: matches!(pending.mode, ResponseMode::Stream)
+                    .then(|| clock.now() + KEEP_ALIVE_INTERVAL),
             },
         })
     }
@@ -1292,6 +1307,7 @@ impl Core {
                     self.finish(
                         id,
                         Err(Failure::at(crate::messages::Message::Stopped, now)),
+                        now,
                         &mut commands,
                     );
                 }
@@ -1316,7 +1332,7 @@ impl Core {
                     })
                     .collect();
                 for id in queries {
-                    self.finish(id, Err(Failure::at(error.clone(), now)), &mut commands);
+                    self.finish(id, Err(Failure::at(error.clone(), now)), now, &mut commands);
                 }
             }
             (None, Event::RetireRuntime) => {
@@ -1408,7 +1424,7 @@ impl Core {
                                 }),
                             );
                             if ended {
-                                self.finish(id, Ok(()), &mut commands);
+                                self.finish(id, Ok(()), now, &mut commands);
                             }
                         }
                         Work::Retiring(_)
@@ -1422,6 +1438,7 @@ impl Core {
                     self.finish(
                         id,
                         Err(Failure::at(crate::messages::Message::Upstream(error), now)),
+                        now,
                         &mut commands,
                     );
                 }
@@ -1438,7 +1455,7 @@ impl Core {
                                 }
                                 Work::Retiring(outstanding) => {
                                     outstanding.session = Some(session);
-                                    self.finish(id, Ok(()), &mut commands);
+                                    self.finish(id, Ok(()), now, &mut commands);
                                 }
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
@@ -1448,16 +1465,14 @@ impl Core {
                                             at: now,
                                             wait: wait.clone(),
                                         };
-                                    } else if let Phase::Preparing(prompt) = std::mem::replace(
-                                        &mut active.phase,
-                                        Phase::Prompt {
-                                            update_deadline: now + UPDATE_TIMEOUT,
-                                        },
-                                    ) {
+                                    } else if let Phase::Preparing(prompt) =
+                                        std::mem::replace(&mut active.phase, Phase::prompt(now))
+                                    {
                                         if let Some(message) = self.refusal(now) {
                                             self.finish(
                                                 id,
                                                 Err(Failure::at(message, now)),
+                                                now,
                                                 &mut commands,
                                             );
                                         } else {
@@ -1487,6 +1502,7 @@ impl Core {
                                             self.refusal(now).unwrap_or_else(|| wait.message(now)),
                                             now,
                                         )),
+                                        now,
                                         &mut commands,
                                     );
                                     if !known {
@@ -1517,7 +1533,7 @@ impl Core {
                                     );
                                 }
                             } else {
-                                self.finish(id, Err(Failure::at(error, now)), &mut commands);
+                                self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
                             }
                         }
                     }
@@ -1528,7 +1544,7 @@ impl Core {
             (None, Event::Runtime(RuntimeEvent::Retired { session })) => {
                 self.cancels.remove(&session);
                 if let Some(id) = self.by_session(&session) {
-                    self.finish(id, Ok(()), &mut commands);
+                    self.finish(id, Ok(()), now, &mut commands);
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Turn { session, update })) => {
@@ -1550,6 +1566,7 @@ impl Core {
                                 self.end_request(
                                     id,
                                     Failure::at(wait.message(now), now),
+                                    now,
                                     &mut commands,
                                 );
                             } else {
@@ -1620,6 +1637,7 @@ impl Core {
                             crate::messages::Message::Upstream(error.clone()),
                             now,
                         )),
+                        now,
                         &mut commands,
                     );
                 }
@@ -1642,6 +1660,7 @@ impl Core {
                     self.finish(
                         id,
                         Err(Failure::at(crate::messages::Message::RuntimeFailed, now)),
+                        now,
                         &mut commands,
                     );
                 }
@@ -1649,23 +1668,7 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other)) => {}
             (None, Event::Deadline) => {
-                let idle: Vec<_> = self
-                    .work
-                    .iter()
-                    .filter_map(|(id, work)| {
-                        work.update_deadline().filter(|at| *at <= now).map(|_| *id)
-                    })
-                    .collect();
-                for id in idle {
-                    let session = self.work[&id].execution().unwrap().session.clone().unwrap();
-                    self.retire(
-                        id,
-                        session,
-                        crate::messages::Message::NoUpdate,
-                        now,
-                        &mut commands,
-                    );
-                }
+                self.retire_idle(now, &mut commands);
                 let due: Vec<_> = self
                     .work
                     .iter()
@@ -1680,7 +1683,7 @@ impl Core {
                         Work::QuotaWorking { .. } => {
                             self.quota_event(id, Event::Deadline, None, now, wall, &mut commands)
                         }
-                        _ => self.finish(id, Ok(()), &mut commands),
+                        _ => self.finish(id, Ok(()), now, &mut commands),
                     }
                 }
             }
@@ -1759,21 +1762,7 @@ impl Core {
                 places += 1;
             }
         }
-        for work in self.work.values_mut() {
-            if let Some(reply) = work.reply_mut()
-                && let Some(at) = &mut reply.keep_alive
-            {
-                let emitted = commands.iter().any(|command| {
-                    matches!(command, Command::Emit(output, _) if output.same_channel(&reply.output))
-                });
-                if emitted {
-                    *at = now + KEEP_ALIVE_INTERVAL;
-                } else if *at <= now {
-                    commands.push(Command::Emit(reply.output.clone(), TurnEvent::KeepAlive));
-                    *at = now + KEEP_ALIVE_INTERVAL;
-                }
-            }
-        }
+        self.emit_keep_alives(now, &mut commands);
         if self.state() != previous {
             let cause = match &self.runtime_state {
                 RuntimeState::Unavailable(reason) => reason.cause,
@@ -1859,12 +1848,7 @@ impl Core {
                     session: id.clone(),
                     prompt,
                 });
-                (
-                    Some(id),
-                    Phase::Prompt {
-                        update_deadline: now + UPDATE_TIMEOUT,
-                    },
-                )
+                (Some(id), Phase::prompt(now))
             }
             Some((session, records::Location::Unloaded(cwd))) => {
                 commands.push(Command::Prepare {
@@ -2073,6 +2057,7 @@ impl Core {
             query,
             phase.session().map(str::to_owned),
             end.map_err(|message| Failure::at(message, now)),
+            now,
             commands,
         );
     }
@@ -2081,6 +2066,7 @@ impl Core {
         query: QuotaQuery,
         session: Option<String>,
         result: Result<(), Failure>,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) {
         let response = match query.purpose {
@@ -2094,7 +2080,7 @@ impl Core {
             }
         };
         if let Some(active) = response {
-            let forget = self.complete_request(active, result, commands);
+            let forget = self.complete_request(active, result, now, commands);
             commands.extend(
                 session
                     .filter(|session| Some(session) != forget.as_ref())
@@ -2117,7 +2103,7 @@ impl Core {
         if matches!(self.work[&id], Work::Retiring(_)) {
             match update {
                 TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
-                    self.finish(id, Ok(()), commands);
+                    self.finish(id, Ok(()), now, commands);
                 }
                 TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } => {
@@ -2135,7 +2121,7 @@ impl Core {
             && let Some((wait, known)) = self.quota_signal(error, now, wall, commands)
         {
             if known {
-                self.finish(id, Err(Failure::at(wait.message(now), now)), commands);
+                self.finish(id, Err(Failure::at(wait.message(now), now)), now, commands);
             } else {
                 self.work
                     .get_mut(&id)
@@ -2151,12 +2137,12 @@ impl Core {
         }
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
         match &mut active.phase {
-            Phase::Prompt { update_deadline }
-            | Phase::AwaitingQuotaEnd {
+            Phase::Prompt { .. } => active.phase = Phase::prompt(now),
+            Phase::AwaitingQuotaEnd {
                 update_deadline: Some(update_deadline),
                 ..
             } => {
-                *update_deadline = now + UPDATE_TIMEOUT;
+                *update_deadline = now + NO_UPDATE_LIMIT;
             }
             _ => {}
         }
@@ -2186,7 +2172,9 @@ impl Core {
         match update {
             TurnUpdate::Activity => {}
             TurnUpdate::Text(text) => {
-                if active.tool_call.is_none() && active.release_or_cut_reply(Some(text), commands) {
+                if active.tool_call.is_none()
+                    && active.release_or_cut_reply(Some(text), now, commands)
+                {
                     let session = active.session.as_ref().unwrap().clone();
                     self.cancel(session, now, commands);
                 }
@@ -2365,9 +2353,15 @@ impl Core {
         if self.work[&id].update_deadline().is_some() {
             self.cancel(session, now, commands);
         }
-        self.end_request(id, Failure::at(error, now), commands);
+        self.end_request(id, Failure::at(error, now), now, commands);
     }
-    fn end_request(&mut self, id: WorkId, error: Failure, commands: &mut Vec<Command>) {
+    fn end_request(
+        &mut self,
+        id: WorkId,
+        error: Failure,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
         let ended = matches!(
             active.phase,
@@ -2379,14 +2373,20 @@ impl Core {
             session: active.session.clone(),
             completion: PendingCompletion::AlreadyCompleted,
         };
-        let forget = self.complete_request(active, Err(error), commands);
+        let forget = self.complete_request(active, Err(error), now, commands);
         if ended {
             commands.extend(forget.map(Command::Forget));
         } else {
             self.work.insert(id, Work::Retiring(outstanding));
         }
     }
-    fn finish(&mut self, id: WorkId, result: Result<(), Failure>, commands: &mut Vec<Command>) {
+    fn finish(
+        &mut self,
+        id: WorkId,
+        result: Result<(), Failure>,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
         match self.work.remove(&id).unwrap() {
             Work::CheckQueued(request) | Work::Checking(request) => {
                 commands.push(Command::RefusePending {
@@ -2395,11 +2395,15 @@ impl Core {
                 });
             }
             Work::QuotaQueued { query, session } => {
-                self.complete_quota(query, session, result, commands)
+                self.complete_quota(query, session, result, now, commands)
             }
-            Work::QuotaWorking { query, phase, .. } => {
-                self.complete_quota(query, phase.session().map(str::to_owned), result, commands)
-            }
+            Work::QuotaWorking { query, phase, .. } => self.complete_quota(
+                query,
+                phase.session().map(str::to_owned),
+                result,
+                now,
+                commands,
+            ),
             Work::Retiring(outstanding) => {
                 if let Some(session) = &outstanding.session {
                     commands.push(Command::Forget(session.clone()));
@@ -2415,7 +2419,7 @@ impl Core {
             }
             work => {
                 let mut active = work.into_active().unwrap();
-                match std::mem::replace(&mut active.phase, Phase::Prompt { update_deadline: 0 }) {
+                match std::mem::replace(&mut active.phase, Phase::Completing) {
                     Phase::QuotaSettling { wait, .. } if result.is_ok() => {
                         let session = active.session.clone();
                         active.phase = Phase::Settling {
@@ -2447,7 +2451,7 @@ impl Core {
                     );
                     return;
                 }
-                let forget = self.complete_request(active, result, commands);
+                let forget = self.complete_request(active, result, now, commands);
                 commands.extend(forget.map(Command::Forget));
             }
         }
@@ -2456,20 +2460,21 @@ impl Core {
         &mut self,
         mut active: Active,
         result: Result<(), Failure>,
+        now: Moment,
         commands: &mut Vec<Command>,
     ) -> Option<String> {
-        let (can_continue, result) =
-            match std::mem::replace(&mut active.phase, Phase::Prompt { update_deadline: 0 }) {
-                Phase::Settling {
-                    can_continue,
-                    result: pending,
-                    ..
-                } => (can_continue, result.and(pending)),
-                Phase::Preparing(_)
-                | Phase::Prompt { .. }
-                | Phase::AwaitingQuotaEnd { .. }
-                | Phase::QuotaSettling { .. } => (false, result),
-            };
+        let (can_continue, result) = match std::mem::replace(&mut active.phase, Phase::Completing) {
+            Phase::Settling {
+                can_continue,
+                result: pending,
+                ..
+            } => (can_continue, result.and(pending)),
+            Phase::Completing
+            | Phase::Preparing(_)
+            | Phase::Prompt { .. }
+            | Phase::AwaitingQuotaEnd { .. }
+            | Phase::QuotaSettling { .. } => (false, result),
+        };
         let tool_hash = active
             .tool_call
             .as_ref()
@@ -2487,7 +2492,7 @@ impl Core {
         }) {
             active.held = None;
         }
-        active.release_or_cut_reply(None, commands);
+        active.release_or_cut_reply(None, now, commands);
         let can_continue = can_continue && active.stop.sequence().is_none();
         let end = result.map_err(|failure| failure.message).map(|()| {
             let mut output = active.text.clone();
@@ -3039,14 +3044,14 @@ impl Conductor {
         turn: TurnRequest,
         hold: Hold,
         request: crate::journal::Request,
-        stream: bool,
+        mode: ResponseMode,
     ) -> Result<Ticket, crate::messages::Refusal> {
         let (admission, reply) = oneshot::channel();
         let (connection, lease) = mpsc::unbounded_channel();
         self.send
             .send(Input::Turn(Box::new(TurnWork {
                 pending: PendingRequest {
-                    stream,
+                    mode,
                     turn,
                     request,
                     admission,
@@ -3605,7 +3610,7 @@ mod tests {
                         level_from_name: false,
                     },
                     request,
-                    reply: Reply {
+                    reply: ResponseChannel {
                         output,
                         keep_alive: None,
                     },
@@ -3820,7 +3825,7 @@ mod tests {
                 .admit(
                     TurnWork {
                         pending: PendingRequest {
-                            stream: false,
+                            mode: ResponseMode::Body,
                             turn: turn("m", "high"),
                             request,
                             admission,
@@ -3858,7 +3863,7 @@ mod tests {
                     let _ = core.admit(
                         TurnWork {
                             pending: PendingRequest {
-                                stream: false,
+                                mode: ResponseMode::Body,
                                 turn: turn(model, effort),
                                 request: journal.begin(crate::journal::Api::Chat, 0),
                                 admission,
@@ -3923,7 +3928,7 @@ mod tests {
                     level_from_name: false,
                 },
                 request: journal.begin(crate::journal::Api::Chat, 0),
-                reply: Reply {
+                reply: ResponseChannel {
                     output,
                     keep_alive: None,
                 },
@@ -4252,7 +4257,9 @@ mod tests {
                 .ok()
                 .unwrap()
                 .turn;
-            let admission = conductor.admit(turn, Hold::empty(), request, false).await;
+            let admission = conductor
+                .admit(turn, Hold::empty(), request, ResponseMode::Body)
+                .await;
             assert!(
                 admission.is_ok(),
                 "a request during a check must queue even when no earlier accepted runtime existed"
@@ -4391,11 +4398,11 @@ mod tests {
             let (conductor, task) = Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 1);
             conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
             let parse = |system: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"system","content":system},{"role":"user","content":"request"}]})).unwrap()).ok().unwrap().turn;
-            let mut a = conductor.admit(parse("A"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), false).await.ok().unwrap();
+            let mut a = conductor.admit(parse("A"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), ResponseMode::Body).await.ok().unwrap();
             prompting_a.notified().await;
             let (reply, owner) = oneshot::channel();
             conductor.send.send(Input::Builds { action: crate::runtime_builds::Action::Build(choice.to_string()), reply, hold: Hold::empty() }).await.unwrap();
-            let mut b = conductor.admit(parse("B"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), false).await.ok().unwrap();
+            let mut b = conductor.admit(parse("B"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), ResponseMode::Body).await.ok().unwrap();
             let waiting = trace.lock().unwrap().clone();
             let deferred = !waiting.iter().any(|event| event == "stop:old" || event == "launch:new");
             if !deferred {
@@ -4476,7 +4483,7 @@ mod tests {
                     level_from_name: false,
                 },
                 request: journal.begin(crate::journal::Api::Chat, 203),
-                reply: Reply {
+                reply: ResponseChannel {
                     output,
                     keep_alive: None,
                 },
@@ -5188,7 +5195,7 @@ mod tests {
                     level_from_name: false,
                 },
                 request,
-                reply: Reply {
+                reply: ResponseChannel {
                     output,
                     keep_alive: None,
                 },
@@ -5222,7 +5229,7 @@ mod tests {
                         level_from_name: false
                     },
                     request: queued,
-                    reply: Reply {
+                    reply: ResponseChannel {
                         output,
                         keep_alive: None
                     },
@@ -5292,7 +5299,7 @@ mod tests {
                         level_from_name: false,
                     },
                     request: journal.begin(crate::journal::Api::Chat, 0),
-                    reply: Reply {
+                    reply: ResponseChannel {
                         output,
                         keep_alive: None,
                     },
@@ -5380,7 +5387,7 @@ mod tests {
                 work: BTreeMap::from([(
                     0,
                     Work::AcceptedWorking(Active {
-                        reply: Reply {
+                        reply: ResponseChannel {
                             output: output.clone(),
                             keep_alive: None,
                         },
@@ -5400,7 +5407,7 @@ mod tests {
                         model_name: "gemini-3.8-flash".into(),
                         effort: EffortAsk::Absent,
                         phase: Phase::Prompt {
-                            update_deadline: UPDATE_TIMEOUT,
+                            update_deadline: NO_UPDATE_LIMIT,
                         },
                         tool_call: Some(crate::conversation::ToolCall {
                             name: "read".into(),
@@ -5443,7 +5450,7 @@ mod tests {
                         },
                         turn: next,
                         request: journal.begin(crate::journal::Api::Chat, 200),
-                        reply: Reply {
+                        reply: ResponseChannel {
                             output,
                             keep_alive: None,
                         },
@@ -5546,7 +5553,7 @@ mod tests {
                     },
                     turn,
                     request,
-                    reply: Reply {
+                    reply: ResponseChannel {
                         output,
                         keep_alive: None,
                     },
@@ -5656,7 +5663,7 @@ mod tests {
             },
             turn,
             request,
-            reply: Reply {
+            reply: ResponseChannel {
                 output,
                 keep_alive: None,
             },
@@ -5698,7 +5705,12 @@ mod tests {
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let request = journal.begin(crate::journal::Api::Chat, clock.now());
         let admitted = conductor
-            .admit(turn, clock.hold(HoldKind::HttpRequest), request, false)
+            .admit(
+                turn,
+                clock.hold(HoldKind::HttpRequest),
+                request,
+                ResponseMode::Body,
+            )
             .await;
         let end = match admitted {
             Ok(Ticket { mut events, hold }) => {
@@ -5749,7 +5761,7 @@ mod tests {
             .send
             .send(Input::Turn(Box::new(TurnWork {
                 pending: PendingRequest {
-                    stream: false,
+                    mode: ResponseMode::Body,
                     turn: turn(),
                     request: request(),
                     admission,
@@ -5760,7 +5772,12 @@ mod tests {
             .await
             .ok()
             .unwrap();
-        let next = conductor.admit(turn(), clock.hold(HoldKind::HttpRequest), request(), false);
+        let next = conductor.admit(
+            turn(),
+            clock.hold(HoldKind::HttpRequest),
+            request(),
+            ResponseMode::Body,
+        );
         assert!(next.await.is_ok(), "the conductor serves the next request");
         let lines: String = std::fs::read_dir(folder.join("logs"))
             .unwrap()
@@ -5802,7 +5819,7 @@ mod tests {
             leases.push(lease);
             core.handle(
                 Event::CheckPending(Box::new(PendingRequest {
-                    stream: false,
+                    mode: ResponseMode::Body,
                     turn,
                     request,
                     admission,
@@ -6118,7 +6135,7 @@ mod tests {
                 let (connection, _lease) = mpsc::unbounded_channel();
                 core.handle(
                     Event::CheckPending(Box::new(PendingRequest {
-                        stream: false,
+                        mode: ResponseMode::Body,
                         turn,
                         request,
                         admission,
@@ -6194,7 +6211,7 @@ mod tests {
             let (connection, _lease) = mpsc::unbounded_channel();
             core.handle(
                 Event::CheckPending(Box::new(PendingRequest {
-                    stream: false,
+                    mode: ResponseMode::Body,
                     turn,
                     request,
                     admission,
@@ -6301,7 +6318,7 @@ mod tests {
         let (connection, _lease) = mpsc::unbounded_channel();
         core.handle(
             Event::CheckPending(Box::new(PendingRequest {
-                stream: false,
+                mode: ResponseMode::Body,
                 turn,
                 request,
                 admission,
