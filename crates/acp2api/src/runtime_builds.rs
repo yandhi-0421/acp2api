@@ -16,14 +16,23 @@ pub(crate) struct Builds {
     environment: Environment,
     port: u16,
     found: Arc<Mutex<Vec<Found>>>,
+    checked: Arc<Mutex<Vec<ListedBuild>>>,
 }
 #[derive(Clone)]
 struct Found {
     folder: PathBuf,
     listed: Option<ListedBuild>,
+    identity: String,
+}
+pub(crate) struct BuildRow {
+    pub(crate) path: PathBuf,
+    pub(crate) version: Option<String>,
+    pub(crate) identity: String,
+    pub(crate) acceptance: Option<&'static str>,
 }
 pub(crate) struct Summary {
-    pub(crate) found: Vec<(PathBuf, Option<String>)>,
+    pub(crate) found: Vec<BuildRow>,
+    pub(crate) release: Vec<String>,
     pub(crate) choices: Vec<(String, String)>,
     pub(crate) newer: Option<String>,
 }
@@ -32,11 +41,13 @@ pub(crate) enum Action {
     Search,
     Path(PathBuf),
     Build(String),
+    Check(String),
 }
 pub(crate) enum Selection {
     Keep,
     Notice(&'static str),
     Start(Option<PathBuf>),
+    Check { folder: PathBuf, identity: String },
 }
 #[derive(Debug)]
 pub(crate) enum LaunchFailure {
@@ -85,6 +96,7 @@ impl Builds {
             environment,
             port,
             found: Arc::default(),
+            checked: Arc::default(),
         }
     }
     #[cfg(test)]
@@ -108,14 +120,15 @@ impl Builds {
             0,
         )
     }
-    fn accepted_builds(&self) -> impl Iterator<Item = &ListedBuild> {
-        self.start
-            .release
-            .listed_builds()
-            .iter()
-            .filter(|build| build.platform == self.start.release.platform())
+    fn accepted_builds(&self) -> impl Iterator<Item = ListedBuild> {
+        let mut accepted = self.start.release.listed_builds().to_vec();
+        accepted.extend(self.checked.lock().unwrap().iter().cloned());
+        let platform = self.start.release.platform().to_owned();
+        accepted
+            .into_iter()
+            .filter(move |build| build.platform == platform)
     }
-    fn identify(&self, folder: &Path) -> Result<ListedBuild, LaunchFailure> {
+    fn hashes(folder: &Path) -> Result<String, LaunchFailure> {
         let hash = |name: &str| -> Result<Option<String>, LaunchFailure> {
             let path = folder.join(name);
             match fs::read(&path) {
@@ -130,13 +143,16 @@ impl Builds {
         let (Some(server), Some(harness)) = (hash(SERVER)?, hash(HARNESS)?) else {
             return Err(LaunchFailure::NoExecutable);
         };
-        self.accepted_builds()
-            .find(|build| {
-                build.agy_acp_server_sha256 == server
-                    && build.localharness_external_sha256 == harness
-            })
-            .cloned()
+        Ok(format!("{server}:{harness}"))
+    }
+    fn identify(&self, folder: &Path) -> Result<ListedBuild, LaunchFailure> {
+        let hashes = Self::hashes(folder)?;
+        self.identify_hashes(&hashes)
             .ok_or(LaunchFailure::NotAccepted)
+    }
+    fn identify_hashes(&self, hashes: &str) -> Option<ListedBuild> {
+        self.accepted_builds()
+            .find(|build| identity(build) == hashes)
     }
     fn accepted_copy(&self) -> Result<Option<ListedBuild>, String> {
         match self.identify(&self.start.data.join(COPY)) {
@@ -169,12 +185,15 @@ impl Builds {
                 .iter()
                 .all(|name| folder.join(name).is_file())
             {
-                let listed = match self.identify(&folder) {
-                    Ok(build) => Some(build),
-                    Err(LaunchFailure::NotAccepted) => None,
-                    Err(_) => continue,
+                let Ok(identity) = Self::hashes(&folder) else {
+                    continue;
                 };
-                found.push(Found { listed, folder });
+                let listed = self.identify_hashes(&identity);
+                found.push(Found {
+                    listed,
+                    folder,
+                    identity,
+                });
             }
         }
         *self.found.lock().unwrap() = found;
@@ -187,6 +206,12 @@ impl Builds {
     ) -> Result<Selection, String> {
         let initial = matches!(action, Action::Initial);
         if initial {
+            let state = crate::store::StateFile::read(&self.start.data.join("state.json"))?;
+            *self.checked.lock().unwrap() = state
+                .checked_builds
+                .into_iter()
+                .map(|checked| checked.build)
+                .collect();
             for entry in fs::read_dir(&self.start.data).map_err(|error| error.to_string())? {
                 let entry = entry.map_err(|error| error.to_string())?;
                 if entry
@@ -220,6 +245,19 @@ impl Builds {
                 }
                 settings.agy_acp_server_path = Some(path);
                 crate::store::save(configuration, settings)?;
+            }
+            Action::Check(choice) => {
+                let found = self.found.lock().unwrap();
+                let selected = found
+                    .iter()
+                    .find(|found| found.listed.is_none() && found.identity == choice)
+                    .ok_or(
+                        "Choose a build that is not an accepted version from the search results.",
+                    )?;
+                return Ok(Selection::Check {
+                    folder: selected.folder.clone(),
+                    identity: choice,
+                });
             }
             Action::Build(choice) => {
                 let found = self.found.lock().unwrap();
@@ -289,6 +327,64 @@ impl Builds {
         }
         Ok(())
     }
+    pub(crate) fn check_copy(
+        &self,
+        source: &Path,
+        identity: &str,
+    ) -> Result<PathBuf, LaunchFailure> {
+        let check = self.start.data.join(CHECK);
+        if check.exists() {
+            fs::remove_dir_all(&check).map_err(|error| error.to_string())?;
+        }
+        fs::create_dir(&check).map_err(|error| error.to_string())?;
+        let result = (|| {
+            for name in [SERVER, HARNESS] {
+                fs::copy(source.join(name), check.join(name)).map_err(|error| error.to_string())?;
+            }
+            if Self::hashes(&check)? != identity {
+                return Err(LaunchFailure::Runtime(
+                    "the selected build changed before the compatibility check".into(),
+                ));
+            }
+            Ok(check.join(SERVER))
+        })();
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&check);
+        }
+        result
+    }
+    pub(crate) fn accept_check(&self, version: String, hashes: &str) -> Result<(), LaunchFailure> {
+        let check = self.start.data.join(CHECK);
+        if Self::hashes(&check)? != hashes {
+            return Err("the check copy changed during the compatibility check"
+                .to_string()
+                .into());
+        }
+        let (server, harness) = hashes.split_once(':').unwrap();
+        let build = ListedBuild {
+            version,
+            platform: self.start.release.platform().into(),
+            agy_acp_server_sha256: server.into(),
+            localharness_external_sha256: harness.into(),
+        };
+        let path = self.start.data.join("state.json");
+        let mut state = crate::store::StateFile::read(&path)?;
+        state.checked_builds.retain(|checked| {
+            !(checked.build.platform == build.platform && identity(&checked.build) == hashes)
+        });
+        state.checked_builds.push(crate::store::CheckedBuild {
+            build,
+            checked_at: crate::journal::timestamp(self.start.clock.wall())
+                .map_err(|error| error.to_string())?,
+        });
+        state.save(&path)?;
+        *self.checked.lock().unwrap() = state
+            .checked_builds
+            .into_iter()
+            .map(|checked| checked.build)
+            .collect();
+        self.copy(check)
+    }
     pub(crate) async fn launch(
         &self,
         retained: Option<Vec<(String, PathBuf)>>,
@@ -351,11 +447,19 @@ impl Builds {
         let found = self.found.lock().unwrap();
         let rows = found
             .iter()
-            .map(|found| {
-                (
-                    found.folder.join(SERVER),
-                    found.listed.as_ref().map(|build| build.version.clone()),
-                )
+            .map(|found| BuildRow {
+                path: found.folder.join(SERVER),
+                version: found.listed.as_ref().map(|build| build.version.clone()),
+                identity: found.identity.clone(),
+                acceptance: found.listed.as_ref().map(|build| {
+                    if self.start.release.listed_builds().iter().any(|listed| {
+                        listed.platform == build.platform && identity(listed) == identity(build)
+                    }) {
+                        "On the release list"
+                    } else {
+                        "Checked on this computer"
+                    }
+                }),
             })
             .collect();
         let newer = current.as_ref().and_then(|current| {
@@ -383,6 +487,16 @@ impl Builds {
             .collect();
         Ok(Summary {
             found: rows,
+            release: self
+                .start
+                .release
+                .listed_builds()
+                .iter()
+                .filter(|build| build.platform == self.start.release.platform())
+                .map(|build| build.version.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             newer,
             choices,
         })
@@ -400,6 +514,7 @@ fn scan(path: &Path, folders: &mut Vec<PathBuf>) {
     }
 }
 pub(crate) const COPY: &str = "official-runtime";
+pub(crate) const CHECK: &str = "official-runtime-check";
 #[cfg(windows)]
 pub(crate) const SERVER: &str = "agy_acp_server.exe";
 #[cfg(not(windows))]
@@ -453,6 +568,60 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn checked_builds_are_reloaded_with_both_hashes_and_the_current_platform() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-checked-reload-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let copy = root.join(COPY);
+        fs::create_dir_all(&copy).unwrap();
+        for name in [SERVER, HARNESS] {
+            fs::write(copy.join(name), b"checked executables").unwrap();
+        }
+        let ports = Ports::production();
+        let hash = crate::hex(&Sha256::digest(b"checked executables"));
+        let state = serde_json::json!({"format":1,"lockout":null,"checked_builds":[{
+            "version":"1.6.0","platform":ports.release.platform(),
+            "agy_acp_server_sha256":hash,"localharness_external_sha256":hash,"checked_at":"2026-10-18T12:00:00Z"
+        }]});
+        let path = root.join("state.json");
+        fs::write(&path, state.to_string()).unwrap();
+        let builds = Builds::fixture(&root, ports.clock.clone());
+        let config = root.join("config.toml");
+        let mut settings = crate::store::read(&config, 3).unwrap().settings;
+        let selected = builds
+            .select(Action::Initial, &mut settings, &config)
+            .await
+            .unwrap();
+        assert!(
+            matches!(selected, Selection::Start(None)),
+            "a previously checked copy must remain selected after a new start"
+        );
+        assert_eq!(builds.identify(&copy).unwrap().version, "1.6.0");
+        for name in [SERVER, HARNESS] {
+            fs::write(copy.join(name), b"changed").unwrap();
+            assert!(
+                matches!(builds.identify(&copy), Err(LaunchFailure::NotAccepted)),
+                "each changed hash invalidates the checked build"
+            );
+            fs::write(copy.join(name), b"checked executables").unwrap();
+        }
+        let mut foreign = state;
+        foreign["checked_builds"][0]["platform"] = "another-platform".into();
+        fs::write(&path, foreign.to_string()).unwrap();
+        let builds = Builds::fixture(&root, ports.clock);
+        builds
+            .select(Action::Initial, &mut settings, &config)
+            .await
+            .unwrap();
+        assert!(
+            matches!(builds.identify(&copy), Err(LaunchFailure::NotAccepted)),
+            "a local check accepts only its recorded platform"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
     #[tokio::test]
     #[allow(clippy::disallowed_methods)]
     async fn a_later_start_removes_each_leftover_runtime_backup() {
@@ -627,7 +796,7 @@ mod tests {
             .ok()
             .and_then(|selection| match selection {
                 Selection::Start(path) => path,
-                Selection::Keep | Selection::Notice(_) => None,
+                Selection::Keep | Selection::Notice(_) | Selection::Check { .. } => None,
             });
         fs::remove_dir_all(&root).unwrap();
         assert_eq!(

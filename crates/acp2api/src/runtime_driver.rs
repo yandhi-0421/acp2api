@@ -113,6 +113,40 @@ impl Runtime {
         start: &RuntimeStart,
         expected_version: &str,
     ) -> Result<(Self, crate::catalog::Catalog), LaunchFailure> {
+        let mut runtime = Self::open(start, program(&start.data)).await?;
+        let mut stopped = start.stopped.clone();
+        let starting = async {
+            let initialized = tokio::select! {
+                result = runtime.initialize(start) => result,
+                Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
+            }?;
+            if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
+                return Err(LaunchFailure::Runtime(
+                    "initialize version differs from the accepted build".into(),
+                ));
+            }
+            runtime
+                .new_session(&[], None)
+                .await
+                .map_err(LaunchFailure::Runtime)
+        };
+        let result = tokio::select! {
+            result = starting => result,
+            _hold = start.clock.sleep_until(start.clock.now().saturating_add(5 * 60 * 1000)) =>
+                Err(LaunchFailure::Runtime("runtime start gave no answer in 5 minutes".into())),
+        };
+        match result {
+            Ok(catalog) => Ok((runtime, catalog)),
+            Err(error) => {
+                runtime.stop().await;
+                Err(error)
+            }
+        }
+    }
+    pub(crate) async fn open(
+        start: &RuntimeStart,
+        program: PathBuf,
+    ) -> Result<Self, LaunchFailure> {
         let data = &start.data;
         let cwd = start.temporary.sessions();
         let tool_sets = start.tool_sets.clone();
@@ -122,7 +156,7 @@ impl Runtime {
             start.launcher.as_ref(),
             start.clock.clone(),
             LaunchSpec {
-                program: program(data),
+                program,
                 args: Vec::new(),
                 env_set: vec![(
                     "GEMINI_HOME".into(),
@@ -171,7 +205,7 @@ impl Runtime {
                 }
             }
         });
-        let mut runtime = Self {
+        let runtime = Self {
             input: child.stdin,
             lines,
             prompts: std::collections::HashMap::new(),
@@ -188,42 +222,17 @@ impl Runtime {
             configuring: std::collections::HashMap::new(),
             stderr_session: None,
         };
-        let client = json!({
-            "name": "acp2api",
-            "title": "acp2api",
-            "version": start.release.version()
-        });
-        let mut stopped = start.stopped.clone();
-        let timeout = start
-            .clock
-            .sleep_until(start.clock.now().saturating_add(5 * 60 * 1000));
-        let starting = async {
-            let initialized = tokio::select! {
-                result = runtime.call("initialize", json!({"protocolVersion": 1, "clientInfo": client, "clientCapabilities": {}})) => result.map_err(LaunchFailure::Runtime),
-                Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(LaunchFailure::Stopped),
-            }?;
-            if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
-                return Err(LaunchFailure::Runtime(
-                    "initialize version differs from the accepted build".into(),
-                ));
-            }
-            runtime
-                .new_session(&[], None)
-                .await
-                .map_err(LaunchFailure::Runtime)
-        };
-        let result = tokio::select! {
-            result = starting => result,
-            _hold = timeout => Err(LaunchFailure::Runtime("runtime start gave no answer in 5 minutes".into())),
-        };
-        let catalog = match result {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                runtime.stop().await;
-                return Err(error);
-            }
-        };
-        Ok((runtime, catalog))
+        Ok(runtime)
+    }
+    pub(crate) async fn initialize(
+        &mut self,
+        start: &RuntimeStart,
+    ) -> Result<Value, LaunchFailure> {
+        self.call("initialize", json!({
+            "protocolVersion": 1,
+            "clientInfo": {"name":"acp2api", "title":"acp2api", "version":start.release.version()},
+            "clientCapabilities": {}
+        })).await.map_err(LaunchFailure::Runtime)
     }
     pub(crate) async fn new_session(
         &mut self,

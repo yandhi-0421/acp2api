@@ -59,6 +59,7 @@ fn runtime(
 ) -> String {
     let crate::runtime_builds::Summary {
         found,
+        release,
         newer,
         choices,
     } = match builds {
@@ -70,13 +71,21 @@ fn runtime(
             );
         }
     };
+    let release = release
+        .iter()
+        .map(|version| format!("<li>{} — On the release list</li>", escape(version)))
+        .collect::<String>();
     let rows = found
         .iter()
-        .map(|(path, version)| {
+        .map(|row| {
+            let check = if row.version.is_none() {
+                format!(r#"<form method="post" action="/manage/compatibility-check" aria-describedby="compatibility-cost compatibility-risks"><input type="hidden" name="build" value="{}"><button type="submit">Run the compatibility check</button></form>"#, escape(&row.identity))
+            } else { String::new() };
             format!(
-                "<li><code>{}</code> — {}</li>",
-                escape(&path.display().to_string()),
-                escape(version.as_deref().unwrap_or("Not an accepted version"))
+                "<li><code>{}</code> — {} {}{check}</li>",
+                escape(&row.path.display().to_string()),
+                escape(row.version.as_deref().unwrap_or("Not an accepted version")),
+                row.acceptance.unwrap_or("")
             )
         })
         .collect::<String>();
@@ -104,6 +113,6 @@ fn runtime(
         .map(|path| escape(&path.display().to_string()))
         .unwrap_or_default();
     format!(
-        r#"<section><h2>Official runtime</h2>{newer}<form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
+        r#"<section><h2>Official runtime</h2>{newer}<ul>{release}</ul><form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><p id="compatibility-cost">A compatibility check uses 3 to 4 model requests through your Google account.</p><p id="compatibility-risks">The check does not check the stderr lines of the lockout signals, three prompt turns at the same time, or the memory that decides N.</p><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
     )
 }

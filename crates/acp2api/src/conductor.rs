@@ -2,10 +2,14 @@ mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{EffortAsk, Prompt, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
-    runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
+    runtime_builds::LaunchFailure,
+    runtime_driver::{Runtime, RuntimeEvent, RuntimeStart, TurnUpdate},
 };
+use agent_client_protocol_schema::v1::StopReason;
+use serde_json::json;
 use std::{
     collections::{BTreeMap, VecDeque},
+    path::PathBuf,
     sync::Arc,
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -36,10 +40,41 @@ impl Notice {
         )
     }
 }
-struct Replacement {
+enum Replacement {
+    Build {
+        reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
+        source: Option<std::path::PathBuf>,
+        initial: bool,
+    },
+    Check {
+        reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
+        folder: std::path::PathBuf,
+        identity: String,
+    },
+}
+enum CheckFailure {
+    Incompatible(String),
+    Runtime(LaunchFailure),
+}
+impl From<String> for CheckFailure {
+    fn from(error: String) -> Self {
+        Self::Incompatible(error)
+    }
+}
+impl From<crate::runtime_driver::CommandError> for CheckFailure {
+    fn from(error: crate::runtime_driver::CommandError) -> Self {
+        match error {
+            crate::runtime_driver::CommandError::Io(error) => {
+                Self::Runtime(LaunchFailure::Runtime(error.to_string()))
+            }
+            crate::runtime_driver::CommandError::Session(error) => Self::Incompatible(error),
+        }
+    }
+}
+struct CompatibilityCheck {
+    identity: String,
+    result: crate::BoxFuture<'static, Result<String, CheckFailure>>,
     reply: oneshot::Sender<Result<String, crate::runtime_builds::LaunchFailure>>,
-    source: Option<std::path::PathBuf>,
-    initial: bool,
 }
 enum Input {
     Builds {
@@ -302,27 +337,71 @@ impl Core {
         journal: &crate::journal::Journal,
         builds: &crate::runtime_builds::Builds,
         publish: &watch::Sender<Arc<crate::store::Settings>>,
-    ) {
-        let change = self.replacement.take().unwrap();
-        if let Some(source) = change.source
+    ) -> Option<CompatibilityCheck> {
+        let (reply, source, initial) = match self.replacement.take().unwrap() {
+            Replacement::Build {
+                reply,
+                source,
+                initial,
+            } => (reply, source, initial),
+            Replacement::Check {
+                reply,
+                folder,
+                identity,
+            } => match builds.check_copy(&folder, &identity) {
+                Ok(program) => {
+                    self.runtime_state = RuntimeState::Retiring;
+                    self.stop_runtime(runtime, read_open).await;
+                    let start = builds.start.clone();
+                    let retained = self
+                        .records
+                        .iter()
+                        .filter_map(|record| match &record.location {
+                            records::Location::Unloaded(cwd) => {
+                                Some((record.session.clone(), cwd.clone()))
+                            }
+                            records::Location::Loaded => None,
+                        })
+                        .collect();
+                    return Some(CompatibilityCheck {
+                        identity,
+                        result: Box::pin(async move {
+                            start
+                                .clean_sessions(retained)
+                                .await
+                                .map_err(|error| CheckFailure::Runtime(error.into()))?;
+                            Conductor::check(&start, program).await
+                        }),
+                        reply,
+                    });
+                }
+                Err(error) => {
+                    if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
+                        self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
+                            .await;
+                    }
+                    let _ = reply.send(Err(error));
+                    return None;
+                }
+            },
+        };
+        if let Some(source) = source
             && let Err(error) = builds.copy(source)
-            && !change.initial
+            && !initial
         {
             if matches!(self.runtime_state, RuntimeState::Retiring) && runtime.is_some() {
                 self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
                     .await;
             }
-            let _ = change.reply.send(Err(error));
-            return;
+            let _ = reply.send(Err(error));
+            return None;
         }
         self.stop_runtime(runtime, read_open).await;
         self.launch(runtime, read_open, clock, journal, builds)
             .await;
         if matches!(self.runtime_state, RuntimeState::Stopping) {
-            let _ = change
-                .reply
-                .send(Err(crate::runtime_builds::LaunchFailure::Stopped));
-            return;
+            let _ = reply.send(Err(crate::runtime_builds::LaunchFailure::Stopped));
+            return None;
         }
         let configured = publish.borrow().agy_acp_server_path.clone();
         let result = builds
@@ -330,7 +409,8 @@ impl Core {
             .await
             .map(|()| String::new())
             .map_err(Into::into);
-        let _ = change.reply.send(result);
+        let _ = reply.send(result);
+        None
     }
     async fn launch(
         &mut self,
@@ -1267,18 +1347,20 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
+            let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
                 if core.replacement_ready() && core.replacement.is_some() {
-                    core.replace(
-                        &mut runtime,
-                        &mut read_open,
-                        &clock,
-                        &journal,
-                        &actor_builds,
-                        &publish,
-                    )
-                    .await;
+                    checking = core
+                        .replace(
+                            &mut runtime,
+                            &mut read_open,
+                            &clock,
+                            &journal,
+                            &actor_builds,
+                            &publish,
+                        )
+                        .await;
                     if matches!(core.runtime_state, RuntimeState::Stopping) {
                         break;
                     }
@@ -1299,7 +1381,7 @@ impl Conductor {
                         break;
                     }
                 }
-                if core.replacement.is_none() {
+                if core.replacement.is_none() && checking.is_none() {
                     while let Some((action, reply)) = core.changes.pop_front() {
                         let initial = matches!(action, crate::runtime_builds::Action::Initial);
                         let mut changed = (**publish.borrow()).clone();
@@ -1319,6 +1401,25 @@ impl Conductor {
                                     crate::runtime_builds::Selection::Notice(notice) => {
                                         let _ = reply.send(Ok(notice.into()));
                                     }
+                                    crate::runtime_builds::Selection::Check {
+                                        folder,
+                                        identity,
+                                    } => {
+                                        core.apply(
+                                            Event::RetireRuntime,
+                                            &mut runtime,
+                                            &mut read_open,
+                                            &clock,
+                                            &journal,
+                                        )
+                                        .await;
+                                        core.replacement = Some(Replacement::Check {
+                                            reply,
+                                            folder,
+                                            identity,
+                                        });
+                                        break;
+                                    }
                                     crate::runtime_builds::Selection::Start(source) => {
                                         core.apply(
                                             Event::RetireRuntime,
@@ -1328,7 +1429,7 @@ impl Conductor {
                                             &journal,
                                         )
                                         .await;
-                                        core.replacement = Some(Replacement {
+                                        core.replacement = Some(Replacement::Build {
                                             reply,
                                             source,
                                             initial,
@@ -1373,6 +1474,27 @@ impl Conductor {
                     biased;
                     Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => {
                         (Event::Stop, clock.hold(HoldKind::TurnEvent))
+                    }
+                    result = async { checking.as_mut().unwrap().result.as_mut().await }, if checking.is_some() => {
+                        let check = checking.take().unwrap();
+                        let result = match result {
+                            Ok(version) => actor_builds.accept_check(version.clone(), &check.identity)
+                                .map(|()| format!("The compatibility check passed for {version}.")),
+                            Err(CheckFailure::Runtime(LaunchFailure::Stopped)) => Err(LaunchFailure::Stopped),
+                            Err(CheckFailure::Runtime(error)) => {
+                                core.apply(Event::RuntimeFailure, &mut runtime, &mut read_open, &clock, &journal).await;
+                                Ok(format!("The compatibility check failed: {error}."))
+                            }
+                            Err(CheckFailure::Incompatible(error)) => Ok(format!("The compatibility check failed: {error}.")),
+                        };
+                        let cleanup = std::fs::remove_dir_all(actor_builds.start.data.join(crate::runtime_builds::CHECK))
+                            .map_err(|error| crate::runtime_builds::LaunchFailure::Runtime(error.to_string()));
+                        let result = cleanup.and(result);
+                        core.launch(&mut runtime, &mut read_open, &clock, &journal, &actor_builds).await;
+                        let configured = publish.borrow().agy_acp_server_path.clone();
+                        let discovered = actor_builds.discover(configured).await;
+                        let _ = check.reply.send(discovered.map_err(crate::runtime_builds::LaunchFailure::Runtime).and(result));
+                        continue;
                     }
                     work = first_closed(&connected), if !connected.is_empty() => {
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
@@ -1451,6 +1573,12 @@ impl Conductor {
                 if matches!(core.runtime_state, RuntimeState::Stopping) {
                     break;
                 }
+            }
+            if let Some(check) = checking {
+                let _ = check.result.await;
+                let _ = check
+                    .reply
+                    .send(Err(crate::runtime_builds::LaunchFailure::Stopped));
             }
             if let Some(runtime) = runtime {
                 runtime.stop().await;
@@ -1543,6 +1671,224 @@ impl Conductor {
                 }
                 Command::Emit(output, event) => {
                     let _ = output.send((event, clock.hold(HoldKind::TurnEvent)));
+                }
+            }
+        }
+    }
+    async fn answer<T>(
+        start: &RuntimeStart,
+        wait: crate::Moment,
+        answer: impl std::future::Future<Output = Result<T, CheckFailure>>,
+    ) -> Result<T, CheckFailure> {
+        let mut stopped = start.stopped.clone();
+        tokio::select! {
+            biased;
+            Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => Err(CheckFailure::Runtime(LaunchFailure::Stopped)),
+            result = answer => result,
+            _hold = start.clock.sleep_until(start.clock.now().saturating_add(wait)) =>
+                Err(CheckFailure::Runtime(LaunchFailure::Runtime("runtime gave no answer before its deadline".into()))),
+        }
+    }
+    async fn check(start: &RuntimeStart, program: PathBuf) -> Result<String, CheckFailure> {
+        let mut runtime = Runtime::open(start, program)
+            .await
+            .map_err(CheckFailure::Runtime)?;
+        let checking = async {
+            let initialized = Self::answer(start, 5 * 60 * 1000, async {
+                runtime
+                    .initialize(start)
+                    .await
+                    .map_err(CheckFailure::Runtime)
+            })
+            .await?;
+            if initialized["protocolVersion"] != 1
+                || initialized["agentCapabilities"]["loadSession"] != true
+                || !initialized["authMethods"]
+                    .as_array()
+                    .is_some_and(|methods| {
+                        methods
+                            .iter()
+                            .any(|method| method["id"] == "oauth-personal")
+                    })
+            {
+                return Err(
+                    "the runtime must support ACP 1, session/load and oauth-personal"
+                        .to_string()
+                        .into(),
+                );
+            }
+            let version = initialized["agentInfo"]["version"]
+                .as_str()
+                .filter(|version| !version.is_empty())
+                .ok_or_else(|| CheckFailure::Incompatible("initialize has no version".into()))?
+                .to_owned();
+            let codeword = crate::random_hex::<16>().map_err(|error| error.to_string())?;
+            let tools = vec![crate::conversation::ClientTool {
+                name: format!(
+                    "compatibility_{}",
+                    crate::random_hex::<12>().map_err(|error| error.to_string())?
+                ),
+                description: "Return a value for the compatibility check.".into(),
+                schema: json!({"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}),
+                kind: crate::conversation::ToolKind::Function,
+                namespace: None,
+            }];
+            let system = format!(
+                "For this compatibility check the secret codeword is {codeword}. When asked for the codeword, repeat it exactly. Use only the supplied client tool when asked to use a tool."
+            );
+            Self::answer(start, 5 * 60 * 1000, async {
+                runtime
+                    .new_session(&tools, Some(&system))
+                    .await
+                    .map_err(|error| CheckFailure::Runtime(error.into()))
+            })
+            .await?;
+            let session = runtime.session_id().to_owned();
+            let (text, call) = Self::check_prompt(
+                &mut runtime,
+                start,
+                &session,
+                "Reply with the secret codeword from the system instruction. Do not use any tool.",
+            )
+            .await?;
+            if !text.contains(&codeword) || call.is_some() {
+                return Err("the reply did not contain the system codeword"
+                    .to_string()
+                    .into());
+            }
+            let (_, call) = Self::check_prompt(&mut runtime, start, &session, "Call the supplied client tool with a value of your choice. Do not use a built-in tool.").await?;
+            let call = call.ok_or_else(|| {
+                CheckFailure::Incompatible("no client tool permission request".into())
+            })?;
+            let cwd = runtime.session_cwd(&session).to_owned();
+            runtime.forget(&session);
+            Self::answer(start, 5 * 60 * 1000, async {
+                runtime
+                    .request_session(
+                        "compatibility-check".into(),
+                        &tools,
+                        Some(&system),
+                        Some((session.clone(), cwd)),
+                    )
+                    .await?;
+                loop {
+                    let (event, _hold) = runtime.next().await;
+                    match event {
+                        RuntimeEvent::Prepared { result, .. } => {
+                            result?;
+                            break;
+                        }
+                        RuntimeEvent::Other | RuntimeEvent::Stderr => {}
+                        RuntimeEvent::Closed => {
+                            return Err(CheckFailure::Runtime(LaunchFailure::Runtime(
+                                "the check runtime exited during session/load".into(),
+                            )));
+                        }
+                        _ => {
+                            return Err("session/load failed during the compatibility check"
+                                .to_string()
+                                .into());
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .await?;
+            let result = crate::random_hex::<16>().map_err(|error| error.to_string())?;
+            let prompt = format!(
+                "The tool {} returned this result as text: {result}\nReply with that result exactly, without calling any tool.",
+                call.name
+            );
+            let (text, call) = Self::check_prompt(&mut runtime, start, &session, &prompt).await?;
+            if !text.contains(&result) || call.is_some() {
+                return Err("the reply did not contain the tool result sent as text"
+                    .to_string()
+                    .into());
+            }
+            Ok(version)
+        };
+        let result = checking.await;
+        runtime.stop().await;
+        result
+    }
+    async fn check_prompt(
+        runtime: &mut Runtime,
+        start: &RuntimeStart,
+        session: &str,
+        text: &str,
+    ) -> Result<(String, Option<crate::conversation::ToolCall>), CheckFailure> {
+        runtime
+            .start_prompt(
+                vec![crate::conversation::PromptBlock::Text(text.into())],
+                session,
+            )
+            .await?;
+        let mut text = String::new();
+        let mut call = None;
+        let mut deadline = start.clock.now().saturating_add(5 * 60 * 1000);
+        loop {
+            let (event, _hold) =
+                Self::answer(start, deadline.saturating_sub(start.clock.now()), async {
+                    Ok(runtime.next().await)
+                })
+                .await?;
+            match event {
+                RuntimeEvent::Turn { update, .. } => {
+                    if call.is_none() {
+                        deadline = start.clock.now().saturating_add(5 * 60 * 1000);
+                    }
+                    match update {
+                        TurnUpdate::Text(chunk) => text.push_str(&chunk),
+                        TurnUpdate::Permission {
+                            request,
+                            call: tool,
+                        } => {
+                            runtime.permission(request).await?;
+                            runtime.cancel(session).await?;
+                            call = Some(tool);
+                            deadline = start.clock.now().saturating_add(30 * 1000);
+                        }
+                        TurnUpdate::PromptEnded { stop_reason } => {
+                            let expected = if call.is_some() {
+                                StopReason::Cancelled
+                            } else {
+                                StopReason::EndTurn
+                            };
+                            if stop_reason != Some(expected) {
+                                return Err("unexpected compatibility prompt stop reason"
+                                    .to_string()
+                                    .into());
+                            }
+                            return Ok((text, call));
+                        }
+                        TurnUpdate::ThoughtDropped | TurnUpdate::Usage(_) => {}
+                        TurnUpdate::UnpermittedTool(name) => {
+                            return Err(format!(
+                                "the built-in tool {name} ran during the compatibility check"
+                            )
+                            .into());
+                        }
+                        TurnUpdate::RefusedPermission { request, .. } => {
+                            runtime.permission(request).await?;
+                            return Err(
+                                "a permission request did not name the supplied client tool"
+                                    .to_string()
+                                    .into(),
+                            );
+                        }
+                        TurnUpdate::Failed(error) => return Err(error.to_string().into()),
+                    }
+                }
+                RuntimeEvent::Other | RuntimeEvent::Stderr => {}
+                RuntimeEvent::Closed => {
+                    return Err(CheckFailure::Runtime(LaunchFailure::Runtime(
+                        "the check runtime exited unexpectedly".into(),
+                    )));
+                }
+                _ => {
+                    return Err("runtime failed during the compatibility check"
+                        .to_string()
+                        .into());
                 }
             }
         }
@@ -1722,6 +2068,206 @@ mod tests {
         (core, queued, tickets.try_into().ok().unwrap())
     }
 
+    #[tokio::test]
+    async fn each_failed_check_process_counts_once_toward_runtime_unavailable() {
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Tree(Arc<AtomicUsize>);
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async move {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                })
+            }
+        }
+        struct Launcher(AtomicUsize, Arc<AtomicUsize>);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                assert!(
+                    self.0.fetch_add(1, Ordering::SeqCst) < 3,
+                    "three candidate starts cap"
+                );
+                Ok(Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(tokio::io::empty()),
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(Tree(self.1.clone())),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!("acp2api-check-failures-{}", crate::random_hex::<12>().unwrap()));
+            let source = root.join("exe");
+            std::fs::create_dir_all(&source).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(source.join(name), b"unlisted candidate").unwrap(); }
+            let stopped = Arc::new(AtomicUsize::new(0));
+            let mut ports = crate::Ports::production();
+            ports.launcher = Arc::new(Launcher(AtomicUsize::new(0), stopped.clone()));
+            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment {
+                account_root:root.join("account"), temp:root.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:source
+            }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
+            let configuration = root.join("config.toml");
+            let settings = crate::store::read(&configuration, 1).unwrap().settings;
+            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
+            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
+            for attempt in 1..=3 {
+                conductor.builds(crate::runtime_builds::Action::Check(identity.clone()), Hold::empty()).await.unwrap();
+                let message = conductor.model_names(Hold::empty()).await.err().unwrap().message.to_string();
+                assert_eq!(message.contains(REPEATED_FAILURES), attempt == 3, "each failed check process must count once: attempt {attempt}, {message}");
+            }
+            assert_eq!(stopped.load(Ordering::SeqCst), 3, "each failed check process is stopped");
+            drop(conductor);
+            task.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+        }).await.expect("failure check cap: 5 seconds, three candidate launches, three initialize writes, no output or API calls");
+    }
+    #[tokio::test]
+    async fn a_check_queues_requests_when_no_accepted_runtime_existed() {
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Tree(Arc<AtomicBool>);
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async move {
+                    self.0.store(true, Ordering::SeqCst);
+                })
+            }
+        }
+        struct Launcher(Mutex<Option<Launched>>, mpsc::UnboundedSender<()>);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                self.1.send(()).unwrap();
+                Ok(self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("one check process cap"))
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-check-unavailable-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let source = root.join("exe");
+            std::fs::create_dir_all(&source).unwrap();
+            for name in [
+                crate::runtime_builds::SERVER,
+                crate::runtime_builds::HARNESS,
+            ] {
+                std::fs::write(source.join(name), b"unlisted candidate").unwrap();
+            }
+            let (stdout, _peer) = tokio::io::duplex(8192);
+            let stopped = Arc::new(AtomicBool::new(false));
+            let (launched, mut launch) = mpsc::unbounded_channel();
+            let mut ports = crate::Ports::production();
+            ports.launcher = Arc::new(Launcher(
+                Mutex::new(Some(Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(stdout),
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(Tree(stopped.clone())),
+                })),
+                launched,
+            ));
+            let (stop, stopping) = watch::channel(false);
+            let builds = crate::runtime_builds::Builds::new(
+                &ports,
+                crate::Environment {
+                    account_root: root.join("account"),
+                    temp: root.join("temp"),
+                    home: None,
+                    local_app_data: None,
+                    path: vec![],
+                    exe_dir: source,
+                },
+                root.clone(),
+                crate::account::Temporary::fixture(&root),
+                crate::runtime_driver::mcp::ToolSets::new(0),
+                stopping,
+                0,
+            );
+            let configuration = root.join("config.toml");
+            let settings = crate::store::read(&configuration, 1).unwrap().settings;
+            let journal =
+                crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let request = journal.begin(crate::journal::Api::Chat, ports.clock.now());
+            let (conductor, task) = Conductor::start(
+                builds,
+                ports.clock.clone(),
+                journal,
+                settings,
+                configuration,
+                1,
+            );
+            conductor
+                .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+                .await
+                .unwrap();
+            assert!(conductor.model_names(Hold::empty()).await.is_err());
+            let identity = conductor.builds_summary().unwrap().found[0]
+                .identity
+                .clone();
+            let owner = conductor.clone();
+            let check = tokio::spawn(async move {
+                owner
+                    .builds(
+                        crate::runtime_builds::Action::Check(identity),
+                        Hold::empty(),
+                    )
+                    .await
+            });
+            launch.recv().await.unwrap();
+            let turn = crate::dialect::CHAT
+                .parse(br#"{"model":"m","messages":[{"role":"user","content":"queued"}]}"#)
+                .ok()
+                .unwrap()
+                .turn;
+            let admission = conductor.admit(turn, Hold::empty(), request).await;
+            assert!(
+                admission.is_ok(),
+                "a request during a check must queue even when no earlier accepted runtime existed"
+            );
+            let mut ticket = admission.ok().unwrap();
+            assert!(
+                matches!(
+                    ticket.events.try_recv(),
+                    Err(mpsc::error::TryRecvError::Empty)
+                ),
+                "a check sends no API prompt"
+            );
+            stop.send(true).unwrap();
+            task.await.unwrap();
+            assert!(matches!(check.await.unwrap(), Err(LaunchFailure::Stopped)));
+            assert!(
+                stopped.load(Ordering::SeqCst),
+                "stop must end the check process"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        })
+        .await
+        .expect(
+            "check cap: 5 seconds, one process, one initialize write, 8 KiB input, one API request",
+        );
+    }
     #[tokio::test]
     async fn a_planned_build_change_replaces_the_actor_runtime_after_the_running_turn() {
         use crate::{
@@ -2061,7 +2607,7 @@ mod tests {
             };
             core.handle(Event::RetireRuntime, 0);
             let (reply, result) = oneshot::channel();
-            core.replacement = Some(Replacement { reply, source:selected, initial:true });
+            core.replacement = Some(Replacement::Build { reply, source:selected, initial:true });
             let settings = watch::channel(Arc::new(settings)).0;
             let mut runtime = None;
             let mut read_open = false;
@@ -2167,20 +2713,26 @@ mod tests {
             std::fs::write(source.join(crate::runtime_builds::SERVER), b"accepted").unwrap();
             let copy_error = std::fs::copy(source.join(crate::runtime_builds::HARNESS), folder.join("probe")).unwrap_err().to_string();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
-            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
-            core.handle(Event::RetireRuntime, 0);
-            core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
-            core.handle(Event::Deadline, 201);
-            core.cleanup_before_start = true;
-            let (reply, result) = oneshot::channel();
-            core.replacement = Some(Replacement { reply, source:Some(source), initial:false });
-            let config = folder.join("config.toml");
-            let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
-            core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
-            let actual = (result.await.unwrap().map_err(|error| error.to_string()), core.failures.len(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.runtime_state, RuntimeState::Serving));
+            let (build_reply, build_result) = oneshot::channel();
+            let (check_reply, check_result) = oneshot::channel();
+            for (replacement, result) in [
+                (Replacement::Build { reply:build_reply, source:Some(source.clone()), initial:false }, build_result),
+                (Replacement::Check { reply:check_reply, folder:source, identity:crate::runtime_builds::identity(&ports.release.listed_builds()[0]) }, check_result),
+            ] {
+                let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+                core.handle(Event::RetireRuntime, 0);
+                core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
+                core.handle(Event::Deadline, 201);
+                core.cleanup_before_start = true;
+                core.replacement = Some(replacement);
+                let config = folder.join("config.toml");
+                let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
+                core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
+                let actual = (result.await.unwrap().map_err(|error| error.to_string()), core.failures.len(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.runtime_state, RuntimeState::Serving));
+                assert_eq!(actual, (Err(copy_error.clone()), 0, false, true, true), "owner copy errors must return to the owner while the existing runtime stays available");
+            }
             if let Some(runtime) = runtime { runtime.stop().await; }
             std::fs::remove_dir_all(folder).unwrap();
-            assert_eq!(actual, (Err(copy_error), 0, false, true, true), "FR-043 copy errors must return to the owner while the existing runtime stays available");
         }).await.expect("owner copy cap: five seconds, four launch attempts, two replies of at most 64 KiB");
     }
 
@@ -2216,7 +2768,7 @@ mod tests {
             core.records[0].location = records::Location::Unloaded(cwd);
             core.cleanup_before_start = true;
             let (reply, result) = oneshot::channel();
-            core.replacement = Some(Replacement { reply, source:None, initial:false });
+            core.replacement = Some(Replacement::Build { reply, source:None, initial:false });
             let config = folder.join("config.toml");
             let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
             let mut runtime = None; let mut read_open = false;

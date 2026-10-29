@@ -14,7 +14,7 @@ use axum::{
 };
 use std::sync::{Arc, Mutex};
 #[derive(Clone)]
-struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
+pub(crate) struct RequestHold(pub(crate) Arc<Mutex<Option<crate::Hold>>>);
 #[derive(Clone)]
 struct App {
     conductor: Conductor,

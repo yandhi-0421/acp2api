@@ -1,10 +1,83 @@
 use argon2::{Argon2, PasswordHasher, password_hash::phc::PasswordHash};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
 };
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StateFile {
+    format: u8,
+    lockout: Option<Lockout>,
+    pub(crate) checked_builds: Vec<CheckedBuild>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Lockout {
+    since: String,
+    signal: String,
+    original_error_text: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedBuild {
+    #[serde(flatten)]
+    pub(crate) build: crate::ListedBuild,
+    pub(crate) checked_at: String,
+}
+impl StateFile {
+    pub(crate) fn read(path: &Path) -> Result<Self, String> {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    format: 1,
+                    lockout: None,
+                    checked_builds: Vec::new(),
+                });
+            }
+            Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+        };
+        let state: Self = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+        if state.format != 1 {
+            return Err(format!("unknown state file format {}", state.format));
+        }
+        for checked in &state.checked_builds {
+            if checked.build.version.is_empty()
+                || ![
+                    &checked.build.agy_acp_server_sha256,
+                    &checked.build.localharness_external_sha256,
+                ]
+                .iter()
+                .all(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            {
+                return Err("the state file has an invalid checked build".into());
+            }
+        }
+        Ok(state)
+    }
+    pub(crate) fn save(&self, path: &Path) -> Result<(), String> {
+        let temporary = path.with_file_name(format!(
+            ".state-{}.tmp",
+            crate::random_hex::<16>().map_err(|error| error.to_string())?
+        ));
+        let result = (|| {
+            let mut file =
+                crate::os::private_file(&temporary).map_err(|error| error.to_string())?;
+            let bytes = serde_json::to_vec(self).map_err(|error| error.to_string())?;
+            file.write_all(&bytes).map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())?;
+            drop(file);
+            fs::rename(&temporary, path).map_err(|error| error.to_string())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
+    }
+}
 #[derive(Clone, Serialize)]
 pub(crate) struct Settings {
     pub port: u16,
@@ -253,6 +326,63 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn state_file_round_trips_records_and_rejects_invalid_data() {
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-state-file-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("state.json");
+        let hash = "a".repeat(64);
+        let saved = serde_json::json!({"format":1,"lockout":null,"checked_builds":[{
+            "version":"1.6.0", "platform":"macos-arm64", "agy_acp_server_sha256":hash,
+            "localharness_external_sha256":hash, "checked_at":"2026-10-18T12:00:00Z"
+        }]});
+        std::fs::write(&path, saved.to_string()).unwrap();
+        let state = super::StateFile::read(&path).unwrap();
+        state.save(&path).unwrap();
+        let actual: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(actual, saved, "whole-file writes preserve the records");
+        for invalid in [
+            serde_json::json!({"format":2,"lockout":null,"checked_builds":[]}),
+            serde_json::json!({"format":1,"lockout":null,"checked_builds":[],"extra":true}),
+            {
+                let mut value = saved.clone();
+                value["checked_builds"][0]["unexpected"] = true.into();
+                value
+            },
+            {
+                let mut value = saved;
+                value["checked_builds"][0]["agy_acp_server_sha256"] = "short".into();
+                value
+            },
+        ] {
+            std::fs::write(&path, invalid.to_string()).unwrap();
+            assert!(
+                super::StateFile::read(&path).is_err(),
+                "the state parser must reject {invalid}"
+            );
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(
+            state.save(&path).is_err(),
+            "a failed rename must return the filesystem error"
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            1,
+            "a failed save leaves no temporary file"
+        );
+        assert!(
+            super::StateFile::read(&path).is_err(),
+            "an unreadable state file must return an error"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn non_utf8_configuration_gives_m26() {
         let folder = crate::os::environment()
