@@ -10,6 +10,10 @@ mod compatibility_check;
 mod compatibility_facts;
 #[path = "support/compatibility_check.rs"]
 mod compatibility_support;
+#[path = "steps/copy_failure.rs"]
+mod copy_failure;
+#[path = "support/copy_failure.rs"]
+mod copy_failure_support;
 #[path = "steps/panel.rs"]
 mod panel;
 #[path = "steps/places_and_queue.rs"]
@@ -84,6 +88,7 @@ struct World {
     panel: acp2api_acceptance::panel_check::Panel,
     models: model_names::ModelState,
     logs: logs::LogState,
+    copy_failure: Option<copy_failure_support::DeniedCopy>,
     startup: acp2api_acceptance::startup_check::Startup,
     access: access_protection::AccessState,
     endpoint: endpoints_and_streams::EndpointState,
