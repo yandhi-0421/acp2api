@@ -1369,8 +1369,23 @@ impl Core {
                             if let Some((wait, known)) =
                                 self.quota_signal(&error, now, wall, &mut commands)
                             {
+                                let pending_model = match &self.work[&id] {
+                                    Work::Checking(request) => Some(request.turn.model.clone()),
+                                    Work::Retiring(outstanding) => Some(outstanding.model.clone()),
+                                    _ => None,
+                                };
                                 if known {
-                                    self.finish(id, Err(wait.message(now)), &mut commands);
+                                    self.finish(id, Err(self.refusal(now).unwrap()), &mut commands);
+                                } else if let Some(model) = pending_model {
+                                    self.finish(id, Err(self.refusal(now).unwrap()), &mut commands);
+                                    self.enqueue_quota(
+                                        QuotaPurpose::Reset {
+                                            wait,
+                                            model: Some(model),
+                                            response: None,
+                                        },
+                                        None,
+                                    );
                                 } else {
                                     let mut active =
                                         self.work.remove(&id).unwrap().into_active().unwrap();
@@ -5533,6 +5548,84 @@ mod tests {
             core.failures.is_empty(),
             "FR-039 planned replacement is not a runtime failure"
         );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-quota-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for disconnected in [false, true] {
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.work.clear();
+            core.sign_in_required = true;
+            let turn = crate::dialect::CHAT
+                .parse(br#"{"model":"m","messages":[{"role":"user","content":"Check"}]}"#)
+                .ok()
+                .unwrap()
+                .turn;
+            let request = journal.begin(crate::journal::Api::Chat, 0);
+            let work = request.id.clone();
+            let (admission, _reply) = oneshot::channel();
+            let (connection, _lease) = mpsc::unbounded_channel();
+            core.handle(
+                Event::CheckPending(Box::new(PendingRequest {
+                    turn,
+                    request,
+                    admission,
+                    connection,
+                })),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+            if disconnected {
+                core.handle(Event::Disconnected(work.clone()), 0, std::time::UNIX_EPOCH);
+            }
+            let commands = core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work: work.clone(),
+                    result: Err(crate::messages::Message::UpstreamAcp(
+                        serde_json::from_value(
+                            serde_json::json!({"code":429,"message":"RESOURCE_EXHAUSTED"}),
+                        )
+                        .unwrap(),
+                    )),
+                }),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+            assert_eq!(
+                core.quota_wait.as_ref().unwrap().deadline,
+                3_600_000,
+                "FR-036 no reset time uses the 60-minute fallback"
+            );
+            assert!(
+                core.work
+                    .values()
+                    .any(|w| matches!(w, Work::QuotaQueued { .. })),
+                "FR-036 the reset query uses the shared queue"
+            );
+            assert!(
+                core.by_request(&work).is_none(),
+                "the completed check releases its place"
+            );
+            if disconnected {
+                assert!(commands.iter().any(|c| matches!(c, Command::Complete(done) if done.request.id == work && matches!(done.outcome, crate::journal::Outcome::Disconnected))));
+            } else {
+                assert!(
+                    commands.iter().any(|c| matches!(
+                        c,
+                        Command::RefusePending {
+                            error: crate::messages::Message::SignInRequired(_),
+                            ..
+                        }
+                    )),
+                    "FR-037 the higher-priority sign-in condition selects the error"
+                );
+            }
+        }
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
