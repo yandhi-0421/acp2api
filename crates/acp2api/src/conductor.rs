@@ -3037,10 +3037,7 @@ impl Conductor {
                             state.save(&core.state_path)
                         });
                     if let Err(error) = result {
-                        eprintln!(
-                            "acp2api: cannot save lockout: {}",
-                            crate::journal::redact_error(&error)
-                        );
+                        journal.state_file_failure("lockout", &error, clock.as_ref());
                     }
                     core.stop_runtime(runtime, read_open).await;
                 }
@@ -3528,6 +3525,52 @@ mod tests {
                 "a waiting owner request receives M-12: {response:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_lockout_save_is_journaled_and_keeps_lockout_in_memory() {
+        let (mut core, commands, folder) = error_after_reply(
+            "",
+            crate::messages::HttpError {
+                code: Some(403),
+                status: "PERMISSION_DENIED".into(),
+                message: "Account suspended".into(),
+            },
+        );
+        std::fs::create_dir(&core.state_path).unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let records: Vec<serde_json::Value> = std::fs::read_dir(folder.join("logs"))
+            .unwrap()
+            .flat_map(|entry| {
+                std::fs::read_to_string(entry.unwrap().path())
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let state = core.state();
+        let later = core.refusal(1).unwrap().to_string();
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(state, "Lockout");
+        assert!(later.starts_with("acp2api: lockout since "));
+        assert!(
+            records
+                .iter()
+                .any(|record| record["event"] == "state_file_write_failed"
+                    && record["operation"] == "lockout"),
+            "a failed lockout persistence is recorded in the journal: {records:?}"
+        );
     }
 
     #[test]
