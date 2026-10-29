@@ -152,7 +152,14 @@ async fn restart(w: &mut World, seconds: u64) {
 
 #[then(regex = r"^acp2api refuses the request with HTTP (502|503)$")]
 fn refusal_status(w: &mut World, status: u16) {
-    check::refusal(w.scenario.answer.as_ref().unwrap(), status);
+    let answer = w.scenario.answer.as_ref().unwrap();
+    check::refusal(answer, status);
+    if status == 502 {
+        assert_eq!(
+            answer.headers.get("x-should-retry").map(String::as_str),
+            Some("false")
+        );
+    }
 }
 
 #[then(expr = "acp2api refuses the request with HTTP 503 and the header {string}")]
@@ -175,6 +182,16 @@ fn exact_message(w: &mut World, expected: String) {
 #[then("acp2api refuses the request with HTTP 503 and no prompt")]
 fn refused_without_prompt(w: &mut World) {
     check::refusal(w.scenario.answer.as_ref().unwrap(), 503);
+    assert_eq!(
+        w.scenario
+            .answer
+            .as_ref()
+            .unwrap()
+            .headers
+            .get("retry-after")
+            .map(String::as_str),
+        Some("1")
+    );
     let (before, _) = w.scenario.hub.active_request();
     assert_eq!(w.scenario.fake().record().prompts().len(), before);
 }
