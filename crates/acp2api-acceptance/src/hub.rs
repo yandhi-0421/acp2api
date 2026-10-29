@@ -1,5 +1,6 @@
 use crate::fake::FakeState;
 use crate::real_limit;
+use crate::time_limits::REAL_TIME_CAP;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -68,6 +69,7 @@ pub(crate) struct State {
     pub next_socket: u64,
     pub now: u64,
     pub counts: Counts,
+    pub stdin_got_by_pid: HashMap<u64, u64>,
     pub entries: Vec<Entry>,
     pub bytes: usize,
     pub failure: Option<String>,
@@ -146,6 +148,7 @@ impl Hub {
                 next_socket: 0,
                 now: 0,
                 counts: Counts::default(),
+                stdin_got_by_pid: HashMap::new(),
                 entries: Vec::new(),
                 bytes: 0,
                 failure: None,
@@ -229,6 +232,12 @@ impl Hub {
                 }
                 if message["op"] == "Hello" {
                     pid = message["pid"].as_u64().expect("fake Hello PID");
+                    self.shared
+                        .0
+                        .lock()
+                        .unwrap()
+                        .stdin_got_by_pid
+                        .insert(pid, 0);
                 }
                 role = message["role"].as_str().unwrap_or("rpc").to_owned();
                 if role != "rpc" {
@@ -246,10 +255,7 @@ impl Hub {
                 "Hello" => {
                     #[cfg(windows)]
                     if !process_recorded && (role == "server" || role == "harness") {
-                        let pid = message["pid"]
-                            .as_u64()
-                            .and_then(|pid| u32::try_from(pid).ok())
-                            .expect("fake Hello PID");
+                        let pid = u32::try_from(pid).expect("fake Hello PID");
                         if let Some((_process, created)) = crate::setup::open_fake_process(pid) {
                             let record = format!("{pid} {created}\n");
                             let cap = (EVENT_CAP * 32) as u64; // u32 + space + u64 + newline.
@@ -282,14 +288,16 @@ impl Hub {
                 }
                 "Got" => {
                     state.counts.stdin_got += 1;
+                    *state
+                        .stdin_got_by_pid
+                        .get_mut(&pid)
+                        .expect("fake Hello precedes Got") += 1;
                     if let Some(line) = message["line"].as_str() {
                         match serde_json::from_str::<Value>(line) {
                             Ok(value) => {
                                 let mut redacted = value.clone();
                                 redact(&mut redacted);
-                                state.record(
-                                    json!({"kind":"got","pid":pid,"line":redacted.to_string()}),
-                                );
+                                state.record(json!({"kind":"got","line":redacted.to_string()}));
                                 let requests = crate::fake::mcp_requests(&mut state, &value);
                                 state.counts.fake_mcp_inflight += requests.len() as u64;
                                 state.counts.fake_mcp_sent += requests.len() as u64;
@@ -344,24 +352,34 @@ impl Hub {
                 "drain_stdin" => {
                     let pid = message["pid"].as_u64().expect("stdin drain PID");
                     let lines = message["lines"].as_u64().expect("stdin drain lines");
-                    let deadline = Instant::now() + real_limit(Duration::from_secs(10));
-                    loop {
-                        let got = state
-                            .entries
-                            .iter()
-                            .filter(|entry| {
-                                entry.event["kind"] == "got" && entry.event["pid"] == pid
-                            })
-                            .count() as u64;
-                        if got >= lines {
-                            break json!({"ok":true});
-                        }
-                        let remaining = deadline.saturating_duration_since(Instant::now());
-                        if remaining.is_zero() {
-                            break json!({"error":format!("stdin drain 10 s cap: pid {pid}, written {lines}, got {got}")});
-                        }
-                        state = self.shared.1.wait_timeout(state, remaining).unwrap().0;
+                    let (drained, timeout) = self
+                        .shared
+                        .1
+                        .wait_timeout_while(state, real_limit(REAL_TIME_CAP), |state| {
+                            state.stdin_got_by_pid.get(&pid).copied().unwrap_or(0) < lines
+                        })
+                        .unwrap();
+                    state = drained;
+                    if timeout.timed_out() {
+                        let got = state.stdin_got_by_pid.get(&pid).copied().unwrap_or(0);
+                        let message = format!(
+                            "stdin drain {} s cap: pid {pid}, written {lines}, got {got}",
+                            REAL_TIME_CAP.as_secs()
+                        );
+                        state.failure = Some(message.clone());
+                        json!({"error":message})
+                    } else {
+                        json!({"ok":true})
                     }
+                }
+                "failure" => {
+                    state.failure = Some(
+                        message["message"]
+                            .as_str()
+                            .expect("harness failure message")
+                            .to_owned(),
+                    );
+                    json!({"ok":true})
                 }
                 "now" | "drain" => json!({"now":state.now}),
                 "sleep" => {
@@ -550,7 +568,7 @@ impl HubLink {
     fn open(&self) -> std::io::Result<TcpStream> {
         let stream = TcpStream::connect(&self.address)?;
         stream.set_read_timeout(Some(real_limit(Duration::from_secs(300))))?;
-        stream.set_write_timeout(Some(real_limit(Duration::from_secs(10))))?;
+        stream.set_write_timeout(Some(real_limit(REAL_TIME_CAP)))?;
         Ok(stream)
     }
     pub fn connect(&self, mut message: Value) -> std::io::Result<BufReader<TcpStream>> {
@@ -617,13 +635,17 @@ impl std::fmt::Debug for HubLink {
 
 impl Hub {
     pub async fn prepare_restart(&self) {
-        let deadline = Instant::now() + real_limit(Duration::from_secs(10));
+        let deadline = Instant::now() + real_limit(REAL_TIME_CAP);
         while crate::fake::FakeRuntime::new(self.clone())
             .record()
             .processes_alive()
             > 0
         {
-            assert!(Instant::now() < deadline, "restart process-drain cap: 10 s");
+            assert!(
+                Instant::now() < deadline,
+                "restart process-drain cap: {} s",
+                REAL_TIME_CAP.as_secs()
+            );
             let hub = self.clone();
             tokio::task::spawn_blocking(move || hub.wait_change(deadline))
                 .await

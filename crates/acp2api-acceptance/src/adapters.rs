@@ -128,7 +128,7 @@ impl ProcessLauncher for GuardedLauncher {
             inner: launched.stdin,
             link: self.link.clone(),
             pid: launched.tree.pid(),
-            lines: 0,
+            lines_written: 0,
             drain: StdinDrain::Open,
         });
         launched.stdout = Box::pin(CountRead {
@@ -171,12 +171,12 @@ struct CountWrite {
     inner: ProcessWrite,
     link: HubLink,
     pid: u32,
-    lines: u64,
+    lines_written: u64,
     drain: StdinDrain,
 }
 enum StdinDrain {
     Open,
-    Waiting(tokio::task::JoinHandle<()>),
+    Waiting(tokio::task::JoinHandle<Result<(), String>>),
     Done,
 }
 impl AsyncWrite for CountWrite {
@@ -189,7 +189,7 @@ impl AsyncWrite for CountWrite {
         if let Poll::Ready(Ok(n)) = result {
             let lines = buf[..n].iter().filter(|b| **b == b'\n').count();
             if lines > 0 {
-                self.lines += lines as u64;
+                self.lines_written += lines as u64;
                 self.link
                     .call(json!({"op":"io","direction":"stdin","lines":lines}));
             }
@@ -204,27 +204,42 @@ impl AsyncWrite for CountWrite {
         if matches!(self.drain, StdinDrain::Open) {
             let link = self.link.clone();
             let pid = self.pid;
-            let lines = self.lines;
+            let lines = self.lines_written;
             // A pipe flush does not prove that the fake reported the bytes before a Windows kill.
             self.drain = StdinDrain::Waiting(tokio::task::spawn_blocking(move || {
                 // Use a separate connection so MCP work can still use the shared RPC connection.
-                let mut reader = link
-                    .connect(json!({"op":"drain_stdin","pid":pid,"lines":lines}))
-                    .expect("stdin drain connection");
-                let mut response = String::new();
-                reader
-                    .read_line(&mut response)
-                    .expect("stdin drain response");
-                assert_eq!(
-                    serde_json::from_str::<serde_json::Value>(&response).expect("stdin drain JSON"),
-                    json!({"ok":true}),
-                    "stdin drain acknowledgement"
-                );
+                let result = (|| -> Result<(), String> {
+                    let mut reader = link
+                        .connect(json!({"op":"drain_stdin","pid":pid,"lines":lines}))
+                        .map_err(|error| format!("stdin drain connection: {error}"))?;
+                    let mut response = String::new();
+                    reader
+                        .read_line(&mut response)
+                        .map_err(|error| format!("stdin drain response: {error}"))?;
+                    let response: serde_json::Value = serde_json::from_str(&response)
+                        .map_err(|error| format!("stdin drain JSON: {error}"))?;
+                    if let Some(error) = response["error"].as_str() {
+                        return Err(error.to_owned());
+                    }
+                    if response != json!({"ok":true}) {
+                        return Err(format!("invalid stdin drain acknowledgement: {response}"));
+                    }
+                    Ok(())
+                })();
+                if let Err(message) = &result
+                    && let Ok(mut reader) = link.connect(json!({"op":"failure","message":message}))
+                {
+                    let _ = reader.read_line(&mut String::new());
+                }
+                result
             }));
         }
         if let StdinDrain::Waiting(wait) = &mut self.drain {
-            std::task::ready!(Pin::new(wait).poll(cx)).expect("stdin drain task");
+            let result = std::task::ready!(Pin::new(wait).poll(cx));
             self.drain = StdinDrain::Done;
+            result
+                .map_err(io::Error::other)?
+                .map_err(io::Error::other)?;
         }
         self.inner.as_mut().poll_shutdown(cx)
     }

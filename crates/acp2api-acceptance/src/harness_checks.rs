@@ -18,6 +18,17 @@ fn world() -> Scenario {
     s
 }
 #[cfg(unix)]
+fn send_signal(pid: i32, signal: i32) {
+    assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
+}
+#[cfg(unix)]
+fn process_is_stopped(pid: i32) -> bool {
+    let mut status = 0;
+    let result = unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED | libc::WNOHANG) };
+    assert!(result >= 0);
+    result == pid && libc::WIFSTOPPED(status)
+}
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdin_shutdown_waits_for_the_fake_to_report_buffered_lines() {
     use std::task::Poll;
@@ -41,16 +52,8 @@ async fn stdin_shutdown_waits_for_the_fake_to_report_buffered_lines() {
     })
     .await;
     let pid = child.tree.pid() as i32;
-    unsafe {
-        assert_eq!(libc::kill(pid, libc::SIGSTOP), 0);
-    }
-    wait_for(&s.hub, deadline, || unsafe {
-        let mut status = 0;
-        let result = libc::waitpid(pid, &mut status, libc::WUNTRACED | libc::WNOHANG);
-        assert!(result >= 0);
-        result == pid && libc::WIFSTOPPED(status)
-    })
-    .await;
+    send_signal(pid, libc::SIGSTOP);
+    wait_for(&s.hub, deadline, || process_is_stopped(pid)).await;
     // One complete cancel fits in the pipe while the fake's reader cannot run.
     child
         .stdin
@@ -59,9 +62,7 @@ async fn stdin_shutdown_waits_for_the_fake_to_report_buffered_lines() {
         .unwrap();
     let mut shutdown = Box::pin(child.stdin.shutdown());
     let first = futures_util::poll!(shutdown.as_mut());
-    unsafe {
-        assert_eq!(libc::kill(pid, libc::SIGCONT), 0);
-    }
+    send_signal(pid, libc::SIGCONT);
     assert!(
         matches!(first, Poll::Pending),
         "stdin shutdown completed before the fake reported the buffered line"

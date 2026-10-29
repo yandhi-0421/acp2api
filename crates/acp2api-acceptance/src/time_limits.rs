@@ -1,6 +1,7 @@
 use std::{sync::OnceLock, time::Duration};
 
 pub const TIME_FACTOR_ENV: &str = "ACP2API_TEST_TIME_FACTOR";
+pub(crate) const REAL_TIME_CAP: Duration = Duration::from_secs(10);
 
 pub fn time_factor() -> u32 {
     static FACTOR: OnceLock<u32> = OnceLock::new();
