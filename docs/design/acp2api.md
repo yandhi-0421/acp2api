@@ -822,7 +822,7 @@ The hub owns the virtual time `now`. The wall time is a fixed epoch of the scena
 
 - `HarnessClock`, the test adapter of `Clock`, reports each deadline of acp2api to the hub. It counts live holds and wakes sleepers only in the deadline phase.
 - `GuardedLauncher` counts the lines on stdin, stdout, and stderr of each fake process. The fake reports the lines that it got, and the hub knows the lines that it ordered.
-  At stdin shutdown, it flushes writes and waits for that fake to report each written line.
+  Each live fake must balance its own input, output read, and output completion counts. A process exit closes that fake's pending lines in separate counters.
 - `FakeRuntime` and `ApiClient` register their own deadlines on the same `TimeLine`, for example for `TurnStep::After`.
 
 ```text
@@ -832,8 +832,8 @@ settle():                                   # fails after 10 s of real time and 
     s = snapshot of the counts
     if s is balanced and s == previous: return
     previous = s; send a drain tick with the same now   # drain mailboxes; do not wake product timers
-  balanced: each line that the hub ordered was read by the test host, each line that the
-            test host wrote was relayed by the fake, each HTTP request of ApiClient and Owner
+  balanced: each live fake relayed every input and the test host read and processed every ordered output;
+            a process exit closes only that fake's pending lines; each HTTP request of ApiClient and Owner
             took its HttpRequest hold or got its answer, each MCP request got its answer,
             and ApiClient read each byte that is available
 

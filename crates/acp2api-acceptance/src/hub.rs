@@ -28,6 +28,10 @@ pub struct Counts {
     pub ordered: u64,
     pub read: u64,
     pub processed: u64,
+    pub stdin_closed: u64,
+    pub read_closed: u64,
+    pub processed_closed: u64,
+    pub open_process_io: u64,
     pub http_sent: u64,
     pub http_started: u64,
     pub mcp_started: u64,
@@ -43,9 +47,10 @@ pub struct Counts {
 impl Counts {
     pub fn balanced(self) -> bool {
         self.holds == 0
-            && self.stdin_written == self.stdin_got
-            && self.ordered == self.read
-            && self.ordered == self.processed
+            && self.stdin_written == self.stdin_got + self.stdin_closed
+            && self.ordered == self.read + self.read_closed
+            && self.ordered == self.processed + self.processed_closed
+            && self.open_process_io == 0
             && self.http_sent + self.fake_mcp_sent == self.http_started + self.mcp_started
             && self.client_read == self.client_consumed
             && !self.client_available
@@ -63,13 +68,25 @@ pub(crate) struct ClientSocket {
     pub read: u64,
     pub consumed: u64,
 }
+#[derive(Default)]
+struct ProcessIo {
+    stdin_written: u64,
+    stdin_got: u64,
+    ordered: u64,
+    read: u64,
+    processed: u64,
+    ended: bool,
+}
 pub(crate) struct State {
     pub active_request: Option<(usize, Value)>,
     pub client_sockets: HashMap<u64, ClientSocket>,
     pub next_socket: u64,
     pub now: u64,
     pub counts: Counts,
-    pub stdin_got_by_pid: HashMap<u64, u64>,
+    process_io: Vec<ProcessIo>,
+    pending_processes: HashMap<u64, usize>,
+    server_processes: HashMap<String, usize>,
+    readers: HashMap<String, usize>,
     pub entries: Vec<Entry>,
     pub bytes: usize,
     pub failure: Option<String>,
@@ -102,13 +119,17 @@ impl State {
     }
     pub(crate) fn out(&mut self, label: &str, command: Value) {
         if command["op"] == "Out" || command["op"] == "Err" {
-            self.counts.ordered += command["line"]
+            let lines = command["line"]
                 .as_str()
                 .unwrap_or("")
                 .bytes()
                 .filter(|b| *b == b'\n')
                 .count() as u64
                 + 1;
+            self.counts.ordered += lines;
+            if let Some(process) = self.server_processes.get(label) {
+                self.process_io[*process].ordered += lines;
+            }
         }
         self.record(json!({"kind":"command", "label":label, "command":command}));
         if self.failure.is_some() {
@@ -148,7 +169,10 @@ impl Hub {
                 next_socket: 0,
                 now: 0,
                 counts: Counts::default(),
-                stdin_got_by_pid: HashMap::new(),
+                process_io: Vec::new(),
+                pending_processes: HashMap::new(),
+                server_processes: HashMap::new(),
+                readers: HashMap::new(),
                 entries: Vec::new(),
                 bytes: 0,
                 failure: None,
@@ -206,6 +230,7 @@ impl Hub {
         let mut role = String::new();
         let mut label = String::new();
         let mut pid = 0;
+        let mut process = None;
         #[cfg(windows)]
         let mut process_recorded = false;
         loop {
@@ -232,14 +257,15 @@ impl Hub {
                 }
                 if message["op"] == "Hello" {
                     pid = message["pid"].as_u64().expect("fake Hello PID");
-                    self.shared
-                        .0
-                        .lock()
-                        .unwrap()
-                        .stdin_got_by_pid
-                        .insert(pid, 0);
                 }
                 role = message["role"].as_str().unwrap_or("rpc").to_owned();
+                if role == "server" {
+                    let mut state = self.shared.0.lock().unwrap();
+                    let id = state.process_io.len();
+                    state.process_io.push(ProcessIo::default());
+                    state.pending_processes.insert(pid, id);
+                    process = Some(id);
+                }
                 if role != "rpc" {
                     self.shared
                         .0
@@ -280,6 +306,9 @@ impl Hub {
                     }
                     if role == "server" {
                         state.servers.insert(label.clone(), writer.clone());
+                        state
+                            .server_processes
+                            .insert(label.clone(), process.unwrap());
                     }
                     let mut redacted = message.clone();
                     redacted.as_object_mut().unwrap().remove("token");
@@ -288,10 +317,7 @@ impl Hub {
                 }
                 "Got" => {
                     state.counts.stdin_got += 1;
-                    *state
-                        .stdin_got_by_pid
-                        .get_mut(&pid)
-                        .expect("fake Hello precedes Got") += 1;
+                    state.process_io[process.expect("fake Hello precedes Got")].stdin_got += 1;
                     if let Some(line) = message["line"].as_str() {
                         match serde_json::from_str::<Value>(line) {
                             Ok(value) => {
@@ -320,8 +346,13 @@ impl Hub {
                 "hold" => {
                     let kind = message["kind"].as_str().unwrap_or("");
                     let add = message["add"].as_bool().unwrap_or(false);
+                    let mut line_process = Value::Null;
                     if add {
                         state.counts.holds += 1;
+                        if kind == "RuntimeLine" {
+                            line_process =
+                                json!(state.readers[message["reader"].as_str().unwrap()]);
+                        }
                         if kind == "HttpRequest" {
                             state.counts.http_started += 1;
                         }
@@ -333,53 +364,48 @@ impl Hub {
                             state.counts.holds.checked_sub(1).expect("balanced holds");
                         if kind == "RuntimeLine" {
                             state.counts.processed += 1;
+                            let process = message["process"].as_u64().unwrap() as usize;
+                            state.process_io[process].processed += 1;
                         }
                         if kind == "McpRequest" {
                             state.counts.mcp_finished += 1;
                         }
                     }
-                    json!({"now":state.now})
+                    json!({"now":state.now,"process":line_process})
                 }
                 "io" => {
                     let n = message["lines"].as_u64().unwrap_or(0);
+                    let process = message["process"].as_u64().unwrap() as usize;
                     if message["direction"] == "stdin" {
                         state.counts.stdin_written += n;
+                        state.process_io[process].stdin_written += n;
                     } else {
                         state.counts.read += n;
+                        state.process_io[process].read += n;
+                        state
+                            .readers
+                            .insert(message["reader"].as_str().unwrap().to_owned(), process);
                     }
                     json!({"ok":true})
                 }
-                "drain_stdin" => {
-                    let pid = message["pid"].as_u64().expect("stdin drain PID");
-                    let lines = message["lines"].as_u64().expect("stdin drain lines");
-                    let (drained, timeout) = self
+                "process" => {
+                    let pid = message["pid"].as_u64().expect("fake process PID");
+                    let (registered, timeout) = self
                         .shared
                         .1
                         .wait_timeout_while(state, real_limit(REAL_TIME_CAP), |state| {
-                            state.stdin_got_by_pid.get(&pid).copied().unwrap_or(0) < lines
+                            !state.pending_processes.contains_key(&pid)
                         })
                         .unwrap();
-                    state = drained;
+                    state = registered;
                     if timeout.timed_out() {
-                        let got = state.stdin_got_by_pid.get(&pid).copied().unwrap_or(0);
-                        let message = format!(
-                            "stdin drain {} s cap: pid {pid}, written {lines}, got {got}",
-                            REAL_TIME_CAP.as_secs()
-                        );
+                        let message =
+                            format!("fake Hello {} s cap: pid {pid}", REAL_TIME_CAP.as_secs());
                         state.failure = Some(message.clone());
                         json!({"error":message})
                     } else {
-                        json!({"ok":true})
+                        json!({"process":state.pending_processes.remove(&pid).unwrap()})
                     }
-                }
-                "failure" => {
-                    state.failure = Some(
-                        message["message"]
-                            .as_str()
-                            .expect("harness failure message")
-                            .to_owned(),
-                    );
-                    json!({"ok":true})
                 }
                 "now" | "drain" => json!({"now":state.now}),
                 "sleep" => {
@@ -449,8 +475,12 @@ impl Hub {
         if role == "server" || role == "harness" {
             let mut state = self.shared.0.lock().unwrap();
             state.record(json!({"kind":"process_end","label":label,"role":role}));
-            if role == "server" {
-                state.servers.remove(&label);
+            if let Some(process) = process {
+                state.process_io[process].ended = true;
+                if state.server_processes.get(&label) == Some(&process) {
+                    state.servers.remove(&label);
+                    state.server_processes.remove(&label);
+                }
             }
             self.shared.1.notify_all();
         }
@@ -474,6 +504,18 @@ impl Hub {
     pub fn counts(&self) -> Counts {
         let s = self.shared.0.lock().unwrap();
         let mut counts = s.counts;
+        for process in &s.process_io {
+            if process.ended {
+                counts.stdin_closed += process.stdin_written.saturating_sub(process.stdin_got);
+                counts.read_closed += process.ordered.saturating_sub(process.read);
+                counts.processed_closed += process.ordered.saturating_sub(process.processed);
+            } else if process.stdin_written != process.stdin_got
+                || process.ordered != process.read
+                || process.ordered != process.processed
+            {
+                counts.open_process_io += 1;
+            }
+        }
         for socket in s.client_sockets.values() {
             counts.client_read += socket.read;
             counts.client_consumed += socket.consumed;

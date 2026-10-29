@@ -54,9 +54,11 @@ impl Clock for HarnessClock {
     fn hold(&self, kind: HoldKind) -> Hold {
         let kind = format!("{kind:?}");
         let link = self.link.clone();
-        link.call(json!({"op":"hold","kind":kind,"add":true}));
+        let reply = link.call(json!({"op":"hold","kind":kind,"add":true,"reader":reader_id()}));
+        // The conductor can drop a line's hold in a different task from its reader.
+        let process = reply["process"].clone();
         Hold::on_drop(move || {
-            link.call(json!({"op":"hold","kind":kind,"add":false}));
+            link.call(json!({"op":"hold","kind":kind,"add":false,"process":process}));
         })
     }
 }
@@ -124,27 +126,43 @@ impl ProcessLauncher for GuardedLauncher {
             std::process::id().to_string().into(),
         ));
         let mut launched = self.inner.launch(spec)?;
+        let reply = self
+            .link
+            .call(json!({"op":"process","pid":launched.tree.pid()}));
+        if let Some(error) = reply["error"].as_str() {
+            return Err(io::Error::other(error.to_owned()).into());
+        }
+        let process = reply["process"]
+            .as_u64()
+            .expect("fake process registration");
         launched.stdin = Box::pin(CountWrite {
             inner: launched.stdin,
             link: self.link.clone(),
-            pid: launched.tree.pid(),
-            lines_written: 0,
-            drain: StdinDrain::Open,
+            process,
         });
         launched.stdout = Box::pin(CountRead {
             inner: launched.stdout,
             link: self.link.clone(),
+            process,
         });
         launched.stderr = Box::pin(CountRead {
             inner: launched.stderr,
             link: self.link.clone(),
+            process,
         });
         Ok(launched)
     }
 }
+fn reader_id() -> String {
+    let task = tokio::task::try_id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| format!("thread:{:?}", std::thread::current().id()));
+    format!("{}:{task}", std::process::id())
+}
 struct CountRead {
     inner: ProcessRead,
     link: HubLink,
+    process: u64,
 }
 impl AsyncRead for CountRead {
     fn poll_read(
@@ -161,7 +179,7 @@ impl AsyncRead for CountRead {
                 .count();
             if lines > 0 {
                 self.link
-                    .call(json!({"op":"io","direction":"stdout","lines":lines}));
+                    .call(json!({"op":"io","direction":"stdout","lines":lines,"process":self.process,"reader":reader_id()}));
             }
         }
         result
@@ -170,14 +188,7 @@ impl AsyncRead for CountRead {
 struct CountWrite {
     inner: ProcessWrite,
     link: HubLink,
-    pid: u32,
-    lines_written: u64,
-    drain: StdinDrain,
-}
-enum StdinDrain {
-    Open,
-    Waiting(tokio::task::JoinHandle<Result<(), String>>),
-    Done,
+    process: u64,
 }
 impl AsyncWrite for CountWrite {
     fn poll_write(
@@ -189,9 +200,9 @@ impl AsyncWrite for CountWrite {
         if let Poll::Ready(Ok(n)) = result {
             let lines = buf[..n].iter().filter(|b| **b == b'\n').count();
             if lines > 0 {
-                self.lines_written += lines as u64;
-                self.link
-                    .call(json!({"op":"io","direction":"stdin","lines":lines}));
+                self.link.call(
+                    json!({"op":"io","direction":"stdin","lines":lines,"process":self.process}),
+                );
             }
         }
         result
@@ -200,47 +211,6 @@ impl AsyncWrite for CountWrite {
         self.inner.as_mut().poll_flush(cx)
     }
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        std::task::ready!(self.inner.as_mut().poll_flush(cx))?;
-        if matches!(self.drain, StdinDrain::Open) {
-            let link = self.link.clone();
-            let pid = self.pid;
-            let lines = self.lines_written;
-            // A pipe flush does not prove that the fake reported the bytes before a Windows kill.
-            self.drain = StdinDrain::Waiting(tokio::task::spawn_blocking(move || {
-                // Use a separate connection so MCP work can still use the shared RPC connection.
-                let result = (|| -> Result<(), String> {
-                    let mut reader = link
-                        .connect(json!({"op":"drain_stdin","pid":pid,"lines":lines}))
-                        .map_err(|error| format!("stdin drain connection: {error}"))?;
-                    let mut response = String::new();
-                    reader
-                        .read_line(&mut response)
-                        .map_err(|error| format!("stdin drain response: {error}"))?;
-                    let response: serde_json::Value = serde_json::from_str(&response)
-                        .map_err(|error| format!("stdin drain JSON: {error}"))?;
-                    if let Some(error) = response["error"].as_str() {
-                        return Err(error.to_owned());
-                    }
-                    if response != json!({"ok":true}) {
-                        return Err(format!("invalid stdin drain acknowledgement: {response}"));
-                    }
-                    Ok(())
-                })();
-                if let Err(message) = &result
-                    && let Ok(mut reader) = link.connect(json!({"op":"failure","message":message}))
-                {
-                    let _ = reader.read_line(&mut String::new());
-                }
-                result
-            }));
-        }
-        if let StdinDrain::Waiting(wait) = &mut self.drain {
-            let result = std::task::ready!(Pin::new(wait).poll(cx));
-            self.drain = StdinDrain::Done;
-            result
-                .map_err(io::Error::other)?
-                .map_err(io::Error::other)?;
-        }
         self.inner.as_mut().poll_shutdown(cx)
     }
 }
