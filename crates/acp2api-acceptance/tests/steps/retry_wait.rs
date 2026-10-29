@@ -170,15 +170,6 @@ fn refusal_header(w: &mut World, header: String) {
     assert_eq!(answer.headers.get(name).map(String::as_str), Some(value));
 }
 
-#[then(regex = r#"^the message is "(acp2api: .+)"$"#)]
-fn exact_message(w: &mut World, expected: String) {
-    assert_eq!(
-        w.scenario.answer.as_ref().unwrap().json()["error"]["message"],
-        expected,
-        "acp2api error message of the current response"
-    );
-}
-
 #[then("acp2api refuses the request with HTTP 503 and no prompt")]
 fn refused_without_prompt(w: &mut World) {
     check::refusal(w.scenario.answer.as_ref().unwrap(), 503);

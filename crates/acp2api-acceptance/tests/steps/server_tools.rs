@@ -52,6 +52,7 @@ pub fn refusal(w: &World, expected: &str) {
 async fn advisor(w: &mut World, endpoint: String, kind: String) {
     let call = c::request(&endpoint, &kind, None);
     send(w, endpoint, call).await;
+    refusal(w, &message(w));
 }
 #[when(
     expr = "an API client sends a request to {string} with a tool of the type {string} and the name {string}"
@@ -64,12 +65,6 @@ async fn typed(w: &mut World, endpoint: String, kind: String, name: String) {
 async fn codex(w: &mut World, endpoint: String, kind: String) {
     let call = c::request(&endpoint, &kind, None);
     send(w, endpoint, call).await;
-}
-#[then(
-    regex = r#"^the message is "(Input tag '[^']+' found using 'type' does not match any of the expected tags)"$"#
-)]
-fn exact(w: &mut World, expected: String) {
-    refusal(w, &expected);
 }
 #[then(
     regex = r#"^acp2api refuses the request with HTTP 400 and the message "(acp2api: the server tool web_search is not supported\. To stop these calls, set web_search = "disabled" in the Codex configuration\.)"$"#
@@ -133,6 +128,7 @@ fn has_addition(w: &mut World) {
 pub async fn combined(w: &mut World, endpoint: String) {
     let call = w.server_tools.call.take().unwrap();
     send(w, endpoint, call).await;
+    refusal(w, &message(w));
 }
 pub fn has_request(w: &World) -> bool {
     w.server_tools.call.is_some()
