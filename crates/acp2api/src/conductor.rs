@@ -567,6 +567,10 @@ enum Event {
 enum Command {
     Authenticate,
     Lockout(crate::store::Lockout),
+    RefuseBuildChange {
+        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        error: crate::messages::Message,
+    },
     AdmitChecked {
         id: WorkId,
         session: String,
@@ -1246,6 +1250,23 @@ impl Core {
                 }
                 commands.push(Command::Lockout(evidence));
                 commands.push(Command::State(self.state(), None));
+                if let Some(replacement) = self.replacement.take() {
+                    match replacement {
+                        Replacement::Build { reply, .. } | Replacement::Check { reply, .. } => {
+                            commands.push(Command::RefuseBuildChange {
+                                reply,
+                                error: message.clone(),
+                            });
+                        }
+                        Replacement::SignIn => {}
+                    }
+                }
+                commands.extend(self.changes.drain(..).map(|(_, reply)| {
+                    Command::RefuseBuildChange {
+                        reply,
+                        error: message.clone(),
+                    }
+                }));
                 self.refuse_queued(
                     crate::journal::Outcome::Refused("lockout"),
                     message.clone(),
@@ -3004,6 +3025,9 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::RefuseBuildChange { reply, error } => {
+                    let _ = reply.send(Err(LaunchFailure::Runtime(error.to_string())));
+                }
                 Command::Lockout(mut evidence) => {
                     evidence.original_error_text =
                         crate::journal::redact_error(&evidence.original_error_text);
@@ -3451,6 +3475,59 @@ mod tests {
             "FR-035/FR-056: evidence and the first response contain only the redacted error channel"
         );
         assert!(!state_text.contains("PRIVATE-REPLY"));
+    }
+
+    #[tokio::test]
+    async fn a_lockout_answers_the_waiting_and_queued_build_changes() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-lockout-owner-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.state_path = folder.join(crate::store::STATE_FILE);
+        let (waiting, mut waiting_reply) = oneshot::channel();
+        let (queued, mut queued_reply) = oneshot::channel();
+        core.runtime_state = RuntimeState::Retiring {
+            sign_in_wait_ended: false,
+        };
+        core.replacement = Some(Replacement::Build {
+            reply: waiting,
+            source: None,
+            initial: false,
+        });
+        core.changes
+            .push_back((crate::runtime_builds::Action::Search, queued));
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: Some(403),
+                    status: "PERMISSION_DENIED".into(),
+                    message: "Account suspended".into(),
+                },
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        Conductor::commands(
+            &mut core,
+            &mut None,
+            &mut false,
+            &clock,
+            &journal,
+            &mut commands.into(),
+        )
+        .await;
+        let responses = [waiting_reply.try_recv(), queued_reply.try_recv()];
+        std::fs::remove_dir_all(folder).unwrap();
+        for response in responses {
+            assert!(
+                matches!(response, Ok(Err(ref error)) if error.to_string().starts_with("acp2api: lockout since ") && !error.to_string().contains("Original error:")),
+                "a waiting owner request receives M-12: {response:?}"
+            );
+        }
     }
 
     #[test]
