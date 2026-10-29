@@ -316,10 +316,7 @@ impl Work {
     }
     fn update_deadline(&self) -> Option<Moment> {
         match self {
-            Self::AcceptedWorking(Active {
-                phase: Phase::Prompt { update_deadline },
-                ..
-            }) => Some(*update_deadline),
+            Self::AcceptedWorking(Active { phase, .. }) => phase.update_deadline(),
             _ => None,
         }
     }
@@ -365,7 +362,10 @@ enum Phase {
     Prompt {
         update_deadline: Moment,
     },
-    AwaitingQuotaEnd(quota::Wait),
+    AwaitingQuotaEnd {
+        wait: quota::Wait,
+        update_deadline: Option<Moment>,
+    },
     QuotaSettling {
         at: Moment,
         wait: quota::Wait,
@@ -375,6 +375,17 @@ enum Phase {
         can_continue: bool,
         result: Result<(), Failure>,
     },
+}
+impl Phase {
+    fn update_deadline(&self) -> Option<Moment> {
+        match self {
+            Self::Prompt { update_deadline } => Some(*update_deadline),
+            Self::AwaitingQuotaEnd {
+                update_deadline, ..
+            } => *update_deadline,
+            _ => None,
+        }
+    }
 }
 struct Failure {
     message: crate::messages::Message,
@@ -1432,7 +1443,7 @@ impl Core {
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
                                     active.session = Some(session.clone());
-                                    if let Phase::AwaitingQuotaEnd(wait) = &active.phase {
+                                    if let Phase::AwaitingQuotaEnd { wait, .. } = &active.phase {
                                         active.phase = Phase::QuotaSettling {
                                             at: now,
                                             wait: wait.clone(),
@@ -1547,7 +1558,10 @@ impl Core {
                                     | Phase::QuotaSettling { at, .. } => {
                                         Phase::QuotaSettling { at, wait }
                                     }
-                                    _ => Phase::AwaitingQuotaEnd(wait),
+                                    _ => Phase::AwaitingQuotaEnd {
+                                        wait,
+                                        update_deadline: active.phase.update_deadline(),
+                                    },
                                 };
                             }
                         } else if !known {
@@ -2134,14 +2148,25 @@ impl Core {
             }
             return;
         }
+        let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
+        match &mut active.phase {
+            Phase::Prompt { update_deadline }
+            | Phase::AwaitingQuotaEnd {
+                update_deadline: Some(update_deadline),
+                ..
+            } => {
+                *update_deadline = now + UPDATE_TIMEOUT;
+            }
+            _ => {}
+        }
         if matches!(
             self.work[&id].execution().unwrap().phase,
-            Phase::AwaitingQuotaEnd(_) | Phase::QuotaSettling { .. }
+            Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
         ) {
             let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
             match update {
                 TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
-                    if let Phase::AwaitingQuotaEnd(wait) = &active.phase {
+                    if let Phase::AwaitingQuotaEnd { wait, .. } = &active.phase {
                         active.phase = Phase::QuotaSettling {
                             at: now.saturating_add(SETTLE_DELAY),
                             wait: wait.clone(),
@@ -2157,9 +2182,6 @@ impl Core {
             return;
         }
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
-        if let Phase::Prompt { update_deadline } = &mut active.phase {
-            *update_deadline = now + UPDATE_TIMEOUT;
-        }
         match update {
             TurnUpdate::Text(text) => {
                 if active.tool_call.is_none() && active.release_or_cut_reply(Some(text), commands) {
@@ -2338,10 +2360,7 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        if matches!(
-            self.work[&id].execution().unwrap().phase,
-            Phase::Prompt { .. }
-        ) {
+        if self.work[&id].update_deadline().is_some() {
             self.cancel(session, now, commands);
         }
         self.end_request(id, Failure::at(error, now), commands);
@@ -2446,7 +2465,7 @@ impl Core {
                 } => (can_continue, result.and(pending)),
                 Phase::Preparing(_)
                 | Phase::Prompt { .. }
-                | Phase::AwaitingQuotaEnd(_)
+                | Phase::AwaitingQuotaEnd { .. }
                 | Phase::QuotaSettling { .. } => (false, result),
             };
         let tool_hash = active
@@ -3104,6 +3123,67 @@ mod tests {
                 notices: watch::channel(Arc::new(Vec::new())).0,
             }
         }
+    }
+
+    #[test]
+    fn a_prompt_after_a_quota_signal_keeps_its_no_update_deadline() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-quota-idle-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for with_update in [false, true] {
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.handle(
+                Event::Runtime(RuntimeEvent::UpstreamError {
+                    session: "running".into(),
+                    error: crate::messages::HttpError {
+                        code: 429,
+                        status: "RESOURCE_EXHAUSTED".into(),
+                        message: "Quota exhausted".into(),
+                    },
+                }),
+                60_000,
+                std::time::UNIX_EPOCH,
+            );
+            if with_update {
+                core.handle(
+                    Event::Runtime(RuntimeEvent::Turn {
+                        session: "running".into(),
+                        update: TurnUpdate::Usage(1000),
+                    }),
+                    240_000,
+                    std::time::UNIX_EPOCH,
+                );
+            }
+            let deadline = if with_update { 540_000 } else { 300_000 };
+            let early = core.handle(Event::Deadline, deadline - 1, std::time::UNIX_EPOCH);
+            assert!(
+                !early
+                    .iter()
+                    .any(|command| matches!(command, Command::Cancel(_)))
+            );
+            assert_eq!(
+                core.next_deadline(),
+                Some(deadline),
+                "the running prompt still schedules its FR-051 deadline"
+            );
+            let due = core.handle(Event::Deadline, deadline, std::time::UNIX_EPOCH);
+            assert!(
+                due.iter().any(
+                    |command| matches!(command, Command::Cancel(session) if session == "running")
+                ),
+                "FR-051 cancels a silent prompt after a quota signal"
+            );
+            assert!(
+                due.iter().any(|command| matches!(
+                    command,
+                    Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::NoUpdate)))
+                )),
+                "FR-051 ends with M-19 rather than a quota response"
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
