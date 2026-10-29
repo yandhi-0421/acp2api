@@ -329,16 +329,7 @@ impl Builds {
             Action::Initial => {
                 if let Some(copy) = self.accepted_copy()? {
                     self.scan_places(settings.agy_acp_server_path.as_deref());
-                    *self.source.lock().unwrap() = self
-                        .found
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .find(|found| {
-                            found.folder != self.start.data.join(COPY)
-                                && found.identity == identity(&copy)
-                        })
-                        .map(|found| found.folder.join(SERVER));
+                    *self.source.lock().unwrap() = self.source_for(&identity(&copy));
                     return Ok(Selection::Start(None));
                 }
             }
@@ -370,7 +361,7 @@ impl Builds {
                 for name in [SERVER, HARNESS] {
                     fs::copy(source.join(name), staging.join(name))?;
                 }
-                self.identify(&staging)?;
+                let build = self.identify(&staging)?;
                 let previous = copy.exists();
                 if previous {
                     fs::rename(&copy, &backup)?;
@@ -384,15 +375,26 @@ impl Builds {
                 if previous {
                     let _ = fs::remove_dir_all(backup);
                 }
-                Ok(())
+                Ok(identity(&build))
             })();
             if staging.exists() {
                 fs::remove_dir_all(&staging)?;
             }
-            result?;
-            *self.source.lock().unwrap() = Some(source.join(SERVER));
+            *self.source.lock().unwrap() = self.source_for(&result?);
         }
         Ok(())
+    }
+    fn source_for(&self, hashes: &BuildIdentity) -> Option<PathBuf> {
+        self.found
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|found| {
+                found.folder != self.start.data.join(COPY)
+                    && found.folder != self.start.data.join(CHECK)
+                    && found.identity == *hashes
+            })
+            .map(|found| found.folder.join(SERVER))
     }
     pub(crate) fn check_copy(
         &self,
