@@ -95,6 +95,7 @@ impl Panel {
             &self.conductor.notices(),
             self.conductor.builds_summary(),
             &self.conductor.quota_result(),
+            &self.conductor.view(),
         );
         (status, Html(page)).into_response()
     }
@@ -160,6 +161,7 @@ async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
             &panel.conductor.notices(),
             panel.conductor.builds_summary(),
             &panel.conductor.quota_result(),
+            &panel.conductor.view(),
         )
     } else {
         page::login(None)

@@ -141,7 +141,7 @@ impl Runtime {
     pub(crate) async fn start(
         start: &RuntimeStart,
         expected_version: &str,
-    ) -> Result<(Self, crate::catalog::Catalog), LaunchFailure> {
+    ) -> Result<(Self, Option<crate::catalog::Catalog>), LaunchFailure> {
         let mut runtime = Self::open(start, program(&start.data)).await?;
         let starting = async {
             let initialized = start.until_stopped(runtime.initialize(start)).await?;
@@ -150,10 +150,11 @@ impl Runtime {
                     "initialize version differs from the accepted build".into(),
                 ));
             }
-            runtime
-                .new_session(&[], None)
-                .await
-                .map_err(LaunchFailure::Runtime)
+            match runtime.new_session(&[], None).await {
+                Ok(catalog) => Ok(Some(catalog)),
+                Err(error) if error.requires_sign_in() => Ok(None),
+                Err(error) => Err(LaunchFailure::Runtime(error.to_string())),
+            }
         };
         let result = start.before_deadline(ANSWER_TIMEOUT, starting).await;
         match result {
@@ -253,19 +254,22 @@ impl Runtime {
             "protocolVersion": 1,
             "clientInfo": {"name":"acp2api", "title":"acp2api", "version":start.release.version()},
             "clientCapabilities": {}
-        })).await.map_err(LaunchFailure::Runtime)
+        })).await.map_err(|error| LaunchFailure::Runtime(error.to_string()))
     }
     pub(crate) async fn new_session(
         &mut self,
         tools: &[crate::conversation::ClientTool],
         system: Option<&str>,
-    ) -> Result<crate::catalog::Catalog, String> {
-        let (params, tools) = self.session_parameters(tools, system, None)?;
+    ) -> Result<crate::catalog::Catalog, crate::messages::Message> {
+        let (params, tools) = self
+            .session_parameters(tools, system, None)
+            .map_err(crate::messages::Message::Upstream)?;
         let session = self.call("session/new", params).await?;
-        let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())?;
+        let catalog = crate::catalog::Catalog::decode(&session, self.clock.wall())
+            .map_err(crate::messages::Message::Upstream)?;
         let session_id = session["sessionId"]
             .as_str()
-            .ok_or("missing sessionId")?
+            .ok_or_else(|| crate::messages::Message::Upstream("missing sessionId".into()))?
             .to_owned();
         self.remember_config(&session_id, &session);
         self.tools.insert(session_id.clone(), tools);
@@ -407,22 +411,30 @@ impl Runtime {
         self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
             .await
     }
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    async fn call(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, crate::messages::Message> {
         let id = self
             .send(method, params)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| crate::messages::Message::Upstream(error.to_string()))?;
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
-                Line::Stdout(value) => value?,
+                Line::Stdout(value) => value.map_err(crate::messages::Message::Upstream)?,
                 Line::Stderr(_) => continue,
-                Line::Closed => return Err("runtime stdout closed".into()),
+                Line::Closed => {
+                    return Err(crate::messages::Message::Upstream(
+                        "runtime stdout closed".into(),
+                    ));
+                }
             };
             if value.get("method").is_some() {
                 if value.get("id").is_some() {
                     self.refuse(&value)
                         .await
-                        .map_err(|error| error.to_string())?;
+                        .map_err(|error| crate::messages::Message::Upstream(error.to_string()))?;
                 }
                 continue;
             }
@@ -430,10 +442,12 @@ impl Runtime {
                 return value
                     .get("result")
                     .cloned()
-                    .ok_or_else(|| acp_error(&value["error"]).to_string());
+                    .ok_or_else(|| acp_error(&value["error"]));
             }
         }
-        Err("runtime stdout closed".into())
+        Err(crate::messages::Message::Upstream(
+            "runtime stdout closed".into(),
+        ))
     }
     pub(crate) async fn start_configured_prompt(
         &mut self,

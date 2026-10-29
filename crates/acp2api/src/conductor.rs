@@ -16,12 +16,25 @@ use std::{
 use tokio::sync::{mpsc, oneshot, watch};
 #[derive(Clone)]
 pub(crate) struct Conductor {
+    view: watch::Receiver<Arc<View>>,
     quota_result: watch::Receiver<Arc<Option<QuotaResult>>>,
     send: mpsc::Sender<Input>,
     builds: crate::runtime_builds::Builds,
     settings: watch::Receiver<Arc<crate::store::Settings>>,
     notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
+}
+pub(crate) struct View {
+    pub(crate) state: &'static str,
+    pub(crate) queued: usize,
+}
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            state: "Running",
+            queued: 0,
+        }
+    }
 }
 pub(crate) enum OwnerAction {
     RefreshQuota,
@@ -337,6 +350,9 @@ enum RuntimeState {
     Stopping,
 }
 struct Core {
+    sign_in_required: bool,
+    sign_in_entry: String,
+    view: watch::Sender<Arc<View>>,
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
     last_refresh: Option<Moment>,
     quota_wait: Option<quota::Wait>,
@@ -360,6 +376,7 @@ struct Core {
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
+    SignInRequired,
     RefreshQuota(oneshot::Sender<Result<(), String>>),
     RetireRuntime,
     RuntimeFailure,
@@ -407,6 +424,8 @@ impl Core {
     fn state(&self) -> &'static str {
         if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
             "Runtime unavailable"
+        } else if self.sign_in_required {
+            "Sign-in required"
         } else if self.quota_wait.is_some() {
             "Quota wait"
         } else {
@@ -564,11 +583,17 @@ impl Core {
             self.cleanup_before_start = true;
             match builds.launch(retained).await {
                 Ok((started, catalog)) => {
-                    self.replaced(Some(started.session_id().into()), Some(catalog));
+                    let signed_out = catalog.is_none();
+                    let session = catalog.as_ref().map(|_| started.session_id().into());
+                    self.replaced(session, catalog);
                     *runtime = Some(started);
                     *read_open = true;
                     self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
                         .await;
+                    if signed_out {
+                        self.apply(Event::SignInRequired, runtime, read_open, clock, journal)
+                            .await;
+                    }
                     return;
                 }
                 Err(LaunchFailure::Runtime(_) | LaunchFailure::Io(_)) => {
@@ -672,10 +697,16 @@ impl Core {
                 reason.message.clone(),
             ));
         }
+        if self.sign_in_required {
+            return Some(self.sign_in_message());
+        }
         self.quota_wait
             .as_ref()
             .filter(|wait| wait.deadline > now)
             .map(|wait| wait.message(now))
+    }
+    fn sign_in_message(&self) -> crate::messages::Message {
+        crate::messages::Message::SignInRequired(self.sign_in_entry.clone())
     }
     fn start_quota(
         &mut self,
@@ -890,6 +921,16 @@ impl Core {
         }
         let quota_work = work_id.filter(|id| matches!(self.work[id], Work::QuotaWorking { .. }));
         match (quota_work, event) {
+            (None, Event::SignInRequired) => {
+                if !self.sign_in_required {
+                    self.sign_in_required = true;
+                    self.refuse_queued(
+                        crate::journal::Outcome::Refused("sign_in_required"),
+                        self.sign_in_message(),
+                        &mut commands,
+                    );
+                }
+            }
             (Some(id), event) => self.quota_event(id, event, now, wall, &mut commands),
             (None, Event::RefreshQuota(reply)) => {
                 let error = if let RuntimeState::Unavailable(reason) = &self.runtime_state {
@@ -1379,6 +1420,14 @@ impl Core {
             };
             commands.insert(0, Command::State(self.state(), cause));
         }
+        self.view.send_replace(Arc::new(View {
+            state: self.state(),
+            queued: self
+                .work
+                .values()
+                .filter(|work| matches!(work, Work::AcceptedQueued(_) | Work::QuotaQueued { .. }))
+                .count(),
+        }));
         commands
     }
     fn quota_event(
@@ -1985,6 +2034,8 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Input>(32);
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
+        let sign_in_entry = format!("http://127.0.0.1:{}/#sign-in", settings.port);
+        let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let (quota_result, quota_watch) = watch::channel(Arc::new(None));
@@ -1996,6 +2047,9 @@ impl Conductor {
                 quota_wait: None,
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
+                sign_in_required: false,
+                sign_in_entry,
+                view,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
                 cancels: BTreeMap::new(),
@@ -2236,6 +2290,7 @@ impl Conductor {
         });
         (
             Self {
+                view: view_watch,
                 quota_result: quota_watch,
                 send,
                 builds,
@@ -2379,6 +2434,9 @@ impl Conductor {
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
+    }
+    pub(crate) fn view(&self) -> Arc<View> {
+        self.view.borrow().clone()
     }
     pub(crate) async fn builds(
         &self,
@@ -2678,6 +2736,7 @@ mod tests {
                 session: "running".into(),
                 update: TurnUpdate::Failed(crate::messages::Message::UpstreamAcp(
                     crate::messages::AcpError {
+                        data: None,
                         code: 429,
                         message: "RESOURCE_EXHAUSTED; resets 1970-01-01T00:02:00Z".into(),
                     },
@@ -2834,6 +2893,9 @@ mod tests {
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
+            sign_in_required: false,
+            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+            view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
             cleanup_before_start: false,
             cancels: BTreeMap::new(),
@@ -3530,7 +3592,7 @@ mod tests {
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let mut core = Core {
-                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                quota_result:watch::channel(Arc::new(None)).0, last_refresh:None, quota_wait:None, next_quota:quota::TimerId::default(), runtime_state:RuntimeState::Serving, sign_in_required:false, sign_in_entry:"http://127.0.0.1:8329/#sign-in".into(), view:watch::channel(Arc::new(View::default())).0, failures:VecDeque::new(), cleanup_before_start:false,
                 cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
                 work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
                 use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
@@ -3760,6 +3822,7 @@ mod tests {
                     .unwrap()
                     .settings;
                 let conductor = Conductor {
+                    view: watch::channel(Arc::new(View::default())).1,
                     quota_result: watch::channel(Arc::new(None)).1,
                     send,
                     builds: crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
@@ -4095,6 +4158,9 @@ mod tests {
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
+            sign_in_required: false,
+            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+            view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
             cleanup_before_start: false,
             cancels: BTreeMap::new(),
@@ -4209,6 +4275,9 @@ mod tests {
                 quota_wait: None,
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
+                sign_in_required: false,
+                sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+                view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
                 cancels: BTreeMap::new(),
@@ -4242,6 +4311,7 @@ mod tests {
                     session: "session".into(),
                     update: TurnUpdate::Failed(crate::messages::Message::UpstreamAcp(
                         crate::messages::AcpError {
+                            data: None,
                             code: -32099,
                             message: "RPC failure".into(),
                         },
@@ -4318,6 +4388,9 @@ mod tests {
                 quota_wait: None,
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
+                sign_in_required: false,
+                sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+                view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
                 cancels: BTreeMap::new(),
@@ -4437,6 +4510,9 @@ mod tests {
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
+            sign_in_required: false,
+            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+            view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
             cleanup_before_start: false,
             cancels: BTreeMap::new(),
@@ -4482,6 +4558,9 @@ mod tests {
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
+            sign_in_required: false,
+            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+            view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
             cleanup_before_start: false,
             cancels: BTreeMap::new(),
@@ -4585,6 +4664,9 @@ mod tests {
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
+            sign_in_required: false,
+            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+            view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
             cleanup_before_start: false,
             cancels: BTreeMap::new(),
@@ -4634,6 +4716,9 @@ mod tests {
             quota_wait: None,
             next_quota: quota::TimerId::default(),
             runtime_state: RuntimeState::Serving,
+            sign_in_required: false,
+            sign_in_entry: "http://127.0.0.1:8329/#sign-in".into(),
+            view: watch::channel(Arc::new(View::default())).0,
             failures: VecDeque::new(),
             cleanup_before_start: false,
             cancels: BTreeMap::new(),
