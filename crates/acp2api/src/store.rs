@@ -20,14 +20,6 @@ pub(crate) struct Lockout {
     pub(crate) signal: String,
     pub(crate) original_error_text: String,
 }
-impl Lockout {
-    pub(crate) fn message(&self, address: &str) -> crate::messages::Message {
-        crate::messages::Message::Lockout(format!(
-            "acp2api: lockout since {} after {}; acp2api sends no request to the official runtime until the owner ends the lockout at {address}.",
-            self.since, self.signal
-        ))
-    }
-}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CheckedBuild {

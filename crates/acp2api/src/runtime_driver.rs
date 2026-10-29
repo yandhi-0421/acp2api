@@ -573,12 +573,13 @@ impl Runtime {
             && let Some((status, _)) = rest.split_once(", Details:")
             && let Some(session) = self.stderr_session.take()
         {
-            let code = match prefix.split_once("Error ") {
-                Some((_, code)) => match code.trim_end_matches(", ").parse::<u16>() {
-                    Ok(code) => Some(code),
-                    Err(_) => return RuntimeEvent::Stderr,
-                },
-                None => None,
+            // Some error lines report a status without a numeric HTTP code.
+            let Ok(code) = prefix
+                .split_once("Error ")
+                .map(|(_, code)| code.trim_end_matches(", ").parse::<u16>())
+                .transpose()
+            else {
+                return RuntimeEvent::Stderr;
             };
             return RuntimeEvent::UpstreamError {
                 session,

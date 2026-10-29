@@ -65,6 +65,19 @@ pub(crate) enum Message {
     BuiltInToolRan(String),
 }
 impl Message {
+    pub(crate) fn lockout(evidence: &crate::store::Lockout, address: &str, original: bool) -> Self {
+        let mut text = format!(
+            "acp2api: lockout since {} after {}; acp2api sends no request to the official runtime until the owner ends the lockout at {address}.",
+            evidence.since, evidence.signal,
+        );
+        if original {
+            text.push_str(&format!(
+                " Original error: {}",
+                evidence.original_error_text
+            ));
+        }
+        Self::Lockout(text)
+    }
     fn upstream_parts(&self) -> Option<(Option<i64>, &str, Option<&str>)> {
         match self {
             Self::UpstreamHttp(error) => Some((

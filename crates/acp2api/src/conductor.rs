@@ -1,4 +1,5 @@
 mod keep_alive;
+mod lockout;
 mod quota;
 mod records;
 mod retry;
@@ -539,6 +540,11 @@ struct Core {
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
 enum Event {
+    Lockout {
+        signal: &'static str,
+        error: crate::messages::Message,
+        signalling_work: Option<WorkId>,
+    },
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -911,7 +917,11 @@ impl Core {
     }
     fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
         if let Some(evidence) = &self.lockout {
-            return Some(evidence.message(&self.panel_address));
+            return Some(crate::messages::Message::lockout(
+                evidence,
+                &self.panel_address,
+                false,
+            ));
         }
         if let RuntimeState::Unavailable(reason) = &self.runtime_state {
             return Some(crate::messages::Message::RuntimeUnavailable(
@@ -1176,119 +1186,7 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
-        let mut upstream_error = None;
-        let mut failed_reply_signal = None;
-        let error = match &mut event {
-            Event::Runtime(
-                RuntimeEvent::Authenticated(Err(error))
-                | RuntimeEvent::Prepared {
-                    result: Err(error), ..
-                }
-                | RuntimeEvent::Turn {
-                    update: TurnUpdate::Failed(error),
-                    ..
-                },
-            ) => Some(error),
-            Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
-                if let Some(active) = self
-                    .by_session(session)
-                    .and_then(|id| self.work[&id].execution())
-                {
-                    let reply = format!(
-                        "{}{}{}",
-                        active.text,
-                        active.stop_prefix,
-                        active.held.as_deref().unwrap_or("")
-                    );
-                    if reply.contains("Terms of Service") {
-                        failed_reply_signal = Some("Terms of Service");
-                    }
-                }
-                Some(upstream_error.insert(crate::messages::Message::UpstreamHttp(error.clone())))
-            }
-            _ => None,
-        };
-        if let Some(error) = error {
-            if let Some(signal) = error.lockout_signal().or(failed_reply_signal)
-                && self.lockout.is_none()
-            {
-                let evidence = crate::store::Lockout {
-                    since: crate::journal::timestamp(wall).expect("clock after the Unix epoch"),
-                    signal: signal.into(),
-                    original_error_text: crate::journal::redact_error(&error.to_string()),
-                };
-                let message = evidence.message(&self.panel_address);
-                let first_message = crate::messages::Message::Lockout(format!(
-                    "{message} Original error: {}",
-                    evidence.original_error_text
-                ));
-                let trigger = match &event {
-                    Event::Runtime(RuntimeEvent::Prepared { work, .. }) => self.by_request(work),
-                    Event::Runtime(
-                        RuntimeEvent::Turn { session, .. }
-                        | RuntimeEvent::UpstreamError { session, .. },
-                    ) => self.by_session(session),
-                    _ => None,
-                };
-                self.lockout = Some(evidence.clone());
-                self.sign_in_wait = None;
-                self.cancels.clear();
-                for work in self.work.values() {
-                    if let Work::QuotaWorking {
-                        phase: QuotaPhase::Prompt(session),
-                        ..
-                    } = work
-                    {
-                        commands.push(Command::Cancel(session.clone()));
-                    }
-                    if let Some(active) = work.execution()
-                        && active.phase.update_deadline().is_some()
-                        && let Some(session) = &active.session
-                    {
-                        commands.push(Command::Cancel(session.clone()));
-                    }
-                }
-                commands.push(Command::Lockout(evidence));
-                commands.push(Command::State(self.state(), None));
-                if let Some(replacement) = self.replacement.take() {
-                    match replacement {
-                        Replacement::Build { reply, .. } | Replacement::Check { reply, .. } => {
-                            commands.push(Command::RefuseBuildChange {
-                                reply,
-                                error: message.clone(),
-                            });
-                        }
-                        Replacement::SignIn => {}
-                    }
-                }
-                commands.extend(self.changes.drain(..).map(|(_, reply)| {
-                    Command::RefuseBuildChange {
-                        reply,
-                        error: message.clone(),
-                    }
-                }));
-                self.refuse_queued(
-                    crate::journal::Outcome::Refused("lockout"),
-                    message.clone(),
-                    &mut commands,
-                );
-                while let Some(id) = self.work.keys().next().copied() {
-                    let error = if trigger == Some(id) {
-                        first_message.clone()
-                    } else {
-                        message.clone()
-                    };
-                    self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
-                }
-                self.view.send_replace(Arc::new(View {
-                    state: self.state(),
-                    queued: 0,
-                    sign_in_wait: None,
-                }));
-                return commands;
-            }
-            *error = self.sign_in_error(error.clone(), now, &mut commands);
-        }
+        let upstream_error = self.upstream_error(&mut event, now, &mut commands);
         self.retry_waits.retain(|wait| wait.deadline > now);
         if self
             .quota_wait
@@ -1322,6 +1220,16 @@ impl Core {
         }
         let quota_work = work_id.filter(|id| matches!(self.work[id], Work::QuotaWorking { .. }));
         match (quota_work, event) {
+            (
+                None,
+                Event::Lockout {
+                    signal,
+                    error,
+                    signalling_work,
+                },
+            ) => {
+                self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
+            }
             (None, Event::CheckPending(request)) => {
                 self.work
                     .insert(self.next_work, Work::CheckQueued(*request));
@@ -1378,7 +1286,10 @@ impl Core {
             }
             (None, Event::RefreshQuota(reply)) => {
                 let error = if let Some(evidence) = &self.lockout {
-                    Some(evidence.message(&self.panel_address).to_string())
+                    Some(
+                        crate::messages::Message::lockout(evidence, &self.panel_address, false)
+                            .to_string(),
+                    )
                 } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
                     Some(reason.message.clone())
                 } else if matches!(self.runtime_state, RuntimeState::Stopping) {
@@ -1405,27 +1316,12 @@ impl Core {
             (None, Event::Stop) => {
                 self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Stopping;
-                self.cancels.clear();
-                self.refuse_queued(
-                    crate::journal::Outcome::Refused("stopped"),
-                    crate::messages::Message::Stopped,
+                self.end_all_work(
+                    "stopped",
+                    |_| crate::messages::Message::Stopped,
+                    now,
                     &mut commands,
                 );
-                let ids: Vec<_> = self.work.keys().copied().collect();
-                for id in ids {
-                    if let Some(active) = self.work[&id].execution()
-                        && matches!(active.phase, Phase::Prompt { .. })
-                        && let Some(session) = &active.session
-                    {
-                        commands.push(Command::Cancel(session.clone()));
-                    }
-                    self.finish(
-                        id,
-                        Err(Failure::at(crate::messages::Message::Stopped, now)),
-                        now,
-                        &mut commands,
-                    );
-                }
             }
             (None, Event::RuntimeUnavailable(reason)) => {
                 self.sign_in_wait = None;
@@ -1879,12 +1775,53 @@ impl Core {
             };
             commands.insert(0, Command::State(self.state(), cause));
         }
+        self.publish_view();
+        commands
+    }
+    fn publish_view(&self) {
         self.view.send_replace(Arc::new(View {
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
             queued: self.work.values().filter(|work| work.is_queued()).count(),
         }));
-        commands
+    }
+    fn end_all_work(
+        &mut self,
+        refusal: &'static str,
+        message: impl Fn(WorkId) -> crate::messages::Message,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        self.cancels.clear();
+        for work in self.work.values() {
+            if let Work::QuotaWorking {
+                phase: QuotaPhase::Prompt(session),
+                ..
+            } = work
+            {
+                commands.push(Command::Cancel(session.clone()));
+            }
+            if let Some(active) = work.execution()
+                && active.phase.update_deadline().is_some()
+                && let Some(session) = &active.session
+            {
+                commands.push(Command::Cancel(session.clone()));
+            }
+        }
+        while let Some(id) = self.work.keys().next().copied() {
+            let error = message(id);
+            if matches!(self.work[&id], Work::AcceptedQueued(_)) {
+                let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+                Self::refuse_request(
+                    request,
+                    crate::journal::Outcome::Refused(refusal),
+                    error,
+                    commands,
+                );
+            } else {
+                self.finish(id, Err(Failure::at(error, now)), now, commands);
+            }
+        }
     }
     fn start_request(
         &mut self,
@@ -2716,21 +2653,7 @@ impl Conductor {
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
         let state_path = builds.start.data.join(crate::store::STATE_FILE);
-        let lockout = match crate::store::StateFile::read(&state_path) {
-            Ok(state) => {
-                if !state_path.exists()
-                    && let Err(error) = state.save(&state_path)
-                {
-                    journal.state_file_failure("create", &error, clock.as_ref());
-                }
-                state.lockout
-            }
-            Err(error) => Some(crate::store::Lockout {
-                since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
-                signal: "unreadable or damaged state file".into(),
-                original_error_text: crate::journal::redact_error(&error),
-            }),
-        };
+        let lockout = lockout::load(&state_path, clock.as_ref(), &journal);
         let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
@@ -2766,11 +2689,7 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
-            core.view.send_replace(Arc::new(View {
-                state: core.state(),
-                queued: 0,
-                sign_in_wait: None,
-            }));
+            core.publish_view();
             journal.state(core.state(), None, clock.as_ref());
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
@@ -2933,16 +2852,7 @@ impl Conductor {
                         };
                         match work {
                             Input::Builds { action, reply, hold } => {
-                                if let Some(evidence) = &core.lockout {
-                                    let result = if matches!(action, crate::runtime_builds::Action::Initial) {
-                                        Ok(String::new())
-                                    } else {
-                                        Err(LaunchFailure::Runtime(evidence.message(&core.panel_address).to_string()))
-                                    };
-                                    let _ = reply.send(result);
-                                } else {
-                                    core.changes.push_back((action, reply));
-                                }
+                                core.build_change(action, reply);
                                 drop(hold);
                                 continue;
                             }
@@ -3028,17 +2938,8 @@ impl Conductor {
                 Command::RefuseBuildChange { reply, error } => {
                     let _ = reply.send(Err(LaunchFailure::Runtime(error.to_string())));
                 }
-                Command::Lockout(mut evidence) => {
-                    evidence.original_error_text =
-                        crate::journal::redact_error(&evidence.original_error_text);
-                    let result =
-                        crate::store::StateFile::read(&core.state_path).and_then(|mut state| {
-                            state.lockout = Some(evidence);
-                            state.save(&core.state_path)
-                        });
-                    if let Err(error) = result {
-                        journal.state_file_failure("lockout", &error, clock.as_ref());
-                    }
+                Command::Lockout(evidence) => {
+                    lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
                     core.stop_runtime(runtime, read_open).await;
                 }
                 Command::Authenticate => {
