@@ -10,7 +10,7 @@ pub(crate) const STATE_FILE: &str = "state.json";
 #[serde(deny_unknown_fields)]
 pub(crate) struct StateFile {
     format: u8,
-    lockout: Option<Lockout>,
+    pub(crate) lockout: Option<Lockout>,
     pub(crate) checked_builds: Vec<CheckedBuild>,
 }
 #[derive(Clone, Serialize, Deserialize)]

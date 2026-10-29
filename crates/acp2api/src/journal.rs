@@ -288,7 +288,7 @@ pub(crate) enum Diagnostic {
     UnknownEffort { value: serde_json::Value },
     DroppedThoughtText,
 }
-fn redact_error(text: &str) -> String {
+pub(crate) fn redact_error(text: &str) -> String {
     let local_char = |c: char| c.is_alphanumeric() || "-_.+%".contains(c);
     let domain_char = |c: char| c.is_alphanumeric() || "-.".contains(c);
     let mut remaining = text;

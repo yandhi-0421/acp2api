@@ -513,6 +513,7 @@ struct Core {
     sign_in_required: bool,
     sign_in_wait: Option<sign_in::Wait>,
     panel_address: String,
+    state_path: PathBuf,
     view: watch::Sender<Arc<View>>,
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
     last_refresh: Option<Moment>,
@@ -565,7 +566,7 @@ enum Event {
 }
 enum Command {
     Authenticate,
-    StopRuntime,
+    Lockout(crate::store::Lockout),
     AdmitChecked {
         id: WorkId,
         session: String,
@@ -1229,7 +1230,7 @@ impl Core {
                     ) => self.by_session(session),
                     _ => None,
                 };
-                self.lockout = Some(evidence);
+                self.lockout = Some(evidence.clone());
                 self.sign_in_wait = None;
                 self.cancels.clear();
                 for work in self.work.values() {
@@ -1247,7 +1248,7 @@ impl Core {
                         commands.push(Command::Cancel(session.clone()));
                     }
                 }
-                commands.push(Command::StopRuntime);
+                commands.push(Command::Lockout(evidence));
                 commands.push(Command::State(self.state(), None));
                 self.refuse_queued(
                     crate::journal::Outcome::Refused("lockout"),
@@ -1359,7 +1360,9 @@ impl Core {
                 self.quota_event(id, event, upstream_error, now, wall, &mut commands)
             }
             (None, Event::RefreshQuota(reply)) => {
-                let error = if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+                let error = if let Some(evidence) = &self.lockout {
+                    Some(evidence.message(&self.panel_address).to_string())
+                } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
                     Some(reason.message.clone())
                 } else if matches!(self.runtime_state, RuntimeState::Stopping) {
                     Some(crate::messages::Message::Stopped.to_string())
@@ -2695,6 +2698,15 @@ impl Conductor {
         let (send, mut recv) = mpsc::channel::<Input>(32);
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
+        let state_path = builds.start.data.join(crate::store::STATE_FILE);
+        let lockout = match crate::store::StateFile::read(&state_path) {
+            Ok(state) => state.lockout,
+            Err(error) => Some(crate::store::Lockout {
+                since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
+                signal: "unreadable or damaged state file".into(),
+                original_error_text: crate::journal::redact_error(&error),
+            }),
+        };
         let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
@@ -2709,10 +2721,11 @@ impl Conductor {
                 retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
                 runtime_state: RuntimeState::Serving,
-                lockout: None,
+                lockout,
                 sign_in_required: false,
                 sign_in_wait: None,
                 panel_address,
+                state_path,
                 view,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -2729,6 +2742,11 @@ impl Conductor {
                 notices,
             };
             let mut read_open = false;
+            core.view.send_replace(Arc::new(View {
+                state: core.state(),
+                queued: 0,
+                sign_in_wait: None,
+            }));
             journal.state(core.state(), None, clock.as_ref());
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
@@ -2891,7 +2909,16 @@ impl Conductor {
                         };
                         match work {
                             Input::Builds { action, reply, hold } => {
-                                core.changes.push_back((action, reply));
+                                if let Some(evidence) = &core.lockout {
+                                    let result = if matches!(action, crate::runtime_builds::Action::Initial) {
+                                        Ok(String::new())
+                                    } else {
+                                        Err(LaunchFailure::Runtime(evidence.message(&core.panel_address).to_string()))
+                                    };
+                                    let _ = reply.send(result);
+                                } else {
+                                    core.changes.push_back((action, reply));
+                                }
                                 drop(hold);
                                 continue;
                             }
@@ -2974,7 +3001,22 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
-                Command::StopRuntime => core.stop_runtime(runtime, read_open).await,
+                Command::Lockout(mut evidence) => {
+                    evidence.original_error_text =
+                        crate::journal::redact_error(&evidence.original_error_text);
+                    let result =
+                        crate::store::StateFile::read(&core.state_path).and_then(|mut state| {
+                            state.lockout = Some(evidence);
+                            state.save(&core.state_path)
+                        });
+                    if let Err(error) = result {
+                        eprintln!(
+                            "acp2api: cannot save lockout: {}",
+                            crate::journal::redact_error(&error)
+                        );
+                    }
+                    core.stop_runtime(runtime, read_open).await;
+                }
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
                         commands.extend(core.command_failed(
@@ -3243,6 +3285,7 @@ mod tests {
                 sign_in_required: false,
                 sign_in_wait: None,
                 panel_address: "http://127.0.0.1:8329/".into(),
+                state_path: PathBuf::new(),
                 view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
