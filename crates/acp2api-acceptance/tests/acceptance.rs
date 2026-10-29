@@ -24,6 +24,10 @@ mod lockout;
 mod lockout_support;
 #[path = "steps/panel.rs"]
 mod panel;
+#[path = "steps/panel_tiles.rs"]
+mod panel_tiles;
+#[path = "support/panel_tiles.rs"]
+mod panel_tiles_support;
 #[path = "steps/places_and_queue.rs"]
 mod places_and_queue;
 #[path = "support/places_and_queue.rs"]
@@ -87,6 +91,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    panel_tiles: panel_tiles_support::TileState,
     prompt_sessions: std::collections::HashMap<String, String>,
     lockout: lockout_support::LockoutState,
     keep_alive: keep_alive_support::KeepAliveState,

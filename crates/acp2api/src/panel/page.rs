@@ -7,7 +7,14 @@ function update() {
     if (left > 0) setTimeout(update, 1000);
 }
 update();"#;
-pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment) -> String {
+fn figure(label: &str, value: impl std::fmt::Display) -> String {
+    format!(
+        "<p>{} <span>{}</span></p>",
+        escape(label),
+        escape(&value.to_string())
+    )
+}
+fn first_tile(view: &crate::conductor::View, now: crate::Moment, build: Option<&str>) -> String {
     let sign_in = if let Some(wait) = &view.sign_in_wait {
         let seconds = wait.deadline.saturating_sub(now).div_ceil(1000);
         let address = wait
@@ -28,10 +35,12 @@ pub(super) fn sign_in_section(view: &crate::conductor::View, now: crate::Moment)
     } else {
         r#"<form method="post" action="/manage/sign-in"><button type="submit">Sign in</button></form>"#.into()
     };
+    let places = figure("Places in use", view.places);
+    let queued = figure("Requests in the queue", view.queued);
+    let build = figure("Build in use", build.unwrap_or("—"));
     format!(
-        r#"<section id="{entry_id}"><h2>{}</h2><p>Requests in the queue <span>{}</span></p>{sign_in}</section>"#,
+        r#"<section id="{entry_id}"><h2>{}</h2>{places}{queued}{build}{sign_in}</section>"#,
         view.state,
-        view.queued,
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )
 }
@@ -57,17 +66,35 @@ pub(super) fn login(error: Option<&str>) -> String {
         r#"<main class="login"><h1>Welcome back.</h1><p class="intro">Enter the management password to open this panel.</p><section><form method="post" action="/manage/login"><label for="current-password">Management password</label><input type="password" id="current-password" name="password" autocomplete="current-password" required enterkeyhint="go"><button type="submit">Open the management panel</button></form>{error}</section><p class="fine">Use the password shown in the terminal at the first start.</p></main>"#
     ))
 }
-pub(super) fn settings(
-    settings: &crate::store::Settings,
-    highest: u8,
-    notice: Option<&str>,
-    notices: &[crate::conductor::Notice],
-    builds: Result<crate::runtime_builds::Summary, String>,
-    quota_result: &Option<crate::conductor::QuotaResult>,
-    sign_in_section: &str,
-) -> String {
+pub(super) struct Page<'a> {
+    pub(super) settings: &'a crate::store::Settings,
+    pub(super) highest: u8,
+    pub(super) port: u16,
+    pub(super) data_folder: &'a std::path::Path,
+    pub(super) notice: Option<&'a str>,
+    pub(super) notices: &'a [crate::conductor::Notice],
+    pub(super) builds: Result<crate::runtime_builds::Summary, String>,
+    pub(super) quota_result: &'a Option<crate::conductor::QuotaResult>,
+    pub(super) view: &'a crate::conductor::View,
+    pub(super) now: crate::Moment,
+}
+pub(super) fn settings(page: Page<'_>) -> String {
+    let settings = page.settings;
     let key = escape(&settings.local_api_key);
-    let options = (1..=highest)
+    let port = figure("Port", page.port);
+    let data_folder = escape(&page.data_folder.display().to_string());
+    let limit = figure("Concurrency limit", settings.concurrency_limit);
+    let first_tile = first_tile(
+        page.view,
+        page.now,
+        page.builds
+            .as_ref()
+            .ok()
+            .and_then(|builds| builds.current.as_ref())
+            .map(|build| build.version.as_str()),
+    );
+    let runtime = runtime(page.builds, settings, page.view.runtime_process);
+    let options = (1..=page.highest)
         .map(|limit| {
             format!(
                 "<option value=\"{limit}\"{}>{limit}</option>",
@@ -79,28 +106,32 @@ pub(super) fn settings(
             )
         })
         .collect::<String>();
-    let notice = notice
+    let notice = page
+        .notice
         .map(|text| format!("<p class=\"notice\" role=\"status\">{}</p>", escape(text)))
         .unwrap_or_default();
-    let runtime_notices = notices.iter().map(|notice| format!(
+    let runtime_notices = page.notices.iter().map(|notice| format!(
         r#"<section><h2>Runtime notice</h2><p role="status">{}</p><form method="post" action="/manage/notice"><input type="hidden" name="notice_id" value="{}"><button type="submit">Dismiss notice</button></form></section>"#,
         escape(&notice.text()),escape(&notice.id)
     )).collect::<String>();
-    let runtime = runtime(builds, settings);
-    let result = quota_result.as_ref().map(|result| format!(r#"<p>Last result: <time datetime="{time}">{time}</time></p><pre class="quota-result">{text}</pre>"#,time=escape(&result.time),text=escape(&result.text))).unwrap_or_else(|| "<p>No quota result yet.</p>".into());
+    let result = page.quota_result.as_ref().map(|result| format!(r#"<p>Last result: <time datetime="{time}">{time}</time></p><pre class="quota-result">{text}</pre>"#,time=escape(&result.time),text=escape(&result.text))).unwrap_or_else(|| "<p>No quota result yet.</p>".into());
+    let places = figure("Places in use", page.view.places);
+    let queued = figure("Requests in the queue", page.view.queued);
     let quota = format!(
-        r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p></section>"#
+        r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{places}{queued}{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section>"#
     );
     document(&format!(
-        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{sign_in_section}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Concurrency limit</h2><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+        r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
     ))
 }
 
 fn runtime(
     builds: Result<crate::runtime_builds::Summary, String>,
     settings: &crate::store::Settings,
+    process: &str,
 ) -> String {
     let crate::runtime_builds::Summary {
+        current,
         found,
         release,
         newer,
@@ -114,6 +145,19 @@ fn runtime(
             );
         }
     };
+    let current = current
+        .map(|build| {
+            let source = build
+                .source
+                .map(|source| format!("<code>{}</code>", escape(&source.display().to_string())))
+                .unwrap_or_else(|| "Not found.".into());
+            format!(
+                "{}<p>{}</p><p>Source: {source}</p>",
+                figure("Build in use", &build.version),
+                build.acceptance,
+            )
+        })
+        .unwrap_or_else(|| "<p>No build in use.</p>".into());
     let release = release
         .iter()
         .map(|version| format!("<li>{} — On the release list</li>", escape(version)))
@@ -155,7 +199,110 @@ fn runtime(
         .as_ref()
         .map(|path| escape(&path.display().to_string()))
         .unwrap_or_default();
+    let process = figure("Runtime process", process);
     format!(
-        r#"<section><h2>Official runtime</h2>{newer}<ul>{release}</ul><form method="post" action="/manage/retry"><button type="submit">Retry</button></form><form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><p id="compatibility-cost">A compatibility check uses 3 to 4 model requests through your Google account.</p><p id="compatibility-risks">The check does not check the stderr lines of the lockout signals, three prompt turns at the same time, or the memory that decides N.</p><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
+        r#"<section><h2>Official runtime</h2>{current}{process}{newer}<ul>{release}</ul><form method="post" action="/manage/retry"><button type="submit">Retry</button></form><form method="post" action="/manage/search"><button type="submit">Search for builds</button></form><p id="compatibility-cost">A compatibility check uses 3 to 4 model requests through your Google account.</p><p id="compatibility-risks">The check does not check the stderr lines of the lockout signals, three prompt turns at the same time, or the memory that decides N.</p><ul>{rows}</ul><form method="post" action="/manage/runtime-path"><label for="runtime-path">Path of agy_acp_server</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required><button type="submit">Save the runtime path</button></form><form method="post" action="/manage/build"><label for="runtime-build">Accepted build</label><select id="runtime-build" name="build">{options}</select><button type="submit">Use this build</button></form></section>"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn render(
+        view: &crate::conductor::View,
+        version: &str,
+        source: &Path,
+        data_folder: &Path,
+    ) -> String {
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 2,
+            local_api_key: "acp2api-test".into(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let builds = crate::runtime_builds::Summary {
+            current: Some(crate::runtime_builds::CurrentBuild {
+                version: version.into(),
+                acceptance: "On the release list",
+                source: Some(source.into()),
+            }),
+            found: vec![],
+            release: vec![],
+            choices: vec![],
+            newer: None,
+        };
+        super::settings(Page {
+            settings: &settings,
+            highest: 3,
+            port: 8329,
+            data_folder,
+            notice: None,
+            notices: &[],
+            builds: Ok(builds),
+            quota_result: &None,
+            view,
+            now: 0,
+        })
+    }
+
+    #[test]
+    fn the_quota_tile_reads_occupied_and_queued_counts_from_the_view() {
+        let view = crate::conductor::View {
+            places: 1,
+            queued: 2,
+            ..Default::default()
+        };
+        let html = render(&view, "1.4.0", Path::new("source"), Path::new("data"));
+        let quota = html
+            .split("<h2 id=\"quota-title\">Quota</h2>")
+            .nth(1)
+            .unwrap()
+            .split("</section>")
+            .next()
+            .unwrap();
+        assert_eq!(
+            [
+                quota.contains("<p>Places in use <span>1</span></p>"),
+                quota.contains("<p>Requests in the queue <span>2</span></p>"),
+            ],
+            [true, true],
+            "FR-054 the quota tile uses both live counts, not fixed zeroes"
+        );
+    }
+
+    #[test]
+    fn build_version_source_and_data_folder_are_escaped_in_their_tiles() {
+        let html = render(
+            &crate::conductor::View::default(),
+            "1<\"&",
+            Path::new("source<\"&"),
+            Path::new("data<\"&"),
+        );
+        let runtime = html
+            .split("<h2>Official runtime</h2>")
+            .nth(1)
+            .unwrap()
+            .split("</section>")
+            .next()
+            .unwrap();
+        let settings = html
+            .split("<h2>Settings</h2>")
+            .nth(1)
+            .unwrap()
+            .split("</section>")
+            .next()
+            .unwrap();
+        assert_eq!(
+            [
+                runtime.contains("<p>Build in use <span>1&lt;&quot;&amp;</span></p>"),
+                runtime.contains("<p>Source: <code>source&lt;&quot;&amp;</code></p>"),
+                settings.contains("<p>Data folder <code>data&lt;&quot;&amp;</code></p>"),
+            ],
+            [true, true, true],
+            "FR-054 dynamic build and folder text is HTML-escaped"
+        );
+    }
 }

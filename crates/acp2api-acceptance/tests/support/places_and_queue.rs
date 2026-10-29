@@ -61,11 +61,24 @@ pub async fn start(w: &mut World) {
     w.places.started = true;
 }
 
+pub async fn bind_panel(w: &mut World) {
+    if w.startup.panel_running() {
+        w.panel.startup(&mut w.startup).await;
+    } else {
+        start(w).await;
+        w.panel.scenario(&mut w.scenario).await;
+    }
+}
+
 pub async fn panel(w: &mut World) {
-    start(w).await;
-    w.panel.scenario(&mut w.scenario).await;
+    bind_panel(w).await;
     w.panel.login_initial("B1").await;
     assert_eq!(w.panel.login_answer.as_ref().unwrap().status, 303);
+}
+
+pub async fn view(w: &mut World) -> acp2api_acceptance::client::Answer {
+    bind_panel(w).await;
+    w.panel.view_session("B1").await
 }
 
 pub fn marker(name: &str) -> String {

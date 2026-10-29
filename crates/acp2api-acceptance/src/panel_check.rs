@@ -84,14 +84,7 @@ impl Panel {
             .or_insert_with(|| Owner::new(client))
     }
     pub async fn login(&mut self, name: &str, password: &str) {
-        let call = self
-            .owner(name)
-            .submit("/manage/login", json!({"password":password}));
-        let answer = call.finish(&mut self.time()).await;
-        self.owner(name).remember(&answer);
-        let opened = answer.headers.contains_key("set-cookie");
-        self.login_answer = Some(answer);
-        if opened {
+        if self.acquire_cookie(name, password).await {
             let limit = self.saved()["concurrency_limit"]
                 .as_integer()
                 .unwrap()
@@ -108,9 +101,35 @@ impl Panel {
             }
         }
     }
+    async fn acquire_cookie(&mut self, name: &str, password: &str) -> bool {
+        let call = self
+            .owner(name)
+            .submit("/manage/login", json!({"password":password}));
+        let answer = call.finish(&mut self.time()).await;
+        self.owner(name).remember(&answer);
+        let opened = answer.headers.contains_key("set-cookie");
+        self.login_answer = Some(answer);
+        opened
+    }
     pub async fn login_initial(&mut self, name: &str) {
         let password = self.initial_password.clone();
         self.login(name, &password).await;
+    }
+    pub async fn view_session(&mut self, name: &str) -> Answer {
+        let password = self.initial_password.clone();
+        self.acquire_cookie(name, &password).await;
+        assert_eq!(
+            self.login_answer.as_ref().unwrap().status,
+            303,
+            "FR-009 view session uses a successful management password login"
+        );
+        let page = self.page(name).await;
+        assert_eq!(page.status, 200, "FR-009 view session reads the panel");
+        assert!(
+            text(&page).contains("id=\"local-api-key\""),
+            "FR-009 view session cookie opens the authenticated panel"
+        );
+        page
     }
     pub async fn page(&mut self, name: &str) -> Answer {
         let call = self.owner(name).page();

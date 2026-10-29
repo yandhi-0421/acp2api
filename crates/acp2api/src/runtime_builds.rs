@@ -17,6 +17,7 @@ pub(crate) struct Builds {
     port: u16,
     found: Arc<Mutex<Vec<Found>>>,
     checked: Arc<Mutex<Vec<ListedBuild>>>,
+    source: Arc<Mutex<Option<PathBuf>>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BuildIdentity {
@@ -58,10 +59,16 @@ pub(crate) struct BuildRow {
     pub(crate) acceptance: Option<&'static str>,
 }
 pub(crate) struct Summary {
+    pub(crate) current: Option<CurrentBuild>,
     pub(crate) found: Vec<BuildRow>,
     pub(crate) release: Vec<String>,
     pub(crate) choices: Vec<(String, String)>,
     pub(crate) newer: Option<String>,
+}
+pub(crate) struct CurrentBuild {
+    pub(crate) version: String,
+    pub(crate) acceptance: &'static str,
+    pub(crate) source: Option<PathBuf>,
 }
 pub(crate) enum Action {
     Initial,
@@ -142,6 +149,7 @@ impl Builds {
             port,
             found: Arc::default(),
             checked: Arc::default(),
+            source: Arc::default(),
         }
     }
     #[cfg(test)]
@@ -318,10 +326,12 @@ impl Builds {
                     .ok_or("Choose an accepted build from the search results.")?;
                 return Ok(Selection::Start(Some(selected.selected_build())));
             }
-            Action::Initial if self.accepted_copy()?.is_some() => {
-                return Ok(Selection::Start(None));
+            Action::Initial => {
+                if self.accepted_copy()?.is_some() {
+                    return Ok(Selection::Start(None));
+                }
             }
-            Action::Initial | Action::Search => {}
+            Action::Search => {}
         }
         self.scan_places(settings.agy_acp_server_path.as_deref());
         if !initial && self.accepted_copy()?.is_some() {
@@ -349,7 +359,7 @@ impl Builds {
                 for name in [SERVER, HARNESS] {
                     fs::copy(source.join(name), staging.join(name))?;
                 }
-                self.identify(&staging)?;
+                let build = self.identify(&staging)?;
                 let previous = copy.exists();
                 if previous {
                     fs::rename(&copy, &backup)?;
@@ -363,14 +373,26 @@ impl Builds {
                 if previous {
                     let _ = fs::remove_dir_all(backup);
                 }
-                Ok(())
+                Ok(identity(&build))
             })();
             if staging.exists() {
                 fs::remove_dir_all(&staging)?;
             }
-            result?;
+            *self.source.lock().unwrap() = self.source_for(&result?);
         }
         Ok(())
+    }
+    fn source_for(&self, hashes: &BuildIdentity) -> Option<PathBuf> {
+        self.found
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|found| {
+                found.folder != self.start.data.join(COPY)
+                    && found.folder != self.start.data.join(CHECK)
+                    && found.identity == *hashes
+            })
+            .map(|found| found.folder.join(SERVER))
     }
     pub(crate) fn check_copy(
         &self,
@@ -490,9 +512,16 @@ impl Builds {
     }
     pub(crate) async fn discover(&self, configured: Option<PathBuf>) -> Result<(), String> {
         let builds = self.clone();
-        tokio::task::spawn_blocking(move || builds.scan_places(configured.as_deref()))
-            .await
-            .map_err(|error| error.to_string())
+        tokio::task::spawn_blocking(move || {
+            builds.scan_places(configured.as_deref());
+            let source = builds
+                .accepted_copy()?
+                .and_then(|copy| builds.source_for(&identity(&copy)));
+            *builds.source.lock().unwrap() = source;
+            Ok(())
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
     pub(crate) async fn select(
         &self,
@@ -525,8 +554,29 @@ impl Builds {
             self.port
         )
     }
+    fn acceptance(&self, build: &ListedBuild) -> &'static str {
+        if self
+            .start
+            .release
+            .listed_builds()
+            .iter()
+            .any(|listed| listed.platform == build.platform && identity(listed) == identity(build))
+        {
+            "On the release list"
+        } else {
+            "Checked on this computer"
+        }
+    }
+    pub(crate) fn data_folder(&self) -> &Path {
+        &self.start.data
+    }
     pub(crate) fn summary(&self) -> Result<Summary, String> {
-        let current = self.accepted_copy()?.map(|build| build.version);
+        let current = self.accepted_copy()?.map(|build| CurrentBuild {
+            acceptance: self.acceptance(&build),
+            version: build.version,
+            // A removed source folder cannot be reconstructed from the local copy.
+            source: self.source.lock().unwrap().clone(),
+        });
         let found = self.found.lock().unwrap();
         let rows = found
             .iter()
@@ -534,22 +584,14 @@ impl Builds {
                 path: found.folder.join(SERVER),
                 version: found.listed.as_ref().map(|build| build.version.clone()),
                 identity: found.identity.to_string(),
-                acceptance: found.listed.as_ref().map(|build| {
-                    if self.start.release.listed_builds().iter().any(|listed| {
-                        listed.platform == build.platform && identity(listed) == identity(build)
-                    }) {
-                        "On the release list"
-                    } else {
-                        "Checked on this computer"
-                    }
-                }),
+                acceptance: found.listed.as_ref().map(|build| self.acceptance(build)),
             })
             .collect();
         let newer = current.as_ref().and_then(|current| {
             found
                 .iter()
                 .filter_map(|found| found.listed.as_ref())
-                .filter(|build| version(&build.version) > version(current))
+                .filter(|build| version(&build.version) > version(&current.version))
                 .max_by_key(|build| version(&build.version))
                 .map(|build| build.version.clone())
         });
@@ -569,6 +611,7 @@ impl Builds {
             })
             .collect();
         Ok(Summary {
+            current,
             found: rows,
             release: self
                 .start
@@ -650,6 +693,53 @@ mod tests {
                 program: spec.program,
             })
         }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn an_accepted_copy_reaches_launch_before_search_and_recovers_its_source_afterward() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-search-after-start-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            for folder in [COPY, "Zed/1.4.0"] {
+                fs::create_dir_all(root.join(folder)).unwrap();
+                for name in [SERVER, HARNESS] {
+                    fs::write(root.join(folder).join(name), b"accepted").unwrap();
+                }
+            }
+            let mut builds = Builds::fixture(&root, Ports::production().clock);
+            builds.environment.local_app_data = Some(root.clone());
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            builds.start.release = Arc::new(Facts(vec![ListedBuild {
+                version: "1.4.0".into(),
+                platform: builds.start.release.platform().into(),
+                agy_acp_server_sha256: hash.clone(),
+                localharness_external_sha256: hash,
+            }]));
+            let launches = Arc::new(AtomicUsize::new(0));
+            builds.start.launcher = Arc::new(RefusingLauncher(launches.clone()));
+            let config = root.join("config.toml");
+            let mut settings = crate::store::read(&config, 3).unwrap().settings;
+            let selected = builds.select(Action::Initial, &mut settings, &config).await.unwrap();
+            let _ = builds.launch(None).await;
+            let at_start = builds.summary().unwrap();
+            builds.discover(None).await.unwrap();
+            let after_search = builds.summary().unwrap().current.unwrap().source;
+            fs::remove_dir_all(&root).unwrap();
+            assert_eq!(
+                (
+                    matches!(selected, Selection::Start(None)),
+                    launches.load(Ordering::SeqCst),
+                    at_start.found.len(),
+                    at_start.current.unwrap().source,
+                    after_search,
+                ),
+                (true, 1, 0, None, Some(root.join("Zed/1.4.0").join(SERVER))),
+                "FR-042 reaches launch before search; FR-054 obtains the source from the later search"
+            );
+        }).await.expect("search order cap: 5 seconds, one refused launch, no child process, requests or logs");
     }
 
     #[cfg(unix)]

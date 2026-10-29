@@ -94,7 +94,7 @@ Feature: Management panel
       | runtime unavailable | Retry                                        |
       | lockout             | End the lockout with the management password |
 
-  @FR-054 @issue-69 @wip
+  @FR-054 @issue-69
   Scenario: The first tile shows the three figures
     Given the concurrency limit is 2
     And one prompt turn runs, and no request waits in the queue
@@ -119,7 +119,7 @@ Feature: Management panel
       | no notice exists                                           | has no     |
       | a built-in tool ran with no permission request             | has        |
 
-  @FR-054 @issue-69 @wip
+  @FR-054 @issue-69
   Scenario: The tile official runtime shows the build in use and the result of the search
     Given the runtime process runs from the copy of the build 1.4.0 from the install folder of Zed
     And acp2api found the accepted build 1.5.0
@@ -127,7 +127,7 @@ Feature: Management panel
     Then the tile "official runtime" shows the build 1.4.0 with its label "On the release list" and its source, the install folder of Zed
     And the tile "official runtime" shows the runtime process, the result of the search, and "New build found: 1.5.0"
 
-  @FR-054 @issue-69 @wip
+  @FR-054 @issue-69
   Scenario: The tile quota shows the last result of /usage, the places, and the queue
     Given the owner refreshed the quota at a known time
     When the owner opens the management panel with a panel session
@@ -148,7 +148,7 @@ Feature: Management panel
     Then the table of the unknown field names has the row "example_field" with the API "OpenAI Chat Completions API", the count 2, and the time of the last request
     And the tile "logs" shows the log folder
 
-  @FR-054 @issue-69 @wip
+  @FR-054 @issue-69
   Scenario: The tile settings shows the read-only port and data folder
     Given acp2api runs on the port 8329 with the data folder "D"
     When the owner opens the management panel with a panel session
@@ -181,13 +181,13 @@ Feature: Management panel
     When the owner opens the management panel with a panel session
     Then "CLAUDE_CODE_MAX_CONTEXT_TOKENS" and "model_context_window" in the setup text hold a placeholder
 
-  @FR-054 @issue-69 @wip
+  @FR-054 @issue-69
   Scenario: No page of the management panel holds the email address of the Google account
     Given the official runtime is signed in with the Google account "owner@example.com"
     When the owner opens each page of the management panel with a panel session
     Then no page holds "owner@example.com"
 
-  @FR-054 @issue-69 @wip
+  @FR-054 @issue-69
   Scenario: A view of the management panel sends no request to the official runtime
     Given acp2api is in the normal state
     When the owner opens the management panel with a panel session and reloads it 3 times
