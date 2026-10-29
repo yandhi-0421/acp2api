@@ -1,3 +1,4 @@
+mod quota;
 mod records;
 use crate::{
     Clock, Hold, HoldKind, Moment,
@@ -244,6 +245,7 @@ enum RuntimeState {
     Stopping,
 }
 struct Core {
+    quota_wait: Option<quota::Wait>,
     runtime_state: RuntimeState,
     failures: VecDeque<Moment>,
     cleanup_before_start: bool,
@@ -309,7 +311,7 @@ impl Core {
         clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
     ) {
-        let mut commands = self.handle(event, clock.now()).into();
+        let mut commands = self.handle(event, clock.now(), clock.wall()).into();
         Conductor::commands(self, runtime, read_open, clock, journal, &mut commands).await;
     }
     async fn replace(
@@ -545,7 +547,47 @@ impl Core {
             })
             .chain(self.records.iter().map(|record| record.expires))
             .chain(self.cancels.values().copied())
+            .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
             .min()
+    }
+    fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
+        if let RuntimeState::Unavailable(message) = &self.runtime_state {
+            return Some(crate::messages::Message::RuntimeUnavailable(
+                message.clone(),
+            ));
+        }
+        self.quota_wait
+            .as_ref()
+            .filter(|wait| wait.deadline > now)
+            .map(|wait| wait.message(now))
+    }
+    fn start_quota(
+        &mut self,
+        until: std::time::SystemTime,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) -> quota::Wait {
+        let started = self
+            .quota_wait
+            .as_ref()
+            .is_none_or(|wait| wait.deadline <= now);
+        let wait = quota::Wait::new(until, now, wall);
+        self.quota_wait = Some(wait.clone());
+        if started {
+            let message = match &self.runtime_state {
+                RuntimeState::Unavailable(message) => {
+                    crate::messages::Message::RuntimeUnavailable(message.clone())
+                }
+                _ => wait.message(now),
+            };
+            self.refuse_queued(
+                crate::journal::Outcome::Refused("quota_wait"),
+                message,
+                commands,
+            );
+        }
+        wait
     }
     fn check_model(
         &self,
@@ -562,11 +604,18 @@ impl Core {
             |catalog| catalog.resolve(turn),
         )
     }
-    fn model_entries(&self) -> Vec<crate::catalog::ModelEntry> {
-        self.catalog
+    fn model_entries(
+        &self,
+        now: Moment,
+    ) -> Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal> {
+        if let Some(message) = self.refusal(now) {
+            return Err(message.into());
+        }
+        Ok(self
+            .catalog
             .as_ref()
             .map(crate::catalog::Catalog::entries)
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
     fn owner_action(
         &mut self,
@@ -581,13 +630,13 @@ impl Core {
             OwnerAction::SetPasswordHash(hash) => changed.management_password_hash = hash,
             OwnerAction::SetConcurrencyLimit(limit) => changed.concurrency_limit = limit,
             OwnerAction::DismissNotice(id) => {
-                return Ok(self.handle(Event::DismissNotice(id), clock.now()));
+                return Ok(self.handle(Event::DismissNotice(id), clock.now(), clock.wall()));
             }
         }
         crate::store::save(configuration, &changed)?;
         let limit = changed.concurrency_limit;
         settings.send_replace(Arc::new(changed));
-        Ok(self.handle(Event::Limit(limit), clock.now()))
+        Ok(self.handle(Event::Limit(limit), clock.now(), clock.wall()))
     }
     fn admit(
         &self,
@@ -596,7 +645,10 @@ impl Core {
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let (output, ticket) = mpsc::unbounded_channel();
-        let mut checked = self.check_model(&work.turn);
+        let mut checked = match self.refusal(clock.now()) {
+            Some(message) => Err(message.into()),
+            None => self.check_model(&work.turn),
+        };
         if self
             .work
             .values()
@@ -652,8 +704,15 @@ impl Core {
         };
         Some((Event::Accepted(Box::new(accepted)), work.hold))
     }
-    fn handle(&mut self, event: Event, now: Moment) -> Vec<Command> {
+    fn handle(&mut self, event: Event, now: Moment, wall: std::time::SystemTime) -> Vec<Command> {
         let mut commands = Vec::new();
+        if self
+            .quota_wait
+            .as_ref()
+            .is_some_and(|wait| wait.deadline <= now)
+        {
+            self.quota_wait = None;
+        }
         match event {
             Event::Stop => {
                 self.runtime_state = RuntimeState::Stopping;
@@ -752,11 +811,15 @@ impl Core {
                                     if let Phase::Preparing(prompt) =
                                         std::mem::replace(&mut active.phase, Phase::Prompt)
                                     {
-                                        commands.push(Command::Prompt {
-                                            work,
-                                            session,
-                                            prompt,
-                                        });
+                                        if let Some(message) = self.refusal(now) {
+                                            self.finish(id, Err(message), &mut commands);
+                                        } else {
+                                            commands.push(Command::Prompt {
+                                                work,
+                                                session,
+                                                prompt,
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -801,15 +864,22 @@ impl Core {
                     error: error.clone(),
                     late: id.is_none(),
                 });
+                let message = crate::messages::Message::UpstreamHttp(error);
+                let message = if let Some(text) = quota::error_text(&message) {
+                    let until = quota::reset_time(text)
+                        .unwrap_or(wall + std::time::Duration::from_secs(3600));
+                    self.start_quota(until, now, wall, &mut commands)
+                        .message(now)
+                } else {
+                    message
+                };
                 if let Some(id) = id {
                     if !matches!(self.work[&id], Work::Retiring(_)) {
-                        self.retire(
-                            id,
-                            session,
-                            crate::messages::Message::UpstreamHttp(error),
-                            now,
-                            &mut commands,
-                        );
+                        if matches!(message, crate::messages::Message::QuotaWait { .. }) {
+                            self.end_request(id, message, &mut commands);
+                        } else {
+                            self.retire(id, session, message, now, &mut commands);
+                        }
                     }
                 } else {
                     self.records.retain(|record| record.session != session);
@@ -858,7 +928,7 @@ impl Core {
             Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other) => {}
             Event::Deadline => {
                 if self.cancels.values().any(|at| *at <= now) {
-                    return self.handle(Event::RuntimeFailure, now);
+                    return self.handle(Event::RuntimeFailure, now, wall);
                 }
                 let due: Vec<_> = self
                     .work
@@ -889,6 +959,7 @@ impl Core {
             .filter(|work| work.occupies_place())
             .count();
         while matches!(self.runtime_state, RuntimeState::Serving)
+            && self.quota_wait.is_none()
             && places < usize::from(self.limit)
         {
             let Some(id) = self
@@ -1139,6 +1210,7 @@ impl Core {
         work: Option<String>,
         error: crate::runtime_driver::CommandError,
         now: Moment,
+        wall: std::time::SystemTime,
     ) -> Vec<Command> {
         if matches!(self.runtime_state, RuntimeState::Restarting) {
             return Vec::new();
@@ -1155,7 +1227,7 @@ impl Core {
                 None => Event::Runtime(RuntimeEvent::Failed(error)),
             },
         };
-        self.handle(event, now)
+        self.handle(event, now, wall)
     }
     fn cancel(&mut self, session: String, now: Moment, commands: &mut Vec<Command>) {
         self.cancels
@@ -1171,11 +1243,19 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        let active = self.work.remove(&id).unwrap().into_active().unwrap();
-        let ended = matches!(active.phase, Phase::Settling { .. });
-        if matches!(active.phase, Phase::Prompt) {
+        if matches!(self.work[&id].execution().unwrap().phase, Phase::Prompt) {
             self.cancel(session, now, commands);
         }
+        self.end_request(id, error, commands);
+    }
+    fn end_request(
+        &mut self,
+        id: WorkId,
+        error: crate::messages::Message,
+        commands: &mut Vec<Command>,
+    ) {
+        let active = self.work.remove(&id).unwrap().into_active().unwrap();
+        let ended = matches!(active.phase, Phase::Settling { .. });
         let outstanding = OutstandingWork {
             request: active.request.clone(),
             session: active.session.clone(),
@@ -1319,6 +1399,7 @@ impl Conductor {
         let task = tokio::spawn(async move {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
+                quota_wait: None,
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -1493,10 +1574,10 @@ impl Conductor {
                                 continue;
                             }
                             Input::Models { reply, hold } => {
-                                let result = match &core.runtime_state {
-                                    RuntimeState::Unavailable(message) => Err(unavailable_refusal(message, clock.as_ref())),
-                                    _ => Ok(core.model_entries()),
-                                };
+                                let result = core.model_entries(clock.now()).map_err(|mut error| {
+                                    error.hold = clock.hold(HoldKind::TurnEvent);
+                                    error
+                                });
                                 let _ = reply.send(result);
                                 drop(hold);
                                 continue;
@@ -1526,13 +1607,6 @@ impl Conductor {
                                 continue;
                             }
                             Input::Turn(work) => {
-                                if let RuntimeState::Unavailable(message) = &core.runtime_state {
-                                    let error = unavailable_refusal(message, clock.as_ref());
-                                    if work.admission.send(Err(error)).is_err() {
-                                        journal.complete(crate::journal::Completion { request: work.request, session: None, session_use: None, outcome: crate::journal::Outcome::Disconnected }, clock.as_ref());
-                                    }
-                                    continue;
-                                }
                                 match core.admit(*work, &journal, clock.as_ref()) {
                                     Some(accepted) => accepted,
                                     None => continue,
@@ -1595,7 +1669,12 @@ impl Conductor {
                     if let Some(runtime) = runtime.as_mut()
                         && let Err(error) = runtime.cancel(&session).await
                     {
-                        commands.extend(core.command_failed(None, error, clock.now()));
+                        commands.extend(core.command_failed(
+                            None,
+                            error,
+                            clock.now(),
+                            clock.wall(),
+                        ));
                     }
                 }
                 Command::Safety(report) => journal.safety(report, clock.as_ref()),
@@ -1622,7 +1701,12 @@ impl Conductor {
                         Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
                     };
                     if let Err(error) = result {
-                        commands.extend(core.command_failed(Some(work), error, clock.now()));
+                        commands.extend(core.command_failed(
+                            Some(work),
+                            error,
+                            clock.now(),
+                            clock.wall(),
+                        ));
                     }
                 }
                 Command::Prompt {
@@ -1635,14 +1719,24 @@ impl Conductor {
                         Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
                     };
                     if let Err(error) = result {
-                        commands.extend(core.command_failed(Some(work), error, clock.now()));
+                        commands.extend(core.command_failed(
+                            Some(work),
+                            error,
+                            clock.now(),
+                            clock.wall(),
+                        ));
                     }
                 }
                 Command::Permission(request) => {
                     if let Some(runtime) = runtime.as_mut()
                         && let Err(error) = runtime.permission(request).await
                     {
-                        commands.extend(core.command_failed(None, error, clock.now()));
+                        commands.extend(core.command_failed(
+                            None,
+                            error,
+                            clock.now(),
+                            clock.wall(),
+                        ));
                     }
                 }
                 Command::Forget(session) => {
@@ -1744,12 +1838,6 @@ async fn deadline(timer: Option<crate::BoxFuture<'static, Hold>>) -> Hold {
         None => std::future::pending().await,
     }
 }
-fn unavailable_refusal(message: &str, clock: &dyn Clock) -> crate::messages::Refusal {
-    let mut refusal: crate::messages::Refusal =
-        crate::messages::Message::RuntimeUnavailable(message.into()).into();
-    refusal.hold = clock.hold(HoldKind::TurnEvent);
-    refusal
-}
 fn stopped<T>(_: T) -> crate::messages::Refusal {
     crate::messages::Message::Stopped.into()
 }
@@ -1757,6 +1845,114 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    #[test]
+    fn model_lists_use_the_quota_row_until_the_deadline_without_waiting_for_its_timer() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-quota-models-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        let status = |result: Result<Vec<crate::catalog::ModelEntry>, crate::messages::Refusal>| {
+            match result {
+                Ok(_) => 200,
+                Err(error) => crate::dialect::CHAT.refusal(&error).status().as_u16(),
+            }
+        };
+        let normal = status(core.model_entries(0));
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: 429,
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: "resets 1970-01-01T00:02:00Z".into(),
+                },
+            }),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let results = [
+            normal,
+            status(core.model_entries(1)),
+            status(core.model_entries(120_000)),
+        ];
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            results,
+            [200, 429, 200],
+            "FR-012/FR-036 GET /v1/models uses the state's row, including the exact quota deadline"
+        );
+    }
+    #[test]
+    fn preparation_rechecks_quota_after_runtime_recovery() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-quota-preparation-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let mut results = Vec::new();
+        for quota in [false, true] {
+            let (mut core, queued, _tickets) = prompting_with_waiter(&journal);
+            core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
+            if quota {
+                core.handle(
+                    Event::Runtime(RuntimeEvent::UpstreamError {
+                        session: "running".into(),
+                        error: crate::messages::HttpError {
+                            code: 429,
+                            status: "RESOURCE_EXHAUSTED".into(),
+                            message: "resets 1970-01-01T00:02:00Z".into(),
+                        },
+                    }),
+                    1,
+                    std::time::UNIX_EPOCH,
+                );
+                core.handle(
+                    Event::RuntimeUnavailable("runtime unavailable".into()),
+                    1,
+                    std::time::UNIX_EPOCH,
+                );
+                core.handle(Event::ResumeRuntime, 1, std::time::UNIX_EPOCH);
+            }
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+            let commands = core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work: queued,
+                    result: Ok(("prepared".into(), catalog)),
+                }),
+                2,
+                std::time::UNIX_EPOCH,
+            );
+            results.push(
+                if commands
+                    .iter()
+                    .any(|command| matches!(command, Command::Prompt { .. }))
+                {
+                    "prompt"
+                } else if commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        Command::Emit(
+                            _,
+                            TurnEvent::End(Err(crate::messages::Message::QuotaWait { .. }))
+                        )
+                    )
+                }) {
+                    "quota"
+                } else {
+                    "no result"
+                },
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            results,
+            ["prompt", "quota"],
+            "FR-036 runtime recovery clears only runtime unavailable, and preparation must check the remaining condition before prompt dispatch"
+        );
+    }
     struct Facts(Vec<crate::ListedBuild>);
     impl crate::ReleaseFacts for Facts {
         fn version(&self) -> &str {
@@ -1784,6 +1980,7 @@ mod tests {
         [mpsc::UnboundedReceiver<(TurnEvent, Hold)>; 2],
     ) {
         let mut core = Core {
+            quota_wait: None,
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -1824,6 +2021,7 @@ mod tests {
                     output,
                 })),
                 0,
+                std::time::UNIX_EPOCH,
             );
         }
         (core, queued, tickets.try_into().ok().unwrap())
@@ -2291,13 +2489,14 @@ mod tests {
         ));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, loading, _tickets) = prompting_with_waiter(&journal);
-        core.handle(Event::RetireRuntime, 0);
+        core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
         core.handle(
             Event::Runtime(RuntimeEvent::Turn {
                 session: "running".into(),
                 update: TurnUpdate::Text("Hi".into()),
             }),
             1,
+            std::time::UNIX_EPOCH,
         );
         core.handle(
             Event::Runtime(RuntimeEvent::Turn {
@@ -2307,8 +2506,9 @@ mod tests {
                 },
             }),
             2,
+            std::time::UNIX_EPOCH,
         );
-        core.handle(Event::Deadline, 202);
+        core.handle(Event::Deadline, 202, std::time::UNIX_EPOCH);
         core.records[0].location = records::Location::Unloaded(folder.join("saved-cwd"));
         let id = core.by_request(&loading).unwrap();
         core.work.get_mut(&id).and_then(|work| match work {
@@ -2317,7 +2517,7 @@ mod tests {
         }).unwrap().turn = crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"First"},{"role":"assistant","content":"Hi"},{"role":"user","content":"Next"}]})).unwrap()).ok().unwrap().turn;
         core.replaced(Some("other".into()), None);
         core.limit = 2;
-        let preparing = core.handle(Event::ResumeRuntime, 203);
+        let preparing = core.handle(Event::ResumeRuntime, 203, std::time::UNIX_EPOCH);
         assert!(preparing.iter().any(|command| matches!(command, Command::Prepare { load: Some((session, _)), .. } if session == "running")));
         let turn = crate::dialect::CHAT
             .parse(br#"{"model":"m","messages":[{"role":"user","content":"Independent"}]}"#)
@@ -2337,8 +2537,13 @@ mod tests {
                 output,
             })),
             203,
+            std::time::UNIX_EPOCH,
         );
-        core.handle(Event::Disconnected(loading.clone()), 204);
+        core.handle(
+            Event::Disconnected(loading.clone()),
+            204,
+            std::time::UNIX_EPOCH,
+        );
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         core.handle(
@@ -2347,8 +2552,9 @@ mod tests {
                 result: Ok(("running".into(), catalog)),
             }),
             205,
+            std::time::UNIX_EPOCH,
         );
-        let mut commands = core.handle(Event::Deadline, 30_205);
+        let mut commands = core.handle(Event::Deadline, 30_205, std::time::UNIX_EPOCH);
         commands.extend(core.handle(
             Event::Runtime(RuntimeEvent::Turn {
                 session: "other".into(),
@@ -2357,8 +2563,9 @@ mod tests {
                 },
             }),
             30_206,
+            std::time::UNIX_EPOCH,
         ));
-        commands.extend(core.handle(Event::Deadline, 30_406));
+        commands.extend(core.handle(Event::Deadline, 30_406, std::time::UNIX_EPOCH));
         let ends: Vec<_> = commands
             .into_iter()
             .filter_map(|command| match command {
@@ -2421,7 +2628,7 @@ mod tests {
             let active = core.work[&0].execution().unwrap();
             core.records.push(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), hashes:crate::conversation::RecordHashes { system:active.hashes.system, messages:active.hashes.messages.clone() }, tools:active.tools_hash, used:0, expires:86_400_000 });
             core.startup_session = Some("sibling".into());
-            core.handle(Event::Limit(2), 0);
+            core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
             drop(agent_input);
             let mut batch = Vec::new();
             core.cancel("running".into(), 0, &mut batch);
@@ -2429,8 +2636,8 @@ mod tests {
             let mut batch: VecDeque<_> = batch.into();
             Conductor::commands(&mut core, &mut runtime, &mut read_open, &clock, &journal, &mut batch).await;
             assert_eq!(core.failures.len(), 1, "two writes to one closed stdin are one runtime failure");
-            let closed = core.handle(Event::Runtime(RuntimeEvent::Closed), 1);
-            let deadline = core.handle(Event::Deadline, 30_000);
+            let closed = core.handle(Event::Runtime(RuntimeEvent::Closed), 1, std::time::UNIX_EPOCH);
+            let deadline = core.handle(Event::Deadline, 30_000, std::time::UNIX_EPOCH);
             assert_eq!(core.failures.len(), 1, "Closed and the old deadline must not count the failed runtime again");
             assert!(closed.is_empty() && deadline.is_empty(), "the failed runtime must emit no second M-20");
             let mut message = None;
@@ -2471,12 +2678,12 @@ mod tests {
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let mut core = Core {
-                runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
+                quota_wait:None, runtime_state:RuntimeState::Serving, failures:VecDeque::new(), cleanup_before_start:false,
                 cancels:BTreeMap::new(), changes:VecDeque::new(), replacement:None, catalog:None,
                 work:BTreeMap::new(), next_work:0, records:Vec::new(), startup_session:None,
                 use_sequence:0, limit:1, notices:watch::channel(Arc::new(Vec::new())).0,
             };
-            core.handle(Event::RetireRuntime, 0);
+            core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
             let (reply, result) = oneshot::channel();
             core.replacement = Some(Replacement::Build { reply, source:selected, initial:true });
             let settings = watch::channel(Arc::new(settings)).0;
@@ -2591,9 +2798,9 @@ mod tests {
                 (Replacement::Check { reply:check_reply, folder:source, identity:crate::runtime_builds::identity(&ports.release.listed_builds()[0]) }, check_result),
             ] {
                 let (mut core, _, _tickets) = prompting_with_waiter(&journal);
-                core.handle(Event::RetireRuntime, 0);
-                core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
-                core.handle(Event::Deadline, 201);
+                core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
+                core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1, std::time::UNIX_EPOCH);
+                core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH);
                 core.cleanup_before_start = true;
                 core.replacement = Some(replacement);
                 let config = folder.join("config.toml");
@@ -2633,9 +2840,9 @@ mod tests {
             let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root:folder.join("account"), temp:folder.join("temp"), home:None, local_app_data:None, path:vec![], exe_dir:folder.join("exe") }, folder.clone(), temporary, crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let (mut core, _, [_a, mut queued]) = prompting_with_waiter(&journal);
-            core.handle(Event::RetireRuntime, 0);
-            core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1);
-            core.handle(Event::Deadline, 201);
+            core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
+            core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1, std::time::UNIX_EPOCH);
+            core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH);
             core.records[0].location = records::Location::Unloaded(cwd);
             core.cleanup_before_start = true;
             let (reply, result) = oneshot::channel();
@@ -2663,11 +2870,12 @@ mod tests {
         ));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, _, _tickets) = prompting_with_waiter(&journal);
-        core.handle(Event::Stop, 1);
+        core.handle(Event::Stop, 1, std::time::UNIX_EPOCH);
         core.command_failed(
             None,
             crate::runtime_driver::CommandError::Io(std::io::ErrorKind::BrokenPipe.into()),
             2,
+            std::time::UNIX_EPOCH,
         );
         let exit_without_restart =
             matches!(core.runtime_state, RuntimeState::Stopping) && core.failures.is_empty();
@@ -2729,11 +2937,12 @@ mod tests {
         ));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, _, _tickets) = prompting_with_waiter(&journal);
-        core.handle(Event::RetireRuntime, 0);
+        core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
         let work = core.work[&0].request().id.clone();
         core.handle(
             Event::Runtime(RuntimeEvent::Failed("broken pipe".into())),
             1,
+            std::time::UNIX_EPOCH,
         );
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
@@ -2743,6 +2952,7 @@ mod tests {
                 result: Ok(("late-session".into(), catalog)),
             }),
             2,
+            std::time::UNIX_EPOCH,
         );
         std::fs::remove_dir_all(folder).unwrap();
         assert!(matches!(&commands[..], [Command::Forget(session)] if session == "late-session"));
@@ -2756,9 +2966,13 @@ mod tests {
         ));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, _, tickets) = prompting_with_waiter(&journal);
-        core.handle(Event::RetireRuntime, 1);
+        core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
         let message = "acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.";
-        let commands = core.handle(Event::RuntimeUnavailable(message.into()), 2);
+        let commands = core.handle(
+            Event::RuntimeUnavailable(message.into()),
+            2,
+            std::time::UNIX_EPOCH,
+        );
         let ends: Vec<_> = commands
             .iter()
             .filter_map(|command| match command {
@@ -2791,8 +3005,8 @@ mod tests {
         b.turn = crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({
             "model":"m", "messages":[{"role":"system","content":"B's instructions"},{"role":"user","content":"B"}]
         })).unwrap()).ok().unwrap().turn;
-        let changed = core.handle(Event::RetireRuntime, 1);
-        let arrival = core.handle(Event::Accepted(Box::new(b)), 2);
+        let changed = core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
+        let arrival = core.handle(Event::Accepted(Box::new(b)), 2, std::time::UNIX_EPOCH);
         let ended = core.handle(
             Event::Runtime(RuntimeEvent::Turn {
                 session: "running".into(),
@@ -2801,8 +3015,9 @@ mod tests {
                 },
             }),
             3,
+            std::time::UNIX_EPOCH,
         );
-        let completed = core.handle(Event::Deadline, 203);
+        let completed = core.handle(Event::Deadline, 203, std::time::UNIX_EPOCH);
         let no_dispatch = changed
             .iter()
             .chain(&arrival)
@@ -2822,7 +3037,7 @@ mod tests {
             "B must wait for A to end normally before runtime replacement"
         );
         core.replaced(Some("new-runtime-startup".into()), None);
-        let dispatched = core.handle(Event::ResumeRuntime, 204);
+        let dispatched = core.handle(Event::ResumeRuntime, 204, std::time::UNIX_EPOCH);
         assert!(
             core.records.len() == 1
                 && dispatched.iter().any(
@@ -2846,6 +3061,7 @@ mod tests {
                 update: TurnUpdate::UnpermittedTool("run_command".into()),
             }),
             1,
+            std::time::UNIX_EPOCH,
         );
         assert!(
             commands
@@ -2876,6 +3092,7 @@ mod tests {
                 update: TurnUpdate::Text("Late text".into()),
             }),
             2,
+            std::time::UNIX_EPOCH,
         );
         assert!(late.is_empty(), "no output follows the request's error");
         let ended = core.handle(
@@ -2884,6 +3101,7 @@ mod tests {
                 update: TurnUpdate::PromptEnded { stop_reason: None },
             }),
             3,
+            std::time::UNIX_EPOCH,
         );
         assert!(
             ended
@@ -2916,7 +3134,7 @@ mod tests {
                 },
             })
         };
-        let commands = core.handle(error(), 1);
+        let commands = core.handle(error(), 1, std::time::UNIX_EPOCH);
         assert!(
             !commands
                 .iter()
@@ -2939,7 +3157,7 @@ mod tests {
             tickets[0].is_closed(),
             "the ended request retains no reply route"
         );
-        let repeated = core.handle(error(), 2);
+        let repeated = core.handle(error(), 2, std::time::UNIX_EPOCH);
         assert!(
             matches!(&repeated[..], [Command::UpstreamLog { .. }]),
             "a repeated error keeps the occupied entry and sends no second end"
@@ -2952,6 +3170,7 @@ mod tests {
                 )),
             }),
             3,
+            std::time::UNIX_EPOCH,
         );
         assert!(
             ended
@@ -2978,7 +3197,7 @@ mod tests {
             .request()
             .id
             .clone();
-        let disconnected = core.handle(Event::Disconnected(request), 1);
+        let disconnected = core.handle(Event::Disconnected(request), 1, std::time::UNIX_EPOCH);
         assert!(
             !disconnected
                 .iter()
@@ -2989,6 +3208,7 @@ mod tests {
                 session: "running".into(),
             }),
             2,
+            std::time::UNIX_EPOCH,
         );
         assert!(
             retired
@@ -3015,6 +3235,7 @@ mod tests {
         let work = request.id.clone();
         let (output, ticket) = mpsc::unbounded_channel();
         let mut core = Core {
+            quota_wait: None,
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3042,10 +3263,11 @@ mod tests {
                 output,
             })),
             0,
+            std::time::UNIX_EPOCH,
         );
         assert!(matches!(&commands[..], [Command::Prepare { .. }]));
         drop(ticket);
-        core.handle(Event::Disconnected(work.clone()), 1);
+        core.handle(Event::Disconnected(work.clone()), 1, std::time::UNIX_EPOCH);
         assert_eq!(
             core.work.len(),
             1,
@@ -3071,7 +3293,8 @@ mod tests {
                     request: queued,
                     output,
                 })),
-                1
+                1,
+                std::time::UNIX_EPOCH
             )
             .is_empty(),
             "the second request waits for the outstanding ACP call"
@@ -3084,6 +3307,7 @@ mod tests {
                 result: Ok(("disconnected-session".into(), catalog)),
             }),
             2,
+            std::time::UNIX_EPOCH,
         );
         assert!(
             !commands
@@ -3122,6 +3346,7 @@ mod tests {
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
+                quota_wait: None,
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -3149,6 +3374,7 @@ mod tests {
                     output,
                 })),
                 0,
+                std::time::UNIX_EPOCH,
             );
             let ended = core.handle(
                 Event::Runtime(RuntimeEvent::Turn {
@@ -3161,6 +3387,7 @@ mod tests {
                     )),
                 }),
                 0,
+                std::time::UNIX_EPOCH,
             );
             assert!(
                 !ended
@@ -3168,7 +3395,10 @@ mod tests {
                     .any(|command| matches!(command, Command::Emit(_, TurnEvent::End(_)))),
                 "FR-028 waits for error lines after a prompt RPC failure"
             );
-            assert!(core.handle(Event::Deadline, 199).is_empty());
+            assert!(
+                core.handle(Event::Deadline, 199, std::time::UNIX_EPOCH)
+                    .is_empty()
+            );
             let ended = if with_http {
                 core.handle(
                     Event::Runtime(RuntimeEvent::UpstreamError {
@@ -3180,9 +3410,10 @@ mod tests {
                         },
                     }),
                     200,
+                    std::time::UNIX_EPOCH,
                 )
             } else {
-                core.handle(Event::Deadline, 200)
+                core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH)
             };
             let message = ended
                 .into_iter()
@@ -3221,6 +3452,7 @@ mod tests {
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
+                quota_wait: None,
                 runtime_state: RuntimeState::Serving,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
@@ -3268,8 +3500,9 @@ mod tests {
                     update: TurnUpdate::PromptEnded { stop_reason },
                 }),
                 0,
+                std::time::UNIX_EPOCH,
             );
-            core.handle(Event::Deadline, 200);
+            core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH);
             let next = crate::dialect::CHAT.parse(br#"{"model":"m","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[
                 {"role":"user","content":"First"},
                 {"role":"assistant","content":"Before","tool_calls":[{"id":"call-id","function":{"name":"read","arguments":"{}"}}]},
@@ -3289,6 +3522,7 @@ mod tests {
                         output,
                     })),
                     200,
+                    std::time::UNIX_EPOCH,
                 )
                 .into_iter()
                 .filter_map(|command| match command {
@@ -3332,6 +3566,7 @@ mod tests {
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
         let mut core = Core {
+            quota_wait: None,
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3347,15 +3582,23 @@ mod tests {
             limit: 1,
             notices: watch::channel(Arc::new(Vec::new())).0,
         };
-        assert_eq!(core.model_entries().len(), 1);
+        assert_eq!(core.model_entries(0).ok().unwrap().len(), 1);
         let missing = crate::dialect::CHAT
             .parse(br#"{"model":"missing","messages":[{"role":"user","content":"Hi"}]}"#)
             .ok()
             .unwrap()
             .turn;
         assert!(core.check_model(&missing).is_err());
-        core.handle(Event::Runtime(RuntimeEvent::Closed), 0);
-        assert_eq!(core.model_entries().len(), 0, "GET /v1/models");
+        core.handle(
+            Event::Runtime(RuntimeEvent::Closed),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            core.model_entries(0).ok().unwrap().len(),
+            0,
+            "GET /v1/models"
+        );
         assert!(core.check_model(&missing).is_ok());
     }
     #[test]
@@ -3365,6 +3608,7 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
+            quota_wait: None,
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3407,6 +3651,7 @@ mod tests {
                     output,
                 })),
                 0,
+                std::time::UNIX_EPOCH,
             );
             let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
             let catalog = crate::catalog::Catalog::decode(&options, clock.wall()).unwrap();
@@ -3417,6 +3662,7 @@ mod tests {
                     result: prepared,
                 }),
                 0,
+                std::time::UNIX_EPOCH,
             ));
             let session = session.to_owned();
             commands.extend(core.handle(
@@ -3425,8 +3671,9 @@ mod tests {
                     update: ends,
                 }),
                 0,
+                std::time::UNIX_EPOCH,
             ));
-            commands.extend(core.handle(Event::Deadline, 1000));
+            commands.extend(core.handle(Event::Deadline, 1000, std::time::UNIX_EPOCH));
             forgotten.extend(commands.into_iter().filter_map(|command| match command {
                 Command::Forget(session) => Some(session),
                 _ => None,
@@ -3460,6 +3707,7 @@ mod tests {
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
+            quota_wait: None,
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3486,7 +3734,7 @@ mod tests {
         if let Some(at) = core.next_deadline()
             && at <= 24 * 60 * 60 * 1000
         {
-            for command in core.handle(Event::Deadline, at) {
+            for command in core.handle(Event::Deadline, at, std::time::UNIX_EPOCH) {
                 if let Command::Forget(session) = command {
                     forgotten.push((at, session));
                 }
@@ -3505,6 +3753,7 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
         let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
         let mut core = Core {
+            quota_wait: None,
             runtime_state: RuntimeState::Serving,
             failures: VecDeque::new(),
             cleanup_before_start: false,
@@ -3536,14 +3785,14 @@ mod tests {
             output,
         }));
         assert!(matches!(
-            &core.handle(accepted, 0)[..],
+            &core.handle(accepted, 0, std::time::UNIX_EPOCH)[..],
             [Command::Prepare { .. }]
         ));
         let failed = Event::Runtime(RuntimeEvent::Prepared {
             work,
             result: Err("session/new failed".into()),
         });
-        for command in core.handle(failed, 0) {
+        for command in core.handle(failed, 0, std::time::UNIX_EPOCH) {
             if let Command::Complete(completion) = command {
                 journal.complete(completion, clock.as_ref());
             }

@@ -41,7 +41,9 @@ trait WireDialect: Sync {
     }
     fn parse(&self, body: &[u8]) -> Result<Parsed, Refusal>;
     fn refusal_body(&self, refusal: &Refusal) -> Value {
-        let kind = if refusal_status(refusal).is_server_error() {
+        let kind = if matches!(refusal.row(), Row::Quota(_)) {
+            "rate_limit_error"
+        } else if refusal_status(refusal).is_server_error() {
             "server_error"
         } else {
             "invalid_request_error"
@@ -76,6 +78,11 @@ impl<T: WireDialect + 'static> Dialect for T {
         )
             .into_response();
         match refusal.row() {
+            Row::Quota(retry_after) => {
+                response
+                    .headers_mut()
+                    .insert("retry-after", retry_after.to_string().parse().unwrap());
+            }
             Row::Temporary503 => {
                 response
                     .headers_mut()
@@ -249,6 +256,7 @@ fn refusal_status(refusal: &Refusal) -> axum::http::StatusCode {
     use axum::http::StatusCode;
     match refusal.row() {
         Row::Key => StatusCode::UNAUTHORIZED,
+        Row::Quota(_) => StatusCode::TOO_MANY_REQUESTS,
         Row::Rejected => StatusCode::BAD_REQUEST,
         Row::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         Row::Other502 => StatusCode::BAD_GATEWAY,
@@ -276,6 +284,7 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::Key => "invalid_api_key",
         Message::TooLarge => "request_too_large",
         Message::QueueFull => "queue_full",
+        Message::QuotaWait { .. } => "quota_wait",
         Message::Upstream(_) | Message::UpstreamHttp(_) | Message::UpstreamAcp(_) => {
             "upstream_error"
         }

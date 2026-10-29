@@ -43,6 +43,10 @@ pub(crate) enum Message {
     Key,
     TooLarge,
     QueueFull,
+    QuotaWait {
+        until: String,
+        retry_after: u64,
+    },
     RuntimeUnavailable(String),
     RuntimeFailed,
     Stopped,
@@ -56,6 +60,7 @@ pub(crate) enum Row {
     Rejected,
     TooLarge,
     QueueFull,
+    Quota(u64),
     Other502,
     Temporary503,
 }
@@ -87,6 +92,7 @@ impl Refusal {
             Message::Key => Row::Key,
             Message::TooLarge => Row::TooLarge,
             Message::QueueFull => Row::QueueFull,
+            Message::QuotaWait { retry_after, .. } => Row::Quota(retry_after),
             Message::RuntimeFailed => Row::Temporary503,
             Message::UpstreamHttp(ref error) if (500..600).contains(&error.code) => {
                 Row::Temporary503
@@ -176,6 +182,7 @@ impl fmt::Display for Message {
             Self::UpstreamAcp(error) => write!(f, "acp2api: upstream ACP error {}: {}", error.code, error.message),
             Self::Key => f.write_str("acp2api: the local API key is absent or wrong."),
             Self::QueueFull => write!(f, "acp2api: the queue is full ({} requests). Send the request again later.", crate::conductor::QUEUE_CAPACITY),
+            Self::QuotaWait { until, .. } => write!(f, "acp2api: the Google quota is used up until {until}. acp2api starts no prompt turn before that time."),
             Self::TooLarge => f.write_str("acp2api: the request body is larger than 32 MB."),
         }
     }
