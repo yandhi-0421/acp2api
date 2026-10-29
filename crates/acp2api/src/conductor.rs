@@ -1208,7 +1208,6 @@ impl Core {
                 self.failures
                     .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
                 self.failures.push_back(now);
-                self.catalog = None;
                 self.startup_session = None;
                 while let Some(id) = self
                     .work
@@ -1222,6 +1221,7 @@ impl Core {
                         &mut commands,
                     );
                 }
+                self.catalog = None;
             }
             (None, Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other)) => {}
             (None, Event::Deadline) => {
@@ -1971,6 +1971,7 @@ impl Core {
                 hashes: active.hashes.clone(),
                 tools: active.client_tools_hash,
                 model: active.model_id.clone(),
+                catalog: self.catalog.clone(),
                 deadline: at + 30_000,
                 error: error.clone(),
             });
@@ -3038,6 +3039,83 @@ mod tests {
                 );
             }
         }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn runtime_failure_keeps_retry_model_resolution_after_clearing_the_catalog() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-retry-catalog-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.work.clear();
+        core.startup_session = Some("failed".into());
+        let metadata = serde_json::json!({
+            "configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}],
+            "models":{"availableModels":[{"modelId":"m-low"},{"modelId":"m-high"}]}
+        });
+        core.catalog =
+            Some(crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap());
+        let turn = |model: &str, effort: &str| {
+            crate::dialect::CHAT
+                .parse(
+                    &serde_json::to_vec(
+                        &serde_json::json!({"model":model,"reasoning_effort":effort,
+                "messages":[{"role":"user","content":"First"}]}),
+                    )
+                    .unwrap(),
+                )
+                .ok()
+                .unwrap()
+                .turn
+        };
+        let seed = turn("m", "high");
+        let (output, _seed) = mpsc::unbounded_channel();
+        core.handle(
+            Event::Accepted(Box::new(Accepted {
+                model: core.check_model(&seed).ok().unwrap(),
+                turn: seed,
+                request: journal.begin(crate::journal::Api::Chat, 0),
+                output,
+            })),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+        assert!(core.catalog.is_none(), "M-20 clears the live catalog");
+        let clock = crate::Ports::production().clock;
+        let actual: Vec<_> = [("m", "high"), ("m-high", "low"), ("m", "low")]
+            .into_iter()
+            .map(|(model, effort)| {
+                let (admission, mut answer) = oneshot::channel();
+                let _ = core.admit(
+                    TurnWork {
+                        turn: turn(model, effort),
+                        request: journal.begin(crate::journal::Api::Chat, 0),
+                        hold: clock.hold(HoldKind::TurnEvent),
+                        admission,
+                    },
+                    &journal,
+                    clock.as_ref(),
+                );
+                match answer.try_recv().unwrap() {
+                    Err(error)
+                        if matches!(error.message, crate::messages::Message::RetryWait { .. }) =>
+                    {
+                        "retry_wait"
+                    }
+                    Err(_) => "other error",
+                    Ok(_) => "accepted",
+                }
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            ["retry_wait", "retry_wait", "accepted"],
+            "FR-029 resolves the same model ID without the live catalog"
+        );
         std::fs::remove_dir_all(folder).unwrap();
     }
 

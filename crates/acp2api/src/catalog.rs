@@ -18,11 +18,13 @@ pub(crate) struct ModelEntry {
     created_at: String,
     owned_by: &'static str,
 }
+#[derive(Clone)]
 pub(crate) struct Catalog {
     models: Vec<OfferedModel>,
     created: u64,
     created_at: String,
 }
+#[derive(Clone)]
 struct OfferedModel {
     value: String,
     name: String,
