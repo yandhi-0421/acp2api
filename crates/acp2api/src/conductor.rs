@@ -1346,18 +1346,22 @@ impl Core {
                                     Work::Retiring(outstanding) => Some(outstanding.model.clone()),
                                     _ => None,
                                 };
-                                if known {
-                                    self.finish(id, Err(self.refusal(now).unwrap()), &mut commands);
-                                } else if let Some(model) = pending_model {
-                                    self.finish(id, Err(self.refusal(now).unwrap()), &mut commands);
-                                    self.enqueue_quota(
-                                        QuotaPurpose::Reset {
-                                            wait,
-                                            model: Some(model),
-                                            response: None,
-                                        },
-                                        None,
+                                if known || pending_model.is_some() {
+                                    self.finish(
+                                        id,
+                                        Err(self.refusal(now).unwrap_or_else(|| wait.message(now))),
+                                        &mut commands,
                                     );
+                                    if !known {
+                                        self.enqueue_quota(
+                                            QuotaPurpose::Reset {
+                                                wait,
+                                                model: pending_model,
+                                                response: None,
+                                            },
+                                            None,
+                                        );
+                                    }
                                 } else {
                                     let mut active =
                                         self.work.remove(&id).unwrap().into_active().unwrap();
@@ -5385,6 +5389,87 @@ mod tests {
             core.failures.is_empty(),
             "FR-039 planned replacement is not a runtime failure"
         );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn an_elapsed_quota_reset_completes_a_pending_sign_in_check() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-elapsed-quota-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let wall = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        let journal = crate::journal::Journal::open(&folder, wall).unwrap();
+        for (reset, retry_after) in [
+            ("1970-01-01T00:00:00Z", 3600),
+            ("1970-01-01T00:00:01Z", 0),
+            ("1970-01-01T00:00:01.000500Z", 0),
+        ] {
+            let mut core = Core::fixture(2);
+            core.sign_in_required = true;
+            let mut checks = Vec::new();
+            for _ in 0..2 {
+                let turn = crate::dialect::CHAT
+                    .parse(br#"{"model":"m","messages":[{"role":"user","content":"Check"}]}"#)
+                    .ok()
+                    .unwrap()
+                    .turn;
+                let request = journal.begin(crate::journal::Api::Chat, 0);
+                checks.push(request.id.clone());
+                let (admission, _reply) = oneshot::channel();
+                let (connection, _lease) = mpsc::unbounded_channel();
+                core.handle(
+                    Event::CheckPending(Box::new(PendingRequest {
+                        turn,
+                        request,
+                        admission,
+                        connection,
+                    })),
+                    0,
+                    wall,
+                );
+            }
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let catalog = crate::catalog::Catalog::decode(&options, wall).unwrap();
+            core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work: checks[0].clone(),
+                    result: Ok(("checked".into(), catalog)),
+                }),
+                1,
+                wall,
+            );
+            assert!(
+                !core.sign_in_required,
+                "the other check cleared sign-in required"
+            );
+            let error = crate::messages::AcpError {
+                code: 429,
+                message: format!("RESOURCE_EXHAUSTED; resets {reset}"),
+                data: None,
+            };
+            let commands = core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work: checks[1].clone(),
+                    result: Err(crate::messages::Message::UpstreamAcp(error)),
+                }),
+                1,
+                wall,
+            );
+            assert!(
+                commands.iter().any(|command| matches!(
+                    command,
+                    Command::RefusePending {
+                        error: crate::messages::Message::QuotaWait { retry_after: actual, .. },
+                        ..
+                    } if *actual == retry_after
+                )),
+                "FR-036 reset {reset} completes the failed request with 429 (past reset uses the fallback)"
+            );
+            assert!(
+                core.by_request(&checks[1]).is_none(),
+                "the failed check releases its place"
+            );
+        }
         std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]
