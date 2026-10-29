@@ -56,7 +56,7 @@ pub(crate) enum Action {
 pub(crate) enum Selection {
     Keep,
     Notice(&'static str),
-    Start(Option<PathBuf>),
+    Start(Option<(PathBuf, String)>),
     Check {
         folder: PathBuf,
         identity: BuildIdentity,
@@ -284,7 +284,10 @@ impl Builds {
                             .is_some_and(|build| identity(build).to_string() == choice)
                     })
                     .ok_or("Choose an accepted build from the search results.")?;
-                return Ok(Selection::Start(Some(selected.folder.clone())));
+                return Ok(Selection::Start(Some((
+                    selected.folder.clone(),
+                    selected.listed.as_ref().unwrap().version.clone(),
+                ))));
             }
             Action::Initial if self.accepted_copy()?.is_some() => {
                 return Ok(Selection::Start(None));
@@ -300,7 +303,12 @@ impl Builds {
             .iter()
             .filter(|found| found.listed.is_some())
             .max_by_key(|found| version(&found.listed.as_ref().unwrap().version));
-        Ok(Selection::Start(best.map(|found| found.folder.clone())))
+        Ok(Selection::Start(best.map(|found| {
+            (
+                found.folder.clone(),
+                found.listed.as_ref().unwrap().version.clone(),
+            )
+        })))
     }
     pub(crate) fn copy(&self, source: PathBuf) -> Result<(), LaunchFailure> {
         let copy = self.start.data.join(COPY);
@@ -878,7 +886,7 @@ mod tests {
             .await
             .ok()
             .and_then(|selection| match selection {
-                Selection::Start(path) => path,
+                Selection::Start(build) => build.map(|(path, _)| path),
                 Selection::Keep | Selection::Notice(_) | Selection::Check { .. } => None,
             });
         fs::remove_dir_all(&root).unwrap();
@@ -1265,7 +1273,9 @@ mod tests {
             else {
                 panic!("the listed build must be selectable")
             };
-            builds.copy(source.expect("selected build source")).unwrap();
+            builds
+                .copy(source.expect("selected build source").0)
+                .unwrap();
             let _ = builds.launch(None).await;
             let observed = [SERVER, HARNESS].map(|name| fs::read(copy.join(name)).unwrap());
             fs::remove_dir_all(&root).unwrap();

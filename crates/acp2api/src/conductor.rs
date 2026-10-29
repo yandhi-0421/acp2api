@@ -50,7 +50,7 @@ impl Notice {
 enum Replacement {
     Build {
         reply: oneshot::Sender<Result<String, LaunchFailure>>,
-        source: Option<PathBuf>,
+        source: Option<(PathBuf, String)>,
         initial: bool,
     },
     Check {
@@ -457,13 +457,25 @@ impl Core {
                 }
             },
         };
-        if let Some(source) = source
+        if let Some((source, version)) = source
             && let Err(error) = builds.copy(source)
-            && !initial
         {
-            self.resume_after_copy_error(runtime, read_open, clock, journal)
+            if initial {
+                self.make_unavailable(
+                    &format!("the copy of the accepted build {version} failed"),
+                    runtime,
+                    read_open,
+                    clock,
+                    journal,
+                    builds,
+                )
                 .await;
-            let _ = reply.send(Err(error));
+                let _ = reply.send(Ok(String::new()));
+            } else {
+                self.resume_after_copy_error(runtime, read_open, clock, journal)
+                    .await;
+                let _ = reply.send(Err(error));
+            }
             return None;
         }
         self.stop_runtime(runtime, read_open).await;
@@ -3514,7 +3526,7 @@ mod tests {
             let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason), _ => None };
             let actual = (result.await.unwrap().map_err(|error| error.to_string()), reason, runtime.is_none() && !read_open);
             std::fs::remove_dir_all(folder).unwrap();
-            assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: no build that acp2api found is an accepted version. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
+            assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: the copy of the accepted build 1.4.0 failed. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
         }).await.expect("initial-copy test cap: five seconds, one copy attempt, zero process launches");
     }
 
@@ -3615,7 +3627,7 @@ mod tests {
             let (build_reply, build_result) = oneshot::channel();
             let (check_reply, check_result) = oneshot::channel();
             for (replacement, result) in [
-                (Replacement::Build { reply:build_reply, source:Some(source.clone()), initial:false }, build_result),
+                (Replacement::Build { reply:build_reply, source:Some((source.clone(), "1.4.0".into())), initial:false }, build_result),
                 (Replacement::Check { reply:check_reply, folder:source, identity:crate::runtime_builds::identity(&ports.release.listed_builds()[0]) }, check_result),
             ] {
                 let (mut core, _, _tickets) = prompting_with_waiter(&journal);
