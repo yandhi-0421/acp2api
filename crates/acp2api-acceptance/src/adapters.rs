@@ -54,9 +54,14 @@ impl Clock for HarnessClock {
     fn hold(&self, kind: HoldKind) -> Hold {
         let kind = format!("{kind:?}");
         let link = self.link.clone();
-        link.call(json!({"op":"hold","kind":kind,"add":true}));
+        let reply = link.call(json!({"op":"hold","kind":kind,"add":true,"reader":reader_id()}));
+        if let Some(error) = reply["error"].as_str() {
+            panic!("{error}");
+        }
+        // The conductor can drop a line's hold in a different task from its reader.
+        let process = reply["process"].clone();
         Hold::on_drop(move || {
-            link.call(json!({"op":"hold","kind":kind,"add":false}));
+            link.call(json!({"op":"hold","kind":kind,"add":false,"process":process}));
         })
     }
 }
@@ -124,24 +129,68 @@ impl ProcessLauncher for GuardedLauncher {
             std::process::id().to_string().into(),
         ));
         let mut launched = self.inner.launch(spec)?;
+        let reply = self
+            .link
+            .call(json!({"op":"process","pid":launched.tree.pid()}));
+        if let Some(error) = reply["error"].as_str() {
+            return Err(io::Error::other(error.to_owned()).into());
+        }
+        let process = reply["process"]
+            .as_u64()
+            .expect("fake process registration");
         launched.stdin = Box::pin(CountWrite {
             inner: launched.stdin,
             link: self.link.clone(),
+            process,
         });
         launched.stdout = Box::pin(CountRead {
             inner: launched.stdout,
             link: self.link.clone(),
+            process,
         });
         launched.stderr = Box::pin(CountRead {
             inner: launched.stderr,
             link: self.link.clone(),
+            process,
+        });
+        launched.tree = Box::new(GuardedTree {
+            inner: launched.tree,
+            link: self.link.clone(),
+            process,
         });
         Ok(launched)
     }
 }
+struct GuardedTree {
+    inner: Box<dyn ProcessTree>,
+    link: HubLink,
+    process: u64,
+}
+impl ProcessTree for GuardedTree {
+    fn pid(&self) -> u32 {
+        self.inner.pid()
+    }
+    fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+        self.inner.exited()
+    }
+    fn stop(self: Box<Self>, clock: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+        Box::pin(async move {
+            self.link
+                .call(json!({"op":"process_stop","process":self.process}));
+            self.inner.stop(clock).await;
+        })
+    }
+}
+fn reader_id() -> String {
+    let task = tokio::task::try_id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| format!("thread:{:?}", std::thread::current().id()));
+    format!("{}:{task}", std::process::id())
+}
 struct CountRead {
     inner: ProcessRead,
     link: HubLink,
+    process: u64,
 }
 impl AsyncRead for CountRead {
     fn poll_read(
@@ -157,8 +206,9 @@ impl AsyncRead for CountRead {
                 .filter(|b| **b == b'\n')
                 .count();
             if lines > 0 {
-                self.link
-                    .call(json!({"op":"io","direction":"stdout","lines":lines}));
+                self.link.call(
+                    json!({"op":"io","direction":"stdout","lines":lines,"process":self.process,"reader":reader_id()}),
+                );
             }
         }
         result
@@ -167,6 +217,7 @@ impl AsyncRead for CountRead {
 struct CountWrite {
     inner: ProcessWrite,
     link: HubLink,
+    process: u64,
 }
 impl AsyncWrite for CountWrite {
     fn poll_write(
@@ -178,8 +229,9 @@ impl AsyncWrite for CountWrite {
         if let Poll::Ready(Ok(n)) = result {
             let lines = buf[..n].iter().filter(|b| **b == b'\n').count();
             if lines > 0 {
-                self.link
-                    .call(json!({"op":"io","direction":"stdin","lines":lines}));
+                self.link.call(
+                    json!({"op":"io","direction":"stdin","lines":lines,"process":self.process}),
+                );
             }
         }
         result

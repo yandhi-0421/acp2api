@@ -1,5 +1,6 @@
 use crate::fake::FakeState;
 use crate::real_limit;
+use crate::time_limits::SETTLE_CAP;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -27,6 +28,14 @@ pub struct Counts {
     pub ordered: u64,
     pub read: u64,
     pub processed: u64,
+    /// Derived stdin lines closed after a product stop and control connection end.
+    pub derived_stdin_closed: u64,
+    /// Derived ordered output lines that no longer need to be read after that stop.
+    pub derived_read_closed: u64,
+    /// Derived ordered output lines that no longer need completion after that stop.
+    pub derived_processed_closed: u64,
+    /// Derived number of processes whose deliverable IO remains unbalanced.
+    pub derived_open_process_io: u64,
     pub http_sent: u64,
     pub http_started: u64,
     pub mcp_started: u64,
@@ -42,9 +51,10 @@ pub struct Counts {
 impl Counts {
     pub fn balanced(self) -> bool {
         self.holds == 0
-            && self.stdin_written == self.stdin_got
-            && self.ordered == self.read
-            && self.ordered == self.processed
+            && self.stdin_written == self.stdin_got + self.derived_stdin_closed
+            && self.ordered == self.read + self.derived_read_closed
+            && self.ordered == self.processed + self.derived_processed_closed
+            && self.derived_open_process_io == 0
             && self.http_sent + self.fake_mcp_sent == self.http_started + self.mcp_started
             && self.client_read == self.client_consumed
             && !self.client_available
@@ -62,12 +72,27 @@ pub(crate) struct ClientSocket {
     pub read: u64,
     pub consumed: u64,
 }
+#[derive(Default)]
+struct ProcessIo {
+    stdin_written: u64,
+    stdin_got: u64,
+    ordered: u64,
+    read: u64,
+    processed: u64,
+    ended: bool,
+    stop_requested: bool,
+}
 pub(crate) struct State {
     pub active_request: Option<(usize, Value)>,
     pub client_sockets: HashMap<u64, ClientSocket>,
     pub next_socket: u64,
     pub now: u64,
     pub counts: Counts,
+    process_io: Vec<ProcessIo>,
+    pending_processes: HashMap<u64, usize>,
+    server_processes: HashMap<String, usize>,
+    // The reading task creates each RuntimeLine hold before it sends the line to the conductor.
+    last_read_process_by_task: HashMap<String, usize>,
     pub entries: Vec<Entry>,
     pub bytes: usize,
     pub failure: Option<String>,
@@ -100,13 +125,16 @@ impl State {
     }
     pub(crate) fn out(&mut self, label: &str, command: Value) {
         if command["op"] == "Out" || command["op"] == "Err" {
-            self.counts.ordered += command["line"]
+            let lines = command["line"]
                 .as_str()
                 .unwrap_or("")
                 .bytes()
                 .filter(|b| *b == b'\n')
                 .count() as u64
                 + 1;
+            if let Some(process) = self.server_processes.get(label) {
+                self.process_io[*process].ordered += lines;
+            }
         }
         self.record(json!({"kind":"command", "label":label, "command":command}));
         if self.failure.is_some() {
@@ -146,6 +174,10 @@ impl Hub {
                 next_socket: 0,
                 now: 0,
                 counts: Counts::default(),
+                process_io: Vec::new(),
+                pending_processes: HashMap::new(),
+                server_processes: HashMap::new(),
+                last_read_process_by_task: HashMap::new(),
                 entries: Vec::new(),
                 bytes: 0,
                 failure: None,
@@ -202,6 +234,8 @@ impl Hub {
         let mut reader = BufReader::new(stream);
         let mut role = String::new();
         let mut label = String::new();
+        let mut pid = 0;
+        let mut process = None;
         #[cfg(windows)]
         let mut process_recorded = false;
         loop {
@@ -226,7 +260,17 @@ impl Hub {
                 if message["token"] != self.token {
                     break;
                 }
+                if message["op"] == "Hello" {
+                    pid = message["pid"].as_u64().expect("fake Hello PID");
+                }
                 role = message["role"].as_str().unwrap_or("rpc").to_owned();
+                if role == "server" {
+                    let mut state = self.shared.0.lock().unwrap();
+                    let id = state.process_io.len();
+                    state.process_io.push(ProcessIo::default());
+                    state.pending_processes.insert(pid, id);
+                    process = Some(id);
+                }
                 if role != "rpc" {
                     self.shared
                         .0
@@ -242,10 +286,7 @@ impl Hub {
                 "Hello" => {
                     #[cfg(windows)]
                     if !process_recorded && (role == "server" || role == "harness") {
-                        let pid = message["pid"]
-                            .as_u64()
-                            .and_then(|pid| u32::try_from(pid).ok())
-                            .expect("fake Hello PID");
+                        let pid = u32::try_from(pid).expect("fake Hello PID");
                         if let Some((_process, created)) = crate::setup::open_fake_process(pid) {
                             let record = format!("{pid} {created}\n");
                             let cap = (EVENT_CAP * 32) as u64; // u32 + space + u64 + newline.
@@ -270,6 +311,9 @@ impl Hub {
                     }
                     if role == "server" {
                         state.servers.insert(label.clone(), writer.clone());
+                        state
+                            .server_processes
+                            .insert(label.clone(), process.unwrap());
                     }
                     let mut redacted = message.clone();
                     redacted.as_object_mut().unwrap().remove("token");
@@ -277,7 +321,7 @@ impl Hub {
                     json!({"ok":true})
                 }
                 "Got" => {
-                    state.counts.stdin_got += 1;
+                    state.process_io[process.expect("fake Hello precedes Got")].stdin_got += 1;
                     if let Some(line) = message["line"].as_str() {
                         match serde_json::from_str::<Value>(line) {
                             Ok(value) => {
@@ -306,33 +350,75 @@ impl Hub {
                 "hold" => {
                     let kind = message["kind"].as_str().unwrap_or("");
                     let add = message["add"].as_bool().unwrap_or(false);
-                    if add {
-                        state.counts.holds += 1;
-                        if kind == "HttpRequest" {
-                            state.counts.http_started += 1;
-                        }
-                        if kind == "McpRequest" {
-                            state.counts.mcp_started += 1;
-                        }
+                    let reader = message["reader"].as_str().unwrap_or("<missing>");
+                    let line_process = if add && kind == "RuntimeLine" {
+                        state.last_read_process_by_task.get(reader).copied()
                     } else {
-                        state.counts.holds =
-                            state.counts.holds.checked_sub(1).expect("balanced holds");
-                        if kind == "RuntimeLine" {
-                            state.counts.processed += 1;
+                        None
+                    };
+                    if add && kind == "RuntimeLine" && line_process.is_none() {
+                        let message =
+                            format!("RuntimeLine hold without an output read for task {reader}");
+                        state.failure = Some(message.clone());
+                        json!({"error":message})
+                    } else {
+                        if add {
+                            state.counts.holds += 1;
+                            if kind == "HttpRequest" {
+                                state.counts.http_started += 1;
+                            }
+                            if kind == "McpRequest" {
+                                state.counts.mcp_started += 1;
+                            }
+                        } else {
+                            state.counts.holds =
+                                state.counts.holds.checked_sub(1).expect("balanced holds");
+                            if kind == "RuntimeLine" {
+                                let process = message["process"].as_u64().unwrap() as usize;
+                                state.process_io[process].processed += 1;
+                            }
+                            if kind == "McpRequest" {
+                                state.counts.mcp_finished += 1;
+                            }
                         }
-                        if kind == "McpRequest" {
-                            state.counts.mcp_finished += 1;
-                        }
+                        json!({"now":state.now,"process":line_process})
                     }
-                    json!({"now":state.now})
                 }
                 "io" => {
                     let n = message["lines"].as_u64().unwrap_or(0);
+                    let process = message["process"].as_u64().unwrap() as usize;
                     if message["direction"] == "stdin" {
-                        state.counts.stdin_written += n;
+                        state.process_io[process].stdin_written += n;
                     } else {
-                        state.counts.read += n;
+                        state.process_io[process].read += n;
+                        state
+                            .last_read_process_by_task
+                            .insert(message["reader"].as_str().unwrap().to_owned(), process);
                     }
+                    json!({"ok":true})
+                }
+                "process" => {
+                    let pid = message["pid"].as_u64().expect("fake process PID");
+                    let (registered, timeout) = self
+                        .shared
+                        .1
+                        .wait_timeout_while(state, real_limit(SETTLE_CAP), |state| {
+                            !state.pending_processes.contains_key(&pid)
+                        })
+                        .unwrap();
+                    state = registered;
+                    if timeout.timed_out() {
+                        let message =
+                            format!("fake Hello {} s cap: pid {pid}", SETTLE_CAP.as_secs());
+                        state.failure = Some(message.clone());
+                        json!({"error":message})
+                    } else {
+                        json!({"process":state.pending_processes.remove(&pid).unwrap()})
+                    }
+                }
+                "process_stop" => {
+                    let process = message["process"].as_u64().unwrap() as usize;
+                    state.process_io[process].stop_requested = true;
                     json!({"ok":true})
                 }
                 "now" | "drain" => json!({"now":state.now}),
@@ -403,8 +489,12 @@ impl Hub {
         if role == "server" || role == "harness" {
             let mut state = self.shared.0.lock().unwrap();
             state.record(json!({"kind":"process_end","label":label,"role":role}));
-            if role == "server" {
-                state.servers.remove(&label);
+            if let Some(process) = process {
+                state.process_io[process].ended = true;
+                if state.server_processes.get(&label) == Some(&process) {
+                    state.servers.remove(&label);
+                    state.server_processes.remove(&label);
+                }
             }
             self.shared.1.notify_all();
         }
@@ -428,6 +518,25 @@ impl Hub {
     pub fn counts(&self) -> Counts {
         let s = self.shared.0.lock().unwrap();
         let mut counts = s.counts;
+        for process in &s.process_io {
+            counts.stdin_written += process.stdin_written;
+            counts.stdin_got += process.stdin_got;
+            counts.ordered += process.ordered;
+            counts.read += process.read;
+            counts.processed += process.processed;
+            if process.stop_requested && process.ended {
+                counts.derived_stdin_closed +=
+                    process.stdin_written.saturating_sub(process.stdin_got);
+                counts.derived_read_closed += process.ordered.saturating_sub(process.read);
+                counts.derived_processed_closed +=
+                    process.ordered.saturating_sub(process.processed);
+            } else if process.stdin_written != process.stdin_got
+                || process.ordered != process.read
+                || process.ordered != process.processed
+            {
+                counts.derived_open_process_io += 1;
+            }
+        }
         for socket in s.client_sockets.values() {
             counts.client_read += socket.read;
             counts.client_consumed += socket.consumed;

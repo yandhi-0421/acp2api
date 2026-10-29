@@ -2,7 +2,7 @@ use crate::real_limit;
 use crate::{
     adapters::{GuardedLauncher, HarnessClock},
     client::ApiCall,
-    hub::{EVENT_CAP, HubLink, RECORD_CAP},
+    hub::{EVENT_CAP, Hub, HubLink, RECORD_CAP},
     setup::TestRoot,
     *,
 };
@@ -16,6 +16,216 @@ fn world() -> Scenario {
     let mut s = Scenario::default();
     s.plan(Setup::normal());
     s
+}
+#[test]
+fn runtime_line_without_a_reader_returns_a_hub_failure() {
+    use std::io::BufRead;
+
+    let hub = Hub::new("missing-reader-test".into());
+    let link = HubLink::new(&hub);
+    let mut reader = link
+        .connect(json!({"op":"hold","kind":"RuntimeLine","add":true,"reader":"unregistered-task"}))
+        .unwrap();
+    reader
+        .get_mut()
+        .set_read_timeout(Some(real_limit(Duration::from_secs(2))))
+        .unwrap();
+    let mut response = String::new();
+    reader.read_line(&mut response).unwrap();
+    assert!(
+        !response.is_empty(),
+        "a missing reader must return a failure instead of ending the hub connection"
+    );
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let message = "RuntimeLine hold without an output read for task unregistered-task";
+    assert_eq!(response, json!({"error":message}));
+    assert_eq!(hub.failure().as_deref(), Some(message));
+    assert_eq!(link.call(json!({"op":"now"})), json!({"now":0}));
+    hub.close();
+}
+#[cfg(unix)]
+fn send_signal(pid: i32, signal: i32) {
+    assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
+}
+#[cfg(unix)]
+fn process_is_stopped(pid: i32) -> bool {
+    let mut status = 0;
+    let result = unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED | libc::WNOHANG) };
+    assert!(result >= 0);
+    result == pid && libc::WIFSTOPPED(status)
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn self_exit_keeps_output_pending_until_read_and_processed() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut s = world();
+    let run = s.root.seed(&s.hub, &Setup::normal());
+    let launcher = GuardedLauncher::new(&run.fake_program, run.hub);
+    let mut child = launcher
+        .launch(LaunchSpec {
+            program: s
+                .root
+                .path
+                .join("data/official-runtime")
+                .join(if cfg!(windows) {
+                    "agy_acp_server.exe"
+                } else {
+                    "agy_acp_server.par"
+                }),
+            args: vec![],
+            env_set: vec![],
+            cwd: s.root.path.clone(),
+            own_temp: None,
+        })
+        .unwrap();
+    // One output and one exit command; the fake and hub retain their run and byte caps.
+    let line = r#"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}"#;
+    s.hub.command("normal", json!({"op":"Out","line":line}));
+    s.hub.command("normal", json!({"op":"Exit","code":0}));
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), child.tree.exited())
+        .await
+        .unwrap();
+    wait_for(
+        &s.hub,
+        Instant::now() + real_limit(Duration::from_secs(3)),
+        || {
+            s.hub
+                .entries()
+                .iter()
+                .any(|e| e.event["kind"] == "process_end")
+        },
+    )
+    .await;
+    let counts = s.hub.counts();
+    assert_eq!((counts.ordered, counts.read, counts.processed), (1, 0, 0));
+    assert!(
+        !counts.balanced(),
+        "a self-exited fake's output must still be read: {counts:?}"
+    );
+    let mut output = BufReader::new(child.stdout);
+    let mut received = String::new();
+    tokio::time::timeout(
+        real_limit(Duration::from_secs(3)),
+        output.read_line(&mut received),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(received, format!("{line}\n"));
+    let clock = HarnessClock::new(HubLink::new(&s.hub));
+    let hold = clock.hold(HoldKind::RuntimeLine);
+    assert!(
+        !s.hub.counts().balanced(),
+        "reading alone must not complete the pending output"
+    );
+    drop(hold);
+    s.time.settle().await;
+    let counts = s.hub.counts();
+    assert_eq!((counts.ordered, counts.read, counts.processed), (1, 1, 1));
+    assert!(counts.balanced());
+    s.finish(true).await;
+}
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn product_stop_closes_only_its_undelivered_lines() {
+    use tokio::io::AsyncWriteExt;
+
+    let mut s = world();
+    let run = s.root.seed(&s.hub, &Setup::normal());
+    let launcher = GuardedLauncher::new(&run.fake_program, run.hub);
+    let folder = s.root.path.join("data/official-runtime");
+    let descriptor = folder.join("localharness_external");
+    let original = std::fs::read_to_string(&descriptor).unwrap();
+    let mut children = Vec::new();
+    for label in ["normal", "second"] {
+        std::fs::write(
+            &descriptor,
+            original.replace("label = \"normal\"", &format!("label = \"{label}\"")),
+        )
+        .unwrap();
+        let mut child = launcher
+            .launch(LaunchSpec {
+                program: folder.join("agy_acp_server.par"),
+                args: vec![],
+                env_set: vec![],
+                cwd: s.root.path.clone(),
+                own_temp: None,
+            })
+            .unwrap();
+        let pid = child.tree.pid() as i32;
+        let deadline = Instant::now() + real_limit(Duration::from_secs(3));
+        wait_for(&s.hub, deadline, || {
+            s.hub
+                .entries()
+                .iter()
+                .any(|e| e.event["kind"] == "hello" && e.event["hello"]["pid"] == pid)
+        })
+        .await;
+        send_signal(pid, libc::SIGSTOP);
+        wait_for(&s.hub, deadline, || process_is_stopped(pid)).await;
+        // Each fake has one input and one output in flight when the process is killed.
+        child.stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\",\"params\":{\"sessionId\":\"finished\"}}\n").await.unwrap();
+        s.hub.command(label, json!({"op":"Out","line":r#"{"jsonrpc":"2.0","id":136,"result":{"stopReason":"cancelled"}}"#}));
+        children.push(child);
+    }
+    assert!(
+        !s.hub.counts().balanced(),
+        "live fakes must report and consume their lines"
+    );
+    for (index, child) in children.into_iter().enumerate() {
+        let pid = child.tree.pid() as i32;
+        let mut stop = child
+            .tree
+            .stop(std::sync::Arc::new(acp2api::os::SystemClock::default()));
+        assert!(matches!(
+            futures_util::poll!(stop.as_mut()),
+            std::task::Poll::Pending
+        ));
+        assert!(
+            !s.hub.counts().balanced(),
+            "a stop must not close IO before the process connection ends"
+        );
+        send_signal(pid, libc::SIGKILL);
+        tokio::time::timeout(real_limit(Duration::from_secs(3)), stop)
+            .await
+            .unwrap();
+        wait_for(
+            &s.hub,
+            Instant::now() + real_limit(Duration::from_secs(3)),
+            || {
+                s.hub
+                    .entries()
+                    .iter()
+                    .filter(|e| e.event["kind"] == "process_end")
+                    .count()
+                    == index + 1
+            },
+        )
+        .await;
+        if index == 0 {
+            assert!(
+                !s.hub.counts().balanced(),
+                "one process exit must not hide a live process's undelivered lines"
+            );
+        }
+    }
+    let counts = s.hub.counts();
+    assert_eq!(
+        (
+            counts.stdin_written,
+            counts.stdin_got,
+            counts.ordered,
+            counts.read,
+            counts.processed
+        ),
+        (2, 0, 2, 0, 0)
+    );
+    assert!(
+        counts.balanced(),
+        "product-stopped processes cannot deliver more lines: {counts:?}"
+    );
+    s.time.settle().await;
+    s.finish(true).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settle_drains_real_subprocess_bursts() {
