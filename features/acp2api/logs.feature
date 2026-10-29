@@ -15,6 +15,7 @@ Feature: Logs
     And the data folder denies creation of the automatic copy
     When the owner starts acp2api
     Then the log has one line for the change to "runtime unavailable" with the cause "PermissionDenied" and no path or other new field
+    And the terminal has one line for the change to "runtime unavailable" with the cause "PermissionDenied" and no path
 
   @FR-056 @issue-42
   Scenario: A request gives one log line with its metadata

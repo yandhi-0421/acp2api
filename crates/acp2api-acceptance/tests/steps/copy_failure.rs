@@ -45,3 +45,32 @@ fn copy_cause(w: &mut World, cause: String) {
         "FR-056 state-change line must exclude paths of the owner"
     );
 }
+
+#[then(
+    expr = "the terminal has one line for the change to \"runtime unavailable\" with the cause {string} and no path"
+)]
+fn terminal_cause(w: &mut World, cause: String) {
+    let terminal = w.startup.terminal();
+    let lines: Vec<_> = terminal
+        .lines()
+        .filter(|line| line.contains(" state Runtime unavailable"))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "FR-056 one terminal change to runtime unavailable"
+    );
+    let line = lines[0]
+        .strip_prefix("acp2api: ")
+        .expect("terminal state prefix");
+    let (_, state) = line.split_once(" state ").expect("terminal state metadata");
+    assert_eq!(
+        state,
+        format!("Runtime unavailable: {cause}"),
+        "FR-056 terminal state line must carry only the OS error category"
+    );
+    assert!(
+        !line.contains(w.startup.root().path.to_str().unwrap()),
+        "FR-056 terminal state line must exclude paths of the owner"
+    );
+}

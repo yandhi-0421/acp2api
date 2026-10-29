@@ -684,7 +684,7 @@ acp2api has no runtime process that it can use, so it starts no prompt turn. It 
 
 - acp2api found no executable of the official runtime;
 - acp2api found only builds that are not accepted versions;
-- acp2api found an accepted build, but its automatic copy failed (FR-043);
+- acp2api found an accepted build, but its automatic copy failed at a start (FR-043);
 - the runtime process had 3 failures in 10 minutes (FR-041).
 
 The condition ends when a start of a runtime process succeeds. Other conditions remain until their own end. In this state, acp2api starts no runtime process by itself. These events start a new try:
@@ -694,7 +694,7 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
 - a new path, or a new search;
 - a passed compatibility check.
 
-**Pass:** each of the four reasons gives the state and M-14 with that reason. A failed automatic copy names the accepted version, with no path. After the retry entry and a successful start, the next request runs when no other condition stops it.
+**Pass:** each reason in the list gives the state and M-14 with that reason. A failed automatic copy at a start names the accepted version, with no path. After the retry entry and a successful start, the next request runs when no other condition stops it.
 
 ### Official runtime
 
@@ -941,7 +941,7 @@ A log holds only metadata:
 - one line for each change of state;
 - the lines that other FRs name, for example for a rebuild.
 
-After a failed automatic copy (FR-043), the line for the change to "runtime unavailable" also holds the cause as the OS error category. The category is the Rust `std::io::ErrorKind` variant name, for example `PermissionDenied` or `StorageFull`. This rule applies to every variant, so no separate fallback category exists. The line holds no path of the owner and no other new field.
+After a failed automatic copy at a start (FR-043), the state-change line for "runtime unavailable" also holds the OS error category. The line holds no path of the owner and no other new field.
 
 For a refused request, the log line has the `model` value of the body when the body parses and that value is a string of at most 256 bytes. Otherwise, the log line has `model: null`.
 
@@ -964,7 +964,7 @@ For the error texts of the official runtime:
 
 - A test request with a marker string in each content field leaves no marker in the logs, the terminal, or the state file.
 - A stderr line with `name%40example.com` gives `<REDACTED>` in the log.
-- A failed automatic copy gives one state-change line with its OS error category, no path of the owner, and no other new field.
+- A failed automatic copy at a start gives one state-change line with its OS error category, no owner path, and no other new field.
 
 #### FR-057 — Log size
 

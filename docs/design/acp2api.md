@@ -1042,7 +1042,8 @@ The release workflow writes this file from the result of the acceptance test (SC
 
 **Addresses (M-12, M-13, M-14, M-24).**
 
-- M-14 uses the four reasons in the PRD, section "Message texts". For a failed automatic copy, `<version>` is the selected accepted version.
+- M-14 uses the reasons in the PRD, section "Message texts". For a failed automatic copy at a start, `<version>` is the selected accepted version.
+- After a copy error, an owner action answers 422 and keeps the current unavailable reason. These actions are retry, new search, and new path.
 - The address of the management panel is `http://127.0.0.1:<port>/`.
 - The address of the sign-in entry is `http://127.0.0.1:<port>/#sign-in`. The page puts the sign-in entry in the element with the ID `sign-in`. After the entry of the password, the page goes back to the same fragment.
 - The management endpoints are `POST /manage/<action>`, one for each action of FR-053.
@@ -1067,7 +1068,8 @@ The release workflow writes this file from the result of the acceptance test (SC
   - the duration in ms, and the input and output tokens;
   - the result, the error code, and the names of the unknown fields.
 - Each change of state, also the first state after a start: `acp2api: <time> state <state>`. `<state>` is the English name of the panel text, for example `Running` or `Quota wait`. A lockout line adds `: ` and the notice M-12.
-- After a failed automatic copy, the state line adds `: <category>` to `Runtime unavailable`. FR-056 defines the category and excludes paths.
+- At a start, after a failed automatic copy, the state line adds `: <category>` to `Runtime unavailable`. FR-056 excludes paths.
+- The category is the Rust `std::io::ErrorKind` variant name, for example `PermissionDenied` or `StorageFull`. This rule applies to every variant, so no separate fallback category exists.
 - The JSON log line uses the fields `time`, `event: "state_change"`, and `state: "Runtime unavailable"`, plus `cause: "<category>"`. It has no other new field.
 - A step that checks the state of acp2api reads the last state line.
 
