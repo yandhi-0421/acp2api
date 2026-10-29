@@ -1037,7 +1037,7 @@ impl Core {
                             }
                             Err(error) => {
                                 if let Some(text) = quota::error_text(&error) {
-                                    let reset = quota::reset_time(text);
+                                    let reset = quota::reset_time(text, wall);
                                     let wait = self.start_quota(
                                         reset
                                             .unwrap_or(wall + std::time::Duration::from_secs(3600)),
@@ -1108,7 +1108,7 @@ impl Core {
                 });
                 let message = crate::messages::Message::UpstreamHttp(error);
                 if let Some(text) = quota::error_text(&message) {
-                    let reset = quota::reset_time(text);
+                    let reset = quota::reset_time(text, wall);
                     let wait = self.start_quota(
                         reset.unwrap_or(wall + std::time::Duration::from_secs(3600)),
                         now,
@@ -1470,7 +1470,7 @@ impl Core {
                 if result.is_ok()
                     && let Some(until) = model
                         .as_deref()
-                        .and_then(|model| quota::usage_reset(&text, model))
+                        .and_then(|model| quota::usage_reset(&text, model, wall))
                 {
                     *wait = quota::Wait::new(until, now, wall, wait.timer);
                     if self
@@ -1488,7 +1488,7 @@ impl Core {
                     Ok(())
                 } else {
                     let until = if result.is_ok() {
-                        quota::usage_reset(&text, model)
+                        quota::usage_reset(&text, model, wall)
                     } else {
                         None
                     };
@@ -1561,7 +1561,7 @@ impl Core {
         if let TurnUpdate::Failed(error) = &update
             && let Some(text) = quota::error_text(error)
         {
-            let reset = quota::reset_time(text);
+            let reset = quota::reset_time(text, wall);
             let wait = self.start_quota(
                 reset.unwrap_or(wall + std::time::Duration::from_secs(3600)),
                 now,

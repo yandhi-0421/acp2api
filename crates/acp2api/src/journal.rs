@@ -192,22 +192,15 @@ fn log_files(folder: &Path) -> io::Result<Vec<LogFile>> {
     Ok(files)
 }
 pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
-    let seconds = match wall.duration_since(std::time::UNIX_EPOCH) {
-        Ok(elapsed) => i128::from(elapsed.as_secs()),
-        Err(elapsed) => {
-            -i128::from(elapsed.duration().as_secs())
-                - i128::from(elapsed.duration().subsec_nanos() != 0)
-        }
-    };
-    let mut days = seconds.div_euclid(86_400);
+    let seconds = wall
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs();
+    let mut days = seconds / 86_400;
     let mut year = 1970;
     let leap = |year: u64| {
         year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
     };
-    while days < 0 {
-        year -= 1;
-        days += if leap(year) { 366 } else { 365 };
-    }
     loop {
         let count = if leap(year) { 366 } else { 365 };
         if days < count {
@@ -239,9 +232,9 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
         "{year:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
         month + 1,
         days + 1,
-        seconds.div_euclid(3600).rem_euclid(24),
-        seconds.div_euclid(60).rem_euclid(60),
-        seconds.rem_euclid(60)
+        seconds / 3600 % 24,
+        seconds / 60 % 60,
+        seconds % 60
     ))
 }
 

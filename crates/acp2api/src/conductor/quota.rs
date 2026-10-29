@@ -6,10 +6,10 @@ pub(super) fn has_quota(text: &str, model: &str) -> bool {
         .is_some_and(|group| !limit_rows(group).any(|(remaining, _)| remaining == 0))
 }
 
-pub(super) fn usage_reset(text: &str, model: &str) -> Option<SystemTime> {
+pub(super) fn usage_reset(text: &str, model: &str, wall: SystemTime) -> Option<SystemTime> {
     limit_rows(model_group(text, model)?)
         .filter(|(remaining, _)| *remaining == 0)
-        .filter_map(|(_, row)| reset_time(row))
+        .filter_map(|(_, row)| reset_time(row, wall))
         .max()
 }
 
@@ -84,37 +84,40 @@ impl Wait {
     }
 }
 
-pub(super) fn reset_time(text: &str) -> Option<SystemTime> {
-    text.split_whitespace()
-        .find_map(|word| {
-            rfc3339(word.trim_matches(|c| matches!(c, '(' | ')' | '"' | '\'' | ',' | ';')))
-        })
-        .or_else(|| {
-            let (_, rest) = text.split_once("resets ")?;
-            let (date, _) = rest.split_once(" UTC")?;
-            let fields: Vec<_> = date.split_whitespace().collect();
-            let [month, day, year, time] = fields.as_slice() else {
-                return None;
-            };
-            let month = [
-                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-            ]
-            .iter()
-            .position(|name| name == month)? as u32
-                + 1;
-            let day = day.strip_suffix(',')?.parse().ok()?;
-            let year = year.strip_suffix(',')?.parse().ok()?;
-            let (hour, minute) = time.split_once(':')?;
-            if hour.len() != 2 || minute.len() != 2 {
-                return None;
-            }
-            calendar(
-                [year, month, day],
-                [hour.parse().ok()?, minute.parse().ok()?, 0],
-                0,
-                0,
-            )
-        })
+pub(super) fn reset_time(text: &str, wall: SystemTime) -> Option<SystemTime> {
+    let (_, reset) = text.split_once("resets ")?;
+    rfc3339(
+        reset
+            .split_whitespace()
+            .next()?
+            .trim_end_matches(|c| matches!(c, ')' | '"' | '\'' | ',' | ';')),
+    )
+    .or_else(|| {
+        let (date, _) = reset.split_once(" UTC")?;
+        let fields: Vec<_> = date.split_whitespace().collect();
+        let [month, day, year, time] = fields.as_slice() else {
+            return None;
+        };
+        let month = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+        .iter()
+        .position(|name| name == month)? as u32
+            + 1;
+        let day = day.strip_suffix(',')?.parse().ok()?;
+        let year = year.strip_suffix(',')?.parse().ok()?;
+        let (hour, minute) = time.split_once(':')?;
+        if hour.len() != 2 || minute.len() != 2 {
+            return None;
+        }
+        calendar(
+            [year, month, day],
+            [hour.parse().ok()?, minute.parse().ok()?, 0],
+            0,
+            0,
+        )
+    })
+    .filter(|until| *until >= wall)
 }
 
 fn rfc3339(text: &str) -> Option<SystemTime> {
@@ -206,13 +209,7 @@ fn calendar(date: [u32; 3], time: [u32; 3], nanos: u32, offset: i64) -> Option<S
     let days = days_before(year) - days_before(1970)
         + i64::from(months[..(month - 1) as usize].iter().sum::<u32>() + day - 1);
     let seconds = days * 86400 + i64::from(hour * 3600 + minute * 60 + second) - offset;
-    if seconds >= 0 {
-        UNIX_EPOCH.checked_add(Duration::new(seconds as u64, nanos))
-    } else {
-        UNIX_EPOCH
-            .checked_sub(Duration::from_secs(seconds.unsigned_abs()))?
-            .checked_add(Duration::from_nanos(u64::from(nanos)))
-    }
+    UNIX_EPOCH.checked_add(Duration::new(u64::try_from(seconds).ok()?, nanos))
 }
 
 #[cfg(test)]
@@ -225,8 +222,8 @@ mod tests {
             "0% remaining (resets Oct 18, 2026, 00:05 UTC)",
         );
         assert_eq!(
-            usage_reset(&text, "gemini-3.8-flash"),
-            reset_time("resets Oct 18, 2026, 00:10 UTC")
+            usage_reset(&text, "gemini-3.8-flash", UNIX_EPOCH),
+            reset_time("resets Oct 18, 2026, 00:10 UTC", UNIX_EPOCH)
         );
     }
     #[test]
@@ -238,6 +235,17 @@ mod tests {
             !has_quota(&text, "gemini-3.8-flash"),
             "FR-034 no group names the requested model"
         );
+    }
+    #[test]
+    fn reset_time_requires_a_reset_marker_and_a_nonpast_time() {
+        let wall = UNIX_EPOCH + Duration::from_secs(1_792_281_600);
+        for text in [
+            "observed at 2026-10-18T00:01:00Z; reset tomorrow",
+            "resets 2026-10-17T23:59:59Z",
+            "resets 1969-12-31T23:59:59Z",
+        ] {
+            assert_eq!(reset_time(text, wall), None, "{text}");
+        }
     }
     const GROUPS: &str = "### Session Usage
 - **Session total:** data not available yet
@@ -255,8 +263,8 @@ mod tests {
     #[test]
     fn usage_reset_uses_the_exhausted_rows_of_the_named_model_group() {
         assert_eq!(
-            usage_reset(GROUPS, "gemini-3.8-flash"),
-            reset_time("resets Oct 18, 2026, 00:10 UTC"),
+            usage_reset(GROUPS, "gemini-3.8-flash", UNIX_EPOCH),
+            reset_time("resets Oct 18, 2026, 00:10 UTC", UNIX_EPOCH),
             "FR-036 ignores another group and the non-exhausted weekly row"
         );
     }
@@ -266,15 +274,6 @@ mod tests {
         assert_eq!(
             ["gemini-3.8-flash", "claude-sonnet", "unknown"].map(|model| has_quota(text, model)),
             [false, true, false]
-        );
-    }
-    #[test]
-    fn an_expired_rfc3339_reset_before_the_epoch_is_still_usable() {
-        let until = reset_time("resets 1969-12-31T23:59:59Z").unwrap();
-        let wait = Wait::new(until, 0, UNIX_EPOCH, TimerId(1));
-        assert_eq!(
-            wait.message(0).to_string(),
-            "acp2api: the Google quota is used up until 1969-12-31T23:59:59Z. acp2api starts no prompt turn before that time."
         );
     }
     #[test]
@@ -292,7 +291,8 @@ mod tests {
             ("resets 10/24/2026 12:34", None),
         ] {
             assert_eq!(
-                reset_time(text).map(|at| at.duration_since(UNIX_EPOCH).unwrap().as_secs()),
+                reset_time(text, UNIX_EPOCH)
+                    .map(|at| at.duration_since(UNIX_EPOCH).unwrap().as_secs()),
                 seconds,
                 "{text}"
             );
