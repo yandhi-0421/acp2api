@@ -82,6 +82,7 @@ struct TurnWork {
     admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
 }
 pub(crate) const QUEUE_CAPACITY: usize = 32;
+pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const MAX_RUNTIME_FAILURES: usize = 3;
 const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 const REPEATED_FAILURES: &str = "the runtime process failed 3 times in 10 minutes";
@@ -1159,7 +1160,7 @@ impl Core {
     fn cancel(&mut self, session: String, now: Moment, commands: &mut Vec<Command>) {
         self.cancels
             .entry(session.clone())
-            .or_insert_with(|| now.saturating_add(30_000));
+            .or_insert_with(|| now.saturating_add(CANCEL_TIMEOUT));
         commands.push(Command::Cancel(session));
     }
     fn retire(

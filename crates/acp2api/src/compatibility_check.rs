@@ -230,7 +230,10 @@ async fn check_prompt(
                         runtime.permission(request).await?;
                         runtime.cancel(session).await?;
                         call = Some(tool);
-                        deadline = start.clock.now().saturating_add(30 * 1000);
+                        deadline = start
+                            .clock
+                            .now()
+                            .saturating_add(crate::conductor::CANCEL_TIMEOUT);
                     }
                     TurnUpdate::PromptEnded { stop_reason } => {
                         let expected = if call.is_some() {
