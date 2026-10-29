@@ -239,7 +239,26 @@ async fn repeated(w: &mut World) {
 #[then("acp2api is not in the state \"runtime unavailable\"")]
 async fn available(w: &mut World) {
     let answer = w.panel.api(&w.scenario.root.key).await;
-    support::refusal(w, &answer);
+    assert_eq!(
+        answer.status, 400,
+        "FR-038 model list refuses while sign-in is required"
+    );
+    assert_eq!(
+        answer.json(),
+        json!({"error":{"message":support::message(w),"type":"invalid_request_error","param":null,"code":"sign_in_required"}}),
+        "FR-038 GET /v1/models uses the OpenAI error envelope with M-13"
+    );
+    assert!(
+        answer.events.is_empty(),
+        "FR-026 refusal has no stream event"
+    );
+    assert!(
+        !answer
+            .headers
+            .get("content-type")
+            .is_some_and(|value| value.starts_with("text/event-stream")),
+        "FR-026 refusal has no stream response"
+    );
     assert_eq!(
         process::servers(w).len(),
         4,
