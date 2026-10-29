@@ -69,6 +69,7 @@ fn deny_add_subdirectory(path: &std::path::Path) -> Vec<u32> {
     assert_eq!(result, 0);
     assert!(!acl.is_null() && !owner.is_null());
     let acl_size = unsafe { (*acl).AclSize as usize };
+    // Vec<u32> keeps the raw ACL bytes aligned for Windows ACL pointers.
     let mut original = vec![0u32; acl_size.div_ceil(4)];
     unsafe {
         std::ptr::copy_nonoverlapping(

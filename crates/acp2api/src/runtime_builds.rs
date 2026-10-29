@@ -38,7 +38,12 @@ impl Found {
     fn selected_build(&self) -> SelectedBuild {
         SelectedBuild {
             folder: self.folder.clone(),
-            version: self.listed.as_ref().unwrap().version.clone(),
+            version: self
+                .listed
+                .as_ref()
+                .expect("selected builds are listed")
+                .version
+                .clone(),
         }
     }
 }

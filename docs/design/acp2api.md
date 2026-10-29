@@ -496,6 +496,7 @@ The core has these parts. Each part is a private module with a pure interface.
 - **`signals`.** The table of FR-034 over the error of each ACP call and the stderr error lines.
 - **`quota`.** `/usage` (FR-052), the parse of the reset time, and the limit of one refresh in 60 s.
 - **`owner`.** The owner actions of FR-053, the sign-in wait of FR-039, the script of the compatibility check of FR-044, and the notices of FR-047.
+  After a copy error, an owner action answers 422 and keeps the current unavailable reason. These actions are retry, new search, and new path.
 
 Rules of the core:
 
@@ -1043,7 +1044,6 @@ The release workflow writes this file from the result of the acceptance test (SC
 **Addresses (M-12, M-13, M-14, M-24).**
 
 - M-14 uses the reasons in the PRD, section "Message texts". For a failed automatic copy at a start, `<version>` is the selected accepted version.
-- After a copy error, an owner action answers 422 and keeps the current unavailable reason. These actions are retry, new search, and new path.
 - The address of the management panel is `http://127.0.0.1:<port>/`.
 - The address of the sign-in entry is `http://127.0.0.1:<port>/#sign-in`. The page puts the sign-in entry in the element with the ID `sign-in`. After the entry of the password, the page goes back to the same fragment.
 - The management endpoints are `POST /manage/<action>`, one for each action of FR-053.

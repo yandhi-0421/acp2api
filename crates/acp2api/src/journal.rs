@@ -343,6 +343,7 @@ fn redact_error(text: &str) -> String {
     }
     output
 }
+/// Uses the ErrorKind Debug name published by the design as the log value.
 fn os_error_category(cause: io::ErrorKind) -> String {
     format!("{cause:?}")
 }

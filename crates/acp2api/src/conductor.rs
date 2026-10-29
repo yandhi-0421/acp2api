@@ -93,6 +93,11 @@ pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const MAX_RUNTIME_FAILURES: usize = 3;
 const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 const REPEATED_FAILURES: &str = "the runtime process failed 3 times in 10 minutes";
+
+fn copy_failed_reason(version: &str) -> String {
+    format!("the copy of the accepted build {version} failed")
+}
+
 const UNAVAILABLE: &str = "official runtime is not available";
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
@@ -466,7 +471,7 @@ impl Core {
         {
             if initial {
                 self.make_unavailable(
-                    &format!("the copy of the accepted build {} failed", selected.version),
+                    &copy_failed_reason(&selected.version),
                     error.io_kind(),
                     runtime,
                     read_open,
