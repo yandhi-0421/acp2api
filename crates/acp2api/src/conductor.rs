@@ -29,6 +29,7 @@ pub(crate) struct Conductor {
     settings: watch::Receiver<Arc<crate::store::Settings>>,
     notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
+    pub(crate) data_folder: PathBuf,
 }
 pub(crate) struct View {
     pub(crate) state: &'static str,
@@ -2868,6 +2869,7 @@ impl Conductor {
                 view: view_watch,
                 quota_result: quota_watch,
                 send,
+                data_folder: builds.start.data.clone(),
                 builds,
                 settings: settings_watch,
                 notices: notices_watch,
@@ -5615,6 +5617,7 @@ mod tests {
                     settings: watch::channel(Arc::new(settings)).1,
                     notices: watch::channel(Arc::new(Vec::new())).1,
                     highest: 1,
+                    data_folder: folder.clone(),
                 };
                 let result = conductor
                     .builds(crate::runtime_builds::Action::Search, Hold::empty())

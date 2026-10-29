@@ -118,7 +118,7 @@ impl Panel {
         let runtime = page::runtime(builds, &settings, view.runtime_process);
         page::settings(
             &settings,
-            self.conductor.highest,
+            self,
             notice,
             &self.conductor.notices(),
             &runtime,

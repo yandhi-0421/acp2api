@@ -65,7 +65,7 @@ pub(super) fn login(error: Option<&str>) -> String {
 }
 pub(super) fn settings(
     settings: &crate::store::Settings,
-    highest: u8,
+    panel: &super::Panel,
     notice: Option<&str>,
     notices: &[crate::conductor::Notice],
     runtime: &str,
@@ -73,7 +73,10 @@ pub(super) fn settings(
     sign_in_section: &str,
 ) -> String {
     let key = escape(&settings.local_api_key);
-    let options = (1..=highest)
+    let port = panel.port;
+    let data_folder = escape(&panel.conductor.data_folder.display().to_string());
+    let limit = settings.concurrency_limit;
+    let options = (1..=panel.conductor.highest)
         .map(|limit| {
             format!(
                 "<option value=\"{limit}\"{}>{limit}</option>",
@@ -97,7 +100,7 @@ pub(super) fn settings(
         r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section>"#
     );
     document(&format!(
-        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{sign_in_section}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Management password</h2><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+        r#"<main><h1>Settings</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{sign_in_section}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Settings</h2><p>Concurrency limit <span>{limit}</span></p><p>Port <span>{port}</span></p><p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
     ))
 }
 
