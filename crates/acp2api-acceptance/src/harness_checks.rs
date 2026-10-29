@@ -43,143 +43,13 @@ fn runtime_line_without_a_reader_returns_a_hub_failure() {
     assert_eq!(link.call(json!({"op":"now"})), json!({"now":0}));
     hub.close();
 }
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn command_channel_reset_requires_a_product_stop() {
-    use crate::hub::send;
-    use std::{
-        io::{BufRead, BufReader, Read},
-        net::TcpStream,
-        os::fd::AsRawFd,
-    };
-
-    let hub = Hub::new("command-reset-test".into());
-    let link = HubLink::new(&hub);
-    for (pid, stopped) in [(1, true), (2, false)] {
-        let barrier = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        fake::FakeRuntime::new(hub.clone()).script_call(
-            "initialize",
-            rpc_script::RpcReply::FromRequest(|_, call| {
-                let address = call["params"]["barrier"].as_str().unwrap().parse().unwrap();
-                let mut barrier =
-                    TcpStream::connect_timeout(&address, real_limit(Duration::from_secs(3)))
-                        .unwrap();
-                barrier
-                    .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
-                    .unwrap();
-                let mut closed = [0];
-                barrier.read_exact(&mut closed).unwrap();
-                assert_eq!(&closed, b"R");
-                json!({})
-            }),
-        );
-        let stream = TcpStream::connect(&hub.address).unwrap();
-        stream
-            .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(real_limit(Duration::from_secs(3))))
-            .unwrap();
-        let mut reader = BufReader::new(stream);
-        send(
-            reader.get_mut(),
-            &json!({"op":"Hello","token":hub.token,"role":"server","label":"normal","pid":pid}),
-        )
-        .unwrap();
-        let mut hello = String::new();
-        reader.by_ref().take(4097).read_line(&mut hello).unwrap();
-        assert!(hello.len() <= 4096, "reset peer frame cap: 4 KiB");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&hello).unwrap(),
-            json!({"ok":true})
-        );
-        let process = link.call(json!({"op":"process","pid":pid}))["process"].clone();
-        link.call(json!({"op":"io","direction":"stdin","lines":1,"process":process}));
-        if stopped {
-            link.call(json!({"op":"process_stop","process":process}));
-        }
-        send(
-            reader.get_mut(),
-            &json!({"op":"Got","line":json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"barrier":barrier.local_addr().unwrap().to_string()}}).to_string()}),
-        )
-        .unwrap();
-        let (mut released, _) =
-            tokio::time::timeout(real_limit(Duration::from_secs(3)), barrier.accept())
-                .await
-                .unwrap()
-                .unwrap();
-        // The callback has read Got; release its reply only after the reset.
-        let linger = libc::linger {
-            l_onoff: 1,
-            l_linger: 0,
-        };
-        assert_eq!(
-            unsafe {
-                libc::setsockopt(
-                    reader.get_ref().as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_LINGER,
-                    (&linger as *const libc::linger).cast(),
-                    std::mem::size_of_val(&linger) as libc::socklen_t,
-                )
-            },
-            0
-        );
-        drop(reader);
-        tokio::time::timeout(
-            real_limit(Duration::from_secs(3)),
-            tokio::io::AsyncWriteExt::write_all(&mut released, b"R"),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        wait_for(
-            &hub,
-            Instant::now() + real_limit(Duration::from_secs(3)),
-            || {
-                hub.entries()
-                    .iter()
-                    .filter(|entry| entry.event["kind"] == "process_end")
-                    .count()
-                    == pid as usize
-            },
-        )
-        .await;
-        let failure = hub.failure();
-        let counts = hub.counts();
-        assert_eq!(counts.ordered, pid, "the queued Got must reach its reply");
-        if stopped {
-            assert_eq!(
-                failure, None,
-                "a stopped fake cannot receive its queued reply"
-            );
-            assert!(counts.balanced(), "the stopped channel closes pending IO");
-        } else {
-            assert!(failure.unwrap().starts_with("fake command channel:"));
-            assert!(!counts.balanced(), "a live fake must consume its output");
-        }
-    }
-    hub.close();
-}
-async fn held_reply_after_channel_end(hub: &Hub, stopped: bool) -> (Option<String>, hub::Counts) {
+fn registered_fake(hub: &Hub) -> (std::io::BufReader<std::net::TcpStream>, u64) {
     use crate::hub::send;
     use std::{
         io::{BufRead, BufReader, Read},
         net::TcpStream,
     };
 
-    let link = HubLink::new(hub);
-    let fake = fake::FakeRuntime::new(hub.clone());
-    fake.script_call(
-        "initialize",
-        rpc_script::RpcReply::Held {
-            gate: "late-reply".into(),
-            reply: Box::new(rpc_script::RpcReply::Reply {
-                updates: vec![],
-                result: json!({}),
-            }),
-        },
-    );
     let stream = TcpStream::connect(&hub.address).unwrap();
     stream
         .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
@@ -195,12 +65,141 @@ async fn held_reply_after_channel_end(hub: &Hub, stopped: bool) -> (Option<Strin
     .unwrap();
     let mut hello = String::new();
     reader.by_ref().take(4097).read_line(&mut hello).unwrap();
-    assert!(hello.len() <= 4096, "held peer frame cap: 4 KiB");
+    assert!(hello.len() <= 4096, "fake peer frame cap: 4 KiB");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&hello).unwrap(),
         json!({"ok":true})
     );
-    let process = link.call(json!({"op":"process","pid":u32::MAX}))["process"].clone();
+    let process = HubLink::new(hub).call(json!({"op":"process","pid":u32::MAX}))["process"]
+        .as_u64()
+        .unwrap();
+    (reader, process)
+}
+#[cfg(unix)]
+fn reset_on_drop(stream: &std::net::TcpStream) {
+    use std::os::fd::AsRawFd;
+
+    let linger = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
+    assert_eq!(
+        unsafe {
+            libc::setsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                (&linger as *const libc::linger).cast(),
+                std::mem::size_of_val(&linger) as libc::socklen_t,
+            )
+        },
+        0
+    );
+}
+#[cfg(unix)]
+async fn reset_fake_channel(hub: &Hub, stopped: bool) -> (Option<String>, hub::Counts) {
+    use crate::hub::send;
+    use std::{io::Read, net::TcpStream};
+
+    let link = HubLink::new(hub);
+    let barrier = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    fake::FakeRuntime::new(hub.clone()).script_call(
+        "initialize",
+        rpc_script::RpcReply::FromRequest(|_, call| {
+            let address = call["params"]["barrier"].as_str().unwrap().parse().unwrap();
+            let mut barrier =
+                TcpStream::connect_timeout(&address, real_limit(Duration::from_secs(3))).unwrap();
+            barrier
+                .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
+                .unwrap();
+            let mut release = [0];
+            barrier.read_exact(&mut release).unwrap();
+            assert_eq!(&release, b"R");
+            json!({})
+        }),
+    );
+    let (mut reader, process) = registered_fake(hub);
+    link.call(json!({"op":"io","direction":"stdin","lines":1,"process":process}));
+    if stopped {
+        link.call(json!({"op":"process_stop","process":process}));
+    }
+    let before = hub.entries().len();
+    send(
+        reader.get_mut(),
+        &json!({"op":"Got","line":json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"barrier":barrier.local_addr().unwrap().to_string()}}).to_string()}),
+    )
+    .unwrap();
+    let (mut go, _) = tokio::time::timeout(real_limit(Duration::from_secs(3)), barrier.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    // The callback has read Got; release its reply only after the reset.
+    reset_on_drop(reader.get_ref());
+    drop(reader);
+    tokio::time::timeout(
+        real_limit(Duration::from_secs(3)),
+        tokio::io::AsyncWriteExt::write_all(&mut go, b"R"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    wait_for(
+        hub,
+        Instant::now() + real_limit(Duration::from_secs(3)),
+        || {
+            hub.entries()
+                .iter()
+                .skip(before)
+                .any(|entry| entry.event["kind"] == "process_end")
+        },
+    )
+    .await;
+    (hub.failure(), hub.counts())
+}
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopped_fake_reset_is_not_a_failure() {
+    let hub = Hub::new("stopped-reset-test".into());
+    let (failure, counts) = reset_fake_channel(&hub, true).await;
+    hub.close();
+    assert_eq!(
+        failure, None,
+        "a failed write to a stopped fake is not a hub failure"
+    );
+    assert_eq!(counts.ordered, 1, "the queued Got must reach its reply");
+    assert!(counts.balanced(), "the stopped channel closes pending IO");
+}
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_fake_reset_is_a_failure() {
+    let hub = Hub::new("live-reset-test".into());
+    let (failure, counts) = reset_fake_channel(&hub, true).await;
+    assert_eq!(failure, None);
+    assert!(counts.balanced());
+    let (failure, counts) = reset_fake_channel(&hub, false).await;
+    hub.close();
+    assert!(failure.unwrap().starts_with("fake command channel:"));
+    assert_eq!(
+        counts.ordered, 2,
+        "both queued Got messages must reach their replies"
+    );
+    assert!(!counts.balanced(), "a live fake must consume its output");
+}
+async fn held_reply_after_channel_end(hub: &Hub, stopped: bool) -> (Option<String>, hub::Counts) {
+    use crate::hub::send;
+    let link = HubLink::new(hub);
+    let fake = fake::FakeRuntime::new(hub.clone());
+    fake.script_call(
+        "initialize",
+        rpc_script::RpcReply::Held {
+            gate: "late-reply".into(),
+            reply: Box::new(rpc_script::RpcReply::Reply {
+                updates: vec![],
+                result: json!({}),
+            }),
+        },
+    );
+    let (mut reader, process) = registered_fake(hub);
     link.call(json!({"op":"io","direction":"stdin","lines":1,"process":process}));
     let before = hub.entries().len();
     send(
