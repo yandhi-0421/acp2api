@@ -42,7 +42,7 @@ async fn send(w: &mut World, items: Value) {
         "real conversation HTTP status"
     );
     assert_eq!(
-        journal_check::records(&w.scenario).len(),
+        journal_check::request_records(&w.scenario).len(),
         c::prompts(&w.scenario).len(),
         "R1 metadata before completion"
     );

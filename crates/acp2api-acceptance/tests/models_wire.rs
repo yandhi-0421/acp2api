@@ -84,7 +84,7 @@ async fn model_lists_use_key_checks_and_one_metadata_record_with_absent_usage() 
         let answer = s.answer.as_ref().unwrap();
         assert_eq!(answer.status, if wrong { 401 } else { 200 });
         journal::wait_terminal(&s, 1).await;
-        let records = journal::records(&s);
+        let records = journal::request_records(&s);
         assert_eq!(records.len(), 1);
         assert_eq!(journal::terminal(&s), records);
         assert_eq!(records[0]["request_id"], answer.headers["x-request-id"]);

@@ -5,7 +5,7 @@ use acp2api_acceptance::{
 };
 use serde_json::{Value, json};
 fn one(s: &Scenario, result: &str, code: &str, model: Option<&str>) {
-    let r = check::records(s);
+    let r = check::request_records(s);
     let t = check::terminal(s);
     assert_eq!(r.len(), 1, "one completion record");
     assert_eq!(t, r, "one matching physical terminal line");
@@ -64,7 +64,7 @@ async fn authorization_and_parse_refusals_have_one_metadata_only_record() {
             },
             expected,
         );
-        let r = check::records(&s);
+        let r = check::request_records(&s);
         assert_eq!(r[0]["request_id"], a.headers["x-request-id"]);
         assert!(r[0]["session"].is_null());
         assert!(r[0]["session_use"].is_null());
@@ -128,7 +128,7 @@ async fn runtime_failure_has_one_final_record_without_error_content() {
     assert_eq!(a.status, 502);
     check::wait_terminal(&s, 1).await;
     one(&s, "failed", "upstream_error", Some("gemini-3.8-flash"));
-    assert!(check::records(&s)[0]["session"].is_string());
+    assert!(check::request_records(&s)[0]["session"].is_string());
     s.finish(true).await;
 }
 #[tokio::test]
@@ -161,7 +161,7 @@ async fn disconnect_is_completed_once_by_the_core() {
         Some("gemini-3.8-flash"),
     );
     s.time.advance_to(1000).await;
-    assert_eq!(check::records(&s).len(), 1, "no cleanup duplicate");
+    assert_eq!(check::request_records(&s).len(), 1, "no cleanup duplicate");
     s.finish(true).await;
 }
 #[tokio::test]
@@ -186,8 +186,12 @@ async fn metadata_line_escapes_newlines_without_serializing_unknown_values() {
         .iter()
         .map(|p| std::fs::read_to_string(p).unwrap())
         .collect();
-    assert_eq!(data.lines().count(), 1, "one physical line");
-    let _: Value = serde_json::from_str(data.trim()).unwrap();
+    let records: Vec<Value> = data
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON record per physical line"))
+        .filter(|record: &Value| record.get("api").is_some())
+        .collect();
+    assert_eq!(records.len(), 1, "one physical request line");
     assert!(!data.contains("PRIVATE-PATH-CONTENT"));
     s.finish(true).await;
 }

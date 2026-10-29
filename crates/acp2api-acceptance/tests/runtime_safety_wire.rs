@@ -136,7 +136,7 @@ async fn permission_identity_controls_shared_client_and_builtin_names() {
     assert!(
         safety::log_records(&client)
             .iter()
-            .all(|r| r.get("event").is_none())
+            .all(|r| r.get("event").is_none() || r["event"] == "state_change")
     );
     client.finish(true).await;
 

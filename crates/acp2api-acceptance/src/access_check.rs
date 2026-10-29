@@ -97,7 +97,7 @@ pub fn prompt_count(s: &Scenario) -> usize {
 }
 pub async fn journal(s: &Scenario, answer: &Answer, expected_total: usize) {
     journal_check::wait_terminal(s, expected_total).await;
-    let records = journal_check::records(s);
+    let records = journal_check::request_records(s);
     let terminal = journal_check::terminal(s);
     assert_eq!(
         records.len(),

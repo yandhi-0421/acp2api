@@ -362,7 +362,7 @@ async fn client_tool_end_cannot_continue_as_normal_end_turn() {
         "standalone user history cannot complete a pending client tool exchange"
     );
     assert_eq!(c::kind(&s), "rebuild");
-    assert_eq!(journal_check::records(&s).len(), 2);
+    assert_eq!(journal_check::request_records(&s).len(), 2);
     s.finish(true).await;
 }
 

@@ -17,7 +17,7 @@ pub fn call(messages: Value, system: Option<&str>, tools: Value) -> ApiCall {
 }
 pub async fn send(s: &mut Scenario, call: ApiCall, reply: &str) {
     s.start().await;
-    let completed = journal_check::records(s).len();
+    let completed = journal_check::request_records(s).len();
     s.fake()
         .next_prompt(TurnPlan::new().chunk(reply).end("end_turn"));
     content_check::send(s, call).await;
@@ -28,7 +28,7 @@ pub async fn send(s: &mut Scenario, call: ApiCall, reply: &str) {
     );
     // Response completion is the state observation point (design R1).
     assert_eq!(
-        journal_check::records(s).len(),
+        journal_check::request_records(s).len(),
         completed + 1,
         "metadata is committed before HTTP completion"
     );

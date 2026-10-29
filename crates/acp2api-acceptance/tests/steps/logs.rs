@@ -40,7 +40,7 @@ fn fields(w: &mut World, #[step] step: &cucumber::gherkin::Step) {
 #[then(expr = "the unknown field names of the line hold {string}")]
 fn unknown(w: &mut World, field: String) {
     assert_eq!(
-        check::records(&w.scenario)[0]["unknown_fields"],
+        check::request_records(&w.scenario)[0]["unknown_fields"],
         serde_json::json!([field])
     );
 }
