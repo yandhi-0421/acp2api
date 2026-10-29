@@ -143,7 +143,12 @@ impl State {
             return;
         }
         if let Some(writer) = self.servers.get(label) {
-            if let Err(e) = send(&mut writer.lock().unwrap(), &command) {
+            if let Err(e) = send(&mut writer.lock().unwrap(), &command)
+                && !self
+                    .server_processes
+                    .get(label)
+                    .is_some_and(|process| self.process_io[*process].stop_requested)
+            {
                 self.failure = Some(format!("fake command channel: {e}"));
             }
         } else {
