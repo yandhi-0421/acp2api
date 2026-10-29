@@ -5,9 +5,8 @@ use crate::{
 use agent_client_protocol_schema::v1::StopReason;
 use serde_json::json;
 use std::{
-    collections::BTreeMap,
+    ffi::OsString,
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 pub(crate) enum Failure {
     Incompatible(String),
@@ -36,7 +35,6 @@ pub(crate) async fn run(
 ) -> Result<String, Failure> {
     let gemini = gemini
         .ok_or_else(|| Failure::Internal("cannot locate the owner's Gemini folder".into()))?;
-    let before = files(&gemini).map_err(|error| Failure::Internal(error.to_string()))?;
     let mut runtime = Runtime::open(start, program)
         .await
         .map_err(Failure::Runtime)?;
@@ -168,30 +166,29 @@ pub(crate) async fn run(
                 "the reply did not contain the tool result sent as text".into(),
             ));
         }
-        let folder = start
-            .data
-            .join("runtime-home/antigravity-acp/conversations");
-        let sessions = files(&folder).map_err(|error| Failure::Internal(error.to_string()))?;
-        if !sessions
-            .get(&folder.join(format!("{session}.db")))
-            .is_some_and(|(_, _, kind)| kind.is_file())
-        {
-            return Err(Failure::Incompatible(
-                "the check session has no file in the runtime home".into(),
-            ));
-        }
-        Ok(version)
+        Ok((version, session))
     };
     let result = checking.await;
     runtime.stop().await;
-    let after = files(&gemini).map_err(|error| Failure::Internal(error.to_string()))?;
-    if before != after {
+    let (version, session) = result?;
+    let files = session_files(&start.data.join("runtime-home"), &session)
+        .map_err(|error| Failure::Internal(error.to_string()))?;
+    if !files.contains(&OsString::from(format!("{session}.db"))) {
         return Err(Failure::Incompatible(
-            "the check changed files in the owner's Gemini folder".into(),
+            "the check session has no file in the runtime home".into(),
         ));
     }
-    result
+    if !session_files(&gemini, &session)
+        .map_err(|error| Failure::Internal(error.to_string()))?
+        .is_empty()
+    {
+        return Err(Failure::Incompatible(
+            "the check session has files in the owner's Gemini folder".into(),
+        ));
+    }
+    Ok(version)
 }
+
 async fn check_prompt(
     runtime: &mut Runtime,
     start: &RuntimeStart,
@@ -280,31 +277,23 @@ async fn check_prompt(
     }
 }
 
-type Files = BTreeMap<PathBuf, (u64, SystemTime, std::fs::FileType)>;
-fn files(folder: &Path) -> std::io::Result<Files> {
-    let mut result = BTreeMap::new();
-    let entries = match std::fs::read_dir(folder) {
+fn session_files(home: &Path, session: &str) -> std::io::Result<Vec<OsString>> {
+    let entries = match std::fs::read_dir(home.join("antigravity-acp/conversations")) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(result),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
     };
-    let metadata = std::fs::metadata(folder)?;
-    result.insert(
-        folder.to_owned(),
-        (metadata.len(), metadata.modified()?, metadata.file_type()),
-    );
+    let prefix = format!("{session}.");
+    let mut files = Vec::new();
     for entry in entries {
         let entry = entry?;
-        let metadata = entry.path().symlink_metadata()?;
-        result.insert(
-            entry.path(),
-            (metadata.len(), metadata.modified()?, metadata.file_type()),
-        );
-        if metadata.is_dir() {
-            result.extend(files(&entry.path())?);
+        let name = entry.file_name();
+        let text = name.to_string_lossy();
+        if (text == session || text.starts_with(&prefix)) && entry.file_type()?.is_file() {
+            files.push(name);
         }
     }
-    Ok(result)
+    Ok(files)
 }
 #[cfg(test)]
 mod tests;

@@ -180,30 +180,44 @@ async fn rejects_missing_system_append_capability() {
     );
 }
 #[tokio::test]
-async fn rejects_files_created_in_the_owners_gemini_folder() {
-    incompatible(
-        exercise(|call, _, root| {
-            if call["method"] == "session/new" {
-                std::fs::write(root.join("home/.gemini/session.db"), b"wrong runtime home")
+async fn rejects_files_of_the_check_session_in_the_owners_folder() {
+    for suffix in ["db", "db-wal", "db-shm", "meta"] {
+        incompatible(
+            exercise(move |call, _, root| {
+                if call["method"] == "session/new" {
+                    let folder = root.join("home/.gemini/antigravity-acp/conversations");
+                    std::fs::create_dir_all(&folder).unwrap();
+                    std::fs::write(
+                        folder.join(format!("checked-session.{suffix}")),
+                        b"wrong runtime home",
+                    )
                     .unwrap();
-            }
-        })
-        .await,
-    );
+                }
+            })
+            .await,
+        );
+    }
 }
 #[tokio::test]
-async fn rejects_files_changed_in_the_owners_gemini_folder() {
-    incompatible(
-        exercise(|call, _, root| {
-            if call["method"] == "session/new" {
-                std::fs::write(
-                    root.join("home/.gemini/settings.json"),
-                    b"changed owner settings",
-                )
-                .unwrap();
+async fn accepts_unrelated_writes_in_the_owners_folder() {
+    let result = exercise(|call, _, root| {
+        if call["method"] == "session/new" {
+            for name in [
+                "antigravity-acp/conversations/checked-session-other.db",
+                "tmp/checked-session.db",
+                ".DS_Store",
+                "settings.json",
+            ] {
+                let path = root.join("home/.gemini").join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"unrelated owner program").unwrap();
             }
-        })
-        .await,
+        }
+    })
+    .await;
+    assert!(
+        matches!(result, Ok(ref version) if version == "1.6.0"),
+        "unrelated owner-folder writes must not reject a compatible build"
     );
 }
 
