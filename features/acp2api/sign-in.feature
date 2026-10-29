@@ -78,7 +78,7 @@ Feature: Sign-in
       | the owner cancels the sign-in                  |
       | 10 minutes pass with no sign-in                |
 
-  @FR-039 @issue-67 @wip
+  @FR-039 @issue-67
   Scenario: The replacement after a sign-in wait is not a failure of the runtime process
     Given acp2api is in the state "sign-in required"
     When the owner starts and cancels the sign-in 3 times in 10 minutes
