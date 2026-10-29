@@ -1031,7 +1031,12 @@ impl Core {
             output,
         })
     }
-    fn handle(&mut self, event: Event, now: Moment, wall: std::time::SystemTime) -> Vec<Command> {
+    fn handle(
+        &mut self,
+        mut event: Event,
+        now: Moment,
+        wall: std::time::SystemTime,
+    ) -> Vec<Command> {
         if matches!(event, Event::Deadline) && self.cancels.values().any(|at| *at <= now) {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
@@ -1045,6 +1050,26 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
+        let mut upstream_error = None;
+        let error = match &mut event {
+            Event::Runtime(
+                RuntimeEvent::Authenticated(Err(error))
+                | RuntimeEvent::Prepared {
+                    result: Err(error), ..
+                }
+                | RuntimeEvent::Turn {
+                    update: TurnUpdate::Failed(error),
+                    ..
+                },
+            ) => Some(error),
+            Event::Runtime(RuntimeEvent::UpstreamError { error, .. }) => {
+                Some(upstream_error.insert(crate::messages::Message::UpstreamHttp(error.clone())))
+            }
+            _ => None,
+        };
+        if let Some(error) = error {
+            *error = self.sign_in_error(error.clone(), now, &mut commands);
+        }
         if self
             .quota_wait
             .as_ref()
@@ -1116,11 +1141,8 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::Authenticated(result))) => {
                 self.sign_in_wait = None;
-                match result {
-                    Ok(()) => self.sign_in_required = false,
-                    Err(error) => {
-                        self.sign_in_error(error, now, &mut commands);
-                    }
+                if result.is_ok() {
+                    self.sign_in_required = false;
                 }
             }
             (None, Event::RuntimeReady { sign_in_required }) => {
@@ -1131,7 +1153,9 @@ impl Core {
                     self.sign_in_required = false;
                 }
             }
-            (Some(id), event) => self.quota_event(id, event, now, wall, &mut commands),
+            (Some(id), event) => {
+                self.quota_event(id, event, upstream_error, now, wall, &mut commands)
+            }
             (None, Event::RefreshQuota(reply)) => {
                 let error = if let RuntimeState::Unavailable(reason) = &self.runtime_state {
                     Some(reason.message.clone())
@@ -1320,7 +1344,6 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Prepared { work, result })) => {
-                let result = result.map_err(|error| self.sign_in_error(error, now, &mut commands));
                 if let Some(id) = work_id {
                     match result {
                         Ok((session, catalog)) => {
@@ -1416,12 +1439,6 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Turn { session, update })) => {
-                let update = match update {
-                    TurnUpdate::Failed(error) => {
-                        TurnUpdate::Failed(self.sign_in_error(error, now, &mut commands))
-                    }
-                    update => update,
-                };
                 if let Some(id) = work_id {
                     self.update(id, session, update, now, wall, &mut commands);
                 } else if let TurnUpdate::Permission { request, .. }
@@ -1430,13 +1447,9 @@ impl Core {
                     commands.push(Command::Permission(request));
                 }
             }
-            (None, Event::Runtime(RuntimeEvent::UpstreamError { session, error })) => {
+            (None, Event::Runtime(RuntimeEvent::UpstreamError { session, .. })) => {
                 let id = work_id;
-                let message = self.sign_in_error(
-                    crate::messages::Message::UpstreamHttp(error),
-                    now,
-                    &mut commands,
-                );
+                let message = upstream_error.unwrap();
                 if let Some((wait, known)) = self.quota_signal(&message, now, wall, &mut commands) {
                     if let Some(id) = id {
                         if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
@@ -1541,7 +1554,7 @@ impl Core {
                 for id in due {
                     match &self.work[&id] {
                         Work::QuotaWorking { .. } => {
-                            self.quota_event(id, Event::Deadline, now, wall, &mut commands)
+                            self.quota_event(id, Event::Deadline, None, now, wall, &mut commands)
                         }
                         _ => self.finish(id, Ok(()), &mut commands),
                     }
@@ -1744,6 +1757,7 @@ impl Core {
         &mut self,
         id: WorkId,
         event: Event,
+        upstream_error: Option<crate::messages::Message>,
         now: Moment,
         wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
@@ -1765,26 +1779,13 @@ impl Core {
                     *phase = QuotaPhase::Prompt(session.clone());
                     commands.push(Command::Usage { work, session });
                 }
-                Err(error) => {
-                    let error = self.sign_in_error(error, now, commands);
-                    self.finish_quota(id, Err(error), now, wall, commands);
-                }
+                Err(error) => self.finish_quota(id, Err(error), now, wall, commands),
             },
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
-                let update = match update {
-                    TurnUpdate::Failed(error) => {
-                        TurnUpdate::Failed(self.sign_in_error(error, now, commands))
-                    }
-                    update => update,
-                };
                 self.update_quota(id, session, update, now, commands)
             }
-            Event::Runtime(RuntimeEvent::UpstreamError { error, .. }) => {
-                let message = self.sign_in_error(
-                    crate::messages::Message::UpstreamHttp(error),
-                    now,
-                    commands,
-                );
+            Event::Runtime(RuntimeEvent::UpstreamError { .. }) => {
+                let message = upstream_error.unwrap();
                 let _ = self.quota_signal(&message, now, wall, commands);
                 let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() else {
                     unreachable!()
