@@ -490,7 +490,7 @@ impl Core {
     fn state(&self) -> &'static str {
         if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
             "Runtime unavailable"
-        } else if self.sign_in_required || self.sign_in_wait.is_some() {
+        } else if self.sign_in_required {
             "Sign-in required"
         } else if self.quota_wait.is_some() {
             "Quota wait"
@@ -785,7 +785,7 @@ impl Core {
                 reason.message.clone(),
             ));
         }
-        if self.sign_in_required || self.sign_in_wait.is_some() {
+        if self.sign_in_required {
             return Some(self.sign_in_message());
         }
         self.quota_wait
@@ -965,9 +965,7 @@ impl Core {
             admission,
             connection,
         };
-        if (self.sign_in_required || self.sign_in_wait.is_some())
-            && !matches!(self.runtime_state, RuntimeState::Unavailable(_))
-        {
+        if (self.sign_in_required) && !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
             if !self.queue_full() {
                 return Some((Event::CheckPending(Box::new(pending)), hold));
             }
@@ -1128,7 +1126,6 @@ impl Core {
                 }
             }
             (None, Event::StartSignIn) => {
-                self.require_sign_in(&mut commands);
                 self.sign_in_wait = Some(SignInWait {
                     deadline: now + 600_000,
                     address: None,
@@ -1149,8 +1146,13 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::Authenticated(result))) => {
                 self.sign_in_wait = None;
-                if result.is_ok() {
-                    self.sign_in_required = false;
+                match result {
+                    Ok(()) => self.sign_in_required = false,
+                    Err(error) => {
+                        if error.requires_sign_in() {
+                            self.require_sign_in(&mut commands);
+                        }
+                    }
                 }
             }
             (None, Event::RuntimeReady { signed_out }) => {
@@ -1167,7 +1169,7 @@ impl Core {
                     Some(reason.message.clone())
                 } else if matches!(self.runtime_state, RuntimeState::Stopping) {
                     Some(crate::messages::Message::Stopped.to_string())
-                } else if self.sign_in_required || self.sign_in_wait.is_some() {
+                } else if self.sign_in_required {
                     Some(self.sign_in_message().to_string())
                 } else if self
                     .last_refresh
@@ -1563,16 +1565,8 @@ impl Core {
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
                 Work::CheckQueued(_) => Some(*id),
-                Work::QuotaQueued { .. }
-                    if !self.sign_in_required && self.sign_in_wait.is_none() =>
-                {
-                    Some(*id)
-                }
-                Work::AcceptedQueued(_)
-                    if !self.sign_in_required
-                        && self.sign_in_wait.is_none()
-                        && self.quota_wait.is_none() =>
-                {
+                Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
+                Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
                     Some(*id)
                 }
                 _ => None,
@@ -5368,8 +5362,8 @@ mod tests {
         );
         assert_eq!(
             core.state(),
-            "Sign-in required",
-            "a request check does not end the owner's wait"
+            "Quota wait",
+            "FR-038 a successful check clears sign-in required during the owner's wait"
         );
         assert_eq!(core.sign_in_wait.as_ref().unwrap().deadline, 600_000);
         core.handle(
@@ -5625,6 +5619,129 @@ mod tests {
                     "FR-037 the higher-priority sign-in condition selects the error"
                 );
             }
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn starting_a_sign_in_wait_keeps_the_normal_state_and_queue() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-normal-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, queued, _tickets) = prompting_with_waiter(&journal);
+        let commands = core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+        assert_eq!(
+            core.state(),
+            "Running",
+            "FR-039 the wait alone does not require sign-in"
+        );
+        assert!(
+            core.by_request(&queued).is_some(),
+            "FR-037 starting a wait does not flush the queue"
+        );
+        assert!(!commands.iter().any(|c| matches!(
+            c,
+            Command::Emit(_, TurnEvent::End(_)) | Command::RefusePending { .. }
+        )));
+        assert!(
+            core.refusal(0).is_none(),
+            "the wait alone does not refuse admission"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn a_successful_request_check_allows_admission_during_the_owners_wait() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-sign-in-success-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        core.work.clear();
+        core.sign_in_required = true;
+        core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+        let turn = crate::dialect::CHAT
+            .parse(br#"{"model":"m","messages":[{"role":"user","content":"Check"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        let request = journal.begin(crate::journal::Api::Chat, 0);
+        let work = request.id.clone();
+        let (admission, _reply) = oneshot::channel();
+        let (connection, _lease) = mpsc::unbounded_channel();
+        core.handle(
+            Event::CheckPending(Box::new(PendingRequest {
+                turn,
+                request,
+                admission,
+                connection,
+            })),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work,
+                result: Ok(("checked".into(), catalog)),
+            }),
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(
+            core.refusal(1).is_none(),
+            "FR-038 the successful request check clears sign-in required"
+        );
+        assert!(
+            core.sign_in_wait.is_some(),
+            "the owner still has its independent wait"
+        );
+        assert!(
+            commands.iter().any(
+                |c| matches!(c, Command::AdmitChecked { session, .. } if session == "checked")
+            )
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn a_sign_in_error_from_authenticate_starts_the_required_condition() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-authentication-error-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for code in [401, 500] {
+            let (mut core, queued, _tickets) = prompting_with_waiter(&journal);
+            core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
+            let error = crate::messages::Message::UpstreamAcp(
+                serde_json::from_value(
+                    serde_json::json!({"code":code,"message":"Authentication failed"}),
+                )
+                .unwrap(),
+            );
+            let commands = core.handle(
+                Event::Runtime(RuntimeEvent::Authenticated(Err(error))),
+                1,
+                std::time::UNIX_EPOCH,
+            );
+            assert_eq!(
+                core.sign_in_required,
+                code == 401,
+                "FR-038 the authentication error selects sign-in required"
+            );
+            assert_eq!(
+                core.by_request(&queued).is_some(),
+                code != 401,
+                "FR-037 the queue ends only when a condition starts"
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .any(|command| matches!(command, Command::Cancel(_))),
+                "FR-037 running turns are preserved"
+            );
         }
         std::fs::remove_dir_all(folder).unwrap();
     }
