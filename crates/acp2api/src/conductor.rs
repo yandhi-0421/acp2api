@@ -128,6 +128,7 @@ const UNAVAILABLE: &str = "official runtime is not available";
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
 const KEEP_ALIVE_INTERVAL: Moment = 15_000;
+const UPDATE_TIMEOUT: Moment = 300_000;
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 struct Accepted {
     turn: TurnRequest,
@@ -313,9 +314,19 @@ impl Work {
             Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
         }
     }
+    fn update_deadline(&self) -> Option<Moment> {
+        match self {
+            Self::AcceptedWorking(Active {
+                phase: Phase::Prompt { update_deadline },
+                ..
+            }) => Some(*update_deadline),
+            _ => None,
+        }
+    }
     fn deadline(&self) -> Option<Moment> {
         self.completion_deadline()
             .into_iter()
+            .chain(self.update_deadline())
             .chain(self.reply().and_then(|reply| reply.keep_alive))
             .min()
     }
@@ -351,7 +362,9 @@ impl Session {
 }
 enum Phase {
     Preparing(PromptRequest),
-    Prompt,
+    Prompt {
+        update_deadline: Moment,
+    },
     AwaitingQuotaEnd(quota::Wait),
     QuotaSettling {
         at: Moment,
@@ -1260,7 +1273,7 @@ impl Core {
                 let ids: Vec<_> = self.work.keys().copied().collect();
                 for id in ids {
                     if let Some(active) = self.work[&id].execution()
-                        && matches!(active.phase, Phase::Prompt)
+                        && matches!(active.phase, Phase::Prompt { .. })
                         && let Some(session) = &active.session
                     {
                         commands.push(Command::Cancel(session.clone()));
@@ -1367,7 +1380,7 @@ impl Core {
                                 active.phase,
                                 Phase::Settling { .. } | Phase::QuotaSettling { .. }
                             );
-                            if matches!(active.phase, Phase::Prompt) {
+                            if matches!(active.phase, Phase::Prompt { .. }) {
                                 self.cancel(
                                     active.session.as_ref().unwrap().clone(),
                                     now,
@@ -1424,9 +1437,12 @@ impl Core {
                                             at: now,
                                             wait: wait.clone(),
                                         };
-                                    } else if let Phase::Preparing(prompt) =
-                                        std::mem::replace(&mut active.phase, Phase::Prompt)
-                                    {
+                                    } else if let Phase::Preparing(prompt) = std::mem::replace(
+                                        &mut active.phase,
+                                        Phase::Prompt {
+                                            update_deadline: now + UPDATE_TIMEOUT,
+                                        },
+                                    ) {
                                         if let Some(message) = self.refusal(now) {
                                             self.finish(
                                                 id,
@@ -1619,6 +1635,23 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other)) => {}
             (None, Event::Deadline) => {
+                let idle: Vec<_> = self
+                    .work
+                    .iter()
+                    .filter_map(|(id, work)| {
+                        work.update_deadline().filter(|at| *at <= now).map(|_| *id)
+                    })
+                    .collect();
+                for id in idle {
+                    let session = self.work[&id].execution().unwrap().session.clone().unwrap();
+                    self.retire(
+                        id,
+                        session,
+                        crate::messages::Message::NoUpdate,
+                        now,
+                        &mut commands,
+                    );
+                }
                 let due: Vec<_> = self
                     .work
                     .iter()
@@ -1812,7 +1845,12 @@ impl Core {
                     session: id.clone(),
                     prompt,
                 });
-                (Some(id), Phase::Prompt)
+                (
+                    Some(id),
+                    Phase::Prompt {
+                        update_deadline: now + UPDATE_TIMEOUT,
+                    },
+                )
             }
             Some((session, records::Location::Unloaded(cwd))) => {
                 commands.push(Command::Prepare {
@@ -2119,6 +2157,9 @@ impl Core {
             return;
         }
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
+        if let Phase::Prompt { update_deadline } = &mut active.phase {
+            *update_deadline = now + UPDATE_TIMEOUT;
+        }
         match update {
             TurnUpdate::Text(text) => {
                 if active.tool_call.is_none() && active.release_or_cut_reply(Some(text), commands) {
@@ -2193,7 +2234,8 @@ impl Core {
                 commands.push(Command::Permission(request));
             }
             TurnUpdate::Permission { request, call } => {
-                let cancel = matches!(active.phase, Phase::Prompt) && active.tool_call.is_none();
+                let cancel =
+                    matches!(active.phase, Phase::Prompt { .. }) && active.tool_call.is_none();
                 if cancel {
                     active.tool_call = Some(call);
                     self.cancel(session, now, commands);
@@ -2296,7 +2338,10 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        if matches!(self.work[&id].execution().unwrap().phase, Phase::Prompt) {
+        if matches!(
+            self.work[&id].execution().unwrap().phase,
+            Phase::Prompt { .. }
+        ) {
             self.cancel(session, now, commands);
         }
         self.end_request(id, Failure::at(error, now), commands);
@@ -2349,7 +2394,7 @@ impl Core {
             }
             work => {
                 let mut active = work.into_active().unwrap();
-                match std::mem::replace(&mut active.phase, Phase::Prompt) {
+                match std::mem::replace(&mut active.phase, Phase::Prompt { update_deadline: 0 }) {
                     Phase::QuotaSettling { wait, .. } if result.is_ok() => {
                         let session = active.session.clone();
                         active.phase = Phase::Settling {
@@ -2392,17 +2437,18 @@ impl Core {
         result: Result<(), Failure>,
         commands: &mut Vec<Command>,
     ) -> Option<String> {
-        let (can_continue, result) = match std::mem::replace(&mut active.phase, Phase::Prompt) {
-            Phase::Settling {
-                can_continue,
-                result: pending,
-                ..
-            } => (can_continue, result.and(pending)),
-            Phase::Preparing(_)
-            | Phase::Prompt
-            | Phase::AwaitingQuotaEnd(_)
-            | Phase::QuotaSettling { .. } => (false, result),
-        };
+        let (can_continue, result) =
+            match std::mem::replace(&mut active.phase, Phase::Prompt { update_deadline: 0 }) {
+                Phase::Settling {
+                    can_continue,
+                    result: pending,
+                    ..
+                } => (can_continue, result.and(pending)),
+                Phase::Preparing(_)
+                | Phase::Prompt { .. }
+                | Phase::AwaitingQuotaEnd(_)
+                | Phase::QuotaSettling { .. } => (false, result),
+            };
         let tool_hash = active
             .tool_call
             .as_ref()
@@ -3058,6 +3104,31 @@ mod tests {
                 notices: watch::channel(Arc::new(Vec::new())).0,
             }
         }
+    }
+
+    #[test]
+    fn an_idle_prompt_failure_starts_the_existing_retry_wait() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-idle-retry-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        let turn = crate::dialect::CHAT
+            .parse(br#"{"model":"m","messages":[{"role":"user","content":"First"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        core.handle(Event::Deadline, 300_000, std::time::UNIX_EPOCH);
+        let actual = core.check(&turn, 305_000).err().map(|error| {
+            let seconds = match error.row() {
+                crate::messages::Row::Temporary503(seconds) => Some(seconds),
+                _ => None,
+            };
+            (seconds, error.message.to_string())
+        });
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(actual, Some((Some(25), "acp2api: a request of this conversation failed less than 30 s ago. Send the request again in 25 s. The error was: the official runtime sent no update for 5 minutes, so acp2api cancelled the prompt turn.".into())), "FR-029: M-19 uses the existing 503-row retry wait");
     }
 
     #[test]
@@ -5167,7 +5238,9 @@ mod tests {
                         model: "gemini-3.8-flash".into(),
                         model_name: "gemini-3.8-flash".into(),
                         effort: EffortAsk::Absent,
-                        phase: Phase::Prompt,
+                        phase: Phase::Prompt {
+                            update_deadline: UPDATE_TIMEOUT,
+                        },
                         tool_call: Some(crate::conversation::ToolCall {
                             name: "read".into(),
                             arguments: "{}".into(),

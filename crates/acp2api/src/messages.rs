@@ -51,6 +51,7 @@ pub(crate) enum Message {
     RuntimeUnavailable(String),
     SignInRequired(String),
     RuntimeFailed,
+    NoUpdate,
     MaxTurnRequests,
     RetryWait {
         seconds: u64,
@@ -154,7 +155,9 @@ impl Message {
             Message::TooLarge => Row::TooLarge,
             Message::QueueFull => Row::QueueFull,
             Message::QuotaWait { retry_after, .. } => Row::Quota(*retry_after),
-            Message::RuntimeFailed => Row::Temporary503(crate::conductor::WAIT_SECONDS),
+            Message::RuntimeFailed | Message::NoUpdate => {
+                Row::Temporary503(crate::conductor::WAIT_SECONDS)
+            }
             Message::UpstreamHttp(error) if (500..600).contains(&error.code) => {
                 Row::Temporary503(crate::conductor::WAIT_SECONDS)
             }
@@ -236,6 +239,7 @@ impl fmt::Display for Message {
             ),
             Self::BuiltInToolRan(name) => write!(f, "acp2api: the built-in tool {name} of the official runtime ran with no permission request, so acp2api cancelled the prompt turn."),
             Self::Stopped => f.write_str("acp2api: acp2api stopped before the end of this request."),
+            Self::NoUpdate => f.write_str("acp2api: the official runtime sent no update for 5 minutes, so acp2api cancelled the prompt turn."),
             Self::RuntimeFailed => f.write_str("acp2api: the runtime process failed, so acp2api ended the prompt turn."),
             Self::MaxTurnRequests => f.write_str("acp2api: the prompt turn reached the limit of model requests of the official runtime."),
             Self::RetryWait { seconds, error } => write!(f, "acp2api: a request of this conversation failed less than {} s ago. Send the request again in {seconds} s. The error was: {}", crate::conductor::WAIT_SECONDS, error.to_string().trim_start_matches("acp2api: ")),
