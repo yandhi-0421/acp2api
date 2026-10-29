@@ -34,6 +34,10 @@ mod quota_support;
 mod quota_wait;
 #[path = "steps/response_ends.rs"]
 mod response_ends;
+#[path = "support/retry_wait.rs"]
+mod retry_support;
+#[path = "steps/retry_wait.rs"]
+mod retry_wait;
 #[path = "steps/runtime_builds.rs"]
 mod runtime_builds;
 #[path = "steps/runtime_continuation.rs"]
@@ -76,6 +80,7 @@ mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
     sign_in: sign_in_support::SignInState,
+    retry: retry_support::RetryState,
     quota: quota_support::QuotaState,
     queries: query_support::QueryState,
     process: runtime_support::ProcessState,

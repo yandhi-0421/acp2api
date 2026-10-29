@@ -7,7 +7,7 @@ impl Messages {
             Row::Rejected => ("invalid_request_error", "invalid_request_error"),
             Row::TooLarge => ("request_too_large", "request_too_large"),
             Row::Other502 => ("api_error", "invalid_request_error"),
-            Row::Temporary503 => ("api_error", "api_error"),
+            Row::Temporary503(_) => ("api_error", "api_error"),
             Row::QueueFull => ("overloaded_error", "api_error"),
             Row::Quota(_) => ("rate_limit_error", "rate_limit_error"),
         }
@@ -21,7 +21,7 @@ impl WireDialect for Messages {
             | Row::Rejected
             | Row::TooLarge
             | Row::Other502
-            | Row::Temporary503
+            | Row::Temporary503(_)
             | Row::Quota(_) => refusal_status(refusal),
         }
     }

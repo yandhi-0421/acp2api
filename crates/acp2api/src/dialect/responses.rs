@@ -96,10 +96,10 @@ impl WireDialect for Responses {
             },
         );
         response["status"] = json!("failed");
-        let temporary = matches!(refusal.row(), Row::Temporary503);
+        let temporary = matches!(refusal.row(), Row::Temporary503(_));
         response["error"] = json!({"code": if temporary {"server_error"} else {"invalid_prompt"},"message":refusal.message.to_string()});
-        if temporary {
-            response["error"]["headers"] = json!({"retry-after":"30"});
+        if let Row::Temporary503(seconds) = refusal.row() {
+            response["error"]["headers"] = json!({"retry-after":seconds.to_string()});
         }
         response["usage"] = Value::Null;
         vec![wire.event("response.failed", json!({"response":response}))]

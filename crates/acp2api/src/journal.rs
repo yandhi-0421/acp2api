@@ -260,6 +260,7 @@ pub(crate) enum Outcome {
     Success { input: u64, output: u64 },
     Refused(&'static str),
     Failed,
+    MaxTurnRequests,
     BuiltInToolRan,
     Disconnected,
 }
@@ -484,6 +485,7 @@ impl Journal {
             }
             Outcome::Refused(code) => (ResultKind::Refused, Some(code), None, None),
             Outcome::Failed => (ResultKind::Failed, Some("upstream_error"), None, None),
+            Outcome::MaxTurnRequests => (ResultKind::Failed, Some("max_turn_requests"), None, None),
             Outcome::BuiltInToolRan => (ResultKind::Failed, Some("built_in_tool_ran"), None, None),
             Outcome::Disconnected => (
                 ResultKind::Disconnected,

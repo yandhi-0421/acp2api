@@ -109,6 +109,7 @@ impl ThinkingLevel {
         }
     }
 }
+#[derive(Clone)]
 pub(crate) enum EffortAsk {
     Absent,
     Level(ThinkingLevel),
@@ -272,9 +273,15 @@ pub(crate) fn prompt(
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ItemHash([u8; 32]);
+#[derive(Clone)]
 pub(crate) struct RecordHashes {
     pub system: ItemHash,
     pub messages: Vec<ItemHash>,
+}
+impl RecordHashes {
+    pub(crate) fn is_continued_by(&self, later: &Self) -> bool {
+        self.system == later.system && later.messages.starts_with(&self.messages)
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ToolSetHash([u8; 32]);
