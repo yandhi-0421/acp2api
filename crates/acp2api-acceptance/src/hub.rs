@@ -76,6 +76,7 @@ struct ProcessIo {
     read: u64,
     processed: u64,
     ended: bool,
+    stop_requested: bool,
 }
 pub(crate) struct State {
     pub active_request: Option<(usize, Value)>,
@@ -346,32 +347,40 @@ impl Hub {
                 "hold" => {
                     let kind = message["kind"].as_str().unwrap_or("");
                     let add = message["add"].as_bool().unwrap_or(false);
-                    let mut line_process = Value::Null;
-                    if add {
-                        state.counts.holds += 1;
-                        if kind == "RuntimeLine" {
-                            line_process =
-                                json!(state.readers[message["reader"].as_str().unwrap()]);
-                        }
-                        if kind == "HttpRequest" {
-                            state.counts.http_started += 1;
-                        }
-                        if kind == "McpRequest" {
-                            state.counts.mcp_started += 1;
-                        }
+                    let reader = message["reader"].as_str().unwrap_or("<missing>");
+                    let line_process = if add && kind == "RuntimeLine" {
+                        state.readers.get(reader).copied()
                     } else {
-                        state.counts.holds =
-                            state.counts.holds.checked_sub(1).expect("balanced holds");
-                        if kind == "RuntimeLine" {
-                            state.counts.processed += 1;
-                            let process = message["process"].as_u64().unwrap() as usize;
-                            state.process_io[process].processed += 1;
+                        None
+                    };
+                    if add && kind == "RuntimeLine" && line_process.is_none() {
+                        let message =
+                            format!("RuntimeLine hold without an output read for task {reader}");
+                        state.failure = Some(message.clone());
+                        json!({"error":message})
+                    } else {
+                        if add {
+                            state.counts.holds += 1;
+                            if kind == "HttpRequest" {
+                                state.counts.http_started += 1;
+                            }
+                            if kind == "McpRequest" {
+                                state.counts.mcp_started += 1;
+                            }
+                        } else {
+                            state.counts.holds =
+                                state.counts.holds.checked_sub(1).expect("balanced holds");
+                            if kind == "RuntimeLine" {
+                                state.counts.processed += 1;
+                                let process = message["process"].as_u64().unwrap() as usize;
+                                state.process_io[process].processed += 1;
+                            }
+                            if kind == "McpRequest" {
+                                state.counts.mcp_finished += 1;
+                            }
                         }
-                        if kind == "McpRequest" {
-                            state.counts.mcp_finished += 1;
-                        }
+                        json!({"now":state.now,"process":line_process})
                     }
-                    json!({"now":state.now,"process":line_process})
                 }
                 "io" => {
                     let n = message["lines"].as_u64().unwrap_or(0);
@@ -406,6 +415,11 @@ impl Hub {
                     } else {
                         json!({"process":state.pending_processes.remove(&pid).unwrap()})
                     }
+                }
+                "process_stop" => {
+                    let process = message["process"].as_u64().unwrap() as usize;
+                    state.process_io[process].stop_requested = true;
+                    json!({"ok":true})
                 }
                 "now" | "drain" => json!({"now":state.now}),
                 "sleep" => {
@@ -505,7 +519,7 @@ impl Hub {
         let s = self.shared.0.lock().unwrap();
         let mut counts = s.counts;
         for process in &s.process_io {
-            if process.ended {
+            if process.stop_requested && process.ended {
                 counts.stdin_closed += process.stdin_written.saturating_sub(process.stdin_got);
                 counts.read_closed += process.ordered.saturating_sub(process.read);
                 counts.processed_closed += process.ordered.saturating_sub(process.processed);

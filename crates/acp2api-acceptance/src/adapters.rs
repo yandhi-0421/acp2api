@@ -55,6 +55,9 @@ impl Clock for HarnessClock {
         let kind = format!("{kind:?}");
         let link = self.link.clone();
         let reply = link.call(json!({"op":"hold","kind":kind,"add":true,"reader":reader_id()}));
+        if let Some(error) = reply["error"].as_str() {
+            panic!("{error}");
+        }
         // The conductor can drop a line's hold in a different task from its reader.
         let process = reply["process"].clone();
         Hold::on_drop(move || {
@@ -150,7 +153,32 @@ impl ProcessLauncher for GuardedLauncher {
             link: self.link.clone(),
             process,
         });
+        launched.tree = Box::new(GuardedTree {
+            inner: launched.tree,
+            link: self.link.clone(),
+            process,
+        });
         Ok(launched)
+    }
+}
+struct GuardedTree {
+    inner: Box<dyn ProcessTree>,
+    link: HubLink,
+    process: u64,
+}
+impl ProcessTree for GuardedTree {
+    fn pid(&self) -> u32 {
+        self.inner.pid()
+    }
+    fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+        self.inner.exited()
+    }
+    fn stop(self: Box<Self>, clock: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+        Box::pin(async move {
+            self.link
+                .call(json!({"op":"process_stop","process":self.process}));
+            self.inner.stop(clock).await;
+        })
     }
 }
 fn reader_id() -> String {
