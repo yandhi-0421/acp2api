@@ -942,3 +942,98 @@ async fn a_restarted_runtime_sends_initialize_before_its_answer_deadline_can_pas
     .await
     .expect("one readiness request and one restart; 10 s run cap; existing fake and hub log caps");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stream_bodies_are_read_before_settle_allows_the_next_virtual_instant() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let mut observations = Vec::new();
+    for (endpoint, authorized, at, status, content) in [
+        // Completed JSON after the 200 ms error window.
+        ("POST /v1/messages", true, 200, 200, "non-stream body"),
+        // Refusal before admission when the local API key is absent.
+        ("POST /v1/messages", false, 0, 401, "error"),
+        // The cached model list needs no prompt turn.
+        ("GET /v1/models", true, 0, 200, "gemini-3.8-flash"),
+        // The management panel shows its login page.
+        ("GET /", true, 0, 200, "password"),
+    ] {
+        tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
+            let mut s = world();
+            let armed = Arc::new(AtomicBool::new(false));
+            let observing = armed.clone();
+            let observed_hub = s.hub.clone();
+            let hub::RpcPause { link, publication, release, peer } =
+                hub::pause_rpc_after(&s.hub, 512, move |request, reply| {
+                    observing.load(Ordering::SeqCst)
+                        && request["op"] == "hold"
+                        && request["add"] == false
+                        && reply["now"] == at
+                        && observed_hub.counts().holds == 0
+                });
+            let clock = ClockConnections {
+                work: HarnessClock::new(link),
+                timers: HarnessClock::new(HubLink::new(&s.hub)),
+            };
+            let (host, client) = start_with_clock_link(&mut s, Arc::new(clock)).await;
+            if authorized && endpoint == "POST /v1/messages" {
+                s.fake().next_prompt(TurnPlan::new().chunk("non-stream body").usage(10, 100));
+            }
+            armed.store(true, Ordering::SeqCst);
+            let request = ApiCall::one_user_message(endpoint, "body arrival");
+            let call = if authorized { client } else { client.without_local_api_key() }.send(request);
+            let mut time = s.time.clone();
+            let advancing = tokio::spawn(async move { time.advance_to(at + 1).await });
+            publication.await.unwrap();
+            // The last work release is paused before its owner can return to hyper.
+            let wire = call.wire();
+            let deadline = Instant::now() + real_limit(Duration::from_millis(100));
+            while wire.lock().unwrap().end_at.is_none() && Instant::now() < deadline {
+                let hub = s.hub.clone();
+                tokio::task::spawn_blocking(move || hub.wait_change(deadline)).await.unwrap();
+            }
+            let before_release = wire.lock().unwrap().end_at;
+            release.send(()).unwrap();
+            advancing.await.unwrap();
+            let answer = call.finish(&mut s.time).await;
+            let exit = stop_with_clock_link(&mut s, host).await;
+            peer.join().unwrap();
+            s.finish(true).await;
+            assert_eq!(exit, std::process::ExitCode::SUCCESS);
+            assert_eq!(answer.status, status);
+            assert!(String::from_utf8_lossy(&answer.body).contains(content));
+            observations.push((endpoint, authorized, at, before_release));
+        }).await.expect("one readiness request and one body request; 10 s run cap; existing hub and 8 MiB answer caps");
+    }
+    // Clean up all four hosts before the assertion, including on a red run.
+    assert!(
+        observations
+            .iter()
+            .all(|(_, _, at, read)| *read == Some(*at)),
+        "the client must read each non-stream body before the last hold ends: {observations:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_stream_body_preserves_content_length_framing() {
+    tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
+        let mut s = world();
+        let call = s.client().await.model_names();
+        let answer = call.finish(&mut s.time).await;
+        s.finish(true).await;
+        assert_eq!(answer.status, 200);
+        let content_length = answer.body.len().to_string();
+        assert_eq!(
+            (
+                answer.headers.get("content-length").map(String::as_str),
+                answer.headers.get("transfer-encoding").map(String::as_str),
+            ),
+            (Some(content_length.as_str()), None),
+        );
+    })
+    .await
+    .expect("one models request; 10 s run cap; existing hub and 8 MiB answer caps");
+}

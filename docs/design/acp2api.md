@@ -557,7 +557,11 @@ A disconnected request retains its pending journal completion. An early error ha
 No work entry, unresolved admission, or external wait owns a `Hold`. The shell registers continuations and deadlines before it releases the incoming hold.
 
 A completed admission reply carries a short `Hold` in its `Ticket` or `Refusal`.
-The HTTP task retains it through response construction. A stream retains it through the initial events.
+The HTTP task retains that admission hold through response construction. A stream retains it through the initial events.
+`front` takes a `TurnEvent` hold when the HTTP task wakes and retains it until the next poll.
+Each poll takes or receives a hold. A pending poll releases its own hold; a ready poll transfers it with the response.
+For a reply body with an exact size, the bytes retain that hold through the HTTP/1 socket write.
+This rule covers JSON bodies, refusals, the model list, and the management panel.
 
 A completion or disconnect carries a new short hold through the next core transition. An occupied place can therefore wait while virtual time advances.
 Only an accepted stream has a keep-alive timer. Its first deadline starts at acceptance (FR-011).
@@ -618,7 +622,11 @@ impl RuntimeProcess {
    Then it answers `Refused` or `Accepted`.
 4. With a place, the core chooses the ACP session: continue, load, or new, with the N rule. When the model ID changed, it sends `session/set_config_option`. Then it sends `session/prompt` with the result of `conversation::prompt` (ADR-0003, FR-021).
 5. `runtime_driver` gives each update, permission request, result, and error line as an event. The machine of the prompt turn in the core gives `TurnEvent`s to the ticket.
-6. `dialect.respond` writes each `TurnEvent` to the API client. The conductor supplies each event with a `TurnEvent` hold. For a stream, the last byte frame of each ordered batch retains that hold through the HTTP/1 socket write. Thus virtual time cannot pass before the API client can read the bytes.
+6. `dialect.respond` writes each `TurnEvent` to the API client. The conductor supplies each event with a `TurnEvent` hold.
+   For a stream, the last byte frame of each ordered batch retains that hold through the HTTP/1 socket write.
+   For a reply that is not a stream, `front` retains work from wake to poll and through each active poll.
+   A body with an exact size keeps its poll hold in the bytes until the socket write.
+   Thus virtual time cannot pass before the API client can read the bytes.
 7. At the end of the prompt turn, the core changes the record, the retry wait, and the mode (R1). It frees the place and starts the next request of the queue. `journal` writes the request line (FR-056).
 
 ### Owner of each piece of state

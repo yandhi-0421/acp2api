@@ -1,18 +1,48 @@
 use crate::{
-    Clock, HoldKind,
+    Clock, Hold, HoldKind,
     conductor::{Conductor, ResponseMode},
     dialect::{self, Dialect},
     messages::Message,
 };
 use axum::{
     Router,
-    body::Bytes,
+    body::{Bytes, HttpBody},
     extract::{DefaultBodyLimit, Extension, FromRequest, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
-use std::sync::{Arc, Mutex};
+use futures_util::future::poll_fn;
+use std::{
+    sync::{Arc, Mutex},
+    task::{Context, Wake, Waker},
+};
+
+// A woken handler is work before the executor polls it again.
+// HttpRequest also increments the harness request count; TurnEvent covers later wakes and polls.
+struct ResponseWake {
+    clock: Arc<dyn Clock>,
+    state: Mutex<ResponseWakeState>,
+}
+struct ResponseWakeState {
+    hold: Option<Hold>,
+    waker: Waker,
+}
+impl Wake for ResponseWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        let waker = {
+            let mut state = self.state.lock().unwrap();
+            state
+                .hold
+                .get_or_insert_with(|| self.clock.hold(HoldKind::TurnEvent));
+            state.waker.clone()
+        };
+        waker.wake();
+    }
+}
 #[derive(Clone)]
 pub(crate) struct RequestHold(Arc<Mutex<Option<crate::Hold>>>);
 impl RequestHold {
@@ -187,6 +217,41 @@ async fn models(
     }
 }
 
+async fn run_holding(
+    next: axum::middleware::Next,
+    request: axum::extract::Request,
+    clock: Arc<dyn Clock>,
+) -> (axum::response::Response, Hold) {
+    let mut response_future = std::pin::pin!(next.run(request));
+    let mut wake = None;
+    poll_fn(|cx| {
+        let response_wake = wake.get_or_insert_with(|| {
+            Arc::new(ResponseWake {
+                clock: clock.clone(),
+                state: Mutex::new(ResponseWakeState {
+                    hold: None,
+                    waker: cx.waker().clone(),
+                }),
+            })
+        });
+        let hold = {
+            let mut state = response_wake.state.lock().unwrap();
+            state.waker.clone_from(cx.waker());
+            state
+                .hold
+                .take()
+                .unwrap_or_else(|| clock.hold(HoldKind::TurnEvent))
+        };
+        let waker = Waker::from(response_wake.clone());
+        // A Ready response still needs its hold until hyper writes the body.
+        response_future
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .map(|response| (response, hold))
+    })
+    .await
+}
+
 async fn input_hold(
     State(clock): State<Arc<dyn Clock>>,
     mut request: axum::extract::Request,
@@ -199,9 +264,20 @@ async fn input_hold(
     };
     let lease = RequestHold(Arc::new(Mutex::new(Some(clock.hold(kind)))));
     request.extensions_mut().insert(lease.clone());
-    let response = next.run(request).await;
+    let (response, hold) = run_holding(next, request, clock).await;
     drop(lease);
-    response
+    let Some(length) = response.body().size_hint().exact() else {
+        // Streams already keep their holds in event bytes.
+        return response;
+    };
+    // Keep the framing of the buffered reply when wrapping its bytes as a stream.
+    let (mut parts, body) = response.into_parts();
+    parts
+        .headers
+        .entry(axum::http::header::CONTENT_LENGTH)
+        .or_insert_with(|| length.into());
+    let mut hold = Some(hold);
+    axum::response::Response::from_parts(parts, dialect::hold_body(body, move || hold.take()))
 }
 
 fn refuse(
