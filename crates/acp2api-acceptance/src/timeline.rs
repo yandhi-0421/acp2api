@@ -28,23 +28,27 @@ impl TimeLine {
     }
     pub async fn advance_to(&mut self, target: u64) {
         assert!(target >= self.hub.now(), "virtual time cannot reverse");
+        self.settle().await;
         loop {
-            self.settle().await;
             let at = self
                 .next_deadline()
                 .filter(|at| *at <= target)
                 .unwrap_or(target);
-            {
+            let has_external_inputs = {
                 let mut s = self.hub.shared.0.lock().unwrap();
                 s.now = at;
                 let due: Vec<_> = s.external.range(..=at).map(|(at, _)| *at).collect();
+                let has_external_inputs = !due.is_empty();
                 for key in due {
                     for event in s.external.remove(&key).unwrap() {
                         crate::fake::dispatch(&mut s, event);
                     }
                 }
+                has_external_inputs
+            };
+            if has_external_inputs {
+                self.settle().await;
             }
-            self.settle().await;
             {
                 let mut s = self.hub.shared.0.lock().unwrap();
                 let due: Vec<_> = s
