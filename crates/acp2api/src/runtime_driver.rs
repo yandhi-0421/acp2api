@@ -70,11 +70,12 @@ impl RuntimeStart {
         wait: Moment,
         answer: impl std::future::Future<Output = Result<T, E>>,
     ) -> Result<T, E> {
-        let mut work = Some(self.clock.hold(HoldKind::TurnEvent));
+        // Cover deadline timer construction until the answer gets its first poll (#146).
+        let mut until_first_poll = Some(self.clock.hold(HoldKind::TurnEvent));
         let mut answer = std::pin::pin!(answer);
         let answer = std::future::poll_fn(move |cx| {
             let result = answer.as_mut().poll(cx);
-            work.take();
+            until_first_poll.take();
             result
         });
         tokio::select! {

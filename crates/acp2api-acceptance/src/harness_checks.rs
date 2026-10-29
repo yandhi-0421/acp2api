@@ -325,6 +325,48 @@ async fn holds_prevent_clock_advance_and_cancelled_sleepers_do_not_block() {
     hub.close();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timer_construction_keeps_virtual_time_at_zero_until_the_future_is_built() {
+    let hub = Hub::new("timer-construction-test".into());
+    let hub::RpcPause {
+        link,
+        publication,
+        release,
+        peer,
+    } = hub::pause_rpc_after(&hub, 8, |request, _| request["op"] == "sleep");
+    let building = tokio::task::spawn_blocking(move || HarnessClock::new(link).sleep_until(50));
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), publication)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut time = timeline::TimeLine::new(hub.clone());
+    let mut advancing = tokio::spawn(async move { time.advance_to(50).await });
+    let blocked = tokio::time::timeout(real_limit(Duration::from_millis(100)), &mut advancing)
+        .await
+        .is_err();
+    let during_construction = hub.now();
+    release.send(()).unwrap();
+    let timer = building.await.unwrap();
+    let completed = tokio::spawn(async move {
+        drop(timer.await);
+    });
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), &mut advancing)
+        .await
+        .unwrap()
+        .unwrap();
+    completed.await.unwrap();
+    peer.join().unwrap();
+    let after_construction = hub.now();
+    hub.close();
+    // Check after cleanup so a red run retains no socket or timer.
+    assert!(blocked, "advance must wait for timer construction");
+    assert_eq!(
+        during_construction, 0,
+        "an incomplete timer is work in progress"
+    );
+    assert_eq!(after_construction, 50);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guard_refuses_unknown_bytes_and_tracks_fake_descendants() {
     let s = world();
     let run = s.root.seed(&s.hub, &Setup::normal());

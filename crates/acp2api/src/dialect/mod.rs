@@ -139,6 +139,7 @@ impl<T: WireDialect + 'static> Dialect for T {
                 let events = stream::unfold(state, move |mut state| async move {
                     loop {
                         if let Some(event) = state.pending.pop_front() {
+                            // Sse encodes one event per frame in this poll; ordered batches need only their last frame to retain the hold.
                             if state.pending.is_empty() {
                                 *state.output_hold.lock().unwrap() = state.hold.take();
                             }
@@ -209,7 +210,7 @@ struct StreamState {
     output_hold: Arc<Mutex<Option<Hold>>>,
     ended: bool,
 }
-// The HTTP/1 vectored writer retains the last bytes of each batch through its socket write.
+// Retain the hold through the socket write so virtual time cannot move before the client has the bytes.
 struct HeldBytes {
     bytes: Bytes,
     _hold: Hold,
@@ -329,14 +330,21 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn flagged_hold() -> (Arc<AtomicBool>, Hold) {
+        let released = Arc::new(AtomicBool::new(false));
+        let flag = released.clone();
+        (
+            released,
+            Hold::on_drop(move || flag.store(true, Ordering::SeqCst)),
+        )
+    }
+
     #[tokio::test]
     async fn stream_bytes_keep_work_live_until_the_transport_releases_the_batch() {
-        use futures_util::StreamExt;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
         let (send, events) = tokio::sync::mpsc::unbounded_channel();
-        let initial_released = Arc::new(AtomicBool::new(false));
-        let released = initial_released.clone();
+        let (initial_released, hold) = flagged_hold();
         let response = MESSAGES
             .respond(
                 ReplyForm {
@@ -347,12 +355,7 @@ mod tests {
                     tools: Vec::new(),
                     tool_choice: ToolChoice::Auto,
                 },
-                Ticket {
-                    events,
-                    hold: Hold::on_drop(move || {
-                        released.store(true, Ordering::SeqCst);
-                    }),
-                },
+                Ticket { events, hold },
                 Arc::new(crate::os::SystemClock::default()),
             )
             .await;
@@ -367,16 +370,10 @@ mod tests {
         drop(initial);
         assert!(initial_released.load(Ordering::SeqCst));
 
-        let text_released = Arc::new(AtomicBool::new(false));
-        let released = text_released.clone();
-        send.send((
-            TurnEvent::Text("buffered".into()),
-            Hold::on_drop(move || {
-                released.store(true, Ordering::SeqCst);
-            }),
-        ))
-        .ok()
-        .unwrap();
+        let (text_released, hold) = flagged_hold();
+        send.send((TurnEvent::Text("buffered".into()), hold))
+            .ok()
+            .unwrap();
         let start = body.next().await.unwrap().unwrap();
         let delta = body.next().await.unwrap().unwrap();
         assert!(start.starts_with(b"event: content_block_start\n"));
