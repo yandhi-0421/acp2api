@@ -325,6 +325,48 @@ async fn holds_prevent_clock_advance_and_cancelled_sleepers_do_not_block() {
     hub.close();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timer_construction_keeps_virtual_time_at_zero_until_the_future_is_built() {
+    let hub = Hub::new("timer-construction-test".into());
+    let hub::RpcPause {
+        link,
+        publication,
+        release,
+        peer,
+    } = hub::pause_rpc_after(&hub, 8, |request, _| request["op"] == "sleep");
+    let building = tokio::task::spawn_blocking(move || HarnessClock::new(link).sleep_until(50));
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), publication)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut time = timeline::TimeLine::new(hub.clone());
+    let mut advancing = tokio::spawn(async move { time.advance_to(50).await });
+    let blocked = tokio::time::timeout(real_limit(Duration::from_millis(100)), &mut advancing)
+        .await
+        .is_err();
+    let during_construction = hub.now();
+    release.send(()).unwrap();
+    let timer = building.await.unwrap();
+    let completed = tokio::spawn(async move {
+        drop(timer.await);
+    });
+    tokio::time::timeout(real_limit(Duration::from_secs(3)), &mut advancing)
+        .await
+        .unwrap()
+        .unwrap();
+    completed.await.unwrap();
+    peer.join().unwrap();
+    let after_construction = hub.now();
+    hub.close();
+    // Check after cleanup so a red run retains no socket or timer.
+    assert!(blocked, "advance must wait for timer construction");
+    assert_eq!(
+        during_construction, 0,
+        "an incomplete timer is work in progress"
+    );
+    assert_eq!(after_construction, 50);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guard_refuses_unknown_bytes_and_tracks_fake_descendants() {
     let s = world();
     let run = s.root.seed(&s.hub, &Setup::normal());
@@ -684,4 +726,219 @@ async fn rearmed_timers_wait_for_other_work_before_advancing_again() {
     assert_eq!(hub.now(), 100);
     assert!(hub.counts().balanced());
     hub.close();
+}
+
+// Separate timer construction from event holds so each test pauses its own boundary.
+struct ClockConnections {
+    work: HarnessClock,
+    timers: HarnessClock,
+}
+impl Clock for ClockConnections {
+    fn now(&self) -> acp2api::Moment {
+        self.work.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.work.wall()
+    }
+    fn sleep_until(&self, at: acp2api::Moment) -> acp2api::BoxFuture<'static, acp2api::Hold> {
+        self.timers.sleep_until(at)
+    }
+    fn hold(&self, kind: HoldKind) -> acp2api::Hold {
+        self.work.hold(kind)
+    }
+}
+
+async fn start_with_clock_link(
+    s: &mut Scenario,
+    clock: std::sync::Arc<dyn Clock>,
+) -> (
+    std::thread::JoinHandle<std::process::ExitCode>,
+    client::ApiClient,
+) {
+    let run = s.root.seed(&s.hub, &Setup::normal());
+    let mut ports = run.ports();
+    ports.clock = clock;
+    let args = [
+        "acp2api-test-host".into(),
+        "--data-dir".into(),
+        s.root.path.join("data").into_os_string(),
+    ];
+    // A child host would discard the proxied connection when it reads the run file.
+    let host = std::thread::spawn(move || acp2api::run(ports, args, run.environment));
+    wait_for(
+        &s.hub,
+        Instant::now() + real_limit(Duration::from_secs(3)),
+        || s.hub.entries().iter().any(|e| e.event["kind"] == "launch"),
+    )
+    .await;
+    let client = client::ApiClient::new(
+        format!("127.0.0.1:{}", s.root.port),
+        s.root.key.clone(),
+        s.hub.clone(),
+    );
+    assert_eq!(client.model_names().finish(&mut s.time).await.status, 200);
+    s.time.settle().await;
+    (host, client)
+}
+
+async fn stop_with_clock_link(
+    s: &mut Scenario,
+    host: std::thread::JoinHandle<std::process::ExitCode>,
+) -> std::process::ExitCode {
+    s.hub.stop();
+    let mut stopped = tokio::task::spawn_blocking(move || host.join().unwrap());
+    loop {
+        s.time.settle().await;
+        if stopped.is_finished() {
+            return stopped.await.unwrap();
+        }
+        if let Some(next) = s.time.next_deadline() {
+            s.time.advance_to(next).await;
+        } else {
+            let hub = s.hub.clone();
+            tokio::select! {
+                exit = &mut stopped => return exit.unwrap(),
+                _ = tokio::task::spawn_blocking(move || {
+                    hub.wait_change(Instant::now() + real_limit(Duration::from_secs(3)))
+                }) => {}
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stream_event_is_read_before_settle_allows_the_next_virtual_instant() {
+    tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
+        let mut s = world();
+        let hub::RpcPause {
+            link,
+            publication,
+            release,
+            peer,
+        } = hub::pause_rpc_after(&s.hub, 512, move |request, reply| {
+            request["op"] == "hold"
+                && request["kind"] == "TurnEvent"
+                && request["add"] == false
+                && reply["now"] == 15_000
+        });
+        let clock = ClockConnections {
+            work: HarnessClock::new(link),
+            timers: HarnessClock::new(HubLink::new(&s.hub)),
+        };
+        let (host, client) = start_with_clock_link(&mut s, std::sync::Arc::new(clock)).await;
+        let mut plan = TurnPlan::new();
+        plan.steps.push(TurnStep::HoldUntil("stream-window".into()));
+        plan.steps.push(TurnStep::Chunk("released".into()));
+        s.fake().next_prompt(plan);
+        let mut request = ApiCall::one_user_message("POST /v1/messages", "stream event arrival");
+        request.body["stream"] = json!(true);
+        let call = client.send(request);
+        s.time.settle().await;
+        let mut time = s.time.clone();
+        let advancing = tokio::spawn(async move { time.advance_to(15_000).await });
+        publication.await.unwrap();
+        // Pause a TurnEvent release before its owner can do any more work.
+        // Hyper's queue must have written the bytes before it drops their owner.
+        let wire = call.wire();
+        let deadline = Instant::now() + real_limit(Duration::from_millis(100));
+        while !wire.lock().unwrap().blocks.iter().any(|b| b.at == 15_000 && b.event == "ping")
+            && Instant::now() < deadline
+        {
+            let hub = s.hub.clone();
+            tokio::task::spawn_blocking(move || hub.wait_change(deadline))
+                .await
+                .unwrap();
+        }
+        let before_release = wire.lock().unwrap().blocks.clone();
+        release.send(()).unwrap();
+        advancing.await.unwrap();
+        s.time.advance_to(30_000).await;
+        s.fake().open_gate("stream-window");
+        let answer = call.finish(&mut s.time).await;
+        let exit = stop_with_clock_link(&mut s, host).await;
+        peer.join().unwrap();
+        s.finish(true).await;
+        // Finish both peers before assertions so the red run keeps no process or socket.
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert_eq!(answer.status, 200);
+        assert!(
+            before_release.iter().any(|b| b.at == 15_000 && b.event == "ping"),
+            "the client must read the 15000 keep-alive before its hold ends: {before_release:?}"
+        );
+    })
+    .await
+    .expect("one readiness request and one stream request; 10 s run cap; existing hub and 8 MiB answer caps");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_runtime_sends_initialize_before_its_answer_deadline_can_pass() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    tokio::time::timeout(real_limit(Duration::from_secs(10)), async {
+        let mut s = world();
+        let armed = Arc::new(AtomicBool::new(false));
+        let restarting = armed.clone();
+        let mut deadline_registered = false;
+        let hub::RpcPause {
+            link,
+            publication,
+            release,
+            peer,
+        } = hub::pause_rpc_after(&s.hub, 512, move |request, _| {
+            if restarting.load(Ordering::SeqCst)
+                && request["op"] == "sleep"
+                && request["at"] == 300_000
+            {
+                deadline_registered = true;
+            }
+            deadline_registered
+                && request["op"] == "hold"
+                && request["kind"] == "TurnEvent"
+                && request["add"] == false
+        });
+        let clock = ClockConnections {
+            work: HarnessClock::new(HubLink::new(&s.hub)),
+            timers: HarnessClock::new(link),
+        };
+        let (host, _client) = start_with_clock_link(&mut s, Arc::new(clock)).await;
+        armed.store(true, Ordering::SeqCst);
+        s.hub.command("normal", json!({"op":"Exit","code":17}));
+        publication.await.unwrap();
+        // The timer constructor released its own hold; the answer has not had a poll yet.
+        let mut time = s.time.clone();
+        let mut advancing = tokio::spawn(async move { time.advance_to(300_000).await });
+        let blocked = tokio::time::timeout(real_limit(Duration::from_millis(100)), &mut advancing)
+            .await
+            .is_err();
+        let before_first_poll = s.hub.now();
+        release.send(()).unwrap();
+        if blocked {
+            advancing.await.unwrap();
+        }
+        let initialization_times: Vec<_> = s
+            .hub
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                let call: serde_json::Value =
+                    serde_json::from_str(entry.event["line"].as_str()?).ok()?;
+                (call["method"] == "initialize").then_some(entry.at)
+            })
+            .collect();
+        let exit = stop_with_clock_link(&mut s, host).await;
+        peer.join().unwrap();
+        s.finish(true).await;
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert!(blocked, "the first answer poll is still work in progress");
+        assert_eq!(
+            before_first_poll, 0,
+            "a registered deadline cannot pass before initialize starts"
+        );
+        assert_eq!(initialization_times, [0, 0]);
+    })
+    .await
+    .expect("one readiness request and one restart; 10 s run cap; existing fake and hub log caps");
 }

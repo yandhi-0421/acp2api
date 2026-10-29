@@ -741,6 +741,66 @@ impl Hub {
 }
 
 #[cfg(test)]
+pub(crate) struct RpcPause {
+    pub link: HubLink,
+    pub publication: tokio::sync::oneshot::Receiver<()>,
+    pub release: std::sync::mpsc::SyncSender<()>,
+    pub peer: thread::JoinHandle<()>,
+}
+
+#[cfg(test)]
+pub(crate) fn pause_rpc_after(
+    hub: &Hub,
+    request_cap: usize,
+    mut matches: impl FnMut(&Value, &Value) -> bool + Send + 'static,
+) -> RpcPause {
+    let link = HubLink::new(hub);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    *link.connection.lock().unwrap() = Some(BufReader::new(socket));
+    let (published, publication) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::sync_channel(1);
+    let upstream = HubLink::new(hub);
+    let peer = thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(real_limit(Duration::from_secs(3))))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(real_limit(Duration::from_secs(3))))
+            .unwrap();
+        let mut reader = BufReader::new(socket);
+        let mut published = Some(published);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(3));
+        for _ in 0..request_cap {
+            assert!(Instant::now() < deadline, "RPC proxy run cap: 3 s");
+            let mut line = String::new();
+            let n = reader.by_ref().take(4097).read_line(&mut line).unwrap();
+            assert!(n <= 4096, "RPC proxy frame cap: 4 KiB");
+            if n == 0 {
+                return;
+            }
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let reply = upstream.call(request.clone());
+            if published.is_some() && matches(&request, &reply) {
+                published.take().unwrap().send(()).unwrap();
+                released
+                    .recv_timeout(real_limit(Duration::from_secs(3)))
+                    .unwrap();
+            }
+            send(reader.get_mut(), &reply).unwrap();
+        }
+        panic!("RPC proxy request cap: {request_cap}");
+    });
+    RpcPause {
+        link,
+        publication,
+        release,
+        peer,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
