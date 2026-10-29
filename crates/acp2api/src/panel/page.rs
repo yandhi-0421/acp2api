@@ -208,9 +208,14 @@ fn runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
-    #[test]
-    fn the_quota_tile_reads_occupied_and_queued_counts_from_the_view() {
+    fn render(
+        view: &crate::conductor::View,
+        version: &str,
+        source: &Path,
+        data_folder: &Path,
+    ) -> String {
         let settings = crate::store::Settings {
             port: 8329,
             concurrency_limit: 2,
@@ -218,34 +223,39 @@ mod tests {
             management_password_hash: String::new(),
             agy_acp_server_path: None,
         };
-        let view = crate::conductor::View {
-            places: 1,
-            queued: 2,
-            ..Default::default()
-        };
         let builds = crate::runtime_builds::Summary {
             current: Some(crate::runtime_builds::CurrentBuild {
-                version: "1.4.0".into(),
+                version: version.into(),
                 acceptance: "On the release list",
-                source: Some("source".into()),
+                source: Some(source.into()),
             }),
             found: vec![],
             release: vec![],
             choices: vec![],
             newer: None,
         };
-        let html = super::settings(Page {
+        super::settings(Page {
             settings: &settings,
             highest: 3,
             port: 8329,
-            data_folder: std::path::Path::new("data"),
+            data_folder,
             notice: None,
             notices: &[],
             builds: Ok(builds),
             quota_result: &None,
-            view: &view,
+            view,
             now: 0,
-        });
+        })
+    }
+
+    #[test]
+    fn the_quota_tile_reads_occupied_and_queued_counts_from_the_view() {
+        let view = crate::conductor::View {
+            places: 1,
+            queued: 2,
+            ..Default::default()
+        };
+        let html = render(&view, "1.4.0", Path::new("source"), Path::new("data"));
         let quota = html
             .split("<h2 id=\"quota-title\">Quota</h2>")
             .nth(1)
@@ -260,6 +270,39 @@ mod tests {
             ],
             [true, true],
             "FR-054 the quota tile uses both live counts, not fixed zeroes"
+        );
+    }
+
+    #[test]
+    fn build_version_source_and_data_folder_are_escaped_in_their_tiles() {
+        let html = render(
+            &crate::conductor::View::default(),
+            "1<\"&",
+            Path::new("source<\"&"),
+            Path::new("data<\"&"),
+        );
+        let runtime = html
+            .split("<h2>Official runtime</h2>")
+            .nth(1)
+            .unwrap()
+            .split("</section>")
+            .next()
+            .unwrap();
+        let settings = html
+            .split("<h2>Settings</h2>")
+            .nth(1)
+            .unwrap()
+            .split("</section>")
+            .next()
+            .unwrap();
+        assert_eq!(
+            [
+                runtime.contains("<p>Build in use <span>1&lt;&quot;&amp;</span></p>"),
+                runtime.contains("<p>Source: <code>source&lt;&quot;&amp;</code></p>"),
+                settings.contains("<p>Data folder <code>data&lt;&quot;&amp;</code></p>"),
+            ],
+            [true, true, true],
+            "FR-054 dynamic build and folder text is HTML-escaped"
         );
     }
 }
