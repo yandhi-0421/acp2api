@@ -17,11 +17,11 @@ fn available(w: &mut World, quota_text: String) {
     query::usage_reply(w, quota_text == "quota");
 }
 
-#[then(expr = "the response ends with {string} set to {string}")]
-fn end(w: &mut World, field: String, expected: String) {
+#[then("the response ends with \"stop_reason\" set to \"refusal\"")]
+fn end(w: &mut World) {
     assert_eq!(
-        w.scenario.answer.as_ref().unwrap().json()[&field],
-        json!(expected),
+        w.scenario.answer.as_ref().unwrap().json()["stop_reason"],
+        "refusal",
         "FR-034 refusal after quota query"
     );
 }
