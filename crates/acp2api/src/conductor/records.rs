@@ -1,4 +1,4 @@
-use super::{Active, Command, Failure, OutstandingWork, PendingCompletion, Phase, retry};
+use super::{Active, Command, Failure, PendingRequest, Phase, retry};
 use crate::conversation::{self, Item, RecordHashes, ToolSetHash};
 use crate::{
     Moment,
@@ -16,6 +16,54 @@ pub(super) struct Record {
     pub tools: ToolSetHash,
     pub used: u64,
     pub expires: crate::Moment,
+}
+pub(super) struct OutstandingWork {
+    model: String,
+    request: crate::journal::Request,
+    session: Option<String>,
+    completion: PendingCompletion,
+}
+enum PendingCompletion {
+    Disconnected(Option<crate::journal::SessionUse>),
+    AlreadyCompleted,
+}
+impl OutstandingWork {
+    pub(super) fn disconnected_check(request: PendingRequest) -> Self {
+        Self {
+            model: request.turn.model,
+            request: request.request,
+            session: None,
+            completion: PendingCompletion::Disconnected(None),
+        }
+    }
+    pub(super) fn request_id(&self) -> &str {
+        &self.request.id
+    }
+    pub(super) fn model(&self) -> &str {
+        &self.model
+    }
+    pub(super) fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+    pub(super) fn prepared(mut self, session: String) -> Vec<Command> {
+        self.session = Some(session);
+        self.finish()
+    }
+    pub(super) fn finish(self) -> Vec<Command> {
+        let mut commands = Vec::new();
+        if let Some(session) = &self.session {
+            commands.push(Command::Forget(session.clone()));
+        }
+        if let PendingCompletion::Disconnected(kind) = self.completion {
+            commands.push(Command::Complete(crate::journal::Completion {
+                request: self.request,
+                session: self.session,
+                session_use: kind,
+                outcome: crate::journal::Outcome::Disconnected,
+            }));
+        }
+        commands
+    }
 }
 pub(super) struct RequestRecord {
     hashes: RecordHashes,
@@ -162,6 +210,32 @@ impl Sessions {
     pub(super) fn runtime_failed(&mut self) {
         self.clear_cancels();
         self.startup = None;
+    }
+    pub(super) fn disconnect(
+        &mut self,
+        active: Active,
+        now: Moment,
+    ) -> (Option<OutstandingWork>, Vec<Command>) {
+        let mut commands = Vec::new();
+        let ended = matches!(
+            active.phase,
+            Phase::Settling { .. } | Phase::QuotaSettling { .. }
+        );
+        if active.phase.update_deadline().is_some() {
+            commands.push(self.cancel(active.session.as_ref().unwrap().clone(), now));
+        }
+        let outstanding = OutstandingWork {
+            model: active.model,
+            request: active.request,
+            session: active.session,
+            completion: PendingCompletion::Disconnected(Some(active.kind)),
+        };
+        if ended {
+            commands.extend(outstanding.finish());
+            (None, commands)
+        } else {
+            (Some(outstanding), commands)
+        }
     }
     pub(super) fn complete_request(
         &mut self,

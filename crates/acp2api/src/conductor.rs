@@ -14,6 +14,7 @@ use crate::{
 use agent_client_protocol_schema::v1::StopReason;
 use keep_alive::KEEP_ALIVE_INTERVAL;
 pub(crate) use keep_alive::NO_UPDATE_LIMIT;
+use records::OutstandingWork;
 pub(crate) use retry::WAIT_SECONDS;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -230,16 +231,6 @@ impl QuotaPhase {
         }
     }
 }
-struct OutstandingWork {
-    model: String,
-    request: crate::journal::Request,
-    session: Option<String>,
-    completion: PendingCompletion,
-}
-enum PendingCompletion {
-    Disconnected(Option<crate::journal::SessionUse>),
-    AlreadyCompleted,
-}
 impl Work {
     fn key(&self) -> &str {
         match self {
@@ -247,7 +238,7 @@ impl Work {
             Self::CheckQueued(request) | Self::Checking(request) => &request.request.id,
             Self::AcceptedQueued(request) => &request.request.id,
             Self::AcceptedWorking(active) => &active.request.id,
-            Self::Retiring(outstanding) => &outstanding.request.id,
+            Self::Retiring(outstanding) => outstanding.request_id(),
             Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => &query.work,
         }
     }
@@ -1003,7 +994,7 @@ impl Core {
                 | Work::ModelsQueued(_)
                 | Work::ModelsReading(_) => None,
                 Work::AcceptedWorking(active) => active.session.as_deref(),
-                Work::Retiring(outstanding) => outstanding.session.as_deref(),
+                Work::Retiring(outstanding) => outstanding.session(),
                 Work::QuotaWorking { phase, .. } => phase.session(),
             };
             (current == Some(session)).then_some(*id)
@@ -1551,38 +1542,16 @@ impl Core {
                         Work::Checking(request) => {
                             self.work.insert(
                                 id,
-                                Work::Retiring(OutstandingWork {
-                                    model: request.turn.model,
-                                    request: request.request,
-                                    session: None,
-                                    completion: PendingCompletion::Disconnected(None),
-                                }),
+                                Work::Retiring(OutstandingWork::disconnected_check(request)),
                             );
                         }
                         Work::AcceptedQueued(request) => Self::drop_queued(request, &mut commands),
                         Work::AcceptedWorking(active) => {
                             self.keep_quota_wait_reset_query(&active);
-                            let ended = matches!(
-                                active.phase,
-                                Phase::Settling { .. } | Phase::QuotaSettling { .. }
-                            );
-                            if active.phase.update_deadline().is_some() {
-                                commands.push(
-                                    self.sessions
-                                        .cancel(active.session.as_ref().unwrap().clone(), now),
-                                );
-                            }
-                            self.work.insert(
-                                id,
-                                Work::Retiring(OutstandingWork {
-                                    model: active.model,
-                                    request: active.request,
-                                    session: active.session,
-                                    completion: PendingCompletion::Disconnected(Some(active.kind)),
-                                }),
-                            );
-                            if ended {
-                                self.finish(id, Ok(()), now, &mut commands);
+                            let (outstanding, disconnected) = self.sessions.disconnect(active, now);
+                            commands.extend(disconnected);
+                            if let Some(outstanding) = outstanding {
+                                self.work.insert(id, Work::Retiring(outstanding));
                             }
                         }
                         Work::Retiring(_)
@@ -1617,9 +1586,13 @@ impl Core {
                                 Work::Checking(_) => {
                                     commands.push(Command::AdmitChecked { id, session });
                                 }
-                                Work::Retiring(outstanding) => {
-                                    outstanding.session = Some(session);
-                                    self.finish(id, Ok(()), now, &mut commands);
+                                Work::Retiring(_) => {
+                                    let Work::Retiring(outstanding) =
+                                        self.work.remove(&id).unwrap()
+                                    else {
+                                        unreachable!()
+                                    };
+                                    commands.extend(outstanding.prepared(session));
                                 }
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
@@ -1660,7 +1633,9 @@ impl Core {
                             {
                                 let pending_model = match &self.work[&id] {
                                     Work::Checking(request) => Some(request.turn.model.clone()),
-                                    Work::Retiring(outstanding) => Some(outstanding.model.clone()),
+                                    Work::Retiring(outstanding) => {
+                                        Some(outstanding.model().to_owned())
+                                    }
                                     _ => None,
                                 };
                                 if known || pending_model.is_some() {
@@ -1746,7 +1721,7 @@ impl Core {
                             let Work::Retiring(outstanding) = &self.work[&id] else {
                                 unreachable!()
                             };
-                            let model = Some(outstanding.model.clone());
+                            let model = Some(outstanding.model().to_owned());
                             self.enqueue_reset_query(wait, model);
                         }
                     } else {
@@ -2324,10 +2299,10 @@ impl Core {
     ) {
         if let TurnUpdate::Usage { size, .. } = &update {
             let model = match &self.work[&id] {
-                Work::Retiring(outstanding) => &outstanding.model,
+                Work::Retiring(outstanding) => outstanding.model(),
                 work => &work.execution().unwrap().model,
             };
-            self.context_sizes.insert(model.clone(), *size);
+            self.context_sizes.insert(model.to_owned(), *size);
         }
         if matches!(self.work[&id], Work::Retiring(_)) {
             match update {
@@ -2658,19 +2633,7 @@ impl Core {
                 now,
                 commands,
             ),
-            Work::Retiring(outstanding) => {
-                if let Some(session) = &outstanding.session {
-                    commands.push(Command::Forget(session.clone()));
-                }
-                if let PendingCompletion::Disconnected(kind) = outstanding.completion {
-                    commands.push(Command::Complete(crate::journal::Completion {
-                        request: outstanding.request,
-                        session: outstanding.session,
-                        session_use: kind,
-                        outcome: crate::journal::Outcome::Disconnected,
-                    }));
-                }
-            }
+            Work::Retiring(outstanding) => commands.extend(outstanding.finish()),
             work => {
                 let mut active = work.into_active().unwrap();
                 let result = match std::mem::replace(&mut active.phase, Phase::Completing) {
