@@ -73,15 +73,7 @@ pub(crate) struct QuotaResult {
 #[derive(Clone)]
 pub(crate) struct Notice {
     pub(crate) id: String,
-    name: String,
-}
-impl Notice {
-    pub(crate) fn text(&self) -> String {
-        format!(
-            "The built-in tool {} ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client.",
-            self.name
-        )
-    }
+    pub(crate) name: String,
 }
 enum Replacement {
     SignIn,
