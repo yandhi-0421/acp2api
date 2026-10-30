@@ -154,6 +154,9 @@ pub(crate) async fn run(
                             break;
                         }
                         RuntimeEvent::Other | RuntimeEvent::Stderr => {}
+                        RuntimeEvent::WriteFailed(reason) => {
+                            return Err(Failure::Runtime(LaunchFailure::Runtime(reason)));
+                        }
                         RuntimeEvent::Closed => {
                             return Err(Failure::Runtime(LaunchFailure::Runtime(
                                 "the check runtime exited during session/load".into(),
@@ -300,6 +303,9 @@ async fn check_prompt(
                 }
             }
             RuntimeEvent::Other | RuntimeEvent::Stderr => {}
+            RuntimeEvent::WriteFailed(reason) => {
+                return Err(Failure::Runtime(LaunchFailure::Runtime(reason)));
+            }
             RuntimeEvent::Closed => {
                 return Err(Failure::Runtime(LaunchFailure::Runtime(
                     "the check runtime exited unexpectedly".into(),

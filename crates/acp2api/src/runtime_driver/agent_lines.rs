@@ -181,6 +181,7 @@ async fn next(runtime: &mut Runtime) -> String {
         ),
         RuntimeEvent::Other => "other".into(),
         RuntimeEvent::Closed => "closed".into(),
+        RuntimeEvent::WriteFailed(reason) => format!("write failed: {reason}"),
     }
 }
 async fn turn(runtime: &mut Runtime) -> Vec<String> {
