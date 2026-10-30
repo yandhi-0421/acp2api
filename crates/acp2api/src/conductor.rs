@@ -585,9 +585,7 @@ struct Core {
     context_sizes: BTreeMap<String, u64>,
     work: WorkTable,
     next_work: WorkId,
-    records: Vec<records::Record>,
-    startup_session: Option<String>,
-    use_sequence: u64,
+    sessions: records::Sessions,
     limit: u8,
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
@@ -726,7 +724,7 @@ impl Core {
                     };
                     self.stop_runtime(runtime, read_open).await;
                     let builds = builds.clone();
-                    let retained = self.retained_sessions();
+                    let retained = self.sessions.retained();
                     return Some(Box::pin(async move {
                         let result = builds.check(program, retained).await;
                         CompletedCheck {
@@ -788,15 +786,6 @@ impl Core {
             .map_err(Into::into);
         let _ = reply.send(result);
         None
-    }
-    fn retained_sessions(&self) -> Vec<(String, PathBuf)> {
-        self.records
-            .iter()
-            .filter_map(|record| match &record.location {
-                records::Location::Unloaded(cwd) => Some((record.session.clone(), cwd.clone())),
-                records::Location::Loaded => None,
-            })
-            .collect()
     }
     async fn resume_after_copy_error(
         &mut self,
@@ -894,7 +883,7 @@ impl Core {
                     .await;
                 return;
             }
-            let retained = self.cleanup_before_start.then(|| self.retained_sessions());
+            let retained = self.cleanup_before_start.then(|| self.sessions.retained());
             self.cleanup_before_start = true;
             match builds.launch(retained).await {
                 Ok((started, catalog)) => {
@@ -987,12 +976,8 @@ impl Core {
     async fn stop_runtime(&mut self, runtime: &mut Option<Runtime>, read_open: &mut bool) {
         *read_open = false;
         if let Some(old) = runtime.take() {
-            for record in &mut self.records {
-                if matches!(record.location, records::Location::Loaded) {
-                    record.location =
-                        records::Location::Unloaded(old.session_cwd(&record.session).to_path_buf());
-                }
-            }
+            self.sessions
+                .unload(|session| old.session_cwd(session).to_path_buf());
             old.stop().await;
         }
         self.replaced(None, None);
@@ -1008,7 +993,7 @@ impl Core {
             && !self.work.values().any(Work::occupies_place)
     }
     fn replaced(&mut self, session: Option<String>, catalog: Option<crate::catalog::Catalog>) {
-        self.startup_session = session;
+        self.sessions.replaced(session);
         self.catalog = catalog;
     }
 
@@ -1038,7 +1023,7 @@ impl Core {
         self.work
             .values()
             .filter_map(Work::deadline)
-            .chain(self.records.iter().map(|record| record.expires))
+            .chain(self.sessions.records().iter().map(|record| record.expires))
             .chain(self.cancels.values().copied())
             .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
             .chain(self.sign_in_wait.as_ref().map(|wait| wait.deadline))
@@ -1632,9 +1617,7 @@ impl Core {
                             self.sign_in_required = false;
                             match self.work.get_mut(&id).unwrap() {
                                 Work::ModelsReading(_) => {
-                                    commands.extend(
-                                        self.startup_session.replace(session).map(Command::Forget),
-                                    );
+                                    commands.extend(self.sessions.models_ready(session));
                                     self.finish(id, Ok(()), now, &mut commands);
                                 }
                                 Work::Checking(_) => {
@@ -1773,11 +1756,7 @@ impl Core {
                             self.enqueue_reset_query(wait, model);
                         }
                     } else {
-                        self.records.retain(|record| record.session != session);
-                        if self.startup_session.as_ref() == Some(&session) {
-                            self.startup_session = None;
-                        }
-                        commands.push(Command::Forget(session));
+                        commands.extend(self.sessions.forget(session));
                         if !known {
                             self.enqueue_reset_query(wait, None);
                         }
@@ -1787,15 +1766,11 @@ impl Core {
                         self.fail_request(id, session, message, now, &mut commands);
                     }
                 } else {
-                    self.records.retain(|record| record.session != session);
-                    if self.startup_session.as_ref() == Some(&session) {
-                        self.startup_session = None;
-                    }
-                    commands.push(Command::Forget(session));
+                    commands.extend(self.sessions.forget(session));
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Failed(error))) => {
-                self.forget_idle(&mut commands);
+                commands.extend(self.sessions.forget_idle());
                 while let Some(id) = self
                     .work
                     .iter()
@@ -1829,7 +1804,7 @@ impl Core {
                 self.failures
                     .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
                 self.failures.push_back(now);
-                self.startup_session = None;
+                self.sessions.replaced(None);
                 while let Some(id) = self
                     .work
                     .iter()
@@ -1866,14 +1841,7 @@ impl Core {
                 }
             }
         }
-        self.records.retain(|record| {
-            if record.expires <= now {
-                commands.push(Command::Forget(record.session.clone()));
-                false
-            } else {
-                true
-            }
-        });
+        commands.extend(self.sessions.expire(now));
         let mut places = self
             .work
             .values()
@@ -1933,7 +1901,7 @@ impl Core {
                         continue;
                     }
                     let phase =
-                        if let Some(session) = session.or_else(|| self.startup_session.take()) {
+                        if let Some(session) = session.or_else(|| self.sessions.take_startup()) {
                             commands.push(Command::Usage {
                                 work: query.work.clone(),
                                 session: session.clone(),
@@ -2067,7 +2035,7 @@ impl Core {
         let hashes = crate::conversation::record_hashes(&request.turn.conversation);
         let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
         let items = request.turn.conversation.items();
-        let matched = records::select(&self.records, &hashes, tools_hash, &items);
+        let matched = records::select(self.sessions.records(), &hashes, tools_hash, &items);
         let prompt = match matched {
             Some((_, new_items)) => Prompt::Continue { new_items },
             None if request.turn.conversation.earlier.is_empty() => Prompt::New {
@@ -2086,22 +2054,22 @@ impl Core {
         let model = prompt.model.clone();
         let ready = match matched {
             Some((index, _)) => {
-                let record = self.records.remove(index);
+                let record = self.sessions.take(index);
                 Some((record.session, record.location))
             }
             None if checked_session.is_some() => checked_session
                 .take()
                 .map(|session| (session, records::Location::Loaded)),
             None if settings.system.is_none() && settings.tools.is_empty() => self
-                .startup_session
-                .take()
+                .sessions
+                .take_startup()
                 .map(|id| (id, records::Location::Loaded)),
             None => None,
         };
         if matched.is_some() {
             commands.extend(checked_session.map(Command::Forget));
         }
-        self.use_sequence += 1;
+        let used = self.sessions.next_use();
         let work = request.request.id.clone();
         let (session, phase) = match ready {
             Some((id, records::Location::Loaded)) => {
@@ -2139,7 +2107,7 @@ impl Core {
                 tools_hash,
                 client_tools_hash,
                 kind,
-                used: self.use_sequence,
+                used,
                 expires: now.saturating_add(24 * 60 * 60 * 1000),
                 held: None,
                 text: String::new(),
@@ -2531,10 +2499,6 @@ impl Core {
             }
         }
     }
-    fn forget_idle(&mut self, commands: &mut Vec<Command>) {
-        let idle = self.records.drain(..).map(|record| record.session);
-        commands.extend(idle.chain(self.startup_session.take()).map(Command::Forget));
-    }
     fn refuse_model_reads(
         &mut self,
         message: &crate::messages::Message,
@@ -2850,7 +2814,7 @@ impl Core {
                 if let Some(hash) = tool_hash {
                     active.hashes.messages.push(hash);
                 }
-                self.records.push(records::Record {
+                self.sessions.remember(records::Record {
                     location: records::Location::Loaded,
                     session: session.clone(),
                     hashes: active.hashes,
@@ -2944,12 +2908,10 @@ impl Conductor {
                 cancels: BTreeMap::new(),
                 changes: VecDeque::new(),
                 replacement: None,
-                startup_session: None,
                 catalog: None,
                 model_names: Vec::new(),
                 context_sizes: BTreeMap::new(),
-                records: Vec::new(),
-                use_sequence: 0,
+                sessions: records::Sessions::default(),
                 limit,
                 work: BTreeMap::new(),
                 next_work: 0,
@@ -3492,9 +3454,7 @@ mod tests {
                 context_sizes: BTreeMap::new(),
                 work: BTreeMap::new(),
                 next_work: 0,
-                records: Vec::new(),
-                startup_session: None,
-                use_sequence: 0,
+                sessions: records::Sessions::default(),
                 limit,
                 notices: watch::channel(Arc::new(Vec::new())).0,
             }
@@ -3646,7 +3606,7 @@ mod tests {
         );
         assert_eq!(core.view.borrow().places, 1, "one shared running read");
 
-        core.startup_session = Some("previous-session".into());
+        core.sessions.replaced(Some("previous-session".into()));
         let metadata = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let commands = core.handle(
             Event::Runtime(RuntimeEvent::Prepared {
@@ -3687,7 +3647,7 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, Command::Prepare { .. }))
         );
-        assert_eq!(core.startup_session.as_deref(), Some("models-session"));
+        assert_eq!(core.sessions.startup(), Some("models-session"));
         assert_eq!(core.view.borrow().model_names, ["m"]);
         assert_eq!(
             (core.view.borrow().places, core.view.borrow().queued),
@@ -3705,7 +3665,7 @@ mod tests {
         let mut core = Core::fixture(2);
         let mut tickets = Vec::new();
         for model in ["m", "n"] {
-            core.startup_session = Some(format!("session-{model}"));
+            core.sessions.replaced(Some(format!("session-{model}")));
             let body =
                 serde_json::json!({"model":model,"messages":[{"role":"user","content":"Hi"}]});
             let turn = crate::dialect::CHAT
@@ -4377,7 +4337,7 @@ mod tests {
     #[test]
     fn stopping_cancels_the_running_usage_prompt_and_answers_its_owner() {
         let mut core = Core {
-            startup_session: Some("usage".into()),
+            sessions: records::Sessions::fixture(Vec::new(), Some("usage".into()), 0),
             ..Core::fixture(1)
         };
         let (reply, mut answer) = oneshot::channel();
@@ -5641,7 +5601,7 @@ mod tests {
         [mpsc::UnboundedReceiver<(TurnEvent, Hold)>; 2],
     ) {
         let mut core = Core {
-            startup_session: Some("running".into()),
+            sessions: records::Sessions::fixture(Vec::new(), Some("running".into()), 0),
             ..Core::fixture(1)
         };
         let mut tickets = Vec::new();
@@ -5852,7 +5812,7 @@ mod tests {
         for catalog_at_admission in [false, true] {
             let (mut core, _, _tickets) = prompting_with_waiter(&journal);
             core.work.clear();
-            core.startup_session = None;
+            core.sessions.replaced(None);
             let metadata = serde_json::json!({
                 "configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}],
                 "models":{"availableModels":[{"modelId":"m-low"},{"modelId":"m-high"}]}
@@ -6793,7 +6753,7 @@ mod tests {
             std::time::UNIX_EPOCH,
         );
         core.handle(Event::Deadline, 202, std::time::UNIX_EPOCH);
-        core.records[0].location = records::Location::Unloaded(folder.join("saved-cwd"));
+        core.sessions.unload(|_| folder.join("saved-cwd"));
         let id = core.by_request(&loading).unwrap();
         core.work.get_mut(&id).and_then(|work| match work {
             Work::AcceptedQueued(request) => Some(request),
@@ -6919,8 +6879,8 @@ mod tests {
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let (mut core, _, [ _a, mut b ]) = prompting_with_waiter(&journal);
             let active = core.work[&0].execution().unwrap();
-            core.records.push(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), hashes:crate::conversation::RecordHashes { system:active.hashes.system, messages:active.hashes.messages.clone() }, tools:active.tools_hash, used:0, expires:86_400_000 });
-            core.startup_session = Some("sibling".into());
+            core.sessions.remember(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), hashes:crate::conversation::RecordHashes { system:active.hashes.system, messages:active.hashes.messages.clone() }, tools:active.tools_hash, used:0, expires:86_400_000 });
+            core.sessions.replaced(Some("sibling".into()));
             core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
             drop(agent_input);
             let mut batch = Vec::new();
@@ -6939,7 +6899,7 @@ mod tests {
             assert!(closed.is_empty() && deadline.is_empty(), "the failed runtime must emit no second M-20");
             let mut message = None;
             while let Ok((event, _hold)) = b.try_recv() { if let TurnEvent::End(Err(error)) = event { message = Some(error.to_string()); } }
-            let retained: Vec<_> = core.records.iter().map(|record| record.session.as_str()).collect();
+            let retained: Vec<_> = core.sessions.records().iter().map(|record| record.session.as_str()).collect();
             let actual = (message, retained == ["saved"]);
             runtime.take().unwrap().stop().await;
             std::fs::remove_dir_all(folder).unwrap();
@@ -7135,7 +7095,7 @@ mod tests {
             core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
             core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1, std::time::UNIX_EPOCH);
             core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH);
-            core.records[0].location = records::Location::Unloaded(cwd);
+            core.sessions.unload(|_| cwd.clone());
             core.cleanup_before_start = true;
             let (reply, result) = oneshot::channel();
             core.replacement = Some(Replacement::Build { reply, source:None, initial:false });
@@ -7338,7 +7298,7 @@ mod tests {
         core.replaced(Some("new-runtime-startup".into()), None);
         let dispatched = core.handle(Event::ResumeRuntime, 204, std::time::UNIX_EPOCH);
         assert!(
-            core.records.len() == 1
+            core.sessions.records().len() == 1
                 && dispatched.iter().any(
                     |command| matches!(command, Command::Prepare {work,..} if work == &queued)
                 ),
@@ -7615,7 +7575,7 @@ mod tests {
             "the completed ACP call releases its entry"
         );
         assert!(
-            core.records.is_empty(),
+            core.sessions.records().is_empty(),
             "the disconnected session cannot continue"
         );
         std::fs::remove_dir_all(folder).unwrap();
@@ -7634,7 +7594,7 @@ mod tests {
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
-                startup_session: Some("session".into()),
+                sessions: records::Sessions::fixture(Vec::new(), Some("session".into()), 0),
                 ..Core::fixture(1)
             };
             core.handle(
@@ -7768,7 +7728,7 @@ mod tests {
                     }),
                 )]),
                 next_work: 1,
-                use_sequence: 1,
+                sessions: records::Sessions::fixture(Vec::new(), None, 1),
                 ..Core::fixture(1)
             };
             core.handle(
@@ -8015,15 +7975,18 @@ mod tests {
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
-            records: vec![records::Record {
-                location: records::Location::Loaded,
-                session: "idle".into(),
-                hashes: crate::conversation::record_hashes(&turn.conversation),
-                tools: crate::conversation::tool_set_hash(&[]),
-                used: 1,
-                expires: 24 * 60 * 60 * 1000,
-            }],
-            use_sequence: 1,
+            sessions: records::Sessions::fixture(
+                vec![records::Record {
+                    location: records::Location::Loaded,
+                    session: "idle".into(),
+                    hashes: crate::conversation::record_hashes(&turn.conversation),
+                    tools: crate::conversation::tool_set_hash(&[]),
+                    used: 1,
+                    expires: 24 * 60 * 60 * 1000,
+                }],
+                None,
+                1,
+            ),
             ..Core::fixture(1)
         };
         let mut forgotten = Vec::new();

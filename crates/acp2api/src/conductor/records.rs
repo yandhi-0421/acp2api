@@ -11,6 +11,93 @@ pub(super) struct Record {
     pub used: u64,
     pub expires: crate::Moment,
 }
+#[derive(Default)]
+pub(super) struct Sessions {
+    records: Vec<Record>,
+    startup: Option<String>,
+    use_sequence: u64,
+}
+impl Sessions {
+    pub(super) fn records(&self) -> &[Record] {
+        &self.records
+    }
+    pub(super) fn retained(&self) -> Vec<(String, std::path::PathBuf)> {
+        self.records
+            .iter()
+            .filter_map(|record| match &record.location {
+                Location::Unloaded(cwd) => Some((record.session.clone(), cwd.clone())),
+                Location::Loaded => None,
+            })
+            .collect()
+    }
+    pub(super) fn unload(&mut self, mut cwd: impl FnMut(&str) -> std::path::PathBuf) {
+        for record in &mut self.records {
+            if matches!(record.location, Location::Loaded) {
+                record.location = Location::Unloaded(cwd(&record.session));
+            }
+        }
+    }
+    pub(super) fn replaced(&mut self, startup: Option<String>) {
+        self.startup = startup;
+    }
+    pub(super) fn models_ready(&mut self, session: String) -> Option<super::Command> {
+        self.startup.replace(session).map(super::Command::Forget)
+    }
+    pub(super) fn take_startup(&mut self) -> Option<String> {
+        self.startup.take()
+    }
+    pub(super) fn take(&mut self, index: usize) -> Record {
+        self.records.remove(index)
+    }
+    pub(super) fn next_use(&mut self) -> u64 {
+        self.use_sequence += 1;
+        self.use_sequence
+    }
+    pub(super) fn remember(&mut self, record: Record) {
+        self.records.push(record);
+    }
+    pub(super) fn forget(&mut self, session: String) -> Vec<super::Command> {
+        self.records.retain(|record| record.session != session);
+        if self.startup.as_ref() == Some(&session) {
+            self.startup = None;
+        }
+        vec![super::Command::Forget(session)]
+    }
+    pub(super) fn forget_idle(&mut self) -> Vec<super::Command> {
+        let idle = self.records.drain(..).map(|record| record.session);
+        idle.chain(self.startup.take())
+            .map(super::Command::Forget)
+            .collect()
+    }
+    pub(super) fn expire(&mut self, now: crate::Moment) -> Vec<super::Command> {
+        let mut commands = Vec::new();
+        self.records.retain(|record| {
+            if record.expires <= now {
+                commands.push(super::Command::Forget(record.session.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        commands
+    }
+    #[cfg(test)]
+    pub(super) fn fixture(
+        records: Vec<Record>,
+        startup: Option<String>,
+        use_sequence: u64,
+    ) -> Self {
+        Self {
+            records,
+            startup,
+            use_sequence,
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn startup(&self) -> Option<&str> {
+        self.startup.as_deref()
+    }
+}
 pub(super) fn select<'a>(
     records: &[Record],
     hashes: &RecordHashes,
