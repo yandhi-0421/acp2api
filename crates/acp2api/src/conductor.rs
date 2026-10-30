@@ -1732,8 +1732,12 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Closed))
-                if matches!(self.runtime_state, RuntimeState::Restarting) => {}
+                if matches!(self.runtime_state, RuntimeState::Restarting) =>
+            {
+                self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
+            }
             (None, Event::Runtime(RuntimeEvent::Closed) | Event::RuntimeFailure) => {
+                self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
                 self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Restarting;
                 self.cancels.clear();
@@ -2443,12 +2447,33 @@ impl Core {
         let idle = self.records.drain(..).map(|record| record.session);
         commands.extend(idle.chain(self.startup_session.take()).map(Command::Forget));
     }
+    fn refuse_model_reads(
+        &mut self,
+        message: &crate::messages::Message,
+        commands: &mut Vec<Command>,
+    ) {
+        let queued: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| matches!(work, Work::ModelsQueued(_)).then_some(*id))
+            .collect();
+        for id in queued {
+            let Work::ModelsQueued(read) = self.work.remove(&id).unwrap() else {
+                unreachable!()
+            };
+            commands.push(Command::ModelsRead {
+                reply: read.reply,
+                result: Err(message.to_string()),
+            });
+        }
+    }
     fn refuse_queued(
         &mut self,
         outcome: crate::journal::Outcome,
         message: crate::messages::Message,
         commands: &mut Vec<Command>,
     ) {
+        self.refuse_model_reads(&message, commands);
         let queued: Vec<_> = self
             .work
             .iter()
@@ -3412,6 +3437,59 @@ mod tests {
             code: Some(429),
             status: "RESOURCE_EXHAUSTED".into(),
             message: "Quota exhausted; no reset time.".into(),
+        }
+    }
+
+    #[test]
+    fn queued_model_reads_end_when_the_runtime_stops_requests() {
+        for (event, expected) in [
+            (
+                Event::RuntimeUnavailable(UnavailableReason {
+                    message: "runtime missing".into(),
+                    cause: None,
+                }),
+                crate::messages::Message::RuntimeUnavailable("runtime missing".into()),
+            ),
+            (Event::Stop, crate::messages::Message::Stopped),
+            (
+                Event::Runtime(RuntimeEvent::Closed),
+                crate::messages::Message::RuntimeFailed,
+            ),
+            (
+                Event::Lockout {
+                    signal: "403 PERMISSION_DENIED",
+                    error: crate::messages::Message::UpstreamHttp(crate::messages::HttpError {
+                        code: Some(403),
+                        status: "PERMISSION_DENIED".into(),
+                        message: "Account suspended".into(),
+                    }),
+                    signalling_work: None,
+                },
+                crate::messages::Message::lockout(
+                    &crate::store::Lockout {
+                        since: "1970-01-01T00:00:00Z".into(),
+                        signal: "403 PERMISSION_DENIED".into(),
+                        original_error_text:
+                            "acp2api: upstream error 403 PERMISSION_DENIED: Account suspended"
+                                .into(),
+                    },
+                    "http://127.0.0.1:8329/",
+                    false,
+                ),
+            ),
+        ] {
+            let mut core = Core::fixture(1);
+            core.runtime_state = RuntimeState::Restarting;
+            let (reply, _result) = oneshot::channel();
+            core.handle(Event::ReadModelNames(reply), 0, std::time::UNIX_EPOCH);
+            assert_eq!(core.view.borrow().queued, 1);
+            let commands = core.handle(event, 1, std::time::UNIX_EPOCH);
+            let answer = commands.into_iter().find_map(|command| match command {
+                Command::ModelsRead { result, .. } => Some(result),
+                _ => None,
+            });
+            assert_eq!(answer, Some(Err(expected.to_string())));
+            assert_eq!(core.view.borrow().queued, 0);
         }
     }
 
