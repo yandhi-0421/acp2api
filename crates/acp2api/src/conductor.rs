@@ -7,7 +7,7 @@ pub(crate) mod sign_in;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
-    conversation::{EffortAsk, Prompt, PromptRequest, Ticket, TurnEvent, TurnRequest},
+    conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest},
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
@@ -1979,7 +1979,7 @@ impl Core {
         &mut self,
         id: WorkId,
         request: Accepted,
-        mut checked_session: Option<String>,
+        checked_session: Option<String>,
         now: Moment,
         commands: &mut Vec<Command>,
     ) -> bool {
@@ -1998,98 +1998,12 @@ impl Core {
             );
             return false;
         }
-        let client_tools_hash = crate::conversation::tool_set_hash(&request.turn.tools);
-        let settings = Session::for_turn(&request.turn);
-        let hashes = crate::conversation::record_hashes(&request.turn.conversation);
-        let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
-        let items = request.turn.conversation.items();
-        let matched = records::select(self.sessions.records(), &hashes, tools_hash, &items);
-        let prompt = match matched {
-            Some((_, new_items)) => Prompt::Continue { new_items },
-            None if request.turn.conversation.earlier.is_empty() => Prompt::New {
-                message: &request.turn.conversation.last,
-            },
-            None => Prompt::Rebuild {
-                conversation_items: &items,
-            },
-        };
-        let (kind, prompt) = crate::conversation::prompt(prompt, &items);
-        let prompt = PromptRequest {
-            blocks: prompt,
-            model: request.model.model,
-            level: request.model.level,
-        };
-        let model = prompt.model.clone();
-        let ready = match matched {
-            Some((index, _)) => {
-                let record = self.sessions.take(index);
-                Some((record.session, record.location))
-            }
-            None if checked_session.is_some() => checked_session
-                .take()
-                .map(|session| (session, records::Location::Loaded)),
-            None if settings.system.is_none() && settings.tools.is_empty() => self
-                .sessions
-                .take_startup()
-                .map(|id| (id, records::Location::Loaded)),
-            None => None,
-        };
-        if matched.is_some() {
-            commands.extend(checked_session.map(Command::Forget));
-        }
-        let record = self.sessions.request_record(hashes, tools_hash, now);
-        let work = request.request.id.clone();
-        let (session, phase) = match ready {
-            Some((id, records::Location::Loaded)) => {
-                commands.push(Command::Prompt {
-                    work: work.clone(),
-                    session: id.clone(),
-                    prompt,
-                });
-                (Some(id), Phase::prompt(now))
-            }
-            Some((session, records::Location::Unloaded(cwd))) => {
-                commands.push(Command::Prepare {
-                    work,
-                    settings: settings.clone(),
-                    load: Some((session.clone(), cwd)),
-                });
-                (Some(session), Phase::Preparing(prompt))
-            }
-            None => {
-                commands.push(Command::Prepare {
-                    work,
-                    settings: settings.clone(),
-                    load: None,
-                });
-                (None, Phase::Preparing(prompt))
-            }
-        };
-        self.work.insert(
-            id,
-            Work::AcceptedWorking(Active {
-                reply: request.reply,
-                request: request.request,
-                session,
-                record,
-                client_tools_hash,
-                kind,
-                held: None,
-                text: String::new(),
-                thought_dropped: false,
-                input_tokens: request.turn.input_tokens,
-                model,
-                model_name: request.turn.model,
-                effort: request.turn.effort,
-                phase,
-                tool_call: None,
-                stop: crate::conversation::Stop::EndTurn,
-                stops: request.turn.stop,
-                stop_prefix: String::new(),
-            }),
-        );
+        let (active, started) = self.sessions.start_request(request, checked_session, now);
+        self.work.insert(id, Work::AcceptedWorking(active));
+        commands.extend(started);
         true
     }
+
     fn quota_event(
         &mut self,
         id: WorkId,

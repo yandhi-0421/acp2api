@@ -1,5 +1,5 @@
-use super::{Active, Command, Failure, PendingRequest, Phase, retry};
-use crate::conversation::{self, Item, RecordHashes, ToolSetHash};
+use super::{Accepted, Active, Command, Failure, PendingRequest, Phase, Session, retry};
+use crate::conversation::{self, Item, Prompt, PromptRequest, RecordHashes, ToolSetHash};
 use crate::{
     Moment,
     conversation::{TurnEvent, Usage},
@@ -111,6 +111,7 @@ pub(super) struct Sessions {
     cancels: BTreeMap<String, Moment>,
 }
 impl Sessions {
+    #[cfg(test)]
     pub(super) fn records(&self) -> &[Record] {
         &self.records
     }
@@ -138,23 +139,6 @@ impl Sessions {
     }
     pub(super) fn take_startup(&mut self) -> Option<String> {
         self.startup.take()
-    }
-    pub(super) fn take(&mut self, index: usize) -> Record {
-        self.records.remove(index)
-    }
-    pub(super) fn request_record(
-        &mut self,
-        hashes: RecordHashes,
-        tools: ToolSetHash,
-        now: Moment,
-    ) -> RequestRecord {
-        self.use_sequence += 1;
-        RequestRecord {
-            hashes,
-            tools,
-            used: self.use_sequence,
-            expires: now.saturating_add(24 * 60 * 60 * 1000),
-        }
     }
     #[cfg(test)]
     pub(super) fn remember(&mut self, record: Record) {
@@ -184,6 +168,109 @@ impl Sessions {
             }
         });
         commands
+    }
+    pub(super) fn start_request(
+        &mut self,
+        request: Accepted,
+        mut checked_session: Option<String>,
+        now: Moment,
+    ) -> (Active, Vec<Command>) {
+        let mut commands = Vec::new();
+        let client_tools_hash = crate::conversation::tool_set_hash(&request.turn.tools);
+        let settings = Session::for_turn(&request.turn);
+        let hashes = crate::conversation::record_hashes(&request.turn.conversation);
+        let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
+        let items = request.turn.conversation.items();
+        let matched = select(&self.records, &hashes, tools_hash, &items);
+        let prompt = match matched {
+            Some((_, new_items)) => Prompt::Continue { new_items },
+            None if request.turn.conversation.earlier.is_empty() => Prompt::New {
+                message: &request.turn.conversation.last,
+            },
+            None => Prompt::Rebuild {
+                conversation_items: &items,
+            },
+        };
+        let (kind, prompt) = crate::conversation::prompt(prompt, &items);
+        let prompt = PromptRequest {
+            blocks: prompt,
+            model: request.model.model,
+            level: request.model.level,
+        };
+        let model = prompt.model.clone();
+        let ready = match matched {
+            Some((index, _)) => {
+                let record = self.records.remove(index);
+                Some((record.session, record.location))
+            }
+            None if checked_session.is_some() => checked_session
+                .take()
+                .map(|session| (session, Location::Loaded)),
+            None if settings.system.is_none() && settings.tools.is_empty() => {
+                self.startup.take().map(|id| (id, Location::Loaded))
+            }
+            None => None,
+        };
+        if matched.is_some() {
+            commands.extend(checked_session.map(Command::Forget));
+        }
+        self.use_sequence += 1;
+        let record = RequestRecord {
+            hashes,
+            tools: tools_hash,
+            used: self.use_sequence,
+            expires: now.saturating_add(24 * 60 * 60 * 1000),
+        };
+        let work = request.request.id.clone();
+        let (session, phase) = match ready {
+            Some((id, Location::Loaded)) => {
+                commands.push(Command::Prompt {
+                    work: work.clone(),
+                    session: id.clone(),
+                    prompt,
+                });
+                (Some(id), Phase::prompt(now))
+            }
+            Some((session, Location::Unloaded(cwd))) => {
+                commands.push(Command::Prepare {
+                    work,
+                    settings: settings.clone(),
+                    load: Some((session.clone(), cwd)),
+                });
+                (Some(session), Phase::Preparing(prompt))
+            }
+            None => {
+                commands.push(Command::Prepare {
+                    work,
+                    settings: settings.clone(),
+                    load: None,
+                });
+                (None, Phase::Preparing(prompt))
+            }
+        };
+        (
+            Active {
+                reply: request.reply,
+                request: request.request,
+                session,
+                record,
+                client_tools_hash,
+                kind,
+                held: None,
+                text: String::new(),
+                thought_dropped: false,
+                input_tokens: request.turn.input_tokens,
+                model,
+                model_name: request.turn.model,
+                effort: request.turn.effort,
+                phase,
+                tool_call: None,
+                stop: crate::conversation::Stop::EndTurn,
+                stops: request.turn.stop,
+                stop_prefix: String::new(),
+            },
+            commands,
+        )
     }
     pub(super) fn next_deadline(&self) -> Option<Moment> {
         self.records
@@ -386,7 +473,7 @@ impl Sessions {
         self.startup.as_deref()
     }
 }
-pub(super) fn select<'a>(
+fn select<'a>(
     records: &[Record],
     hashes: &RecordHashes,
     tools: ToolSetHash,
