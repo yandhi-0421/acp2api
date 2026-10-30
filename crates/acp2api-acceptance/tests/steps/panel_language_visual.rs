@@ -23,9 +23,15 @@ async fn opened(w: &mut World) {
 #[then(regex = r#"^the first tile shows "(运行中|Running)"$"#)]
 fn state(w: &mut World, expected: String) {
     let html = document::html(w.panel.answer.as_ref().expect("the panel was opened"));
-    let text = document::visible(&html);
-    assert!(
-        text.split_whitespace().any(|word| word == expected),
+    let first_tile = document::elements(&html, "section")
+        .next()
+        .expect("the page has a first tile");
+    let state = document::elements(first_tile.content, "h1")
+        .next()
+        .map(|heading| document::visible(heading.content));
+    assert_eq!(
+        state.as_deref(),
+        Some(expected.as_str()),
         "FR-055 served state text must be {expected:?} for browser language {:?}",
         w.panel.owner("B1").language
     );
@@ -153,10 +159,23 @@ async fn switch(w: &mut World) -> Result<(), String> {
 #[then(expr = "the sections are {string}")]
 fn sections(w: &mut World, expected: String) {
     let html = document::html(w.panel.answer.as_ref().expect("the panel was opened"));
-    let text = document::visible(&html);
+    let headings: Vec<_> = document::elements(&html, "section")
+        .flat_map(|tile| document::elements(tile.content, "h2"))
+        .map(|heading| document::visible(heading.content))
+        .collect();
+    let anchors: Vec<_> = document::elements(&html, "nav")
+        .flat_map(|bar| document::elements(bar.content, "a"))
+        .map(|anchor| document::visible(anchor.content))
+        .collect();
     for label in expected.split('、') {
+        // FR-054 shows the band of notices only when a notice exists, and this scenario has none.
+        let shown = if label == "通知" {
+            &anchors
+        } else {
+            &headings
+        };
         assert!(
-            text.split_whitespace().any(|actual| actual == label),
+            shown.iter().any(|actual| actual == label),
             "FR-055 missing Chinese section label: {label}"
         );
     }
