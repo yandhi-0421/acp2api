@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::{io, path::Path, time::SystemTime};
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Api {
     #[serde(rename = "models")]
     Models,
@@ -250,6 +250,12 @@ struct JournalState {
 #[derive(Clone, Default)]
 pub(crate) struct History {
     pub(crate) requests: std::collections::VecDeque<RequestRecord>,
+    pub(crate) unknown_fields: std::collections::BTreeMap<(Api, String), UnknownField>,
+}
+#[derive(Clone)]
+pub(crate) struct UnknownField {
+    pub(crate) count: u64,
+    pub(crate) last_time: String,
 }
 #[derive(Clone)]
 pub(crate) struct Request {
@@ -541,6 +547,19 @@ impl Journal {
         };
         {
             let mut history = self.0.history.lock().unwrap();
+            for field in &record.unknown_fields {
+                history
+                    .unknown_fields
+                    .entry((record.api, field.clone()))
+                    .and_modify(|row| {
+                        row.count += 1;
+                        row.last_time.clone_from(&record.time);
+                    })
+                    .or_insert_with(|| UnknownField {
+                        count: 1,
+                        last_time: record.time.clone(),
+                    });
+            }
             if history.requests.len() == 50 {
                 history.requests.pop_front();
             }

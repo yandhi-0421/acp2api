@@ -164,8 +164,27 @@ pub(super) fn settings(page: Page<'_>) -> String {
             format!("<tr>{cells}</tr>")
         })
         .collect::<String>();
+    let unknown_fields = page
+        .history
+        .unknown_fields
+        .iter()
+        .map(|((api, name), row)| {
+            format!(
+                "<tr><th scope=\"row\">{}</th><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape(name),
+                match api {
+                    crate::journal::Api::Models => "GET /v1/models",
+                    crate::journal::Api::Chat => "OpenAI Chat Completions API",
+                    crate::journal::Api::Messages => "Anthropic Messages API",
+                    crate::journal::Api::Responses => "OpenAI Responses API",
+                },
+                row.count,
+                escape(&row.last_time)
+            )
+        })
+        .collect::<String>();
     let logs = format!(
-        r#"<section><h2>Logs</h2><p>Log folder <code>{}</code></p><div class="log-table"><table><caption>Last 50 requests</caption><thead><tr>{headings}</tr></thead><tbody>{requests}</tbody></table></div></section>"#,
+        r#"<section><h2>Logs</h2><p>Log folder <code>{}</code></p><div class="log-table"><table><caption>Last 50 requests</caption><thead><tr>{headings}</tr></thead><tbody>{requests}</tbody></table></div><div class="log-table"><table><caption>Unknown fields since start</caption><thead><tr><th scope="col">Field name</th><th scope="col">API</th><th scope="col">Count</th><th scope="col">Last time</th></tr></thead><tbody>{unknown_fields}</tbody></table></div></section>"#,
         escape(&page.data_folder.join("logs").display().to_string())
     );
     document(&format!(
