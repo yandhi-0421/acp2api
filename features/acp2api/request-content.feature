@@ -131,7 +131,7 @@ Feature: Request content
     When an API client sends to "POST /v1/messages" a valid request with 128 levels of objects and arrays
     Then acp2api answers with HTTP 200
 
-  @FR-014 @issue-74 @wip
+  @FR-014 @issue-74
   Scenario: acp2api ignores an unknown top-level field and counts it
     When an API client sends a valid request to "POST /v1/chat/completions" with the top-level field "example_field" set to 1
     Then acp2api answers with HTTP 200
