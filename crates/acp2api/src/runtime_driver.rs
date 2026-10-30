@@ -11,7 +11,7 @@ use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{FutureExt, Stream, StreamExt, stream};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -47,6 +47,7 @@ pub(crate) struct RuntimeStart {
     pub(crate) tool_sets: mcp::ToolSets,
 }
 pub(crate) const ANSWER_TIMEOUT: Moment = 5 * 60 * 1000;
+const WRITE_TIMEOUT: Moment = 30_000;
 impl RuntimeStart {
     pub(crate) async fn answer<T, E: From<LaunchFailure>>(
         &self,
@@ -113,6 +114,7 @@ impl RuntimeStart {
         &self,
         retained: Vec<(String, PathBuf)>,
     ) -> Result<(), String> {
+        let _work = self.clock.hold(HoldKind::TurnEvent);
         let folders = self.temporary.sessions();
         let files = self.data.join("runtime-home/antigravity-acp/conversations");
         tokio::task::spawn_blocking(move || {
@@ -145,8 +147,17 @@ impl RuntimeStart {
     }
 }
 const MAX_SIGN_IN_ADDRESS_BYTES: usize = 4096;
+// Track runnable writer work without holding virtual time over a pipe wait.
+enum WriteState {
+    Idle,
+    Ready(Hold),
+    Writing,
+}
 pub(crate) struct Runtime {
-    input: ProcessWrite,
+    input: mpsc::UnboundedSender<(Vec<u8>, Moment)>,
+    writer: tokio::task::JoinSet<()>,
+    stop_writer: tokio::sync::watch::Sender<bool>,
+    write_state: Arc<std::sync::Mutex<WriteState>>,
     lines: mpsc::Receiver<(Line, Hold)>,
     prompts: std::collections::HashMap<u64, String>,
     creating: std::collections::HashMap<u64, CreatingSession>,
@@ -238,6 +249,74 @@ impl Runtime {
         )
         .await?;
         let (tx, lines) = mpsc::channel(128);
+        let (input, mut messages) = mpsc::unbounded_channel::<(Vec<u8>, Moment)>();
+        let mut writer = tokio::task::JoinSet::new();
+        let (stop_writer, mut stopping) = tokio::sync::watch::channel(false);
+        let write_state = Arc::new(std::sync::Mutex::new(WriteState::Idle));
+        let writer_state = write_state.clone();
+        let writer_clock = start.clock.clone();
+        let writer_lines = tx.clone();
+        writer.spawn(async move {
+            let mut pipe = child.stdin;
+            while let Some((bytes, deadline)) = messages.recv().await {
+                let (result, _work) = {
+                    let mut until_first_poll = std::mem::replace(
+                        &mut *writer_state.lock().unwrap(),
+                        WriteState::Writing,
+                    );
+                    let timer = writer_clock.sleep_until(deadline);
+                    let writing = async {
+                        pipe.write_all(&bytes).await?;
+                        pipe.flush().await
+                    };
+                    tokio::pin!(writing);
+                    let completion_clock = &writer_clock;
+                    let writing = std::future::poll_fn(move |cx| {
+                        let result = writing.as_mut().poll(cx);
+                        let result = result.map(|result| (result, completion_clock.hold(HoldKind::TurnEvent)));
+                        let previous = std::mem::replace(&mut until_first_poll, WriteState::Writing);
+                        if let WriteState::Ready(work) = previous {
+                            drop(work);
+                        }
+                        result
+                    });
+                    tokio::pin!(writing);
+                    tokio::select! {
+                        biased;
+                        result = &mut writing => result,
+                        work = timer => {
+                            (Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "runtime stdin write exceeded 30 s")), work)
+                        }
+                        _ = stopping.wait_for(|stopped| *stopped) => match writing.as_mut().now_or_never() {
+                            Some(result) => result,
+                            None => return,
+                        },
+                    }
+                };
+                if let Err(error) = result {
+                    drop(messages);
+                    drop(pipe);
+                    // A cancellation deadline can already have started process
+                    // stop. A queued write failure must not hold its grace open.
+                    let (acknowledge, received) = tokio::sync::oneshot::channel();
+                    tokio::select! {
+                        _ = async {
+                            let _ = writer_lines.send((Line::WriteFailed(error, acknowledge), Hold::empty())).await;
+                            let _ = received.await;
+                        } => {}
+                        _ = stopping.wait_for(|stopped| *stopped) => {}
+                    }
+                    return;
+                }
+                let mut state = writer_state.lock().unwrap();
+                *state = if messages.is_empty() {
+                    WriteState::Idle
+                } else {
+                    WriteState::Ready(writer_clock.hold(HoldKind::TurnEvent))
+                };
+            }
+            let _ = pipe.shutdown().now_or_never();
+        });
         let clock = start.clock.clone();
         tokio::spawn(async move {
             let mut stdout = BufReader::new(child.stdout).split(b'\n');
@@ -276,7 +355,10 @@ impl Runtime {
             }
         });
         let runtime = Self {
-            input: child.stdin,
+            input,
+            writer,
+            stop_writer,
+            write_state,
             lines,
             prompts: std::collections::HashMap::new(),
             creating: std::collections::HashMap::new(),
@@ -430,11 +512,18 @@ impl Runtime {
         let mut bytes =
             serde_json::to_vec(&value).map_err(|e| CommandError::Session(e.to_string()))?;
         bytes.push(b'\n');
-        self.input
-            .write_all(&bytes)
-            .await
-            .map_err(CommandError::Io)?;
-        self.input.flush().await.map_err(CommandError::Io)
+        // Queue time counts too: backlog cannot extend the 30 s transport bound.
+        let deadline = self.clock.now().saturating_add(WRITE_TIMEOUT);
+        let mut state = self.write_state.lock().unwrap();
+        if matches!(*state, WriteState::Idle) {
+            *state = WriteState::Ready(self.clock.hold(HoldKind::TurnEvent));
+        }
+        self.input.send((bytes, deadline)).map_err(|_| {
+            CommandError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "runtime stdin writer stopped",
+            ))
+        })
     }
     pub(crate) async fn permission(
         &mut self,
@@ -481,6 +570,10 @@ impl Runtime {
                 }
                 Line::Closed => {
                     return Err(Message::Upstream("runtime stdout closed".into()));
+                }
+                Line::WriteFailed(error, acknowledge) => {
+                    let _ = acknowledge.send(());
+                    return Err(Message::Upstream(error.to_string()));
                 }
             };
             if value.get("method").is_some() {
@@ -595,6 +688,10 @@ impl Runtime {
             };
             let event = match line {
                 Line::Closed => RuntimeEvent::Closed,
+                Line::WriteFailed(_, acknowledge) => {
+                    let _ = acknowledge.send(());
+                    RuntimeEvent::Closed
+                }
                 Line::StderrClosed => {
                     self.stderr_closed = true;
                     continue;
@@ -870,8 +967,12 @@ impl Runtime {
     }
     /// Retain stopped-process stderr for the bounded `stop_and_drain_stderr` reader.
     async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
-        let _ = self.input.shutdown().await;
+        // Stop finishes only immediately-ready writes and polls pipe shutdown
+        // once, so neither can wait on a stalled pipe. Only the existing 5 s
+        // macOS process-stop grace remains; Windows terminates its Job Object.
         drop(self.input);
+        self.stop_writer.send_replace(true);
+        let _ = self.writer.join_next().await;
         self.tree.stop(self.clock).await;
         for tools in self
             .tools
@@ -919,6 +1020,7 @@ struct SessionTools {
     tools: Vec<crate::conversation::ClientTool>,
 }
 enum Line {
+    WriteFailed(std::io::Error, tokio::sync::oneshot::Sender<()>),
     Stdout(Result<Value, String>),
     Stderr(Vec<u8>),
     StderrClosed,
