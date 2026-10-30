@@ -15,22 +15,12 @@ pub(crate) enum Failure {
     Internal(String),
 }
 impl Failure {
-    fn lockout(event: &RuntimeEvent) -> Option<Self> {
-        let error = match event {
-            RuntimeEvent::Prepared {
-                result: Err(error), ..
-            }
-            | RuntimeEvent::Turn {
-                update: TurnUpdate::Failed(error),
-                ..
-            } => error.clone(),
-            RuntimeEvent::UpstreamError { error, .. } => {
-                crate::messages::Message::UpstreamHttp(error.clone())
-            }
-            _ => return None,
-        };
-        let signal = error.lockout_signal()?;
-        Some(Self::Runtime(LaunchFailure::Lockout { signal, error }))
+    fn lockout(event: &RuntimeEvent, failed_reply: &str) -> Option<Self> {
+        let (error, signal) = event.upstream_error(failed_reply)?;
+        Some(Self::Runtime(LaunchFailure::Lockout {
+            signal: signal?,
+            error,
+        }))
     }
 }
 impl From<LaunchFailure> for Failure {
@@ -58,6 +48,7 @@ pub(crate) async fn run(
     let mut runtime = Runtime::open(start, program)
         .await
         .map_err(Failure::Runtime)?;
+    let mut failed_reply = String::new();
     let checking = async {
         let initialized = start
             .answer(crate::runtime_driver::ANSWER_TIMEOUT, async {
@@ -124,6 +115,7 @@ pub(crate) async fn run(
             start,
             &session,
             "Reply with the secret codeword from the system instruction. Do not use any tool.",
+            &mut failed_reply,
         )
         .await?;
         if !text.contains(&codeword) || call.is_some() {
@@ -131,7 +123,7 @@ pub(crate) async fn run(
                 "the reply did not contain the system codeword".into(),
             ));
         }
-        let (_, call) = check_prompt(&mut runtime, start, &session, "Call the supplied client tool with exactly {\"value\":\"checked text\"}. Do not use a built-in tool.").await?;
+        let (_, call) = check_prompt(&mut runtime, start, &session, "Call the supplied client tool with exactly {\"value\":\"checked text\"}. Do not use a built-in tool.", &mut failed_reply).await?;
         let call =
             call.ok_or_else(|| Failure::Incompatible("no client tool permission request".into()))?;
         if call.arguments != r#"{"value":"checked text"}"# {
@@ -139,6 +131,7 @@ pub(crate) async fn run(
                 "the client tool arguments did not match the prompt".into(),
             ));
         }
+        failed_reply.clear();
         let cwd = runtime.session_cwd(&session).to_owned();
         runtime.forget(&session);
         start
@@ -153,7 +146,7 @@ pub(crate) async fn run(
                     .await?;
                 loop {
                     let (event, _hold) = runtime.next().await;
-                    if let Some(error) = Failure::lockout(&event) {
+                    if let Some(error) = Failure::lockout(&event, "") {
                         return Err(error);
                     }
                     match event {
@@ -183,7 +176,8 @@ pub(crate) async fn run(
             "The tool {} returned this result as text: {result}\nReply with that result exactly, without calling any tool.",
             call.name
         );
-        let (text, call) = check_prompt(&mut runtime, start, &session, &prompt).await?;
+        let (text, call) =
+            check_prompt(&mut runtime, start, &session, &prompt, &mut failed_reply).await?;
         if !text.contains(&result) || call.is_some() {
             return Err(Failure::Incompatible(
                 "the reply did not contain the tool result sent as text".into(),
@@ -196,7 +190,7 @@ pub(crate) async fn run(
     tokio::pin!(stderr);
     let mut lockout = None;
     while let Some(event) = stderr.next().await {
-        if let Some(error) = Failure::lockout(&event) {
+        if let Some(error) = Failure::lockout(&event, &failed_reply) {
             lockout = Some(error);
         }
     }
@@ -227,6 +221,7 @@ async fn check_prompt(
     start: &RuntimeStart,
     session: &str,
     text: &str,
+    reply: &mut String,
 ) -> Result<(String, Option<crate::conversation::ToolCall>), Failure> {
     runtime
         .start_prompt(
@@ -234,7 +229,8 @@ async fn check_prompt(
             session,
         )
         .await?;
-    let mut text = String::new();
+    reply.clear();
+    let text = reply;
     let mut call = None;
     let mut deadline = start
         .clock
@@ -246,7 +242,7 @@ async fn check_prompt(
                 Ok::<_, Failure>(runtime.next().await)
             })
             .await?;
-        if let Some(error) = Failure::lockout(&event) {
+        if let Some(error) = Failure::lockout(&event, text) {
             return Err(error);
         }
         match event {
@@ -282,7 +278,7 @@ async fn check_prompt(
                                 "unexpected compatibility prompt stop reason".into(),
                             ));
                         }
-                        return Ok((text, call));
+                        return Ok((text.clone(), call));
                     }
                     TurnUpdate::Activity | TurnUpdate::ThoughtDropped | TurnUpdate::Usage(_) => {}
                     TurnUpdate::UnpermittedTool(name) => {

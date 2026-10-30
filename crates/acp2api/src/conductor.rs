@@ -5563,7 +5563,7 @@ mod tests {
                         serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"serving","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
                     ]
                 };
-                assert!(answers.len() <= 3, "three ACP answers per process cap");
+                assert!(answers.len() <= 4, "four ACP messages per process cap");
                 let stdout = answers
                     .iter()
                     .map(|answer| format!("{answer}\n"))
@@ -5616,7 +5616,7 @@ mod tests {
             task.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
             assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12");
-        }).await.expect("compatibility lockout cap: five seconds, three processes, three ACP answers and four KiB output per process");
+        }).await.expect("compatibility lockout cap: five seconds, three processes, four ACP messages and four KiB output per process");
     }
 
     #[tokio::test]
@@ -5663,6 +5663,24 @@ mod tests {
             ),
             "403",
             "acp2api: upstream error 403 PERMISSION_DENIED: Account <REDACTED>; Bearer <REDACTED>; appeal https://example.com/appeal",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_reply_signals_lockout_without_persisting_private_text() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"checked","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"PRIVATE-REPLY Terms of Service"}}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}),
+            ],
+            concat!(
+                "Antigravity SDK error processing prompt for session checked\n",
+                "Error 503, Message: Service unavailable, Status: UNAVAILABLE, Details: []\n",
+            ),
+            "Terms of Service",
+            "acp2api: upstream error 503 UNAVAILABLE: Service unavailable",
         ).await;
     }
 

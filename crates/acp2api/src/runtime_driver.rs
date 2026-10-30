@@ -176,17 +176,11 @@ impl Runtime {
                 let stderr = runtime.stop_stderr().await;
                 tokio::pin!(stderr);
                 while let Some(event) = stderr.next().await {
-                    if let RuntimeEvent::UpstreamError {
-                        error: upstream, ..
-                    } = event
-                    {
-                        let upstream = Message::UpstreamHttp(upstream);
-                        if let Some(signal) = upstream.lockout_signal() {
-                            error = LaunchFailure::Lockout {
-                                signal,
-                                error: upstream,
-                            };
-                        }
+                    if let Some((upstream, Some(signal))) = event.upstream_error("") {
+                        error = LaunchFailure::Lockout {
+                            signal,
+                            error: upstream,
+                        };
                     }
                 }
                 Err(error)
@@ -589,13 +583,9 @@ impl Runtime {
         }
     }
     fn stderr_lockout(&mut self, line: &[u8]) -> Option<Message> {
-        let RuntimeEvent::UpstreamError { error, .. } =
-            Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(line))
-        else {
-            return None;
-        };
-        let error = Message::UpstreamHttp(error);
-        error.lockout_signal().map(|_| error)
+        let event = Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(line));
+        let (error, signal) = event.upstream_error("")?;
+        signal.map(|_| error)
     }
     fn stderr(stderr_session: &mut Option<String>, line: &str) -> RuntimeEvent {
         if let Some(address) = line
@@ -945,4 +935,32 @@ pub(crate) enum TurnUpdate {
         stop_reason: Option<StopReason>,
     },
     Failed(Message),
+}
+
+impl RuntimeEvent {
+    pub(crate) fn upstream_error(
+        &self,
+        failed_reply: &str,
+    ) -> Option<(Message, Option<&'static str>)> {
+        let error = match self {
+            Self::Authenticated(Err(error))
+            | Self::Prepared {
+                result: Err(error), ..
+            }
+            | Self::Turn {
+                update: TurnUpdate::Failed(error),
+                ..
+            } => error.clone(),
+            Self::UpstreamError { error, .. } => Message::UpstreamHttp(error.clone()),
+            _ => return None,
+        };
+        let signal = error.lockout_signal().or_else(|| {
+            if matches!(self, Self::UpstreamError { .. }) {
+                crate::messages::lockout_signal(None, failed_reply, None)
+            } else {
+                None
+            }
+        });
+        Some((error, signal))
+    }
 }
