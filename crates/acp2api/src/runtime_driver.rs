@@ -19,12 +19,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 #[derive(Debug)]
 pub(crate) enum CommandError {
-    Io(std::io::Error),
-    Session(String),
+    Io(Message),
+    Session(Message),
 }
 impl From<String> for CommandError {
     fn from(error: String) -> Self {
-        Self::Session(error)
+        Self::Session(Message::Upstream(error))
     }
 }
 impl std::fmt::Display for CommandError {
@@ -32,6 +32,13 @@ impl std::fmt::Display for CommandError {
         match self {
             Self::Io(error) => error.fmt(f),
             Self::Session(error) => error.fmt(f),
+        }
+    }
+}
+impl From<CommandError> for Message {
+    fn from(error: CommandError) -> Self {
+        match error {
+            CommandError::Io(error) | CommandError::Session(error) => error,
         }
     }
 }
@@ -49,8 +56,8 @@ pub(crate) struct RuntimeStart {
     pub(crate) tool_sets: mcp::ToolSets,
 }
 pub(crate) const ANSWER_TIMEOUT: Moment = 5 * 60 * 1000;
-const WRITE_TIMEOUT: Moment = 30_000;
-const MAX_QUEUED_BYTES: usize = 128 * 1024 * 1024;
+pub(crate) const WRITE_TIMEOUT: Moment = 30_000;
+pub(crate) const MAX_QUEUED_BYTES: usize = 128 * 1024 * 1024;
 impl RuntimeStart {
     pub(crate) async fn answer<T, E: From<LaunchFailure>>(
         &self,
@@ -95,7 +102,7 @@ impl RuntimeStart {
             result = answer => result,
         }
     }
-    async fn before_deadline<T, E: From<LaunchFailure>>(
+    pub(crate) async fn before_deadline<T, E: From<LaunchFailure>>(
         &self,
         wait: Moment,
         answer: impl std::future::Future<Output = Result<T, E>>,
@@ -110,7 +117,7 @@ impl RuntimeStart {
         });
         tokio::select! {
             result = answer => result,
-            _hold = self.clock.sleep_until(self.clock.now().saturating_add(wait)) => Err(LaunchFailure::Runtime("runtime gave no answer before its deadline".into()).into()),
+            _hold = self.clock.sleep_until(self.clock.now().saturating_add(wait)) => Err(LaunchFailure::Owner(crate::messages::OwnerMessage::NoAnswerBeforeDeadline).into()),
         }
     }
     pub(crate) async fn clean_sessions(
@@ -222,8 +229,12 @@ async fn write_messages(
             let completion_clock = &writer_clock;
             let writing = std::future::poll_fn(move |cx| {
                 let result = writing.as_mut().poll(cx);
-                let result =
-                    result.map(|result| (result, completion_clock.hold(HoldKind::TurnEvent)));
+                let result = result.map(|result| {
+                    (
+                        result.map_err(|error| Message::Upstream(error.to_string())),
+                        completion_clock.hold(HoldKind::TurnEvent),
+                    )
+                });
                 _until_first_poll = WriteState::Writing;
                 result
             });
@@ -232,7 +243,7 @@ async fn write_messages(
                 biased;
                 result = &mut writing => result,
                 work = timer => {
-                    (Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("runtime stdin write exceeded {} s", WRITE_TIMEOUT / 1000))), work)
+                    (Err(Message::RuntimeStdinWriteTimedOut), work)
                 }
                 _ = stopping.wait_for(|stopped| *stopped) => match writing.as_mut().now_or_never() {
                     Some(result) => result,
@@ -285,8 +296,8 @@ impl Runtime {
         let starting = async {
             let initialized = start.until_stopped(runtime.initialize(start)).await?;
             if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
-                return Err(LaunchFailure::Runtime(
-                    "initialize version differs from the accepted build".into(),
+                return Err(LaunchFailure::Owner(
+                    crate::messages::OwnerMessage::VersionDiffers,
                 ));
             }
             match runtime.new_session(&[], None).await {
@@ -438,7 +449,7 @@ impl Runtime {
             .map_err(Message::Upstream)?;
         let session_id = session["sessionId"]
             .as_str()
-            .ok_or_else(|| Message::Upstream("missing sessionId".into()))?
+            .ok_or(Message::MissingSessionId)?
             .to_owned();
         self.remember_config(&session_id, &session);
         self.tools.insert(session_id.clone(), tools);
@@ -547,24 +558,19 @@ impl Runtime {
     }
     async fn write(&mut self, value: Value) -> Result<(), CommandError> {
         let mut bytes =
-            serde_json::to_vec(&value).map_err(|e| CommandError::Session(e.to_string()))?;
+            serde_json::to_vec(&value).map_err(|e| CommandError::from(e.to_string()))?;
         bytes.push(b'\n');
         // Queue time counts too: backlog cannot extend the 30 s transport bound.
         let deadline = self.clock.now().saturating_add(WRITE_TIMEOUT);
         let mut queue = self.write_state.lock().unwrap();
         if matches!(queue.state, WriteState::Stopped) {
-            return Err(CommandError::Io(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "runtime stdin writer stopped",
-            )));
+            return Err(CommandError::Io(Message::RuntimeStdinWriterStopped));
         }
         if bytes.len() > MAX_QUEUED_BYTES - queue.bytes {
             queue.state = WriteState::Stopped;
             // Overflow fails the write: abort instead of draining bytes into a partial pipe.
             self.writer.abort_all();
-            return Err(CommandError::Io(std::io::Error::other(format!(
-                "runtime stdin queue exceeded {MAX_QUEUED_BYTES} bytes"
-            ))));
+            return Err(CommandError::Io(Message::RuntimeStdinQueueFull));
         }
         queue.bytes += bytes.len();
         if matches!(queue.state, WriteState::Idle) {
@@ -572,12 +578,9 @@ impl Runtime {
                 _work: self.clock.hold(HoldKind::TurnEvent),
             };
         }
-        self.input.send((bytes, deadline)).map_err(|_| {
-            CommandError::Io(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "runtime stdin writer stopped",
-            ))
-        })
+        self.input
+            .send((bytes, deadline))
+            .map_err(|_| CommandError::Io(Message::RuntimeStdinWriterStopped))
     }
     pub(crate) async fn permission(
         &mut self,
@@ -605,10 +608,7 @@ impl Runtime {
             .await
     }
     async fn call(&mut self, method: &str, params: Value) -> Result<Value, Message> {
-        let id = self
-            .send(method, params)
-            .await
-            .map_err(|error| Message::Upstream(error.to_string()))?;
+        let id = self.send(method, params).await.map_err(Message::from)?;
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
                 Line::Stdout(value) => value.map_err(Message::Upstream)?,
@@ -623,18 +623,16 @@ impl Runtime {
                     continue;
                 }
                 Line::Closed => {
-                    return Err(Message::Upstream("runtime stdout closed".into()));
+                    return Err(Message::RuntimeStdoutClosed);
                 }
                 Line::WriteFailed(error, acknowledge) => {
                     let _ = acknowledge.send(());
-                    return Err(Message::Upstream(error.to_string()));
+                    return Err(error);
                 }
             };
             if value.get("method").is_some() {
                 if value.get("id").is_some() {
-                    self.refuse(&value)
-                        .await
-                        .map_err(|error| Message::Upstream(error.to_string()))?;
+                    self.refuse(&value).await.map_err(Message::from)?;
                 }
                 continue;
             }
@@ -645,7 +643,7 @@ impl Runtime {
                     .ok_or_else(|| acp_error(&value["error"]));
             }
         }
-        Err(Message::Upstream("runtime stdout closed".into()))
+        Err(Message::RuntimeStdoutClosed)
     }
     pub(crate) async fn start_configured_prompt(
         &mut self,
@@ -675,9 +673,10 @@ impl Runtime {
             });
         if let Some((option, value)) = changed {
             if sent.contains(&option) {
-                return Err(format!(
-                    "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."
-                ).into());
+                return Err(CommandError::Session(Message::ConfigOptionNotApplied {
+                    option: option.into(),
+                    value: value.into(),
+                }));
             }
             sent.push(option);
             let option = option.to_owned();
@@ -744,7 +743,7 @@ impl Runtime {
                 Line::Closed => RuntimeEvent::Closed,
                 Line::WriteFailed(error, acknowledge) => {
                     let _ = acknowledge.send(());
-                    RuntimeEvent::WriteFailed(error.to_string())
+                    RuntimeEvent::WriteFailed(error)
                 }
                 Line::StderrClosed => {
                     self.stderr_closed = true;
@@ -830,10 +829,10 @@ impl Runtime {
                 };
                 return match self.configure_prompt(prompt, &session, sent).await {
                     Ok(()) => RuntimeEvent::Other,
-                    Err(CommandError::Io(error)) => RuntimeEvent::WriteFailed(error.to_string()),
+                    Err(CommandError::Io(error)) => RuntimeEvent::WriteFailed(error),
                     Err(CommandError::Session(error)) => RuntimeEvent::Turn {
                         session,
-                        update: TurnUpdate::Failed(Message::Upstream(error)),
+                        update: TurnUpdate::Failed(error),
                     },
                 };
             }
@@ -961,8 +960,8 @@ impl Runtime {
         } else if value.get("method").is_some() && value.get("id").is_some() {
             match self.refuse(&value).await {
                 Ok(()) => RuntimeEvent::Other,
-                Err(CommandError::Io(error)) => RuntimeEvent::WriteFailed(error.to_string()),
-                Err(CommandError::Session(error)) => RuntimeEvent::Failed(error),
+                Err(CommandError::Io(error)) => RuntimeEvent::WriteFailed(error),
+                Err(CommandError::Session(error)) => RuntimeEvent::Failed(error.to_string()),
             }
         } else {
             RuntimeEvent::Other
@@ -980,7 +979,7 @@ impl Runtime {
             Some(id) => id,
             None => response["sessionId"]
                 .as_str()
-                .ok_or_else(|| Message::Upstream("missing sessionId".into()))?
+                .ok_or(Message::MissingSessionId)?
                 .to_owned(),
         };
         let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())
@@ -1076,7 +1075,7 @@ struct SessionTools {
     tools: Vec<crate::conversation::ClientTool>,
 }
 enum Line {
-    WriteFailed(std::io::Error, tokio::sync::oneshot::Sender<()>),
+    WriteFailed(Message, tokio::sync::oneshot::Sender<()>),
     Stdout(Result<Value, String>),
     Stderr(Vec<u8>),
     StderrClosed,
@@ -1104,7 +1103,7 @@ pub(crate) enum RuntimeEvent {
     Stderr,
     Other,
     Closed,
-    WriteFailed(String),
+    WriteFailed(Message),
 }
 pub(crate) enum TurnUpdate {
     Activity,

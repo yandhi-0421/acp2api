@@ -142,7 +142,7 @@ async fn a_live_check_runtime_reports_its_stdin_timeout_reason() {
         };
         let (result, ()) = tokio::join!(checking, advance);
         f.runtime.stop().await;
-        assert!(matches!(result, Err(Failure::Runtime(LaunchFailure::Runtime(ref reason))) if reason == "runtime stdin write exceeded 30 s"), "the compatibility check must retain the write failure reason instead of saying the live runtime exited");
+        assert!(matches!(result, Err(Failure::Runtime(LaunchFailure::Owner(OwnerMessage::Api(Message::RuntimeStdinWriteTimedOut))))), "the compatibility check must retain the typed write failure reason instead of saying the live runtime exited");
     }).await.expect("compatibility stdin timeout cap: 5 s");
 }
 

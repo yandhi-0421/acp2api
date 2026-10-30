@@ -24,6 +24,15 @@ pub(crate) struct BuildIdentity {
     server: String,
     harness: String,
 }
+#[cfg(test)]
+impl BuildIdentity {
+    pub(crate) fn fixture() -> Self {
+        Self {
+            server: String::new(),
+            harness: String::new(),
+        }
+    }
+}
 impl std::fmt::Display for BuildIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.server, self.harness)
@@ -52,11 +61,16 @@ pub(crate) struct SelectedBuild {
     pub(crate) folder: PathBuf,
     pub(crate) version: String,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum BuildAcceptance {
+    OnTheReleaseList,
+    CheckedOnThisComputer,
+}
 pub(crate) struct BuildRow {
     pub(crate) path: PathBuf,
     pub(crate) version: Option<String>,
     pub(crate) identity: String,
-    pub(crate) acceptance: Option<&'static str>,
+    pub(crate) acceptance: Option<BuildAcceptance>,
 }
 pub(crate) struct Summary {
     pub(crate) current: Option<CurrentBuild>,
@@ -67,7 +81,7 @@ pub(crate) struct Summary {
 }
 pub(crate) struct CurrentBuild {
     pub(crate) version: String,
-    pub(crate) acceptance: &'static str,
+    pub(crate) acceptance: BuildAcceptance,
     pub(crate) source: Option<PathBuf>,
 }
 pub(crate) enum Action {
@@ -79,7 +93,7 @@ pub(crate) enum Action {
 }
 pub(crate) enum Selection {
     Keep,
-    Notice(&'static str),
+    Notice(crate::messages::OwnerMessage),
     Start(Option<SelectedBuild>),
     Check {
         folder: PathBuf,
@@ -97,6 +111,7 @@ pub(crate) enum LaunchFailure {
         error: crate::messages::Message,
     },
     Stopped,
+    Owner(crate::messages::OwnerMessage),
 }
 impl LaunchFailure {
     pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
@@ -114,14 +129,13 @@ impl From<std::io::Error> for LaunchFailure {
 impl std::fmt::Display for LaunchFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoExecutable => {
-                f.write_str("acp2api found no executable of the official runtime")
-            }
-            Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
+            Self::NoExecutable => crate::messages::RuntimeFault::NoExecutable.fmt(f),
+            Self::NotAccepted => crate::messages::RuntimeFault::NotAccepted.fmt(f),
             Self::Io(error) => error.fmt(f),
             Self::Runtime(error) => f.write_str(error),
             Self::Lockout { error, .. } => error.fmt(f),
             Self::Stopped => f.write_str("acp2api is exiting"),
+            Self::Owner(message) => message.fmt(f),
         }
     }
 }
@@ -134,7 +148,7 @@ impl From<crate::messages::Message> for LaunchFailure {
     fn from(error: crate::messages::Message) -> Self {
         match error.lockout_signal() {
             Some(signal) => Self::Lockout { signal, error },
-            None => Self::Runtime(error.to_string()),
+            None => Self::Owner(crate::messages::OwnerMessage::Api(error)),
         }
     }
 }
@@ -269,7 +283,8 @@ impl Builds {
         action: Action,
         settings: &mut Settings,
         configuration: &Path,
-    ) -> Result<Selection, String> {
+    ) -> Result<Selection, LaunchFailure> {
+        use crate::messages::OwnerMessage;
         let initial = matches!(action, Action::Initial);
         if initial {
             let path = self.start.data.join(crate::store::STATE_FILE);
@@ -297,18 +312,16 @@ impl Builds {
         match action {
             Action::Path(path) => {
                 if !path.is_absolute() {
-                    return Err("Enter an absolute path of agy_acp_server.".into());
+                    return Err(LaunchFailure::Owner(OwnerMessage::PathNotAbsolute));
                 }
                 if !path
                     .parent()
                     .is_some_and(|folder| folder.join(HARNESS).is_file())
                 {
-                    return Ok(Selection::Notice(
-                        "This folder has no localharness_external, so acp2api did not use this path.",
-                    ));
+                    return Ok(Selection::Notice(OwnerMessage::PathWithoutHarness));
                 }
                 if !path.is_file() {
-                    return Err("This path has no agy_acp_server.".into());
+                    return Err(LaunchFailure::Owner(OwnerMessage::PathWithoutServer));
                 }
                 settings.agy_acp_server_path = Some(path);
                 crate::store::save(configuration, settings)?;
@@ -318,9 +331,7 @@ impl Builds {
                 let selected = found
                     .iter()
                     .find(|found| found.listed.is_none() && found.identity.to_string() == choice)
-                    .ok_or(
-                        "Choose a build that is not an accepted version from the search results.",
-                    )?;
+                    .ok_or(LaunchFailure::Owner(OwnerMessage::ChooseUnacceptedBuild))?;
                 return Ok(Selection::Check {
                     folder: selected.folder.clone(),
                     identity: selected.identity.clone(),
@@ -336,7 +347,7 @@ impl Builds {
                             .as_ref()
                             .is_some_and(|build| identity(build).to_string() == choice)
                     })
-                    .ok_or("Choose an accepted build from the search results.")?;
+                    .ok_or(LaunchFailure::Owner(OwnerMessage::ChooseAcceptedBuild))?;
                 return Ok(Selection::Start(Some(selected.selected_build())));
             }
             Action::Initial => {
@@ -422,8 +433,8 @@ impl Builds {
                 fs::copy(source.join(name), check.join(name)).map_err(|error| error.to_string())?;
             }
             if Self::hashes(&check)? != *identity {
-                return Err(LaunchFailure::Runtime(
-                    "the selected build changed before the compatibility check".into(),
+                return Err(LaunchFailure::Owner(
+                    crate::messages::OwnerMessage::BuildChangedBeforeCheck,
                 ));
             }
             Ok(check.join(SERVER))
@@ -441,7 +452,7 @@ impl Builds {
         self.start
             .clean_sessions(retained)
             .await
-            .map_err(crate::compatibility_check::Failure::Internal)?;
+            .map_err(|error| crate::compatibility_check::Failure::Internal(error.into()))?;
         crate::compatibility_check::run(
             &self.start,
             program,
@@ -456,20 +467,20 @@ impl Builds {
         &self,
         identity: &BuildIdentity,
         outcome: Result<String, crate::compatibility_check::Failure>,
-    ) -> Result<String, LaunchFailure> {
-        use crate::compatibility_check::Failure;
+    ) -> Result<crate::messages::OwnerMessage, LaunchFailure> {
+        use crate::{compatibility_check::Failure, messages::OwnerMessage};
         let result = match outcome {
             Ok(version) => self
                 .accept_check(version.clone(), identity)
-                .map(|()| format!("The compatibility check passed for {version}.")),
+                .map(|()| OwnerMessage::CheckPassed { version }),
             Err(Failure::Runtime(
                 error @ (LaunchFailure::Stopped | LaunchFailure::Lockout { .. }),
             )) => Err(error),
-            Err(Failure::Runtime(error)) => Ok(format!("The compatibility check failed: {error}.")),
-            Err(Failure::Incompatible(error)) => {
-                Ok(format!("The compatibility check failed: {error}."))
+            Err(Failure::Runtime(error)) => {
+                Ok(OwnerMessage::CheckRunFailed(std::sync::Arc::new(error)))
             }
-            Err(Failure::Internal(error)) => Err(LaunchFailure::Runtime(error)),
+            Err(Failure::Incompatible(reason)) => Ok(OwnerMessage::CheckFailed(reason)),
+            Err(Failure::Internal(error)) => Err(error),
         };
         let _ = fs::remove_dir_all(self.start.data.join(CHECK));
         result
@@ -477,9 +488,9 @@ impl Builds {
     fn accept_check(&self, version: String, hashes: &BuildIdentity) -> Result<(), LaunchFailure> {
         let check = self.start.data.join(CHECK);
         if Self::hashes(&check)? != *hashes {
-            return Err("the check copy changed during the compatibility check"
-                .to_string()
-                .into());
+            return Err(LaunchFailure::Owner(
+                crate::messages::OwnerMessage::CheckCopyChanged,
+            ));
         }
         let build = ListedBuild {
             version,
@@ -543,7 +554,7 @@ impl Builds {
         action: Action,
         settings: &mut Settings,
         configuration: &Path,
-    ) -> Result<Selection, String> {
+    ) -> Result<Selection, LaunchFailure> {
         let builds = self.clone();
         let mut changed = settings.clone();
         let configuration = configuration.to_path_buf();
@@ -556,7 +567,10 @@ impl Builds {
         *settings = changed;
         result
     }
-    pub(crate) fn unavailable(&self, reason: &str) -> String {
+    pub(crate) fn unavailable(
+        &self,
+        fault: crate::messages::RuntimeFault,
+    ) -> crate::messages::Unavailable {
         let versions = self
             .accepted_builds()
             .map(|build| build.version.clone())
@@ -564,12 +578,13 @@ impl Builds {
             .into_iter()
             .collect::<Vec<_>>()
             .join(", ");
-        format!(
-            "acp2api: the official runtime is unavailable: {reason}. Accepted versions: {versions}. See http://127.0.0.1:{}/.",
-            self.port
-        )
+        crate::messages::Unavailable {
+            fault,
+            versions,
+            port: self.port,
+        }
     }
-    fn acceptance(&self, build: &ListedBuild) -> &'static str {
+    fn acceptance(&self, build: &ListedBuild) -> BuildAcceptance {
         if self
             .start
             .release
@@ -577,9 +592,9 @@ impl Builds {
             .iter()
             .any(|listed| listed.platform == build.platform && identity(listed) == identity(build))
         {
-            "On the release list"
+            BuildAcceptance::OnTheReleaseList
         } else {
-            "Checked on this computer"
+            BuildAcceptance::CheckedOnThisComputer
         }
     }
     pub(crate) fn data_folder(&self) -> &Path {
@@ -780,7 +795,7 @@ mod tests {
         let accepted = builds.identify(&root.join(COPY)).unwrap().version;
         fs::remove_dir_all(root).unwrap();
         assert!(
-            matches!(result, Ok(ref notice) if notice == "The compatibility check passed for 1.6.0.")
+            matches!(result, Ok(ref notice) if notice.to_string() == "The compatibility check passed for 1.6.0.")
                 && accepted == "1.6.0"
                 && leftover,
             "a recorded, usable pass must reach the owner even when cleanup fails: {result:?}"
@@ -953,7 +968,7 @@ mod tests {
             assert!(
                 actual
                     .as_ref()
-                    .is_some_and(|error| error.contains("cannot read")),
+                    .is_some_and(|error| error.to_string().contains("cannot read")),
                 "a copy read error must fail startup, including when the other executable is missing: {actual:?}"
             );
             assert!(preserved, "the unreadable copy must not be replaced");

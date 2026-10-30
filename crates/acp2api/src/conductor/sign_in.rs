@@ -2,8 +2,6 @@ use super::{Command, Core};
 use crate::{Moment, journal::Outcome, messages::Message};
 
 pub(crate) const ENTRY_ID: &str = "sign-in";
-pub(super) const CANNOT_START: &str =
-    "Sign-in cannot start while a sign-in or runtime replacement is in progress.";
 const WAIT_DURATION: Moment = 600_000;
 
 #[derive(Clone)]

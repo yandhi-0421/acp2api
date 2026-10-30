@@ -15,6 +15,8 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 mod page;
+mod texts;
+use texts::Language;
 static CONTENT_SECURITY_POLICY: LazyLock<axum::http::HeaderValue> = LazyLock::new(|| {
     use base64::Engine;
     use sha2::Digest;
@@ -50,6 +52,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
     Router::new()
         .route("/", get(index))
         .route("/manage/login", post(login))
+        .route("/manage/language", post(set_language))
         .route("/manage/key", post(new_key))
         .route("/manage/password", post(password))
         .route("/manage/concurrency", post(concurrency))
@@ -82,34 +85,41 @@ impl Panel {
         let hash = self.conductor.settings().management_password_hash.clone();
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|_, s| s.password_hash == hash && now.saturating_sub(s.since) < LIFETIME);
-        headers
-            .get(header::COOKIE)
-            .and_then(|h| h.to_str().ok())
-            .and_then(|cookies| {
-                cookies
-                    .split(';')
-                    .filter_map(|cookie| cookie.trim().split_once('='))
-                    .find(|(name, _)| *name == COOKIE)
-            })
-            .is_some_and(|(_, value)| sessions.contains_key(value))
+        cookie(headers, COOKIE).is_some_and(|value| sessions.contains_key(value))
     }
-    async fn act(&self, action: OwnerAction) -> Result<(), Response> {
+    async fn act(&self, language: Language, action: OwnerAction) -> Result<(), Response> {
         self.conductor
             .owner(action, self.clock.hold(crate::HoldKind::TurnEvent))
             .await
-            .map_err(|_| self.failed())
+            .map_err(|_| self.failed(language))
     }
-    fn failed(&self) -> Response {
+    fn failed(&self, language: Language) -> Response {
         self.page(
+            language,
             StatusCode::INTERNAL_SERVER_ERROR,
-            "The settings could not be saved. Try again.",
+            language.pick(
+                "The settings could not be saved. Try again.",
+                "设置没有保存。请重试。",
+            ),
         )
     }
-    fn page(&self, status: StatusCode, notice: &str) -> Response {
-        (status, Html(self.html(Some(notice)))).into_response()
+    fn notice(&self, language: Language, notice: &crate::messages::OwnerMessage) -> Response {
+        let line = page::Line {
+            text: &language.owner_message(notice),
+            error: notice.is_failure(),
+        };
+        Html(self.html(language, Some(line))).into_response()
     }
-    fn html(&self, notice: Option<&str>) -> String {
+    fn page(&self, language: Language, status: StatusCode, text: &str) -> Response {
+        let line = page::Line {
+            text,
+            error: !status.is_success(),
+        };
+        (status, Html(self.html(language, Some(line)))).into_response()
+    }
+    fn html(&self, language: Language, notice: Option<page::Line<'_>>) -> String {
         page::settings(page::Page {
+            language,
             settings: &self.conductor.settings(),
             highest: self.conductor.highest,
             port: self.port,
@@ -124,11 +134,23 @@ impl Panel {
         })
     }
 }
+fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .filter_map(|cookie| cookie.trim().split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value)
+}
 async fn guard(
     State(panel): State<Panel>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let language = Language::of(request.headers());
+    request.extensions_mut().insert(language);
     let headers = request.headers();
     let host = crate::front::local_host(headers, panel.port);
     let origin = headers.get_all(header::ORIGIN);
@@ -143,7 +165,10 @@ async fn guard(
     let mut response = if host.is_none() || !valid_origin {
         (
             StatusCode::BAD_REQUEST,
-            "The request must use the local management panel address.",
+            language.pick(
+                "The request must use the local management panel address.",
+                "这个请求必须使用本机管理面板的地址。",
+            ),
         )
             .into_response()
     } else if request.uri().path().starts_with("/manage/")
@@ -152,9 +177,13 @@ async fn guard(
     {
         (
             StatusCode::UNAUTHORIZED,
-            Html(page::login(Some(
-                "Enter the management password to continue.",
-            ))),
+            Html(page::login(
+                language,
+                Some(language.pick(
+                    "Enter the management password to continue.",
+                    "输入管理密码后继续。",
+                )),
+            )),
         )
             .into_response()
     } else {
@@ -176,18 +205,38 @@ async fn guard(
     );
     response
 }
-async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
+async fn index(
+    State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
+    headers: HeaderMap,
+) -> Html<String> {
     Html(if panel.session(&headers) {
-        panel.html(None)
+        panel.html(language, None)
     } else {
-        page::login(None)
+        page::login(language, None)
     })
+}
+#[derive(Deserialize)]
+struct LanguageChoice {
+    language: Language,
+}
+async fn set_language(Form(choice): Form<LanguageChoice>) -> Response {
+    let mut response = Redirect::to("/").into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        choice.language.cookie().parse().expect("generated cookie"),
+    );
+    response
 }
 #[derive(Deserialize)]
 struct Password {
     password: String,
 }
-async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Response {
+async fn login(
+    State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
+    Form(form): Form<Password>,
+) -> Response {
     let hash = panel.conductor.settings().management_password_hash.clone();
     let permit = panel
         .logins
@@ -203,14 +252,20 @@ async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Respon
     if !verified {
         return (
             StatusCode::UNAUTHORIZED,
-            Html(page::login(Some("The management password is wrong."))),
+            Html(page::login(
+                language,
+                Some(language.pick("The management password is wrong.", "管理密码不对。")),
+            )),
         )
             .into_response();
     }
     let Ok(token) = crate::random_hex::<32>() else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "A panel session could not be created.",
+            language.pick(
+                "A panel session could not be created.",
+                "无法创建面板会话。",
+            ),
         )
             .into_response();
     };
@@ -230,25 +285,35 @@ async fn login(State(panel): State<Panel>, Form(form): Form<Password>) -> Respon
     );
     response
 }
-async fn new_key(State(panel): State<Panel>) -> Response {
-    match panel.act(OwnerAction::NewLocalApiKey).await {
+async fn new_key(State(panel): State<Panel>, Extension(language): Extension<Language>) -> Response {
+    match panel.act(language, OwnerAction::NewLocalApiKey).await {
         Ok(()) => Redirect::to("/").into_response(),
         Err(response) => response,
     }
 }
 async fn refresh_quota(
     State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
     Extension(lease): Extension<crate::front::RequestHold>,
 ) -> Response {
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
     drop(lease.release());
     match panel.conductor.owner(OwnerAction::RefreshQuota, hold).await {
-        Ok(()) => panel.page(StatusCode::OK, "Quota refreshed."),
-        Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
+        Ok(()) => panel.page(
+            language,
+            StatusCode::OK,
+            language.pick("Quota refreshed.", "配额已刷新。"),
+        ),
+        Err(error) => panel.page(
+            language,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &language.owner_message(&error),
+        ),
     }
 }
 async fn read_models(
     State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
     Extension(lease): Extension<crate::front::RequestHold>,
 ) -> Response {
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
@@ -258,54 +323,80 @@ async fn read_models(
         .owner(OwnerAction::ReadModelNames, hold)
         .await
     {
-        Ok(()) => panel.page(StatusCode::OK, "Model names read."),
+        Ok(()) => panel.page(
+            language,
+            StatusCode::OK,
+            language.pick("Model names read.", "模型名已读取。"),
+        ),
         Err(error) => panel.page(
+            language,
             StatusCode::UNPROCESSABLE_ENTITY,
-            &crate::journal::redact_error(&error),
+            &crate::journal::redact_error(&language.owner_message(&error)),
         ),
     }
 }
-async fn sign_in(State(panel): State<Panel>) -> Response {
-    panel.sign_in_action(OwnerAction::SignIn).await
+async fn sign_in(State(panel): State<Panel>, Extension(language): Extension<Language>) -> Response {
+    panel.sign_in_action(language, OwnerAction::SignIn).await
 }
-async fn cancel_sign_in(State(panel): State<Panel>) -> Response {
-    panel.sign_in_action(OwnerAction::CancelSignIn).await
+async fn cancel_sign_in(
+    State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
+) -> Response {
+    panel
+        .sign_in_action(language, OwnerAction::CancelSignIn)
+        .await
 }
 impl Panel {
-    async fn sign_in_action(&self, action: OwnerAction) -> Response {
+    async fn sign_in_action(&self, language: Language, action: OwnerAction) -> Response {
         // Keep the HTTP hold through page rendering. The action acknowledges the wait immediately.
         match self
             .conductor
             .owner(action, self.clock.hold(crate::HoldKind::TurnEvent))
             .await
         {
-            Ok(()) => self.page(StatusCode::OK, ""),
-            Err(error) => self.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
+            Ok(()) => Html(self.html(language, None)).into_response(),
+            Err(error) => self.page(
+                language,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &language.owner_message(&error),
+            ),
         }
     }
 }
-async fn password(State(panel): State<Panel>, Form(form): Form<Password>) -> Response {
+async fn password(
+    State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
+    Form(form): Form<Password>,
+) -> Response {
     if form.password.is_empty() {
         return panel.page(
+            language,
             StatusCode::UNPROCESSABLE_ENTITY,
-            "Enter a new management password.",
+            language.pick("Enter a new management password.", "输入新的管理密码。"),
         );
     }
     let Ok(Ok(hash)) =
         tokio::task::spawn_blocking(move || crate::store::hash_password(&form.password)).await
     else {
-        return panel.failed();
+        return panel.failed(language);
     };
-    match panel.act(OwnerAction::SetPasswordHash(hash)).await {
+    match panel
+        .act(language, OwnerAction::SetPasswordHash(hash))
+        .await
+    {
         Ok(()) => Redirect::to("/").into_response(),
         Err(response) => response,
     }
 }
 #[derive(Deserialize)]
-struct Limit {
+struct ConcurrencyLimitForm {
     concurrency_limit: String,
 }
-async fn concurrency(State(panel): State<Panel>, Form(form): Form<Limit>) -> Response {
+async fn concurrency(
+    State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
+    Form(form): Form<ConcurrencyLimitForm>,
+) -> Response {
     let limit = match form
         .concurrency_limit
         .parse::<u8>()
@@ -315,13 +406,24 @@ async fn concurrency(State(panel): State<Panel>, Form(form): Form<Limit>) -> Res
         Some(n) => n,
         None => {
             return panel.page(
+                language,
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "Choose a concurrency limit supported on this platform.",
+                language.pick(
+                    "Choose a concurrency limit supported on this platform.",
+                    "选择这个平台支持的并发上限。",
+                ),
             );
         }
     };
-    match panel.act(OwnerAction::SetConcurrencyLimit(limit)).await {
-        Ok(()) => panel.page(StatusCode::OK, "Concurrency limit saved."),
+    match panel
+        .act(language, OwnerAction::SetConcurrencyLimit(limit))
+        .await
+    {
+        Ok(()) => panel.page(
+            language,
+            StatusCode::OK,
+            language.pick("Concurrency limit saved.", "并发上限已保存。"),
+        ),
         Err(response) => response,
     }
 }
@@ -329,7 +431,11 @@ async fn concurrency(State(panel): State<Panel>, Form(form): Form<Limit>) -> Res
 struct DismissNotice {
     notice_id: String,
 }
-async fn dismiss_notice(State(panel): State<Panel>, Form(form): Form<DismissNotice>) -> Response {
+async fn dismiss_notice(
+    State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
+    Form(form): Form<DismissNotice>,
+) -> Response {
     match panel
         .conductor
         .owner(
@@ -341,31 +447,51 @@ async fn dismiss_notice(State(panel): State<Panel>, Form(form): Form<DismissNoti
         Ok(()) => Redirect::to("/").into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "The notice could not be dismissed. Try again.",
+            language.pick(
+                "The notice could not be dismissed. Try again.",
+                "通知没有关闭。请重试。",
+            ),
         )
             .into_response(),
     }
 }
 async fn runtime_action(
     panel: Panel,
+    language: Language,
     action: crate::runtime_builds::Action,
     lease: crate::front::RequestHold,
 ) -> Response {
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
     drop(lease.release());
     match panel.conductor.builds(action, hold).await {
-        Ok(notice) => panel.page(StatusCode::OK, &notice),
-        Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+        Ok(Some(notice)) => panel.notice(language, &notice),
+        Ok(None) => Html(panel.html(language, None)).into_response(),
+        Err(error) => panel.page(
+            language,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &language.launch_failure(&error),
+        ),
     }
 }
 async fn search(
     State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
     Extension(lease): Extension<crate::front::RequestHold>,
 ) -> Response {
-    runtime_action(panel, crate::runtime_builds::Action::Search, lease).await
+    runtime_action(
+        panel,
+        language,
+        crate::runtime_builds::Action::Search,
+        lease,
+    )
+    .await
 }
-async fn retry(panel: State<Panel>, lease: Extension<crate::front::RequestHold>) -> Response {
-    search(panel, lease).await
+async fn retry(
+    panel: State<Panel>,
+    language: Extension<Language>,
+    lease: Extension<crate::front::RequestHold>,
+) -> Response {
+    search(panel, language, lease).await
 }
 #[derive(Deserialize)]
 struct RuntimePath {
@@ -373,11 +499,13 @@ struct RuntimePath {
 }
 async fn runtime_path(
     State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
     Extension(lease): Extension<crate::front::RequestHold>,
     Form(form): Form<RuntimePath>,
 ) -> Response {
     runtime_action(
         panel,
+        language,
         crate::runtime_builds::Action::Path(form.agy_acp_server_path),
         lease,
     )
@@ -389,11 +517,13 @@ struct Build {
 }
 async fn compatibility_check(
     State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
     Extension(lease): Extension<crate::front::RequestHold>,
     Form(form): Form<Build>,
 ) -> Response {
     runtime_action(
         panel,
+        language,
         crate::runtime_builds::Action::Check(form.build),
         lease,
     )
@@ -401,11 +531,13 @@ async fn compatibility_check(
 }
 async fn build(
     State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
     Extension(lease): Extension<crate::front::RequestHold>,
     Form(form): Form<Build>,
 ) -> Response {
     runtime_action(
         panel,
+        language,
         crate::runtime_builds::Action::Build(form.build),
         lease,
     )
@@ -432,10 +564,10 @@ mod tests {
             panel.sessions.lock().unwrap().insert("panel-test-session".into(), Session { since: clock.now(), password_hash: String::new() });
             let mut headers = HeaderMap::new();
             headers.insert(header::COOKIE, "acp2api_session=panel-test-session".parse().unwrap());
-            let Html(html) = index(State(panel), headers).await;
+            let Html(html) = index(State(panel), Extension(Language::English), headers).await;
             stopped.send(true).unwrap();
             task.await.unwrap();
-            let first_tile = html.split(&format!("<section id=\"{}\">", crate::conductor::sign_in::ENTRY_ID)).nth(1).unwrap().split("</section>").next().unwrap();
+            let first_tile = html.split(&format!("<section id=\"{}\"", crate::conductor::sign_in::ENTRY_ID)).nth(1).unwrap().split("</section>").next().unwrap();
             let owner_path = &*folder.to_string_lossy();
             assert_eq!((response.contains(expected), first_tile.contains(expected), response.contains(owner_path) || first_tile.contains(owner_path)), (true, true, false), "#161: the first API refusal and the lockout tile show the same path-free state-file diagnostic");
         }).await.expect("state-file panel test cap: five seconds, no runtime requests");
@@ -484,23 +616,151 @@ mod tests {
         let empty = Password {
             password: String::new(),
         };
-        let zero = Limit {
+        let zero = ConcurrencyLimitForm {
             concurrency_limit: "0".into(),
         };
         let answers = [
-            new_key(State(panel.clone())).await,
-            password(State(panel.clone()), Form(empty)).await,
-            concurrency(State(panel), Form(zero)).await,
+            new_key(State(panel.clone()), Extension(Language::English)).await,
+            password(
+                State(panel.clone()),
+                Extension(Language::English),
+                Form(empty),
+            )
+            .await,
+            concurrency(State(panel), Extension(Language::English), Form(zero)).await,
         ];
         let mut pages = Vec::new();
         for answer in answers {
             let status = answer.status().as_u16();
             let body = axum::body::to_bytes(answer.into_body(), 1 << 16).await;
             let body = String::from_utf8(body.unwrap().to_vec()).unwrap();
-            pages.push((status, body.contains("<h1>Management panel</h1>")));
+            pages.push((status, body.contains("id=\"local-api-key\"")));
         }
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(pages, [(500, true), (422, true), (422, true)]);
+    }
+    #[tokio::test]
+    async fn the_language_cookie_survives_a_new_panel_session() {
+        let response = set_language(Form(LanguageChoice {
+            language: Language::Chinese,
+        }))
+        .await;
+        assert_eq!(
+            (
+                response.status(),
+                response.headers()[header::SET_COOKIE].to_str().unwrap(),
+                response.headers()[header::LOCATION].to_str().unwrap(),
+            ),
+            (
+                StatusCode::SEE_OTHER,
+                "acp2api_language=zh; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000",
+                "/",
+            )
+        );
+    }
+    #[tokio::test]
+    async fn a_language_choice_without_a_panel_session_gets_no_cookie() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let folder = std::env::temp_dir().join(format!("acp2api-language-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: "acp2api-test".into(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let (conductor, _task) = Conductor::start(
+            crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
+            clock.clone(),
+            journal,
+            settings,
+            folder.join("config.toml"),
+            1,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router(conductor, clock, port))
+                .await
+                .unwrap();
+        });
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let request = format!(
+            "POST /manage/language HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\nConnection: close\r\n\r\nlanguage=zh"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read_to_string(&mut answer),
+        )
+        .await
+        .expect("language request cap: one request, five seconds")
+        .unwrap();
+        server.abort();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            (
+                answer.starts_with("HTTP/1.1 401"),
+                answer.to_ascii_lowercase().contains("set-cookie"),
+            ),
+            (true, false),
+            "FR-009 each management endpoint needs a panel session"
+        );
+    }
+    #[tokio::test]
+    async fn the_meaning_of_a_build_notice_selects_its_dot() {
+        use crate::{compatibility_check::Incompatibility, messages::OwnerMessage};
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-notice-dot-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: "acp2api-test".into(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let (conductor, _task) = Conductor::start(
+            crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
+            clock.clone(),
+            journal,
+            settings,
+            folder.join("config.toml"),
+            1,
+        );
+        let panel = Panel::new(conductor, clock, 8329);
+        let mut lines = Vec::new();
+        for notice in [
+            OwnerMessage::CheckFailed(Incompatibility::NoVersion),
+            OwnerMessage::CheckPassed {
+                version: "1.6.0".into(),
+            },
+        ] {
+            let answer = panel.notice(Language::English, &notice);
+            let status = answer.status();
+            let body = axum::body::to_bytes(answer.into_body(), 1 << 18).await;
+            let body = String::from_utf8(body.unwrap().to_vec()).unwrap();
+            lines.push((
+                status,
+                body.contains(&format!("<span class=\"dot critical\"></span>{notice}")),
+                body.contains(&format!("<span class=\"dot good\"></span>{notice}")),
+            ));
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            lines,
+            [(StatusCode::OK, true, false), (StatusCode::OK, false, true)],
+            "a failed check keeps its HTTP 200 and gets the critical dot"
+        );
     }
     #[tokio::test(flavor = "current_thread")]
     async fn a_login_does_not_block_the_async_worker_with_its_hash() {
@@ -536,9 +796,15 @@ mod tests {
         let password = Password {
             password: "wrong".into(),
         };
-        let response = login(State(panel.clone()), Form(password)).await;
+        let response = login(
+            State(panel.clone()),
+            Extension(Language::English),
+            Form(password),
+        )
+        .await;
         let signed_in = login(
             State(panel),
+            Extension(Language::English),
             Form(Password {
                 password: "right".into(),
             }),

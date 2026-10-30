@@ -330,9 +330,16 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::TooLarge => "request_too_large",
         Message::QueueFull => "queue_full",
         Message::QuotaWait { .. } => "quota_wait",
-        Message::Upstream(_) | Message::UpstreamHttp(_) | Message::UpstreamAcp(_) => {
-            "upstream_error"
-        }
+        Message::Upstream(_)
+        | Message::MissingSessionId
+        | Message::RuntimeStdoutClosed
+        | Message::RuntimeStdinWriteTimedOut
+        | Message::RuntimeStdinQueueFull
+        | Message::RuntimeStdinWriterStopped
+        | Message::RuntimeNotAvailable
+        | Message::ConfigOptionNotApplied { .. }
+        | Message::UpstreamHttp(_)
+        | Message::UpstreamAcp(_) => "upstream_error",
         Message::BuiltInToolRan(_) => "built_in_tool_ran",
         Message::RuntimeFailed => "runtime_failed",
         Message::NoUpdate => "no_update",
@@ -406,7 +413,8 @@ mod tests {
 
     #[test]
     fn runtime_unavailable_refusals_tell_each_client_not_to_retry() {
-        let refusal = Message::RuntimeUnavailable("acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.".into()).into();
+        let refusal =
+            Message::RuntimeUnavailable(crate::messages::Unavailable::no_executable()).into();
         for dialect in [CHAT, MESSAGES, RESPONSES] {
             let response = dialect.refusal(&refusal);
             assert_eq!(

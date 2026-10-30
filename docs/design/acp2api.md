@@ -838,6 +838,8 @@ The fake tracks active prompt turns and cancellation state by ACP session. A can
 - `Owner` is a fake browser. It has a cookie jar and an `Accept-Language` header. It reads the HTML text of the page, and it posts the forms of the management endpoints.
 - Caps: 300 requests for each scenario, 8 MiB for each answer, and 30 s of real time for each request.
 
+For visual checks, an adapter renders the authenticated HTML from `Owner` in installed headless Chrome. It reads computed styles and geometry from the page. These facts prove the visual rules without a dependency on stylesheet selectors. The adapter serializes Chrome runs, blocks network access, and caps each run and its output.
+
 #### Virtual time
 
 The hub owns the virtual time `now`. The wall time is a fixed epoch of the scenario plus `now`.
