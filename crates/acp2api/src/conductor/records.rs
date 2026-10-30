@@ -1,4 +1,9 @@
+use super::{Active, Command, Failure, OutstandingWork, PendingCompletion, Phase, retry};
 use crate::conversation::{self, Item, RecordHashes, ToolSetHash};
+use crate::{
+    Moment,
+    conversation::{TurnEvent, Usage},
+};
 pub(super) enum Location {
     Loaded,
     Unloaded(std::path::PathBuf),
@@ -10,6 +15,44 @@ pub(super) struct Record {
     pub tools: ToolSetHash,
     pub used: u64,
     pub expires: crate::Moment,
+}
+pub(super) struct RequestRecord {
+    hashes: RecordHashes,
+    tools: ToolSetHash,
+    used: u64,
+    expires: Moment,
+}
+impl RequestRecord {
+    pub(super) fn hashes(&self) -> &RecordHashes {
+        &self.hashes
+    }
+    #[cfg(test)]
+    pub(super) fn tools(&self) -> ToolSetHash {
+        self.tools
+    }
+    #[cfg(test)]
+    pub(super) fn fixture(
+        hashes: RecordHashes,
+        tools: ToolSetHash,
+        used: u64,
+        expires: Moment,
+    ) -> Self {
+        Self {
+            hashes,
+            tools,
+            used,
+            expires,
+        }
+    }
+}
+pub(super) enum Completion {
+    Finished,
+    Interrupted,
+    Quota(Option<String>),
+}
+pub(super) struct Completed {
+    pub(super) outstanding: Option<OutstandingWork>,
+    pub(super) retry: Option<retry::Wait>,
 }
 #[derive(Default)]
 pub(super) struct Sessions {
@@ -49,10 +92,21 @@ impl Sessions {
     pub(super) fn take(&mut self, index: usize) -> Record {
         self.records.remove(index)
     }
-    pub(super) fn next_use(&mut self) -> u64 {
+    pub(super) fn request_record(
+        &mut self,
+        hashes: RecordHashes,
+        tools: ToolSetHash,
+        now: Moment,
+    ) -> RequestRecord {
         self.use_sequence += 1;
-        self.use_sequence
+        RequestRecord {
+            hashes,
+            tools,
+            used: self.use_sequence,
+            expires: now.saturating_add(24 * 60 * 60 * 1000),
+        }
     }
+    #[cfg(test)]
     pub(super) fn remember(&mut self, record: Record) {
         self.records.push(record);
     }
@@ -80,6 +134,137 @@ impl Sessions {
             }
         });
         commands
+    }
+    pub(super) fn complete_request(
+        &mut self,
+        mut active: Active,
+        result: Result<(), Failure>,
+        mode: Completion,
+        now: Moment,
+        catalog: Option<&crate::catalog::Catalog>,
+    ) -> (Completed, Vec<Command>) {
+        let mut commands = Vec::new();
+        let outstanding = if matches!(mode, Completion::Interrupted)
+            && !matches!(
+                active.phase,
+                Phase::Settling { .. } | Phase::QuotaSettling { .. }
+            ) {
+            Some(OutstandingWork {
+                model: active.model.clone(),
+                request: active.request.clone(),
+                session: active.session.clone(),
+                completion: PendingCompletion::AlreadyCompleted,
+            })
+        } else {
+            None
+        };
+        let (can_continue, result) = match std::mem::replace(&mut active.phase, Phase::Completing) {
+            Phase::Settling {
+                can_continue,
+                result: pending,
+                ..
+            } => (can_continue, result.and(pending)),
+            Phase::Completing
+            | Phase::Preparing(_)
+            | Phase::Prompt { .. }
+            | Phase::AwaitingQuotaEnd { .. }
+            | Phase::QuotaSettling { .. } => (false, result),
+        };
+        let tool_hash = active
+            .tool_call
+            .as_ref()
+            .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
+        let retry = result
+            .as_ref()
+            .err()
+            .and_then(|failure| retry::Wait::after(&active, failure, catalog));
+        if result.as_ref().is_err_and(|failure| {
+            !matches!(
+                failure.message,
+                crate::messages::Message::MaxTurnRequests | crate::messages::Message::NoUpdate
+            )
+        }) {
+            active.held = None;
+        }
+        active.release_or_cut_reply(None, now, &mut commands);
+        let can_continue = can_continue && active.stop.sequence().is_none();
+        let end = result.map_err(|failure| failure.message).map(|()| {
+            let mut output = active.text.clone();
+            if let Some(call) = active.tool_call.take() {
+                output.push_str(&call.arguments);
+                commands.push(Command::Emit(
+                    active.reply.output.clone(),
+                    TurnEvent::ToolCall(call),
+                ));
+            }
+            Usage {
+                input_tokens: active.input_tokens,
+                output_tokens: crate::conversation::estimate_tokens(&output),
+            }
+        });
+        let mut forget = None;
+        if let Some(session) = &active.session {
+            if end.is_ok() && can_continue {
+                if tool_hash.is_none() || !active.text.is_empty() {
+                    active
+                        .record
+                        .hashes
+                        .messages
+                        .push(crate::conversation::reply_hash(&active.text));
+                }
+                if let Some(hash) = tool_hash {
+                    active.record.hashes.messages.push(hash);
+                }
+                self.records.push(Record {
+                    location: Location::Loaded,
+                    session: session.clone(),
+                    hashes: active.record.hashes,
+                    tools: active.record.tools,
+                    used: active.record.used,
+                    expires: active.record.expires,
+                });
+            } else {
+                forget = Some(session.clone());
+            }
+        }
+        let outcome = match &end {
+            Ok(usage) => crate::journal::Outcome::Success {
+                input: usage.input_tokens,
+                output: usage.output_tokens,
+            },
+            Err(crate::messages::Message::BuiltInToolRan(_)) => {
+                crate::journal::Outcome::BuiltInToolRan
+            }
+            Err(crate::messages::Message::MaxTurnRequests) => {
+                crate::journal::Outcome::MaxTurnRequests
+            }
+            Err(_) => crate::journal::Outcome::Failed,
+        };
+        commands.push(Command::Complete(crate::journal::Completion {
+            request: active.request,
+            session: active.session,
+            session_use: Some(active.kind),
+            outcome,
+        }));
+        if end.is_ok() {
+            commands.push(Command::Emit(
+                active.reply.output.clone(),
+                TurnEvent::Stop(active.stop),
+            ));
+        }
+        commands.push(Command::Emit(active.reply.output, TurnEvent::End(end)));
+        match mode {
+            Completion::Quota(session) => commands.extend(
+                session
+                    .filter(|session| Some(session) != forget.as_ref())
+                    .map(Command::Forget),
+            ),
+            Completion::Finished | Completion::Interrupted => {}
+        }
+        if outstanding.is_none() {
+            commands.extend(forget.map(Command::Forget));
+        }
+        (Completed { outstanding, retry }, commands)
     }
     #[cfg(test)]
     pub(super) fn fixture(
