@@ -46,7 +46,7 @@ Feature: Errors
       | POST /v1/responses        | OpenAI Responses API        |
       | POST /v1/chat/completions | OpenAI Chat Completions API |
 
-  @FR-027 @issue-71 @wip
+  @FR-027 @issue-71
   Scenario Outline: An error after the acceptance is an error event in an Anthropic stream
     Given a streamed request to "POST /v1/messages" was accepted before <case>
     When <case> ends the request
@@ -70,7 +70,7 @@ Feature: Errors
     Then the stream has the text "Hel"
     And the stream has a "content_block_stop" event for the open text block and then the "error" event
 
-  @FR-027 @issue-71 @wip
+  @FR-027 @issue-71
   Scenario Outline: Each error other than the 503 row is a response.failed event with the code invalid_prompt
     Given a streamed request to "POST /v1/responses" was accepted before <case>
     When <case> ends the request
@@ -99,7 +99,7 @@ Feature: Errors
     Then the stream has one "data:" line with an "error" object
     And the stream ends after that line with no "data: [DONE]"
 
-  @FR-032 @issue-71 @wip
+  @FR-032 @issue-71
   Scenario Outline: Each error of acp2api holds the text of its case
     When <case> ends a request to "<endpoint>"
     Then <place> holds the message "<message>"
@@ -123,7 +123,7 @@ Feature: Errors
       | the request has no local API key                  | 401    | authentication_error  |
       | the request has the field "output_config.format"  | 400    | invalid_request_error |
 
-  @FR-033 @issue-71 @wip
+  @FR-033 @issue-71
   Scenario Outline: Each other error case of a request with no stream gets the status, the headers, and the error.type of its row
     Given <prior state>
     When an API client sends a request to "POST /v1/messages" with "stream" set to false

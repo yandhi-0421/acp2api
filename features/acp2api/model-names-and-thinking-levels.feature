@@ -57,7 +57,7 @@ Feature: Model names and thinking levels
       | gpt-5.5               | <names> |
       | gemini-3.8-flash-xhigh | <names> |
 
-  @FR-012 @issue-71 @wip
+  @FR-012 @issue-71
   Scenario Outline: The list of model names gives the error of a state that stops requests
     Given acp2api is in the state "<state>"
     When an API client sends "GET /v1/models"

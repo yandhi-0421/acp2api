@@ -97,7 +97,7 @@ Feature: Sign-in
     When the owner starts acp2api for the first time
     Then acp2api is in the state "sign-in required"
 
-  @FR-036 @FR-038 @issue-71 @wip
+  @FR-036 @FR-038 @issue-71
   Scenario Outline: A successful sign-in preserves an unexpired quota wait
     Given two prompt turns run
     And one ends with a quota signal whose reset time is 2 minutes away
@@ -113,7 +113,7 @@ Feature: Sign-in
       | a sign-in in the management panel         |
       | a successful sign-in check of a request   |
 
-  @FR-036 @FR-038 @issue-71 @wip
+  @FR-036 @FR-038 @issue-71
   Scenario: An expired quota wait does not clear sign-in required
     Given acp2api has a quota wait until the time 120 s and also requires a sign-in
     And the official runtime still has no valid sign-in
@@ -122,7 +122,7 @@ Feature: Sign-in
     And the request gets HTTP 400 with M-13
     And the official runtime gets no prompt
 
-  @FR-036 @FR-040 @issue-71 @wip
+  @FR-036 @FR-040 @issue-71
   Scenario: Runtime recovery preserves an unexpired quota wait
     Given acp2api has an unexpired quota wait and the state "runtime unavailable"
     When the owner retries and the runtime process starts with a valid sign-in
