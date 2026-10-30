@@ -10,10 +10,16 @@ mod compatibility_check;
 mod compatibility_facts;
 #[path = "support/compatibility_check.rs"]
 mod compatibility_support;
+#[path = "steps/condition_overlap.rs"]
+mod condition_overlap;
 #[path = "steps/copy_failure.rs"]
 mod copy_failure;
 #[path = "support/copy_failure.rs"]
 mod copy_failure_support;
+#[path = "steps/error_statuses.rs"]
+mod error_statuses;
+#[path = "support/error_cases.rs"]
+mod error_support;
 #[path = "steps/keep_alive.rs"]
 mod keep_alive;
 #[path = "support/keep_alive.rs"]
@@ -96,6 +102,7 @@ mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
     setup_logs: setup_logs_support::SetupLogs,
+    errors: error_support::ErrorCases,
     panel_tiles: panel_tiles_support::TileState,
     prompt_sessions: std::collections::HashMap<String, String>,
     lockout: lockout_support::LockoutState,

@@ -151,9 +151,9 @@ Feature: Places and queue
       | 4 minutes | the prompt turn continues to its end, and the response has the full reply                                                                    |
       | 5 minutes | the official runtime gets a cancel of the prompt turn, and acp2api answers with HTTP 503 and the message "acp2api: the official runtime sent no update for 5 minutes, so acp2api cancelled the prompt turn." |
 
-  @FR-037 @issue-71 @wip
+  @FR-037 @issue-71
   Scenario Outline: The start of a state ends the requests in the queue with the error of that state
-    Given each place holds a prompt turn
+    Given each place holds a prompt turn before <event>
     And two requests with no stream wait in the queue
     When <event> starts the state "<state>"
     Then each of the two requests gets HTTP <status> with the message of the state "<state>"
