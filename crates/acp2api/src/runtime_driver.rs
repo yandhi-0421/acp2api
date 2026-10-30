@@ -11,7 +11,7 @@ use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
-use futures_util::{Stream, stream};
+use futures_util::{Stream, StreamExt, stream};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -173,18 +173,22 @@ impl Runtime {
         match result {
             Ok(catalog) => Ok((runtime, catalog)),
             Err(mut error) => {
-                if !matches!(error, LaunchFailure::Lockout { .. }) {
-                    // Stdout has priority, so its failure can precede buffered stderr evidence.
-                    while let Ok((line, _hold)) = runtime.lines.try_recv() {
-                        if let Line::Stderr(line) = line
-                            && let Some(lockout) = runtime.stderr_lockout(&line)
-                        {
-                            error = lockout.into();
-                            break;
+                let stderr = runtime.stop_stderr().await;
+                tokio::pin!(stderr);
+                while let Some(event) = stderr.next().await {
+                    if let RuntimeEvent::UpstreamError {
+                        error: upstream, ..
+                    } = event
+                    {
+                        let upstream = Message::UpstreamHttp(upstream);
+                        if let Some(signal) = upstream.lockout_signal() {
+                            error = LaunchFailure::Lockout {
+                                signal,
+                                error: upstream,
+                            };
                         }
                     }
                 }
-                runtime.stop().await;
                 Err(error)
             }
         }

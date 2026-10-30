@@ -700,3 +700,42 @@ async fn a_sign_in_address_accepts_four_kib_and_rejects_a_longer_line() {
         "the product accepts a sign-in address of exactly 4 KiB"
     );
 }
+
+#[tokio::test]
+async fn a_stderr_lockout_after_the_acp_call_fails_wins_over_start_failure() {
+    struct LateStderr(tokio::io::DuplexStream);
+    impl ProcessTree for LateStderr {
+        fn pid(&self) -> u32 {
+            std::process::id()
+        }
+        fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
+            Box::pin(std::future::pending())
+        }
+        fn stop(mut self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+            Box::pin(async move {
+                self.0.write_all(concat!(
+                    "Antigravity SDK error processing prompt for session startup\n",
+                    "Error 403, Message: Verify your account, Status: PERMISSION_DENIED, Details: []\n",
+                ).as_bytes()).await.unwrap();
+            })
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let root = Root(Environment::from_process().temp.join(format!("acp2api-late-stderr-{}", crate::random_hex::<8>().unwrap())));
+        let (stderr, writer) = tokio::io::duplex(4096);
+        let mut ports = Ports::production();
+        ports.launcher = Arc::new(OneChild(Mutex::new(Some(Launched {
+            stdin: Box::pin(tokio::io::sink()),
+            stdout: Box::pin(std::io::Cursor::new(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}\n")),
+            stderr: Box::pin(stderr),
+            tree: Box::new(LateStderr(writer)),
+        }))));
+        let start = RuntimeStart {
+            stopped: tokio::sync::watch::channel(false).1,
+            clock: ports.clock, launcher: ports.launcher, release: ports.release,
+            data: root.0.clone(), temporary: crate::account::Temporary::fixture(&root.0), tool_sets: mcp::ToolSets::new(0),
+        };
+        let result = Runtime::start(&start, "1.4.0").await;
+        assert!(matches!(result, Err(LaunchFailure::Lockout { signal: "403", ref error }) if error.to_string() == "acp2api: upstream error 403 PERMISSION_DENIED: Verify your account"), "FR-034: stderr emitted only when the failed process stops must override the ACP failure");
+    }).await.expect("late startup stderr cap: five seconds, one process, one ACP error, two stderr lines under four KiB");
+}
