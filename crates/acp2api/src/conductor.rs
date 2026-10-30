@@ -180,7 +180,7 @@ enum Work {
 }
 struct ModelRead {
     work: String,
-    reply: oneshot::Sender<Result<(), String>>,
+    replies: Vec<oneshot::Sender<Result<(), String>>>,
 }
 struct QuotaQuery {
     work: String,
@@ -1373,32 +1373,41 @@ impl Core {
                 }
             }
             (None, Event::ReadModelNames(reply)) => {
-                let error = if let Some(evidence) = &self.lockout {
-                    Some(
-                        crate::messages::Message::lockout(evidence, &self.panel_address, false)
-                            .to_string(),
-                    )
-                } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
-                    Some(reason.message.clone())
-                } else if matches!(self.runtime_state, RuntimeState::Stopping) {
-                    Some(crate::messages::Message::Stopped.to_string())
-                } else if self.queue_full() {
-                    Some(crate::messages::Message::QueueFull.to_string())
+                if self.catalog.is_some() || !self.view.borrow().model_names.is_empty() {
+                    let _ = reply.send(Ok(()));
+                } else if let Some(read) = self.work.values_mut().find_map(|work| match work {
+                    Work::ModelsQueued(read) | Work::ModelsReading(read) => Some(read),
+                    _ => None,
+                }) {
+                    read.replies.push(reply);
                 } else {
-                    None
-                };
-                if let Some(error) = error {
-                    let _ = reply.send(Err(error));
-                } else {
-                    let id = self.next_work;
-                    self.next_work += 1;
-                    self.work.insert(
-                        id,
-                        Work::ModelsQueued(ModelRead {
-                            work: format!("models-{id}"),
-                            reply,
-                        }),
-                    );
+                    let error = if let Some(evidence) = &self.lockout {
+                        Some(
+                            crate::messages::Message::lockout(evidence, &self.panel_address, false)
+                                .to_string(),
+                        )
+                    } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+                        Some(reason.message.clone())
+                    } else if matches!(self.runtime_state, RuntimeState::Stopping) {
+                        Some(crate::messages::Message::Stopped.to_string())
+                    } else if self.queue_full() {
+                        Some(crate::messages::Message::QueueFull.to_string())
+                    } else {
+                        None
+                    };
+                    if let Some(error) = error {
+                        let _ = reply.send(Err(error));
+                    } else {
+                        let id = self.next_work;
+                        self.next_work += 1;
+                        self.work.insert(
+                            id,
+                            Work::ModelsQueued(ModelRead {
+                                work: format!("models-{id}"),
+                                replies: vec![reply],
+                            }),
+                        );
+                    }
                 }
             }
             (None, Event::Stop) => {
@@ -1553,7 +1562,9 @@ impl Core {
                             self.sign_in_required = false;
                             match self.work.get_mut(&id).unwrap() {
                                 Work::ModelsReading(_) => {
-                                    self.startup_session = Some(session);
+                                    commands.extend(
+                                        self.startup_session.replace(session).map(Command::Forget),
+                                    );
                                     self.finish(id, Ok(()), now, &mut commands);
                                 }
                                 Work::Checking(_) => {
@@ -2461,10 +2472,10 @@ impl Core {
             let Work::ModelsQueued(read) = self.work.remove(&id).unwrap() else {
                 unreachable!()
             };
-            commands.push(Command::ModelsRead {
-                reply: read.reply,
+            commands.extend(read.replies.into_iter().map(|reply| Command::ModelsRead {
+                reply,
                 result: Err(message.to_string()),
-            });
+            }));
         }
     }
     fn refuse_queued(
@@ -2614,10 +2625,11 @@ impl Core {
     ) {
         match self.work.remove(&id).unwrap() {
             Work::ModelsQueued(read) | Work::ModelsReading(read) => {
-                commands.push(Command::ModelsRead {
-                    reply: read.reply,
-                    result: result.map_err(|failure| failure.message.to_string()),
-                });
+                let result = result.map_err(|failure| failure.message.to_string());
+                commands.extend(read.replies.into_iter().map(|reply| Command::ModelsRead {
+                    reply,
+                    result: result.clone(),
+                }));
             }
             Work::CheckQueued(request) | Work::Checking(request) => {
                 commands.push(Command::RefusePending {
@@ -3491,6 +3503,90 @@ mod tests {
             assert_eq!(answer, Some(Err(expected.to_string())));
             assert_eq!(core.view.borrow().queued, 0);
         }
+    }
+
+    #[test]
+    fn model_name_callers_share_one_read_and_then_use_the_cached_names() {
+        let mut core = Core::fixture(2);
+        core.runtime_state = RuntimeState::Restarting;
+        let mut answers = Vec::new();
+        for _ in 0..2 {
+            let (reply, answer) = oneshot::channel();
+            answers.push(answer);
+            core.handle(Event::ReadModelNames(reply), 0, std::time::UNIX_EPOCH);
+        }
+        assert_eq!(core.view.borrow().queued, 1, "one shared queued read");
+        let commands = core.handle(
+            Event::RuntimeReady {
+                sign_in_required: false,
+            },
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|c| matches!(c, Command::Prepare { .. }))
+                .count(),
+            1
+        );
+        let (reply, answer) = oneshot::channel();
+        answers.push(answer);
+        let commands = core.handle(Event::ReadModelNames(reply), 2, std::time::UNIX_EPOCH);
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, Command::Prepare { .. }))
+        );
+        assert_eq!(core.view.borrow().places, 1, "one shared running read");
+
+        core.startup_session = Some("previous-session".into());
+        let metadata = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: "models-0".into(),
+                result: Ok((
+                    "models-session".into(),
+                    crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
+                )),
+            }),
+            3,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, Command::Forget(session) if session == "previous-session"))
+        );
+        for command in commands {
+            if let Command::ModelsRead { reply, result } = command {
+                reply.send(result).unwrap();
+            }
+        }
+        assert!(
+            answers
+                .iter_mut()
+                .all(|answer| answer.try_recv() == Ok(Ok(()))),
+            "every waiter gets the shared result"
+        );
+        let (reply, mut answer) = oneshot::channel();
+        let commands = core.handle(Event::ReadModelNames(reply), 4, std::time::UNIX_EPOCH);
+        assert_eq!(
+            answer.try_recv(),
+            Ok(Ok(())),
+            "cached names answer immediately"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, Command::Prepare { .. }))
+        );
+        assert_eq!(core.startup_session.as_deref(), Some("models-session"));
+        assert_eq!(core.view.borrow().model_names, ["m"]);
+        assert_eq!(
+            (core.view.borrow().places, core.view.borrow().queued),
+            (0, 0)
+        );
     }
 
     #[test]
