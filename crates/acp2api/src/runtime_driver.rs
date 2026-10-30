@@ -55,6 +55,8 @@ impl RuntimeStart {
     ) -> Result<T, E> {
         self.before_deadline(wait, self.until_stopped(answer)).await
     }
+    /// Stop the process and read stderr to EOF, bounded by the answer timeout or stop.
+    /// Stdout can end before stderr carries lockout evidence; evidence already read is retained.
     pub(crate) async fn stop_and_drain_stderr(
         &self,
         runtime: Runtime,
@@ -65,6 +67,7 @@ impl RuntimeStart {
         let _ = self
             .before_deadline(ANSWER_TIMEOUT, async {
                 tokio::select! {
+                    // Preserve buffered lockout evidence when stop is already set.
                     biased;
                     result = async {
                         while let Some(event) = stderr.next().await {
@@ -198,6 +201,7 @@ impl Runtime {
                 start
                     .stop_and_drain_stderr(runtime, |event| {
                         if let Some((upstream, Some(signal))) = event.upstream_error("") {
+                            // FR-034 also applies during shutdown: a lockout signal overrides Stopped.
                             error = LaunchFailure::Lockout {
                                 signal,
                                 error: upstream,
@@ -861,6 +865,7 @@ impl Runtime {
     pub(crate) async fn stop(self) {
         drop(self.stop_stderr().await);
     }
+    /// Retain stopped-process stderr for the bounded `stop_and_drain_stderr` reader.
     async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
         let _ = self.input.shutdown().await;
         drop(self.input);
@@ -977,6 +982,7 @@ impl RuntimeEvent {
             _ => return None,
         };
         let signal = error.lockout_signal().or_else(|| {
+            // FR-034 counts reply text only in a prompt turn that stderr marks as failed.
             if matches!(self, Self::UpstreamError { .. }) {
                 crate::messages::lockout_signal(None, failed_reply, None)
             } else {

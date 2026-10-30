@@ -186,6 +186,7 @@ pub(crate) async fn run(
     };
     let result = checking.await;
     let mut lockout = None;
+    // A prompt result can precede stderr evidence; a lockout read before the bound wins.
     start
         .stop_and_drain_stderr(runtime, |event| {
             if let Some(error) = Failure::lockout(&event, &failed_reply) {
