@@ -58,6 +58,7 @@ pub(crate) enum OwnerAction {
     SignIn,
     CancelSignIn,
     RefreshQuota,
+    ReadModelNames,
     NewLocalApiKey,
     SetPasswordHash(String),
     SetConcurrencyLimit(u8),
@@ -159,6 +160,8 @@ struct ResponseChannel {
 type WorkId = u64;
 type WorkTable = BTreeMap<WorkId, Work>;
 enum Work {
+    ModelsQueued(ModelRead),
+    ModelsReading(ModelRead),
     CheckQueued(PendingRequest),
     Checking(PendingRequest),
     AcceptedQueued(Accepted),
@@ -174,6 +177,10 @@ enum Work {
         text: String,
         result: Result<(), crate::messages::Message>,
     },
+}
+struct ModelRead {
+    work: String,
+    reply: oneshot::Sender<Result<(), String>>,
 }
 struct QuotaQuery {
     work: String,
@@ -234,6 +241,7 @@ enum PendingCompletion {
 impl Work {
     fn key(&self) -> &str {
         match self {
+            Self::ModelsQueued(read) | Self::ModelsReading(read) => &read.work,
             Self::CheckQueued(request) | Self::Checking(request) => &request.request.id,
             Self::AcceptedQueued(request) => &request.request.id,
             Self::AcceptedWorking(active) => &active.request.id,
@@ -249,7 +257,9 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn execution_mut(&mut self) -> Option<&mut Active> {
@@ -260,7 +270,9 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn into_queued(self) -> Option<Accepted> {
@@ -271,7 +283,9 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn into_active(self) -> Option<Active> {
@@ -282,13 +296,18 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn is_queued(&self) -> bool {
         matches!(
             self,
-            Self::CheckQueued(_) | Self::AcceptedQueued(_) | Self::QuotaQueued { .. }
+            Self::CheckQueued(_)
+                | Self::AcceptedQueued(_)
+                | Self::QuotaQueued { .. }
+                | Self::ModelsQueued(_)
         )
     }
     fn occupies_place(&self) -> bool {
@@ -298,6 +317,7 @@ impl Work {
                 | Self::AcceptedWorking(_)
                 | Self::Retiring(_)
                 | Self::QuotaWorking { .. }
+                | Self::ModelsReading(_)
         )
     }
     fn reply(&self) -> Option<&ResponseChannel> {
@@ -312,7 +332,11 @@ impl Work {
                 }
                 QuotaPurpose::Refresh(_) => None,
             },
-            Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
+            Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn reply_mut(&mut self) -> Option<&mut ResponseChannel> {
@@ -327,7 +351,11 @@ impl Work {
                 }
                 QuotaPurpose::Refresh(_) => None,
             },
-            Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
+            Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn update_deadline(&self) -> Option<Moment> {
@@ -578,6 +606,7 @@ enum Event {
     StartSignIn,
     EndSignInWait,
     RefreshQuota(oneshot::Sender<Result<(), String>>),
+    ReadModelNames(oneshot::Sender<Result<(), String>>),
     RetireRuntime,
     RuntimeFailure,
     Stop,
@@ -592,6 +621,10 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
+    ModelsRead {
+        reply: oneshot::Sender<Result<(), String>>,
+        result: Result<(), String>,
+    },
     Authenticate,
     Lockout(crate::store::Lockout),
     RefuseBuildChange {
@@ -911,7 +944,9 @@ impl Core {
                 Work::CheckQueued(_)
                 | Work::Checking(_)
                 | Work::AcceptedQueued(_)
-                | Work::QuotaQueued { .. } => None,
+                | Work::QuotaQueued { .. }
+                | Work::ModelsQueued(_)
+                | Work::ModelsReading(_) => None,
                 Work::AcceptedWorking(active) => active.session.as_deref(),
                 Work::Retiring(outstanding) => outstanding.session.as_deref(),
                 Work::QuotaWorking { phase, .. } => phase.session(),
@@ -1055,6 +1090,9 @@ impl Core {
             }
             OwnerAction::RefreshQuota => {
                 return self.handle(Event::RefreshQuota(reply), clock.now(), clock.wall());
+            }
+            OwnerAction::ReadModelNames => {
+                return self.handle(Event::ReadModelNames(reply), clock.now(), clock.wall());
             }
             OwnerAction::DismissNotice(id) => {
                 let commands = self.handle(Event::DismissNotice(id), clock.now(), clock.wall());
@@ -1334,6 +1372,35 @@ impl Core {
                     self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
                 }
             }
+            (None, Event::ReadModelNames(reply)) => {
+                let error = if let Some(evidence) = &self.lockout {
+                    Some(
+                        crate::messages::Message::lockout(evidence, &self.panel_address, false)
+                            .to_string(),
+                    )
+                } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+                    Some(reason.message.clone())
+                } else if matches!(self.runtime_state, RuntimeState::Stopping) {
+                    Some(crate::messages::Message::Stopped.to_string())
+                } else if self.queue_full() {
+                    Some(crate::messages::Message::QueueFull.to_string())
+                } else {
+                    None
+                };
+                if let Some(error) = error {
+                    let _ = reply.send(Err(error));
+                } else {
+                    let id = self.next_work;
+                    self.next_work += 1;
+                    self.work.insert(
+                        id,
+                        Work::ModelsQueued(ModelRead {
+                            work: format!("models-{id}"),
+                            reply,
+                        }),
+                    );
+                }
+            }
             (None, Event::Stop) => {
                 self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Stopping;
@@ -1461,6 +1528,8 @@ impl Core {
                             }
                         }
                         Work::Retiring(_)
+                        | Work::ModelsQueued(_)
+                        | Work::ModelsReading(_)
                         | Work::QuotaQueued { .. }
                         | Work::QuotaWorking { .. } => unreachable!(),
                     }
@@ -1483,6 +1552,10 @@ impl Core {
                             self.catalog = Some(catalog);
                             self.sign_in_required = false;
                             match self.work.get_mut(&id).unwrap() {
+                                Work::ModelsReading(_) => {
+                                    self.startup_session = Some(session);
+                                    self.finish(id, Ok(()), now, &mut commands);
+                                }
                                 Work::Checking(_) => {
                                     commands.push(Command::AdmitChecked { id, session });
                                 }
@@ -1518,6 +1591,10 @@ impl Core {
                                     }
                                 }
                             }
+                        }
+                        Err(error) if matches!(self.work[&id], Work::ModelsReading(_)) => {
+                            let _ = self.quota_signal(&error, now, wall, &mut commands);
+                            self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
                         }
                         Err(error) => {
                             if let Some((wait, known)) =
@@ -1718,6 +1795,7 @@ impl Core {
             && places < usize::from(self.limit)
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
+                Work::ModelsQueued(_) => Some(*id),
                 Work::CheckQueued(_) => Some(*id),
                 Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
                 Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
@@ -1728,6 +1806,19 @@ impl Core {
                 break;
             };
             let request = match self.work.remove(&id).unwrap() {
+                Work::ModelsQueued(read) => {
+                    commands.push(Command::Prepare {
+                        work: read.work.clone(),
+                        settings: Session {
+                            tools: Vec::new(),
+                            system: None,
+                        },
+                        load: None,
+                    });
+                    self.work.insert(id, Work::ModelsReading(read));
+                    places += 1;
+                    continue;
+                }
                 Work::CheckQueued(request) => {
                     commands.push(Command::Prepare {
                         work: request.request.id.clone(),
@@ -2497,6 +2588,12 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         match self.work.remove(&id).unwrap() {
+            Work::ModelsQueued(read) | Work::ModelsReading(read) => {
+                commands.push(Command::ModelsRead {
+                    reply: read.reply,
+                    result: result.map_err(|failure| failure.message.to_string()),
+                });
+            }
             Work::CheckQueued(request) | Work::Checking(request) => {
                 commands.push(Command::RefusePending {
                     request: Box::new(request),
@@ -2982,6 +3079,9 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::ModelsRead { reply, result } => {
+                    let _ = reply.send(result);
+                }
                 Command::RefuseBuildChange { reply, error } => {
                     let _ = reply.send(Err(LaunchFailure::Runtime(error.to_string())));
                 }

@@ -54,6 +54,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/password", post(password))
         .route("/manage/concurrency", post(concurrency))
         .route("/manage/refresh-quota", post(refresh_quota))
+        .route("/manage/models", post(read_models))
         .route("/manage/sign-in", post(sign_in))
         .route("/manage/cancel-sign-in", post(cancel_sign_in))
         .route("/manage/notice", post(dismiss_notice))
@@ -244,6 +245,24 @@ async fn refresh_quota(
     match panel.conductor.owner(OwnerAction::RefreshQuota, hold).await {
         Ok(()) => panel.page(StatusCode::OK, "Quota refreshed."),
         Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
+    }
+}
+async fn read_models(
+    State(panel): State<Panel>,
+    Extension(lease): Extension<crate::front::RequestHold>,
+) -> Response {
+    let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
+    drop(lease.release());
+    match panel
+        .conductor
+        .owner(OwnerAction::ReadModelNames, hold)
+        .await
+    {
+        Ok(()) => panel.page(StatusCode::OK, "Model names read."),
+        Err(error) => panel.page(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &crate::journal::redact_error(&error),
+        ),
     }
 }
 async fn sign_in(State(panel): State<Panel>) -> Response {
