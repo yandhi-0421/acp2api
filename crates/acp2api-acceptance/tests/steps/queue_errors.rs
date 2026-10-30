@@ -27,6 +27,13 @@ async fn refusal(w: &mut World, status: u16, header: &str) -> Answer {
         Some(value),
         "FR-033 refusal header"
     );
+    if matches!(status, 429 | 503 | 529) {
+        assert_eq!(
+            answer.headers.get("x-should-retry"),
+            None,
+            "FR-033 HTTP {status} refusal has no x-should-retry header"
+        );
+    }
     answer
 }
 
