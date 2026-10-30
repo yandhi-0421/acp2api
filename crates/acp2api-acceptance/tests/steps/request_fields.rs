@@ -144,13 +144,12 @@ fn error_type(w: &mut World, expected: String) {
             &w.fields.endpoint,
         );
         assert!(content_check::blocks(&w.scenario).is_empty());
-    } else {
+    } else if w.fields.expected.is_some() {
         expected_refusal(w);
-        assert!(
-            w.scenario.answer.as_ref().unwrap().headers["content-type"]
-                .starts_with("application/json")
-        );
     }
+    assert!(
+        w.scenario.answer.as_ref().unwrap().headers["content-type"].starts_with("application/json")
+    );
     assert_eq!(
         w.scenario.answer.as_ref().unwrap().json()["error"]["type"],
         expected
