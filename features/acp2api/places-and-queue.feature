@@ -172,3 +172,38 @@ Feature: Places and queue
     When the prompt turn of "A" ends with the stderr error line 429 "RESOURCE_EXHAUSTED"
     Then the two requests in the queue get HTTP 429
     And the prompt turn of "B" continues to its end, and "B" gets its full reply
+
+  @FR-037 @issue-170
+  Scenario: Another sign-in error preserves requests that wait for their required checks
+    Given the concurrency limit is 1
+    And acp2api is in the state "sign-in required"
+    And the sign-in check of request "active-condition-source-170" waits for a runtime reply
+    And requests "active-condition-first-queued-170" and "active-condition-second-queued-170" wait for their required sign-in checks
+    When the sign-in check of "active-condition-source-170" fails
+    Then "active-condition-first-queued-170" has no HTTP status yet
+    And "active-condition-second-queued-170" has no HTTP status yet
+    And the official runtime gets one sign-in check for "active-condition-first-queued-170"
+    When the sign-in check of "active-condition-first-queued-170" fails
+    Then "active-condition-first-queued-170" gets HTTP 400 with M-13 and no stream event
+    And "active-condition-second-queued-170" has no HTTP status yet
+    And the official runtime gets one sign-in check for "active-condition-second-queued-170"
+    When the sign-in check of "active-condition-second-queued-170" fails
+    Then "active-condition-second-queued-170" gets HTTP 400 with M-13 and no stream event
+
+  @FR-037 @issue-170
+  Scenario: Another quota error preserves requests that wait for their required sign-in checks
+    Given the concurrency limit is 2
+    And acp2api has a quota wait until the time 120 s and also requires a sign-in
+    And the sign-in check of request "active-quota-source-170" waits for the upstream error 429 RESOURCE_EXHAUSTED
+    And the sign-in check of request "active-quota-blocker-170" waits for a runtime reply
+    And requests "active-quota-first-queued-170" and "active-quota-second-queued-170" wait for their required sign-in checks
+    When the sign-in check of "active-quota-source-170" fails
+    Then "active-quota-first-queued-170" has no HTTP status yet
+    And "active-quota-second-queued-170" has no HTTP status yet
+    And the official runtime gets one sign-in check for "active-quota-first-queued-170"
+    When the sign-in check of "active-quota-first-queued-170" fails
+    Then "active-quota-first-queued-170" gets HTTP 400 with M-13 and no stream event
+    And "active-quota-second-queued-170" has no HTTP status yet
+    And the official runtime gets one sign-in check for "active-quota-second-queued-170"
+    When the sign-in check of "active-quota-second-queued-170" fails
+    Then "active-quota-second-queued-170" gets HTTP 400 with M-13 and no stream event

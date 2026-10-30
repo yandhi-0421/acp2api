@@ -580,3 +580,40 @@ fn no_overflow_call(w: &mut World) {
     );
     assert!(process::calls(w, "session/prompt").is_empty());
 }
+
+#[given(expr = "requests {string} and {string} wait for their required sign-in checks")]
+async fn two_queued_checks(w: &mut World, first: String, second: String) {
+    for name in [first, second] {
+        support::held_check(w, &name, false).await;
+        assert!(
+            !support::held(w, &name),
+            "queued request {name} has not started its required check"
+        );
+    }
+    support::queue_count(w, 2).await;
+}
+
+#[given(
+    expr = "the sign-in check of request {string} waits for the upstream error 429 RESOURCE_EXHAUSTED"
+)]
+async fn held_quota_check(w: &mut World, name: String) {
+    use acp2api_acceptance::{endpoint_check, rpc_script::RpcReply};
+
+    support::start(w).await;
+    w.scenario.fake().script_call(
+        "session/new",
+        RpcReply::Held {
+            gate: format!("sign-in-{name}"),
+            reply: Box::new(RpcReply::Error(json!({
+                "code": 429,
+                "message": format!("RESOURCE_EXHAUSTED; resets {}", crate::quota_support::RESET),
+            }))),
+        },
+    );
+    let live = queue::send(
+        w,
+        endpoint_check::request("POST /v1/messages", &queue::marker(&name), true),
+    )
+    .await;
+    w.places.calls.push((name, Some(live)));
+}
