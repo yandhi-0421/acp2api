@@ -138,7 +138,7 @@ fn unknown_row(w: &mut World, name: String, api: String, count: usize) {
 fn log_folder(w: &mut World, title: String) {
     let html = tiles::html(w);
     let text = tiles::visible(tiles::tile(&html, &title));
-    let path = w.scenario.root.path.join("data/logs");
+    let path = w.scenario.root.path.join("data").join("logs");
     assert!(path.is_dir(), "real log folder exists");
     assert!(
         text.contains(path.to_str().unwrap()),
