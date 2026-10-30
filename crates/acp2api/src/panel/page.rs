@@ -217,6 +217,7 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
                 .iter()
                 .map(|(name, _)| {
                     let text = match &metadata[*name] {
+                        serde_json::Value::Null => String::new(),
                         serde_json::Value::String(text) => text.clone(),
                         serde_json::Value::Array(fields) => fields
                             .iter()
@@ -354,6 +355,7 @@ mod tests {
         version: &str,
         source: &Path,
         data_folder: &Path,
+        history: &crate::journal::History,
     ) -> String {
         let settings = crate::store::Settings {
             port: 8329,
@@ -382,10 +384,55 @@ mod tests {
             notices: &[],
             builds: Ok(builds),
             quota_result: &None,
-            history: &crate::journal::History::default(),
+            history,
             view,
             now: 0,
         })
+    }
+
+    #[test]
+    fn empty_log_cells_are_blank_and_present_zero_is_visible() {
+        let mut history = crate::journal::History::default();
+        history
+            .requests
+            .push_back(std::sync::Arc::new(crate::journal::RequestRecord {
+                time: "1970-01-01T00:00:00Z".into(),
+                request_id: "req-example".into(),
+                api: crate::journal::Api::Chat,
+                model: None,
+                session: None,
+                session_use: None,
+                duration_ms: 7,
+                input_tokens: None,
+                output_tokens: Some(0),
+                result: crate::journal::ResultKind::Success,
+                error_code: None,
+                unknown_fields: vec!["field<&>".into()],
+            }));
+        let html = render(
+            &crate::conductor::View::default(),
+            "1.4.0",
+            Path::new("source"),
+            Path::new("data"),
+            &history,
+        );
+        let row = html
+            .split("<caption>Last 50 requests</caption>")
+            .nth(1)
+            .unwrap()
+            .split("<tbody>")
+            .nth(1)
+            .unwrap()
+            .split("</tbody>")
+            .next()
+            .unwrap();
+        assert!(!row.contains("null"), "missing optional metadata is blank");
+        assert_eq!(row.matches("<td></td>").count(), 5);
+        assert!(row.contains("<td>0</td>"), "a reported zero is a value");
+        assert!(
+            row.contains("field&lt;&amp;&gt;"),
+            "field names stay escaped"
+        );
     }
 
     #[test]
@@ -395,7 +442,13 @@ mod tests {
             queued: 2,
             ..Default::default()
         };
-        let html = render(&view, "1.4.0", Path::new("source"), Path::new("data"));
+        let html = render(
+            &view,
+            "1.4.0",
+            Path::new("source"),
+            Path::new("data"),
+            &crate::journal::History::default(),
+        );
         let quota = html
             .split("<h2 id=\"quota-title\">Quota</h2>")
             .nth(1)
@@ -420,6 +473,7 @@ mod tests {
             "1<\"&",
             Path::new("source<\"&"),
             Path::new("data<\"&"),
+            &crate::journal::History::default(),
         );
         let runtime = html
             .split("<h2>Official runtime</h2>")
