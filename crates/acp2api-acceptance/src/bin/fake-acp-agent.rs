@@ -53,10 +53,12 @@ fn main() -> ExitCode {
     let harness = std::env::args().any(|a| a == "--harness");
     let hello = json!({"op":"Hello","token":fields["token"],"label":fields["label"],"version":fields.get("version").map(String::as_str).unwrap_or("1.4.0"),"role":if harness {"harness"}else{"server"},"pid":std::process::id(),"parent_pid":parent_pid(),"argv":std::env::args().collect::<Vec<_>>(),"cwd":std::env::current_dir().unwrap(),"environment_names":std::env::vars_os().map(|(k,_)|k.to_string_lossy().into_owned()).collect::<Vec<_>>(),"GEMINI_HOME":std::env::var("GEMINI_HOME").ok(),"TEMP":std::env::var("TEMP").ok(),"TMP":std::env::var("TMP").ok()});
     send(&writer, &hello);
+    let stop_stdin = Arc::new(Mutex::new(None::<(String, std::net::SocketAddr)>));
     let children = Arc::new(Mutex::new(Vec::<std::process::Child>::new()));
     if !harness {
         let writer = writer.clone();
         let children = children.clone();
+        let stop_stdin = stop_stdin.clone();
         thread::spawn(move || {
             let stdin = std::io::stdin();
             let mut reader = stdin.lock();
@@ -82,6 +84,28 @@ fn main() -> ExitCode {
                     &writer,
                     &json!({"op":"Got","line":line.trim_end_matches('\n')}),
                 );
+                let stop = {
+                    let mut plan = stop_stdin.lock().unwrap();
+                    if plan
+                        .as_ref()
+                        .is_some_and(|(needle, _)| line.contains(needle))
+                    {
+                        plan.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some((_, notify)) = stop {
+                    let mut prefix = [0; 64 * 1024];
+                    reader.read_exact(&mut prefix).expect("partial ACP message");
+                    let limit = real_limit(Duration::from_secs(3));
+                    let mut observer = TcpStream::connect_timeout(&notify, limit).unwrap();
+                    observer.set_write_timeout(Some(limit)).unwrap();
+                    observer.write_all(&prefix[..256]).unwrap();
+                    loop {
+                        thread::park();
+                    }
+                }
             }
             if cfg!(not(windows)) {
                 for child in children.lock().unwrap().iter_mut() {
@@ -113,6 +137,20 @@ fn main() -> ExitCode {
             return ExitCode::from(70);
         }
         match command["op"].as_str().unwrap_or("") {
+            "StopReadingStdinAfter" => {
+                let needle = command["contains"].as_str().expect("stdin stop trigger");
+                assert!(
+                    !needle.is_empty() && needle.len() <= 128,
+                    "stdin trigger cap: 128 bytes"
+                );
+                let notify: std::net::SocketAddr = command["notify"]
+                    .as_str()
+                    .expect("stdin stop observer")
+                    .parse()
+                    .unwrap();
+                assert!(notify.ip().is_loopback(), "stdin observer must be local");
+                *stop_stdin.lock().unwrap() = Some((needle.into(), notify));
+            }
             "KeepToken" => {
                 let token = command["token"].as_str().expect("synthetic token");
                 assert!(token.len() <= 128, "synthetic token cap: 128 bytes");
