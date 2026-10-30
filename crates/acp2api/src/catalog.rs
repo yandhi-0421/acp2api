@@ -106,7 +106,7 @@ impl Catalog {
             created: wall.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
         })
     }
-    fn names(&self) -> impl Iterator<Item = (String, &str)> {
+    pub(crate) fn names(&self) -> impl Iterator<Item = (String, &str)> {
         self.models.iter().flat_map(|model| {
             std::iter::once(model.value.clone())
                 .chain(

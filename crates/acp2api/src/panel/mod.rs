@@ -18,10 +18,15 @@ mod page;
 static CONTENT_SECURITY_POLICY: LazyLock<axum::http::HeaderValue> = LazyLock::new(|| {
     use base64::Engine;
     use sha2::Digest;
-    let hash =
-        base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(page::COUNTDOWN));
+    let scripts = [page::COUNTDOWN, page::COPY_KEY]
+        .map(|script| {
+            let hash =
+                base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(script));
+            format!("'sha256-{hash}'")
+        })
+        .join(" ");
     let policy = format!(
-        "default-src 'none'; script-src 'sha256-{hash}'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        "default-src 'none'; script-src {scripts}; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     );
     policy.parse().unwrap()
 });

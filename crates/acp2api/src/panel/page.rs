@@ -7,6 +7,15 @@ function update() {
     if (left > 0) setTimeout(update, 1000);
 }
 update();"#;
+pub(super) const COPY_KEY: &str = r#"document.getElementById('copy-key').addEventListener('click', async () => {
+    const status = document.getElementById('copy-key-status');
+    try {
+        await navigator.clipboard.writeText(document.getElementById('local-api-key').value);
+        status.textContent = 'Local API key copied.';
+    } catch {
+        status.textContent = 'Copy failed. Use Show key to copy it.';
+    }
+});"#;
 fn figure(label: &str, value: impl std::fmt::Display) -> String {
     format!(
         "<p>{} <span>{}</span></p>",
@@ -121,6 +130,59 @@ pub(super) fn settings(page: Page<'_>) -> String {
     let quota = format!(
         r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{places}{queued}{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section>"#
     );
+    let address = format!("http://127.0.0.1:{}", page.port);
+    let model = page
+        .view
+        .model_names
+        .first()
+        .map(String::as_str)
+        .unwrap_or("<MODEL_NAME>");
+    let shell_model = format!("'{}'", model.replace('\'', "'\\''"));
+    let window = "<CONTEXT_WINDOW>";
+    let claude = format!(
+        r#"export ANTHROPIC_BASE_URL="{address}"
+export ANTHROPIC_AUTH_TOKEN="<LOCAL_API_KEY>"
+export ANTHROPIC_MODEL={shell_model}
+export ANTHROPIC_DEFAULT_HAIKU_MODEL={shell_model}
+export ANTHROPIC_DEFAULT_SONNET_MODEL={shell_model}
+export ANTHROPIC_DEFAULT_OPUS_MODEL={shell_model}
+export CLAUDE_CODE_SUBAGENT_MODEL={shell_model}
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS={window}"#
+    );
+    let codex = format!(
+        r#"model = {model}
+model_context_window = {window}
+model_provider = "acp2api"
+
+[model_providers.acp2api]
+name = "acp2api"
+base_url = "{address}/v1"
+wire_api = "responses"
+experimental_bearer_token = "<LOCAL_API_KEY>""#,
+        model = toml::Value::String(model.into())
+    );
+    let chat = serde_json::to_string_pretty(
+        &serde_json::json!({"base_url":format!("{address}/v1"),"api_key":"<LOCAL_API_KEY>"}),
+    )
+    .unwrap();
+    let models = if page.view.model_names.is_empty() {
+        "<form method=\"post\" action=\"/manage/models\"><button type=\"submit\">Read the model names now</button></form>".into()
+    } else {
+        format!(
+            "<ul>{}</ul>",
+            page.view
+                .model_names
+                .iter()
+                .map(|name| format!("<li><code>{}</code></li>", escape(name)))
+                .collect::<String>()
+        )
+    };
+    let setup = format!(
+        r#"<section><h2>Setup</h2><p>Address <code>{address}</code></p><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><button type="button" id="copy-key">Copy local API key</button><p id="copy-key-status" role="status"></p><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form><h3>Model names</h3>{models}<p>Replace the placeholders below. Copy the local API key separately.</p><h3>Claude Code</h3><pre>{}</pre><h3>Codex</h3><pre>{}</pre><h3>Chat Completions client</h3><pre>{}</pre><script>{COPY_KEY}</script></section>"#,
+        escape(&claude),
+        escape(&codex),
+        escape(&chat)
+    );
     let columns = [
         ("time", "Time"),
         ("request_id", "Request ID"),
@@ -188,7 +250,7 @@ pub(super) fn settings(page: Page<'_>) -> String {
         escape(&page.data_folder.join("logs").display().to_string())
     );
     document(&format!(
-        r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section>{logs}<section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+        r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}{setup}{logs}<section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
     ))
 }
 

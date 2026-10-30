@@ -33,6 +33,7 @@ pub(crate) struct Conductor {
     pub(crate) highest: u8,
 }
 pub(crate) struct View {
+    pub(crate) model_names: Vec<String>,
     pub(crate) state: &'static str,
     pub(crate) runtime_process: &'static str,
     pub(crate) places: usize,
@@ -42,6 +43,7 @@ pub(crate) struct View {
 impl Default for View {
     fn default() -> Self {
         Self {
+            model_names: Vec::new(),
             state: "Running",
             runtime_process: "starting",
             places: 0,
@@ -1795,7 +1797,12 @@ impl Core {
         commands
     }
     fn publish_view(&self) {
+        let model_names = self.catalog.as_ref().map_or_else(
+            || self.view.borrow().model_names.clone(),
+            |catalog| catalog.names().map(|(name, _)| name).collect(),
+        );
         self.view.send_replace(Arc::new(View {
+            model_names,
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
             runtime_process: self.runtime_state.process_word(),
