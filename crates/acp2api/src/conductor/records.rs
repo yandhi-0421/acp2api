@@ -1,9 +1,6 @@
-use super::{Accepted, Active, Command, Failure, PendingRequest, Phase, Session, retry};
-use crate::conversation::{self, Item, Prompt, PromptRequest, RecordHashes, ToolSetHash};
-use crate::{
-    Moment,
-    conversation::{TurnEvent, Usage},
-};
+use super::{Active, Command, PendingRequest, Session};
+use crate::Moment;
+use crate::conversation::{self, Item, Prompt, RecordHashes, ToolSetHash};
 use std::collections::BTreeMap;
 pub(super) enum Location {
     Loaded,
@@ -12,10 +9,7 @@ pub(super) enum Location {
 pub(super) struct Record {
     pub location: Location,
     pub session: String,
-    pub hashes: RecordHashes,
-    pub tools: ToolSetHash,
-    pub used: u64,
-    pub expires: crate::Moment,
+    pub record: RequestRecord,
 }
 pub(super) struct OutstandingWork {
     model: String,
@@ -23,11 +17,19 @@ pub(super) struct OutstandingWork {
     session: Option<String>,
     completion: PendingCompletion,
 }
-enum PendingCompletion {
+pub(super) enum PendingCompletion {
     Disconnected(Option<crate::journal::SessionUse>),
     AlreadyCompleted,
 }
 impl OutstandingWork {
+    pub(super) fn from_active(active: &Active, completion: PendingCompletion) -> Self {
+        Self {
+            model: active.model.clone(),
+            request: active.request.clone(),
+            session: active.session.clone(),
+            completion,
+        }
+    }
     pub(super) fn disconnected_check(request: PendingRequest) -> Self {
         Self {
             model: request.turn.model,
@@ -45,9 +47,8 @@ impl OutstandingWork {
     pub(super) fn session(&self) -> Option<&str> {
         self.session.as_deref()
     }
-    pub(super) fn prepared(mut self, session: String) -> Vec<Command> {
+    pub(super) fn prepared(&mut self, session: String) {
         self.session = Some(session);
-        self.finish()
     }
     pub(super) fn finish(self) -> Vec<Command> {
         let mut commands = Vec::new();
@@ -72,6 +73,19 @@ pub(super) struct RequestRecord {
     expires: Moment,
 }
 impl RequestRecord {
+    pub(super) fn with_reply(
+        mut self,
+        text: &str,
+        tool_hash: Option<crate::conversation::ItemHash>,
+    ) -> Self {
+        if tool_hash.is_none() || !text.is_empty() {
+            self.hashes.messages.push(conversation::reply_hash(text));
+        }
+        if let Some(hash) = tool_hash {
+            self.hashes.messages.push(hash);
+        }
+        self
+    }
     pub(super) fn hashes(&self) -> &RecordHashes {
         &self.hashes
     }
@@ -94,23 +108,20 @@ impl RequestRecord {
         }
     }
 }
-pub(super) enum Completion {
-    Finished,
-    Interrupted,
-    Quota(Option<String>),
-}
-pub(super) struct Completed {
-    pub(super) outstanding: Option<OutstandingWork>,
-    pub(super) retry: Option<retry::Wait>,
+pub(super) struct Selection {
+    pub(super) kind: crate::journal::SessionUse,
+    pub(super) prompt: Vec<crate::conversation::PromptBlock>,
+    pub(super) ready: Option<(String, Location)>,
+    pub(super) record: RequestRecord,
 }
 #[derive(Default)]
-pub(super) struct Sessions {
+pub(super) struct AcpSessions {
     records: Vec<Record>,
     startup: Option<String>,
     use_sequence: u64,
     cancels: BTreeMap<String, Moment>,
 }
-impl Sessions {
+impl AcpSessions {
     #[cfg(test)]
     pub(super) fn records(&self) -> &[Record] {
         &self.records
@@ -134,8 +145,8 @@ impl Sessions {
     pub(super) fn replaced(&mut self, startup: Option<String>) {
         self.startup = startup;
     }
-    pub(super) fn models_ready(&mut self, session: String) -> Option<super::Command> {
-        self.startup.replace(session).map(super::Command::Forget)
+    pub(super) fn models_ready(&mut self, session: String) -> Option<Command> {
+        self.startup.replace(session).map(Command::Forget)
     }
     pub(super) fn take_startup(&mut self) -> Option<String> {
         self.startup.take()
@@ -144,24 +155,24 @@ impl Sessions {
     pub(super) fn remember(&mut self, record: Record) {
         self.records.push(record);
     }
-    pub(super) fn forget(&mut self, session: String) -> Vec<super::Command> {
+    pub(super) fn forget(&mut self, session: String) -> Command {
         self.records.retain(|record| record.session != session);
         if self.startup.as_ref() == Some(&session) {
             self.startup = None;
         }
-        vec![super::Command::Forget(session)]
+        Command::Forget(session)
     }
-    pub(super) fn forget_idle(&mut self) -> Vec<super::Command> {
+    pub(super) fn forget_idle(&mut self) -> Vec<Command> {
         let idle = self.records.drain(..).map(|record| record.session);
         idle.chain(self.startup.take())
-            .map(super::Command::Forget)
+            .map(Command::Forget)
             .collect()
     }
-    pub(super) fn expire(&mut self, now: crate::Moment) -> Vec<super::Command> {
+    pub(super) fn expire(&mut self, now: crate::Moment) -> Vec<Command> {
         let mut commands = Vec::new();
         self.records.retain(|record| {
-            if record.expires <= now {
-                commands.push(super::Command::Forget(record.session.clone()));
+            if record.record.expires <= now {
+                commands.push(Command::Forget(record.session.clone()));
                 false
             } else {
                 true
@@ -169,35 +180,28 @@ impl Sessions {
         });
         commands
     }
-    pub(super) fn start_request(
+    pub(super) fn select(
         &mut self,
-        request: Accepted,
+        turn: &crate::conversation::TurnRequest,
+        settings: &Session,
         mut checked_session: Option<String>,
         now: Moment,
-    ) -> (Active, Vec<Command>) {
+    ) -> (Selection, Vec<Command>) {
         let mut commands = Vec::new();
-        let client_tools_hash = crate::conversation::tool_set_hash(&request.turn.tools);
-        let settings = Session::for_turn(&request.turn);
-        let hashes = crate::conversation::record_hashes(&request.turn.conversation);
+        let hashes = crate::conversation::record_hashes(&turn.conversation);
         let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
-        let items = request.turn.conversation.items();
+        let items = turn.conversation.items();
         let matched = select(&self.records, &hashes, tools_hash, &items);
         let prompt = match matched {
             Some((_, new_items)) => Prompt::Continue { new_items },
-            None if request.turn.conversation.earlier.is_empty() => Prompt::New {
-                message: &request.turn.conversation.last,
+            None if turn.conversation.earlier.is_empty() => Prompt::New {
+                message: &turn.conversation.last,
             },
             None => Prompt::Rebuild {
                 conversation_items: &items,
             },
         };
         let (kind, prompt) = crate::conversation::prompt(prompt, &items);
-        let prompt = PromptRequest {
-            blocks: prompt,
-            model: request.model.model,
-            level: request.model.level,
-        };
-        let model = prompt.model.clone();
         let ready = match matched {
             Some((index, _)) => {
                 let record = self.records.remove(index);
@@ -221,53 +225,12 @@ impl Sessions {
             used: self.use_sequence,
             expires: now.saturating_add(24 * 60 * 60 * 1000),
         };
-        let work = request.request.id.clone();
-        let (session, phase) = match ready {
-            Some((id, Location::Loaded)) => {
-                commands.push(Command::Prompt {
-                    work: work.clone(),
-                    session: id.clone(),
-                    prompt,
-                });
-                (Some(id), Phase::prompt(now))
-            }
-            Some((session, Location::Unloaded(cwd))) => {
-                commands.push(Command::Prepare {
-                    work,
-                    settings: settings.clone(),
-                    load: Some((session.clone(), cwd)),
-                });
-                (Some(session), Phase::Preparing(prompt))
-            }
-            None => {
-                commands.push(Command::Prepare {
-                    work,
-                    settings: settings.clone(),
-                    load: None,
-                });
-                (None, Phase::Preparing(prompt))
-            }
-        };
         (
-            Active {
-                reply: request.reply,
-                request: request.request,
-                session,
-                record,
-                client_tools_hash,
+            Selection {
                 kind,
-                held: None,
-                text: String::new(),
-                thought_dropped: false,
-                input_tokens: request.turn.input_tokens,
-                model,
-                model_name: request.turn.model,
-                effort: request.turn.effort,
-                phase,
-                tool_call: None,
-                stop: crate::conversation::Stop::EndTurn,
-                stops: request.turn.stop,
-                stop_prefix: String::new(),
+                prompt,
+                ready,
+                record,
             },
             commands,
         )
@@ -275,7 +238,7 @@ impl Sessions {
     pub(super) fn next_deadline(&self) -> Option<Moment> {
         self.records
             .iter()
-            .map(|record| record.expires)
+            .map(|record| record.record.expires)
             .chain(self.cancels.values().copied())
             .min()
     }
@@ -288,7 +251,7 @@ impl Sessions {
             .or_insert_with(|| now.saturating_add(super::CANCEL_TIMEOUT));
         Command::Cancel(session)
     }
-    pub(super) fn prompt_ended(&mut self, session: &str) {
+    pub(super) fn cancel_ended(&mut self, session: &str) {
         self.cancels.remove(session);
     }
     pub(super) fn clear_cancels(&mut self) {
@@ -304,19 +267,14 @@ impl Sessions {
         now: Moment,
     ) -> (Option<OutstandingWork>, Vec<Command>) {
         let mut commands = Vec::new();
-        let ended = matches!(
-            active.phase,
-            Phase::Settling { .. } | Phase::QuotaSettling { .. }
-        );
+        let ended = active.phase.settled();
         if active.phase.update_deadline().is_some() {
             commands.push(self.cancel(active.session.as_ref().unwrap().clone(), now));
         }
-        let outstanding = OutstandingWork {
-            model: active.model,
-            request: active.request,
-            session: active.session,
-            completion: PendingCompletion::Disconnected(Some(active.kind)),
-        };
+        let outstanding = OutstandingWork::from_active(
+            &active,
+            PendingCompletion::Disconnected(Some(active.kind)),
+        );
         if ended {
             commands.extend(outstanding.finish());
             (None, commands)
@@ -324,136 +282,22 @@ impl Sessions {
             (Some(outstanding), commands)
         }
     }
-    pub(super) fn complete_request(
+    pub(super) fn keep(
         &mut self,
-        mut active: Active,
-        result: Result<(), Failure>,
-        mode: Completion,
-        now: Moment,
-        catalog: Option<&crate::catalog::Catalog>,
-    ) -> (Completed, Vec<Command>) {
-        let mut commands = Vec::new();
-        let outstanding = if matches!(mode, Completion::Interrupted)
-            && !matches!(
-                active.phase,
-                Phase::Settling { .. } | Phase::QuotaSettling { .. }
-            ) {
-            Some(OutstandingWork {
-                model: active.model.clone(),
-                request: active.request.clone(),
-                session: active.session.clone(),
-                completion: PendingCompletion::AlreadyCompleted,
-            })
-        } else {
-            None
-        };
-        let (can_continue, result) = match std::mem::replace(&mut active.phase, Phase::Completing) {
-            Phase::Settling {
-                can_continue,
-                result: pending,
-                ..
-            } => (can_continue, result.and(pending)),
-            Phase::Completing
-            | Phase::Preparing(_)
-            | Phase::Prompt { .. }
-            | Phase::AwaitingQuotaEnd { .. }
-            | Phase::QuotaSettling { .. } => (false, result),
-        };
-        let tool_hash = active
-            .tool_call
-            .as_ref()
-            .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
-        let retry = result
-            .as_ref()
-            .err()
-            .and_then(|failure| retry::Wait::after(&active, failure, catalog));
-        if result.as_ref().is_err_and(|failure| {
-            !matches!(
-                failure.message,
-                crate::messages::Message::MaxTurnRequests | crate::messages::Message::NoUpdate
-            )
-        }) {
-            active.held = None;
-        }
-        active.release_or_cut_reply(None, now, &mut commands);
-        let can_continue = can_continue && active.stop.sequence().is_none();
-        let end = result.map_err(|failure| failure.message).map(|()| {
-            let mut output = active.text.clone();
-            if let Some(call) = active.tool_call.take() {
-                output.push_str(&call.arguments);
-                commands.push(Command::Emit(
-                    active.reply.output.clone(),
-                    TurnEvent::ToolCall(call),
-                ));
-            }
-            Usage {
-                input_tokens: active.input_tokens,
-                output_tokens: crate::conversation::estimate_tokens(&output),
-            }
-        });
-        let mut forget = None;
-        if let Some(session) = &active.session {
-            if end.is_ok() && can_continue {
-                if tool_hash.is_none() || !active.text.is_empty() {
-                    active
-                        .record
-                        .hashes
-                        .messages
-                        .push(crate::conversation::reply_hash(&active.text));
-                }
-                if let Some(hash) = tool_hash {
-                    active.record.hashes.messages.push(hash);
-                }
+        session: String,
+        record: Option<RequestRecord>,
+    ) -> Option<String> {
+        match record {
+            Some(record) => {
                 self.records.push(Record {
                     location: Location::Loaded,
-                    session: session.clone(),
-                    hashes: active.record.hashes,
-                    tools: active.record.tools,
-                    used: active.record.used,
-                    expires: active.record.expires,
+                    session,
+                    record,
                 });
-            } else {
-                forget = Some(session.clone());
+                None
             }
+            None => Some(session),
         }
-        let outcome = match &end {
-            Ok(usage) => crate::journal::Outcome::Success {
-                input: usage.input_tokens,
-                output: usage.output_tokens,
-            },
-            Err(crate::messages::Message::BuiltInToolRan(_)) => {
-                crate::journal::Outcome::BuiltInToolRan
-            }
-            Err(crate::messages::Message::MaxTurnRequests) => {
-                crate::journal::Outcome::MaxTurnRequests
-            }
-            Err(_) => crate::journal::Outcome::Failed,
-        };
-        commands.push(Command::Complete(crate::journal::Completion {
-            request: active.request,
-            session: active.session,
-            session_use: Some(active.kind),
-            outcome,
-        }));
-        if end.is_ok() {
-            commands.push(Command::Emit(
-                active.reply.output.clone(),
-                TurnEvent::Stop(active.stop),
-            ));
-        }
-        commands.push(Command::Emit(active.reply.output, TurnEvent::End(end)));
-        match mode {
-            Completion::Quota(session) => commands.extend(
-                session
-                    .filter(|session| Some(session) != forget.as_ref())
-                    .map(Command::Forget),
-            ),
-            Completion::Finished | Completion::Interrupted => {}
-        }
-        if outstanding.is_none() {
-            commands.extend(forget.map(Command::Forget));
-        }
-        (Completed { outstanding, retry }, commands)
     }
     #[cfg(test)]
     pub(super) fn fixture(
@@ -483,12 +327,12 @@ fn select<'a>(
         .iter()
         .enumerate()
         .filter(|(_, record)| {
-            record.tools == tools
-                && record.hashes.is_continued_by(hashes)
-                && conversation::continues_after(items, record.hashes.messages.len())
+            record.record.tools == tools
+                && record.record.hashes.is_continued_by(hashes)
+                && conversation::continues_after(items, record.record.hashes.messages.len())
         })
-        .max_by_key(|(_, record)| (record.hashes.messages.len(), record.used))
-        .map(|(index, record)| (index, &items[record.hashes.messages.len()..]))
+        .max_by_key(|(_, record)| (record.record.hashes.messages.len(), record.record.used))
+        .map(|(index, record)| (index, &items[record.record.hashes.messages.len()..]))
 }
 
 #[cfg(test)]
@@ -515,24 +359,28 @@ mod tests {
             Record {
                 location: Location::Loaded,
                 session: "short-recent".into(),
-                hashes: RecordHashes {
-                    system: hashes.system,
-                    messages: hashes.messages[..1].into(),
+                record: RequestRecord {
+                    hashes: RecordHashes {
+                        system: hashes.system,
+                        messages: hashes.messages[..1].into(),
+                    },
+                    tools,
+                    used: 99,
+                    expires: 0,
                 },
-                tools,
-                used: 99,
-                expires: 0,
             },
             Record {
                 location: Location::Loaded,
                 session: "long-older".into(),
-                hashes: RecordHashes {
-                    system: hashes.system,
-                    messages: hashes.messages[..2].into(),
+                record: RequestRecord {
+                    hashes: RecordHashes {
+                        system: hashes.system,
+                        messages: hashes.messages[..2].into(),
+                    },
+                    tools,
+                    used: 1,
+                    expires: 0,
                 },
-                tools,
-                used: 1,
-                expires: 0,
             },
         ];
         let items = conversation.items();

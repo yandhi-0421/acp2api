@@ -7,7 +7,7 @@ pub(crate) mod sign_in;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
-    conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest},
+    conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
     messages::OwnerMessage,
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
@@ -15,7 +15,7 @@ use crate::{
 use agent_client_protocol_schema::v1::StopReason;
 use keep_alive::KEEP_ALIVE_INTERVAL;
 pub(crate) use keep_alive::NO_UPDATE_LIMIT;
-use records::OutstandingWork;
+use records::{OutstandingWork, PendingCompletion};
 pub(crate) use retry::WAIT_SECONDS;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -434,6 +434,9 @@ impl Phase {
             update_deadline: now + NO_UPDATE_LIMIT,
         }
     }
+    fn settled(&self) -> bool {
+        matches!(self, Self::Settling { .. } | Self::QuotaSettling { .. })
+    }
     fn update_deadline(&self) -> Option<Moment> {
         match self {
             Self::Prompt { update_deadline } => Some(*update_deadline),
@@ -474,6 +477,94 @@ struct Active {
     stop_prefix: String,
 }
 impl Active {
+    fn finish(
+        mut self,
+        result: Result<(), Failure>,
+        now: Moment,
+        catalog: Option<&crate::catalog::Catalog>,
+    ) -> (
+        Vec<Command>,
+        Option<retry::Wait>,
+        Option<records::RequestRecord>,
+    ) {
+        let mut commands = Vec::new();
+        let (can_continue, result) = match std::mem::replace(&mut self.phase, Phase::Completing) {
+            Phase::Settling {
+                can_continue,
+                result: pending,
+                ..
+            } => (can_continue, result.and(pending)),
+            Phase::Completing
+            | Phase::Preparing(_)
+            | Phase::Prompt { .. }
+            | Phase::AwaitingQuotaEnd { .. }
+            | Phase::QuotaSettling { .. } => (false, result),
+        };
+        let tool_hash = self
+            .tool_call
+            .as_ref()
+            .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
+        let retry = result
+            .as_ref()
+            .err()
+            .and_then(|failure| retry::Wait::after(&self, failure, catalog));
+        if result.as_ref().is_err_and(|failure| {
+            !matches!(
+                failure.message,
+                crate::messages::Message::MaxTurnRequests | crate::messages::Message::NoUpdate
+            )
+        }) {
+            self.held = None;
+        }
+        self.release_or_cut_reply(None, now, &mut commands);
+        let can_continue = can_continue && self.stop.sequence().is_none();
+        let end = result.map_err(|failure| failure.message).map(|()| {
+            let mut output = self.text.clone();
+            if let Some(call) = self.tool_call.take() {
+                output.push_str(&call.arguments);
+                commands.push(Command::Emit(
+                    self.reply.output.clone(),
+                    TurnEvent::ToolCall(call),
+                ));
+            }
+            Usage {
+                input_tokens: self.input_tokens,
+                output_tokens: crate::conversation::estimate_tokens(&output),
+            }
+        });
+        let record = if self.session.is_some() && end.is_ok() && can_continue {
+            Some(self.record.with_reply(&self.text, tool_hash))
+        } else {
+            None
+        };
+        let outcome = match &end {
+            Ok(usage) => crate::journal::Outcome::Success {
+                input: usage.input_tokens,
+                output: usage.output_tokens,
+            },
+            Err(crate::messages::Message::BuiltInToolRan(_)) => {
+                crate::journal::Outcome::BuiltInToolRan
+            }
+            Err(crate::messages::Message::MaxTurnRequests) => {
+                crate::journal::Outcome::MaxTurnRequests
+            }
+            Err(_) => crate::journal::Outcome::Failed,
+        };
+        commands.push(Command::Complete(crate::journal::Completion {
+            request: self.request,
+            session: self.session,
+            session_use: Some(self.kind),
+            outcome,
+        }));
+        if end.is_ok() {
+            commands.push(Command::Emit(
+                self.reply.output.clone(),
+                TurnEvent::Stop(self.stop),
+            ));
+        }
+        commands.push(Command::Emit(self.reply.output, TurnEvent::End(end)));
+        (commands, retry, record)
+    }
     fn earliest_stop(&self, text: &str) -> Option<(usize, String)> {
         self.stops
             .iter()
@@ -583,7 +674,7 @@ struct Core {
     context_sizes: BTreeMap<String, u64>,
     work: WorkTable,
     next_work: WorkId,
-    sessions: records::Sessions,
+    sessions: records::AcpSessions,
     limit: u8,
     notices: watch::Sender<Arc<Vec<Notice>>>,
 }
@@ -1354,7 +1445,7 @@ impl Core {
             update: TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_),
         }) = &event
         {
-            self.sessions.prompt_ended(session);
+            self.sessions.cancel_ended(session);
         }
         let quota_work = work_id.filter(|id| matches!(self.work[id], Work::QuotaWorking { .. }));
         match (quota_work, event) {
@@ -1605,13 +1696,9 @@ impl Core {
                                 Work::Checking(_) => {
                                     commands.push(Command::AdmitChecked { id, session });
                                 }
-                                Work::Retiring(_) => {
-                                    let Work::Retiring(outstanding) =
-                                        self.work.remove(&id).unwrap()
-                                    else {
-                                        unreachable!()
-                                    };
-                                    commands.extend(outstanding.prepared(session));
+                                Work::Retiring(outstanding) => {
+                                    outstanding.prepared(session);
+                                    self.finish(id, Ok(()), now, &mut commands);
                                 }
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
@@ -1697,7 +1784,7 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Retired { session })) => {
-                self.sessions.prompt_ended(&session);
+                self.sessions.cancel_ended(&session);
                 if let Some(id) = self.by_session(&session) {
                     self.finish(id, Ok(()), now, &mut commands);
                 }
@@ -1744,7 +1831,7 @@ impl Core {
                             self.enqueue_reset_query(wait, model);
                         }
                     } else {
-                        commands.extend(self.sessions.forget(session));
+                        commands.push(self.sessions.forget(session));
                         if !known {
                             self.enqueue_reset_query(wait, None);
                         }
@@ -1754,7 +1841,7 @@ impl Core {
                         self.fail_request(id, session, message, now, &mut commands);
                     }
                 } else {
-                    commands.extend(self.sessions.forget(session));
+                    commands.push(self.sessions.forget(session));
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Failed(error))) => {
@@ -2017,9 +2104,73 @@ impl Core {
             );
             return false;
         }
-        let (active, started) = self.sessions.start_request(request, checked_session, now);
-        self.work.insert(id, Work::AcceptedWorking(active));
-        commands.extend(started);
+        let settings = Session::for_turn(&request.turn);
+        let (selection, selected) =
+            self.sessions
+                .select(&request.turn, &settings, checked_session, now);
+        commands.extend(selected);
+        let records::Selection {
+            kind,
+            prompt,
+            ready,
+            record,
+        } = selection;
+        let prompt = PromptRequest {
+            blocks: prompt,
+            model: request.model.model,
+            level: request.model.level,
+        };
+        let model = prompt.model.clone();
+        let work = request.request.id.clone();
+        let (session, phase) = match ready {
+            Some((id, records::Location::Loaded)) => {
+                commands.push(Command::Prompt {
+                    work: work.clone(),
+                    session: id.clone(),
+                    prompt,
+                });
+                (Some(id), Phase::prompt(now))
+            }
+            Some((session, records::Location::Unloaded(cwd))) => {
+                commands.push(Command::Prepare {
+                    work,
+                    settings: settings.clone(),
+                    load: Some((session.clone(), cwd)),
+                });
+                (Some(session), Phase::Preparing(prompt))
+            }
+            None => {
+                commands.push(Command::Prepare {
+                    work,
+                    settings: settings.clone(),
+                    load: None,
+                });
+                (None, Phase::Preparing(prompt))
+            }
+        };
+        self.work.insert(
+            id,
+            Work::AcceptedWorking(Active {
+                reply: request.reply,
+                request: request.request,
+                session,
+                record,
+                client_tools_hash: crate::conversation::tool_set_hash(&request.turn.tools),
+                kind,
+                held: None,
+                text: String::new(),
+                thought_dropped: false,
+                input_tokens: request.turn.input_tokens,
+                model,
+                model_name: request.turn.model,
+                effort: request.turn.effort,
+                phase,
+                tool_call: None,
+                stop: crate::conversation::Stop::EndTurn,
+                stops: request.turn.stop,
+                stop_prefix: String::new(),
+            }),
+        );
         true
     }
 
@@ -2208,9 +2359,14 @@ impl Core {
             }
         };
         if let Some(active) = response {
-            let (_, completion) =
-                self.complete_request(active, result, records::Completion::Quota(session), now);
+            let (forget, completion) = self.complete_request(active, result, now);
             commands.extend(completion);
+            commands.extend(
+                session
+                    .filter(|session| Some(session) != forget.as_ref())
+                    .map(Command::Forget),
+            );
+            commands.extend(forget.map(Command::Forget));
         } else {
             commands.extend(session.map(Command::Forget));
         }
@@ -2522,11 +2678,14 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
-        let (outstanding, completion) =
-            self.complete_request(active, Err(error), records::Completion::Interrupted, now);
+        let outstanding = (!active.phase.settled())
+            .then(|| OutstandingWork::from_active(&active, PendingCompletion::AlreadyCompleted));
+        let (forget, completion) = self.complete_request(active, Err(error), now);
         commands.extend(completion);
         if let Some(outstanding) = outstanding {
             self.work.insert(id, Work::Retiring(outstanding));
+        } else {
+            commands.extend(forget.map(Command::Forget));
         }
     }
     fn finish(
@@ -2604,9 +2763,9 @@ impl Core {
                     );
                     return;
                 }
-                let (_, completion) =
-                    self.complete_request(active, result, records::Completion::Finished, now);
+                let (forget, completion) = self.complete_request(active, result, now);
                 commands.extend(completion);
+                commands.extend(forget.map(Command::Forget));
             }
         }
     }
@@ -2614,15 +2773,14 @@ impl Core {
         &mut self,
         active: Active,
         result: Result<(), Failure>,
-        mode: records::Completion,
         now: Moment,
-    ) -> (Option<OutstandingWork>, Vec<Command>) {
+    ) -> (Option<String>, Vec<Command>) {
         self.keep_quota_wait_reset_query(&active);
-        let (completed, commands) =
-            self.sessions
-                .complete_request(active, result, mode, now, self.catalog.as_ref());
-        self.retry_waits.extend(completed.retry);
-        (completed.outstanding, commands)
+        let session = active.session.clone();
+        let (commands, retry, record) = active.finish(result, now, self.catalog.as_ref());
+        self.retry_waits.extend(retry);
+        let forget = session.and_then(|session| self.sessions.keep(session, record));
+        (forget, commands)
     }
 }
 impl Conductor {
@@ -2680,7 +2838,7 @@ impl Conductor {
                 catalog: None,
                 model_names: Vec::new(),
                 context_sizes: BTreeMap::new(),
-                sessions: records::Sessions::default(),
+                sessions: records::AcpSessions::default(),
                 limit,
                 work: BTreeMap::new(),
                 next_work: 0,
@@ -3231,7 +3389,7 @@ mod tests {
                 context_sizes: BTreeMap::new(),
                 work: BTreeMap::new(),
                 next_work: 0,
-                sessions: records::Sessions::default(),
+                sessions: records::AcpSessions::default(),
                 limit,
                 notices: watch::channel(Arc::new(Vec::new())).0,
             }
@@ -4124,7 +4282,7 @@ mod tests {
     #[test]
     fn stopping_cancels_the_running_usage_prompt_and_answers_its_owner() {
         let mut core = Core {
-            sessions: records::Sessions::fixture(Vec::new(), Some("usage".into()), 0),
+            sessions: records::AcpSessions::fixture(Vec::new(), Some("usage".into()), 0),
             ..Core::fixture(1)
         };
         let (reply, mut answer) = oneshot::channel();
@@ -5402,7 +5560,7 @@ mod tests {
         [mpsc::UnboundedReceiver<(TurnEvent, Hold)>; 2],
     ) {
         let mut core = Core {
-            sessions: records::Sessions::fixture(Vec::new(), Some("running".into()), 0),
+            sessions: records::AcpSessions::fixture(Vec::new(), Some("running".into()), 0),
             ..Core::fixture(1)
         };
         let mut tickets = Vec::new();
@@ -6683,7 +6841,7 @@ mod tests {
             let journal = crate::journal::Journal::open(&folder.join("logs"), std::time::UNIX_EPOCH).unwrap();
             let (mut core, _, [ _a, mut b ]) = prompting_with_waiter(&journal);
             let active = core.work[&0].execution().unwrap();
-            core.sessions.remember(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), hashes:crate::conversation::RecordHashes { system:active.record.hashes().system, messages:active.record.hashes().messages.clone() }, tools:active.record.tools(), used:0, expires:86_400_000 });
+            core.sessions.remember(records::Record { location:records::Location::Unloaded(folder.join("saved-cwd")), session:"saved".into(), record:records::RequestRecord::fixture(crate::conversation::RecordHashes { system:active.record.hashes().system, messages:active.record.hashes().messages.clone() }, active.record.tools(), 0, 86_400_000) });
             core.sessions.replaced(Some("sibling".into()));
             core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
             drop(agent_input);
@@ -6897,6 +7055,7 @@ mod tests {
             core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
             core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1, std::time::UNIX_EPOCH);
             core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH);
+            assert_eq!(core.sessions.records().len(), 1);
             core.sessions.unload(|_| cwd.clone());
             core.cleanup_before_start = true;
             let (reply, result) = oneshot::channel();
@@ -7398,7 +7557,7 @@ mod tests {
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
             let mut core = Core {
-                sessions: records::Sessions::fixture(Vec::new(), Some("session".into()), 0),
+                sessions: records::AcpSessions::fixture(Vec::new(), Some("session".into()), 0),
                 ..Core::fixture(1)
             };
             core.handle(
@@ -7534,7 +7693,7 @@ mod tests {
                     }),
                 )]),
                 next_work: 1,
-                sessions: records::Sessions::fixture(Vec::new(), None, 1),
+                sessions: records::AcpSessions::fixture(Vec::new(), None, 1),
                 ..Core::fixture(1)
             };
             core.handle(
@@ -7782,14 +7941,16 @@ mod tests {
         let body = br#"{"model":"m","messages":[{"role":"user","content":"Hi"}]}"#;
         let turn = crate::dialect::CHAT.parse(body).ok().unwrap().turn;
         let mut core = Core {
-            sessions: records::Sessions::fixture(
+            sessions: records::AcpSessions::fixture(
                 vec![records::Record {
                     location: records::Location::Loaded,
                     session: "idle".into(),
-                    hashes: crate::conversation::record_hashes(&turn.conversation),
-                    tools: crate::conversation::tool_set_hash(&[]),
-                    used: 1,
-                    expires: 24 * 60 * 60 * 1000,
+                    record: records::RequestRecord::fixture(
+                        crate::conversation::record_hashes(&turn.conversation),
+                        crate::conversation::tool_set_hash(&[]),
+                        1,
+                        24 * 60 * 60 * 1000,
+                    ),
                 }],
                 None,
                 1,
