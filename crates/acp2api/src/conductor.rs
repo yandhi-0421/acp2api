@@ -579,6 +579,7 @@ struct Core {
     )>,
     replacement: Option<Replacement>,
     catalog: Option<crate::catalog::Catalog>,
+    model_names: Vec<String>,
     context_sizes: BTreeMap<String, u64>,
     work: WorkTable,
     next_work: WorkId,
@@ -992,6 +993,19 @@ impl Core {
             .filter(|wait| wait.deadline > now)
             .map(|wait| wait.message(now))
     }
+    fn owner_work_refusal(&self) -> Option<String> {
+        if let Some(evidence) = &self.lockout {
+            Some(
+                crate::messages::Message::lockout(evidence, &self.panel_address, false).to_string(),
+            )
+        } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+            Some(reason.message.clone())
+        } else if matches!(self.runtime_state, RuntimeState::Stopping) {
+            Some(crate::messages::Message::Stopped.to_string())
+        } else {
+            None
+        }
+    }
     fn start_quota(
         &mut self,
         until: std::time::SystemTime,
@@ -1344,27 +1358,20 @@ impl Core {
                 self.quota_event(id, event, upstream_error, now, wall, &mut commands)
             }
             (None, Event::RefreshQuota(reply)) => {
-                let error = if let Some(evidence) = &self.lockout {
-                    Some(
-                        crate::messages::Message::lockout(evidence, &self.panel_address, false)
-                            .to_string(),
-                    )
-                } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
-                    Some(reason.message.clone())
-                } else if matches!(self.runtime_state, RuntimeState::Stopping) {
-                    Some(crate::messages::Message::Stopped.to_string())
-                } else if self.sign_in_required {
-                    Some(self.sign_in_message().to_string())
-                } else if self
-                    .last_refresh
-                    .is_some_and(|at| now.saturating_sub(at) < 60_000)
-                {
-                    Some("Wait 60 s between quota refreshes.".into())
-                } else if self.queue_full() {
-                    Some(crate::messages::Message::QueueFull.to_string())
-                } else {
-                    None
-                };
+                let error = self.owner_work_refusal().or_else(|| {
+                    if self.sign_in_required {
+                        Some(self.sign_in_message().to_string())
+                    } else if self
+                        .last_refresh
+                        .is_some_and(|at| now.saturating_sub(at) < 60_000)
+                    {
+                        Some("Wait 60 s between quota refreshes.".into())
+                    } else if self.queue_full() {
+                        Some(crate::messages::Message::QueueFull.to_string())
+                    } else {
+                        None
+                    }
+                });
                 if let Some(error) = error {
                     let _ = reply.send(Err(error));
                 } else {
@@ -1373,7 +1380,7 @@ impl Core {
                 }
             }
             (None, Event::ReadModelNames(reply)) => {
-                if self.catalog.is_some() || !self.view.borrow().model_names.is_empty() {
+                if self.catalog.is_some() || !self.model_names.is_empty() {
                     let _ = reply.send(Ok(()));
                 } else if let Some(read) = self.work.values_mut().find_map(|work| match work {
                     Work::ModelsQueued(read) | Work::ModelsReading(read) => Some(read),
@@ -1381,20 +1388,10 @@ impl Core {
                 }) {
                     read.replies.push(reply);
                 } else {
-                    let error = if let Some(evidence) = &self.lockout {
-                        Some(
-                            crate::messages::Message::lockout(evidence, &self.panel_address, false)
-                                .to_string(),
-                        )
-                    } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
-                        Some(reason.message.clone())
-                    } else if matches!(self.runtime_state, RuntimeState::Stopping) {
-                        Some(crate::messages::Message::Stopped.to_string())
-                    } else if self.queue_full() {
-                        Some(crate::messages::Message::QueueFull.to_string())
-                    } else {
-                        None
-                    };
+                    let error = self.owner_work_refusal().or_else(|| {
+                        self.queue_full()
+                            .then(|| crate::messages::Message::QueueFull.to_string())
+                    });
                     if let Some(error) = error {
                         let _ = reply.send(Err(error));
                     } else {
@@ -1905,13 +1902,12 @@ impl Core {
         self.publish_view();
         commands
     }
-    fn publish_view(&self) {
-        let model_names = self.catalog.as_ref().map_or_else(
-            || self.view.borrow().model_names.clone(),
-            |catalog| catalog.names().map(|(name, _)| name).collect(),
-        );
+    fn publish_view(&mut self) {
+        if let Some(catalog) = &self.catalog {
+            self.model_names = catalog.names().map(|(name, _)| name).collect();
+        }
         self.view.send_replace(Arc::new(View {
-            model_names,
+            model_names: self.model_names.clone(),
             context_sizes: self.context_sizes.clone(),
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
@@ -2182,7 +2178,7 @@ impl Core {
                 *result = Err(crate::messages::Message::BuiltInToolRan(name));
                 self.cancel(session, now, commands);
             }
-            TurnUpdate::Activity | TurnUpdate::Usage(_, _) | TurnUpdate::ThoughtDropped => {}
+            TurnUpdate::Activity | TurnUpdate::Usage { .. } | TurnUpdate::ThoughtDropped => {}
         }
     }
     fn finish_quota(
@@ -2291,7 +2287,7 @@ impl Core {
         wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
     ) {
-        if let TurnUpdate::Usage(_, size) = &update {
+        if let TurnUpdate::Usage { size, .. } = &update {
             let model = match &self.work[&id] {
                 Work::Retiring(outstanding) => &outstanding.model,
                 work => &work.execution().unwrap().model,
@@ -2309,7 +2305,7 @@ impl Core {
                 }
                 TurnUpdate::Activity
                 | TurnUpdate::Text(_)
-                | TurnUpdate::Usage(_, _)
+                | TurnUpdate::Usage { .. }
                 | TurnUpdate::ThoughtDropped
                 | TurnUpdate::UnpermittedTool(_) => {}
             }
@@ -2377,7 +2373,7 @@ impl Core {
                     self.cancel(session, now, commands);
                 }
             }
-            TurnUpdate::Usage(used, _) => active.input_tokens = used,
+            TurnUpdate::Usage { used, .. } => active.input_tokens = used,
             TurnUpdate::ThoughtDropped => {
                 if !active.thought_dropped {
                     active.thought_dropped = true;
@@ -2833,7 +2829,16 @@ impl Conductor {
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let (quota_result, quota_watch) = watch::channel(Arc::new(None));
-        let panel_journal = journal.clone();
+        let conductor = Self {
+            journal: journal.clone(),
+            view: view_watch,
+            quota_result: quota_watch,
+            send,
+            builds,
+            settings: settings_watch,
+            notices: notices_watch,
+            highest,
+        };
         let task = tokio::spawn(async move {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
@@ -2860,6 +2865,7 @@ impl Conductor {
                 replacement: None,
                 startup_session: None,
                 catalog: None,
+                model_names: Vec::new(),
                 context_sizes: BTreeMap::new(),
                 records: Vec::new(),
                 use_sequence: 0,
@@ -3092,20 +3098,9 @@ impl Conductor {
                 runtime.stop().await;
             }
         });
-        (
-            Self {
-                journal: panel_journal,
-                view: view_watch,
-                quota_result: quota_watch,
-                send,
-                builds,
-                settings: settings_watch,
-                notices: notices_watch,
-                highest,
-            },
-            task,
-        )
+        (conductor, task)
     }
+
     async fn commands(
         core: &mut Core,
         runtime: &mut Option<Runtime>,
@@ -3410,6 +3405,7 @@ mod tests {
                 changes: VecDeque::new(),
                 replacement: None,
                 catalog: None,
+                model_names: Vec::new(),
                 context_sizes: BTreeMap::new(),
                 work: BTreeMap::new(),
                 next_work: 0,
@@ -3631,7 +3627,7 @@ mod tests {
             core.handle(
                 Event::Runtime(RuntimeEvent::Turn {
                     session: format!("session-{model}"),
-                    update: TurnUpdate::Usage(13, size),
+                    update: TurnUpdate::Usage { used: 13, size },
                 }),
                 0,
                 std::time::UNIX_EPOCH,
@@ -4964,7 +4960,10 @@ mod tests {
                 core.handle(
                     Event::Runtime(RuntimeEvent::Turn {
                         session: "running".into(),
-                        update: TurnUpdate::Usage(1000, 1_048_576),
+                        update: TurnUpdate::Usage {
+                            used: 1000,
+                            size: 1_048_576,
+                        },
                     }),
                     240_000,
                     std::time::UNIX_EPOCH,

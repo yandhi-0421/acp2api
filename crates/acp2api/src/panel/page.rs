@@ -89,8 +89,9 @@ pub(super) struct Page<'a> {
     pub(super) now: crate::Moment,
 }
 pub(super) fn settings(page: Page<'_>) -> String {
+    let setup = setup_tile(&page);
+    let logs = logs_tile(page.history, page.data_folder);
     let settings = page.settings;
-    let key = escape(&settings.local_api_key);
     let port = figure("Port", page.port);
     let data_folder = escape(&page.data_folder.display().to_string());
     let limit = figure("Concurrency limit", settings.concurrency_limit);
@@ -130,6 +131,13 @@ pub(super) fn settings(page: Page<'_>) -> String {
     let quota = format!(
         r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{places}{queued}{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section>"#
     );
+    document(&format!(
+        r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}{setup}{logs}<section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+    ))
+}
+
+fn setup_tile(page: &Page<'_>) -> String {
+    let key = escape(&page.settings.local_api_key);
     let address = format!("http://127.0.0.1:{}", page.port);
     let model = page
         .view
@@ -182,58 +190,78 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
                 .collect::<String>()
         )
     };
-    let setup = format!(
+    format!(
         r#"<section><h2>Setup</h2><p>Address <code>{address}</code></p><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><button type="button" id="copy-key">Copy local API key</button><p id="copy-key-status" role="status"></p><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form><h3>Model names</h3>{models}<p>Replace the placeholders below. Copy the local API key separately.</p><h3>Claude Code</h3><pre>{}</pre><h3>Codex</h3><pre>{}</pre><h3>Chat Completions client</h3><pre>{}</pre><script>{COPY_KEY}</script></section>"#,
         escape(&claude),
         escape(&codex),
         escape(&chat)
-    );
-    let columns = [
-        ("time", "Time"),
-        ("request_id", "Request ID"),
-        ("api", "API"),
-        ("model", "Model"),
-        ("session", "ACP session"),
-        ("session_use", "Session use"),
-        ("duration_ms", "Duration (ms)"),
-        ("input_tokens", "Input tokens"),
-        ("output_tokens", "Output tokens"),
-        ("result", "Result"),
-        ("error_code", "Error code"),
-        ("unknown_fields", "Unknown fields"),
-    ];
-    let headings = columns
-        .iter()
-        .map(|(_, label)| format!("<th scope=\"col\">{label}</th>"))
-        .collect::<String>();
-    let requests = page
-        .history
+    )
+}
+
+fn logs_tile(history: &crate::journal::History, data_folder: &std::path::Path) -> String {
+    let headings = [
+        "Time",
+        "Request ID",
+        "API",
+        "Model",
+        "ACP session",
+        "Session use",
+        "Duration (ms)",
+        "Input tokens",
+        "Output tokens",
+        "Result",
+        "Error code",
+        "Unknown fields",
+    ]
+    .iter()
+    .map(|label| format!("<th scope=\"col\">{label}</th>"))
+    .collect::<String>();
+    let requests = history
         .requests
         .iter()
         .rev()
         .map(|record| {
-            let metadata = serde_json::to_value(record.as_ref()).unwrap();
-            let cells = columns
-                .iter()
-                .map(|(name, _)| {
-                    let text = match &metadata[*name] {
-                        serde_json::Value::Null => String::new(),
-                        serde_json::Value::String(text) => text.clone(),
-                        serde_json::Value::Array(fields) => fields
-                            .iter()
-                            .map(|field| field.as_str().unwrap())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        value => value.to_string(),
-                    };
-                    format!("<td>{}</td>", escape(&text))
+            let session_use = record
+                .session_use
+                .map(|value| match value {
+                    crate::journal::SessionUse::New => "new",
+                    crate::journal::SessionUse::Continue => "continue",
+                    crate::journal::SessionUse::Rebuild => "rebuild",
                 })
-                .collect::<String>();
+                .unwrap_or_default();
+            let result = match record.result {
+                crate::journal::ResultKind::Success => "success",
+                crate::journal::ResultKind::Refused => "refused",
+                crate::journal::ResultKind::Failed => "failed",
+                crate::journal::ResultKind::Disconnected => "disconnected",
+            };
+            let cells = [
+                record.time.clone(),
+                record.request_id.clone(),
+                record.api.log_name().into(),
+                record.model.clone().unwrap_or_default(),
+                record.session.clone().unwrap_or_default(),
+                session_use.into(),
+                record.duration_ms.to_string(),
+                record
+                    .input_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                record
+                    .output_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                result.into(),
+                record.error_code.clone().unwrap_or_default(),
+                record.unknown_fields.join(", "),
+            ]
+            .iter()
+            .map(|value| format!("<td>{}</td>", escape(value)))
+            .collect::<String>();
             format!("<tr>{cells}</tr>")
         })
         .collect::<String>();
-    let unknown_fields = page
-        .history
+    let unknown_fields = history
         .unknown_fields
         .iter()
         .flat_map(|(name, rows)| rows.iter().map(move |(api, row)| (name, api, row)))
@@ -241,28 +269,21 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
             format!(
                 "<tr><th scope=\"row\">{}</th><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape(name),
-                match api {
-                    crate::journal::Api::Models => "GET /v1/models",
-                    crate::journal::Api::Chat => "OpenAI Chat Completions API",
-                    crate::journal::Api::Messages => "Anthropic Messages API",
-                    crate::journal::Api::Responses => "OpenAI Responses API",
-                },
+                api.display_name(),
                 row.count,
                 escape(&row.last_time)
             )
         })
         .collect::<String>();
-    let other_names = page.history.other_names.as_ref().map(|row| format!(
+    let other_names = history.other_names.as_ref().map(|row| format!(
         "<tr><th scope=\"row\">other names</th><td>All APIs</td><td>{}</td><td>{}</td></tr>",
         row.count, escape(&row.last_time)
     )).unwrap_or_default();
-    let logs = format!(
-        r#"<section><h2>Logs</h2><p>Log folder <code>{}</code></p><div class="log-table"><table><caption>Last 50 requests</caption><thead><tr>{headings}</tr></thead><tbody>{requests}</tbody></table></div><div class="log-table"><table><caption>Unknown fields since start</caption><thead><tr><th scope="col">Field name</th><th scope="col">API</th><th scope="col">Count</th><th scope="col">Last time</th></tr></thead><tbody>{unknown_fields}{other_names}</tbody></table></div></section>"#,
-        escape(&page.data_folder.join("logs").display().to_string())
-    );
-    document(&format!(
-        r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}{setup}{logs}<section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
-    ))
+    let limit = crate::journal::REQUEST_HISTORY_LIMIT;
+    format!(
+        r#"<section><h2>Logs</h2><p>Log folder <code>{}</code></p><div class="log-table"><table><caption>Last {limit} requests</caption><thead><tr>{headings}</tr></thead><tbody>{requests}</tbody></table></div><div class="log-table"><table><caption>Unknown fields since start</caption><thead><tr><th scope="col">Field name</th><th scope="col">API</th><th scope="col">Count</th><th scope="col">Last time</th></tr></thead><tbody>{unknown_fields}{other_names}</tbody></table></div></section>"#,
+        escape(&data_folder.join("logs").display().to_string())
+    )
 }
 
 fn runtime(

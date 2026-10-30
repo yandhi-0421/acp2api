@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::{io, path::Path, time::SystemTime};
 
+pub(crate) const REQUEST_HISTORY_LIMIT: usize = 50;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Api {
     #[serde(rename = "models")]
@@ -11,6 +13,24 @@ pub enum Api {
     Messages,
     #[serde(rename = "responses")]
     Responses,
+}
+impl Api {
+    pub(crate) fn display_name(self) -> &'static str {
+        match self {
+            Self::Models => "GET /v1/models",
+            Self::Chat => "OpenAI Chat Completions API",
+            Self::Messages => "Anthropic Messages API",
+            Self::Responses => "OpenAI Responses API",
+        }
+    }
+    pub(crate) fn log_name(self) -> &'static str {
+        match self {
+            Self::Models => "models",
+            Self::Chat => "chat.completions",
+            Self::Messages => "messages",
+            Self::Responses => "responses",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -571,7 +591,7 @@ impl Journal {
                 row.count += 1;
                 row.last_time.clone_from(&record.time);
             }
-            if history.requests.len() == 50 {
+            if history.requests.len() == REQUEST_HISTORY_LIMIT {
                 history.requests.pop_front();
             }
             history.requests.push_back(snapshot);
