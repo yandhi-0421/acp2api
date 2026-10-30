@@ -4,6 +4,8 @@ pub(crate) mod mcp;
 #[cfg(test)]
 mod rpc_request_ids;
 mod safety;
+#[cfg(test)]
+pub(crate) mod write_tests;
 use crate::messages::Message;
 use crate::runtime_builds::LaunchFailure;
 use crate::*;

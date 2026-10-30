@@ -129,6 +129,23 @@ async fn all_compatibility_facts_pass() {
     assert!(matches!(result,Ok(ref version) if version=="1.6.0"));
 }
 
+#[tokio::test]
+async fn a_live_check_runtime_reports_its_stdin_timeout_reason() {
+    // One prompt, five real seconds, a 16 KiB recording cap, no real process.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut f = crate::runtime_driver::write_tests::fixture().await;
+        let mut reply = String::new();
+        let checking = check_prompt(&mut f.runtime, &f.start, "live-session", "a prompt whose pipe stops accepting bytes", &mut reply);
+        let advance = async {
+            while f.waits.recv().await.unwrap() != 30_000 {}
+            f.now.send_replace(30_000);
+        };
+        let (result, ()) = tokio::join!(checking, advance);
+        f.runtime.stop().await;
+        assert!(matches!(result, Err(Failure::Runtime(LaunchFailure::Runtime(ref reason))) if reason == "runtime stdin write exceeded 30 s"), "the compatibility check must retain the write failure reason instead of saying the live runtime exited");
+    }).await.expect("compatibility stdin timeout cap: 5 s");
+}
+
 fn initialize(
     pointer: &'static str,
     value: Value,
