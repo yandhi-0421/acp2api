@@ -9,6 +9,7 @@ use acp2api_acceptance::{
 };
 use std::{
     future::Future,
+    pin::Pin,
     sync::Arc,
     task::{Context, Poll, Wake, Waker},
     time::Duration,
@@ -67,7 +68,13 @@ async fn plain_http_completion_keeps_an_unrelated_deadline_in_the_future() {
         let initial_settle = HarnessClock::new(HubLink::new(&hub)).hold(HoldKind::TurnEvent);
         let notify = Arc::new(CompletionWake(Notify::new()));
         let waker = Waker::from(notify.clone());
-        let mut completion = Box::pin(call.finish(&mut time));
+        let mut completion: Pin<Box<dyn Future<Output = _>>> = if advance {
+            Box::pin(call.finish(&mut time))
+        } else {
+            Box::pin(call.finish_current(&mut time))
+        };
+        // Keep I/O pending through the initial settle, so the advancing method
+        // commits to the unrelated deadline before the response is released.
         assert!(matches!(
             completion.as_mut().poll(&mut Context::from_waker(&waker)),
             Poll::Pending

@@ -58,7 +58,7 @@ pub async fn seed(w: &mut World, reset: bool) {
     let call = endpoint_check::request("POST /v1/messages", "quota signal seed", false);
     let live = begin(w, call).await;
     if reset {
-        let answer = live.finish(&mut w.scenario.time).await;
+        let answer = live.finish_current(&mut w.scenario.time).await;
         assert!(
             matches!(answer.status, 429 | 502),
             "seed reaches the upstream error path"

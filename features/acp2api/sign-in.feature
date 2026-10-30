@@ -103,7 +103,7 @@ Feature: Sign-in
     And one ends with a quota signal whose reset time is 2 minutes away
     And the other then ends with a sign-in error
     When <success> occurs 30 s later
-    And an API client sends a valid request
+    And an API client sends a valid request before the reset time
     Then the request gets HTTP 429 with M-16
     And the official runtime gets no prompt for that request
     And the first tile shows "Quota wait"

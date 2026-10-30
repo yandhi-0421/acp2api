@@ -3,7 +3,7 @@ use acp2api::Clock as _;
 use acp2api_acceptance::{
     TurnPlan, TurnStep,
     adapters::HarnessClock,
-    client::{Answer, ApiCall},
+    client::{Answer, ApiCall, Call},
     hub::HubLink,
 };
 use serde_json::Value;
@@ -38,12 +38,22 @@ pub fn upstream(code: u16, status: &str) -> TurnPlan {
     }
 }
 
-pub async fn send(w: &mut World, call: ApiCall) {
+async fn begin(w: &mut World, call: ApiCall) -> Call {
     w.errors.prompts_before = w.scenario.fake().record().prompts().len();
     w.request.queue_next(&w.scenario);
     let live = w.scenario.client().await.send(call);
     w.scenario.time.settle().await;
+    live
+}
+
+pub async fn send(w: &mut World, call: ApiCall) {
+    let live = begin(w, call).await;
     w.scenario.answer = Some(live.finish(&mut w.scenario.time).await);
+}
+
+pub async fn send_current(w: &mut World, call: ApiCall) {
+    let live = begin(w, call).await;
+    w.scenario.answer = Some(live.finish_current(&mut w.scenario.time).await);
 }
 
 pub async fn stop_next_tick(w: &mut World) {

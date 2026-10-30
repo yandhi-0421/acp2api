@@ -18,7 +18,9 @@ async fn quota_first(w: &mut World) {
     w.scenario
         .fake()
         .finish_gate("queue-quota", quota::error(429, Some(quota::RESET)));
-    let answer = queue::take(w, "quota").finish(&mut w.scenario.time).await;
+    let answer = queue::take(w, "quota")
+        .finish_current(&mut w.scenario.time)
+        .await;
     assert_eq!(answer.status, 200, "signal source was accepted as a stream");
 }
 
@@ -28,7 +30,9 @@ async fn sign_in_second(w: &mut World) {
     w.scenario
         .fake()
         .finish_gate("queue-sign-in", support::upstream(401, "UNAUTHENTICATED"));
-    let answer = queue::take(w, "sign-in").finish(&mut w.scenario.time).await;
+    let answer = queue::take(w, "sign-in")
+        .finish_current(&mut w.scenario.time)
+        .await;
     assert_eq!(
         answer.status, 200,
         "second signal source was accepted as a stream"
@@ -49,7 +53,7 @@ async fn succeeds(w: &mut World, success: String) {
     } else {
         w.scenario.fake().set_signed_in(true);
         w.request.plan = Some(TurnPlan::default());
-        support::send(
+        support::send_current(
             w,
             endpoint_check::request("POST /v1/messages", "successful check during quota", false),
         )
@@ -121,12 +125,16 @@ async fn quota_and_sign_in(w: &mut World) {
     w.scenario
         .fake()
         .finish_gate("queue-quota", quota::error(429, Some(quota::RESET)));
-    let _ = queue::take(w, "quota").finish(&mut w.scenario.time).await;
+    let _ = queue::take(w, "quota")
+        .finish_current(&mut w.scenario.time)
+        .await;
     w.scenario.fake().set_signed_in(false);
     w.scenario
         .fake()
         .finish_gate("queue-sign-in", support::upstream(401, "UNAUTHENTICATED"));
-    let _ = queue::take(w, "sign-in").finish(&mut w.scenario.time).await;
+    let _ = queue::take(w, "sign-in")
+        .finish_current(&mut w.scenario.time)
+        .await;
     w.errors.checks_before = process::calls(w, "session/new").len();
 }
 
@@ -134,7 +142,7 @@ async fn quota_and_sign_in(w: &mut World) {
 async fn at_reset(w: &mut World, at: u64) {
     w.scenario.time.advance_to(at * 1000).await;
     w.request.plan = Some(TurnPlan::default());
-    support::send(
+    support::send_current(
         w,
         endpoint_check::request("POST /v1/messages", "request at quota expiry", false),
     )
@@ -190,9 +198,9 @@ async fn recovered(w: &mut World) {
 #[when("an API client sends a valid request before the reset time")]
 async fn before_reset(w: &mut World) {
     assert!(w.scenario.hub.now() < 120_000, "quota has not expired");
-    support::send(
+    support::send_current(
         w,
-        endpoint_check::request("POST /v1/messages", "request after runtime recovery", false),
+        endpoint_check::request("POST /v1/messages", "request before quota reset", false),
     )
     .await;
 }
