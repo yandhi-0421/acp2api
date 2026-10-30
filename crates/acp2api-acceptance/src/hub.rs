@@ -332,7 +332,6 @@ impl Hub {
                     json!({"ok":true})
                 }
                 "Got" => {
-                    state.process_io[process.expect("fake Hello precedes Got")].stdin_got += 1;
                     if let Some(line) = message["line"].as_str() {
                         match serde_json::from_str::<Value>(line) {
                             Ok(value) => {
@@ -349,12 +348,14 @@ impl Hub {
                                     state.counts.fake_mcp_inflight -= 1;
                                     match response {Ok(response)=>state.record(json!({"kind":"mcp","request":request,"response":response})),Err(error)=>state.failure=Some(format!("fake MCP: {error}"))}
                                 }
-                                let mut state = self.shared.0.lock().unwrap();
+                                state = self.shared.0.lock().unwrap();
                                 crate::fake::respond(&mut state, &label, value);
                             }
                             Err(_) => state.failure = Some("invalid ACP from product".into()),
                         }
                     }
+                    // Keep reply preparation outstanding until its output is queued.
+                    state.process_io[process.expect("fake Hello precedes Got")].stdin_got += 1;
                     self.shared.1.notify_all();
                     continue;
                 }
