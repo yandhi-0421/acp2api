@@ -801,6 +801,14 @@ impl Core {
         };
         self.launch(runtime, read_open, &builds.start.clock, journal, builds)
             .await;
+        if self.lockout.is_some() {
+            let _ = check.reply.send(Err(self
+                .refusal(builds.start.clock.now())
+                .expect("lockout just started")
+                .to_string()
+                .into()));
+            return;
+        }
         let configured = publish.borrow().agy_acp_server_path.clone();
         let discovered = builds.discover(configured).await;
         let _ = check
@@ -5781,6 +5789,76 @@ mod tests {
             std::fs::remove_dir_all(root).unwrap();
             assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true, true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12, and removes the check folder");
         }).await.expect("compatibility lockout cap: five seconds, three processes, four ACP messages and four KiB output per process");
+    }
+
+    #[tokio::test]
+    async fn a_lockout_while_restoring_after_a_check_returns_only_m12() {
+        struct Launcher {
+            starts: AtomicUsize,
+            checks: AtomicUsize,
+            stops: Arc<AtomicUsize>,
+        }
+        impl crate::ProcessLauncher for Launcher {
+            fn launch(
+                &self,
+                spec: crate::LaunchSpec,
+            ) -> Result<crate::Launched, crate::LaunchError> {
+                let stdout: crate::ProcessRead = if spec
+                    .program
+                    .parent()
+                    .unwrap()
+                    .ends_with(crate::runtime_builds::CHECK)
+                {
+                    assert_eq!(
+                        self.checks.fetch_add(1, Ordering::SeqCst),
+                        0,
+                        "one check start cap"
+                    );
+                    Box::pin(tokio::io::empty())
+                } else {
+                    let start = self.starts.fetch_add(1, Ordering::SeqCst);
+                    assert!(start < 2, "one initial start and one restoration cap");
+                    let answers = if start == 0 {
+                        vec![
+                            serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"version":"1.4.0"}}}),
+                            serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"serving","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                        ]
+                    } else {
+                        vec![
+                            serde_json::json!({"jsonrpc":"2.0","id":1,"error":{"code":403,"message":"Verify your account"}}),
+                        ]
+                    };
+                    let output = answers
+                        .iter()
+                        .map(|answer| format!("{answer}\n"))
+                        .collect::<String>();
+                    assert!(output.len() <= 1024, "one KiB output cap");
+                    Box::pin(Output(std::io::Cursor::new(output.into_bytes())))
+                };
+                Ok(crate::Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout,
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(StoppedTree(self.stops.clone())),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let launcher = Arc::new(Launcher { starts: AtomicUsize::new(0), checks: AtomicUsize::new(0), stops: Arc::new(AtomicUsize::new(0)) });
+            let mut ports = crate::Ports::production();
+            ports.launcher = launcher.clone();
+            let (stop, stopped) = watch::channel(false);
+            let (root, conductor, task) = check_fixture(ports, stopped).await;
+            let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
+            let owner = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
+            let owner_lockout = matches!(owner, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check") && !text.contains("Original error:"));
+            let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|lockout| lockout.signal);
+            let actual = (conductor.view().state, owner_lockout, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst), evidence);
+            stop.send(true).unwrap();
+            task.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, ("Lockout", true, 2, 1, 3, Some("403".into())), "FR-035: lockout during restoration replaces the check notice with only M-12 for its waiting owner");
+        }).await.expect("check restoration lockout cap: five seconds, three processes, at most two ACP replies and one KiB output per process");
     }
 
     #[tokio::test]
