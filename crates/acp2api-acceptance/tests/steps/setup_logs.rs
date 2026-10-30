@@ -113,7 +113,8 @@ fn oldest(w: &mut World, title: String) {
     let first = w.setup_logs.requests[0]["request_id"].as_str().unwrap();
     let last = w.setup_logs.requests[50]["request_id"].as_str().unwrap();
     assert!(
-        !text.contains(first) && text.contains(last),
+        !text.split_whitespace().any(|word| word == first)
+            && text.split_whitespace().any(|word| word == last),
         "FR-054 first request is evicted and newest request remains"
     );
 }
