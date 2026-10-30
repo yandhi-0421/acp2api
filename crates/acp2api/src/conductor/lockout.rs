@@ -182,15 +182,17 @@ impl Core {
     pub(super) fn build_change(
         &mut self,
         action: crate::runtime_builds::Action,
-        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        reply: BuildReply,
     ) {
         if let Some(evidence) = &self.lockout {
             let result = if matches!(action, crate::runtime_builds::Action::Initial) {
-                Ok(String::new())
+                Ok(None)
             } else {
-                Err(LaunchFailure::Runtime(
-                    Message::lockout(evidence, &self.panel_address, false).to_string(),
-                ))
+                Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
+                    evidence,
+                    &self.panel_address,
+                    false,
+                ))))
             };
             let _ = reply.send(result);
         } else {

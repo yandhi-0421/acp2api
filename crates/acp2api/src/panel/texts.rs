@@ -1,3 +1,9 @@
+use crate::{
+    compatibility_check::Incompatibility,
+    conductor::{RuntimeProcess, State},
+    messages::{LockoutMessage, Message, OwnerMessage, RuntimeFault},
+    runtime_builds::{BuildAcceptance, LaunchFailure},
+};
 use axum::http::{HeaderMap, header};
 use serde::Deserialize;
 
@@ -12,58 +18,48 @@ pub(super) enum Language {
     Chinese,
 }
 
-// Texts that other modules give to the panel in English. A line that is not here,
-// for example an OS error or an API message, stays as it is.
-const CHINESE_LINES: &[(&str, &str)] = &[
-    ("Running", "运行中"),
-    ("Quota wait", "配额等待"),
-    ("Sign-in required", "需要登录"),
-    ("Runtime unavailable", "运行时不可用"),
-    ("Lockout", "已锁死"),
-    ("running", "运行中"),
-    ("starting", "正在启动"),
-    ("stopping", "正在停止"),
-    ("stopped", "已停止"),
-    ("On the release list", "发布列表"),
-    ("Checked on this computer", "本机已检查"),
-    (
-        "This folder has no localharness_external, so acp2api did not use this path.",
-        "这个文件夹里没有 localharness_external，acp2api 没有使用这个路径。",
-    ),
-    (
-        "Enter an absolute path of agy_acp_server.",
-        "填写 agy_acp_server 的绝对路径。",
-    ),
-    (
-        "This path has no agy_acp_server.",
-        "这个路径上没有 agy_acp_server。",
-    ),
-    (
-        "Choose a build that is not an accepted version from the search results.",
-        "从搜索结果里选择一个不是已接受版本的构建。",
-    ),
-    (
-        "Choose an accepted build from the search results.",
-        "从搜索结果里选择一个已接受版本的构建。",
-    ),
-    (
-        "Sign-in cannot start while a sign-in or runtime replacement is in progress.",
-        "登录或运行时进程替换正在进行，现在不能开始登录。",
-    ),
-    (
-        "Wait 60 s between quota refreshes.",
-        "两次刷新配额至少间隔 60 秒。",
-    ),
-    (
-        "acp2api found no executable of the official runtime",
-        "acp2api 没有找到官方运行时的可执行文件",
-    ),
-    (
-        "no build that acp2api found is an accepted version",
-        "acp2api 找到的构建都不是已接受版本",
-    ),
-    ("acp2api is exiting", "acp2api 正在退出"),
-];
+pub(super) struct Labels {
+    pub(super) official_runtime: &'static str,
+    pub(super) quota: &'static str,
+    pub(super) places_and_queue: &'static str,
+    pub(super) setup: &'static str,
+    pub(super) logs: &'static str,
+    pub(super) settings: &'static str,
+    pub(super) notices: &'static str,
+    pub(super) places_in_use: &'static str,
+    pub(super) requests_in_the_queue: &'static str,
+    pub(super) build_in_use: &'static str,
+    pub(super) concurrency_limit: &'static str,
+    pub(super) management_password: &'static str,
+}
+const ENGLISH_LABELS: Labels = Labels {
+    official_runtime: "Official runtime",
+    quota: "Quota",
+    places_and_queue: "Places and queue",
+    setup: "Setup",
+    logs: "Logs",
+    settings: "Settings",
+    notices: "Notices",
+    places_in_use: "Places in use",
+    requests_in_the_queue: "Requests in the queue",
+    build_in_use: "Build in use",
+    concurrency_limit: "Concurrency limit",
+    management_password: "Management password",
+};
+const CHINESE_LABELS: Labels = Labels {
+    official_runtime: "官方运行时",
+    quota: "配额",
+    places_and_queue: "名额与队列",
+    setup: "接入",
+    logs: "日志",
+    settings: "设置",
+    notices: "通知",
+    places_in_use: "在用名额",
+    requests_in_the_queue: "队列中的请求",
+    build_in_use: "在用的构建",
+    concurrency_limit: "并发上限",
+    management_password: "管理密码",
+};
 
 impl Language {
     pub(super) fn of(headers: &HeaderMap) -> Self {
@@ -110,21 +106,230 @@ impl Language {
             Self::Chinese => chinese,
         }
     }
-    pub(super) fn line(self, english: &str) -> String {
-        if self == Self::English {
-            return english.into();
+    pub(super) fn labels(self) -> &'static Labels {
+        match self {
+            Self::English => &ENGLISH_LABELS,
+            Self::Chinese => &CHINESE_LABELS,
         }
-        if let Some((_, chinese)) = CHINESE_LINES.iter().find(|(line, _)| *line == english) {
-            return (*chinese).into();
+    }
+    pub(super) fn state(self, state: State) -> &'static str {
+        match state {
+            State::Running => self.pick(state.name(), "运行中"),
+            State::QuotaWait => self.pick(state.name(), "配额等待"),
+            State::SignInRequired => self.pick(state.name(), "需要登录"),
+            State::RuntimeUnavailable => self.pick(state.name(), "运行时不可用"),
+            State::Lockout => self.pick(state.name(), "已锁死"),
         }
-        let sentence = |prefix: &str| english.strip_prefix(prefix)?.strip_suffix('.');
-        if let Some(version) = sentence("The compatibility check passed for ") {
-            return format!("构建 {version} 通过了兼容性检查。");
+    }
+    pub(super) fn runtime_process(self, runtime_process: RuntimeProcess) -> &'static str {
+        match runtime_process {
+            RuntimeProcess::Starting => self.pick("starting", "正在启动"),
+            RuntimeProcess::Running => self.pick("running", "运行中"),
+            RuntimeProcess::Stopping => self.pick("stopping", "正在停止"),
+            RuntimeProcess::Stopped => self.pick("stopped", "已停止"),
         }
-        if let Some(error) = sentence("The compatibility check failed: ") {
-            return format!("兼容性检查没有通过：{}。", self.line(error));
+    }
+    pub(super) fn build_acceptance(self, acceptance: BuildAcceptance) -> &'static str {
+        match acceptance {
+            BuildAcceptance::OnTheReleaseList => self.pick("On the release list", "发布列表"),
+            BuildAcceptance::CheckedOnThisComputer => {
+                self.pick("Checked on this computer", "本机已检查")
+            }
         }
-        english.into()
+    }
+    pub(super) fn built_in_tool_notice(self, name: &str) -> String {
+        match self {
+            Self::English => format!(
+                "The built-in tool {name} ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client."
+            ),
+            Self::Chinese => format!(
+                "内置工具 {name} 在没有权限请求的情况下运行。acp2api 取消了这个 prompt 轮次，并给 API 客户端返回了错误。"
+            ),
+        }
+    }
+    pub(super) fn api_message(self, message: &Message) -> String {
+        match self {
+            Self::English => message.to_string(),
+            Self::Chinese => chinese_api_message(message),
+        }
+    }
+    pub(super) fn owner_message(self, message: &OwnerMessage) -> String {
+        match self {
+            Self::English => message.to_string(),
+            Self::Chinese => chinese_owner_message(message),
+        }
+    }
+    pub(super) fn launch_failure(self, failure: &LaunchFailure) -> String {
+        match self {
+            Self::English => failure.to_string(),
+            Self::Chinese => chinese_launch_failure(failure),
+        }
+    }
+}
+
+fn chinese_fault(fault: &RuntimeFault) -> String {
+    match fault {
+        RuntimeFault::NoExecutable => {
+            "没有找到官方运行时，所以 acp2api 没有启动运行时进程。".into()
+        }
+        RuntimeFault::NotAccepted => {
+            "找到的构建不是已接受版本，所以 acp2api 没有启动运行时进程。".into()
+        }
+        RuntimeFault::RepeatedFailures => {
+            "运行时进程在 10 分钟内失败了 3 次，所以 acp2api 不再自动启动它。".into()
+        }
+        RuntimeFault::CopyFailed { version } => {
+            format!("已接受构建 {version} 的复制失败了，所以 acp2api 没有启动运行时进程。")
+        }
+    }
+}
+
+fn chinese_lockout(message: &LockoutMessage) -> String {
+    let LockoutMessage {
+        since,
+        signal,
+        address,
+        original,
+    } = message;
+    let original = original
+        .as_ref()
+        .map(|text| format!(" 原始错误：{text}"))
+        .unwrap_or_default();
+    format!(
+        "{since}，官方运行时返回了一个可能危及 Google 账户的响应（{signal}）。从那时起，acp2api 不向官方运行时发送任何请求。所有者可以在 {address} 结束锁死。{original}"
+    )
+}
+
+fn chinese_api_message(message: &Message) -> String {
+    match message {
+        Message::Lockout(lockout) => chinese_lockout(lockout),
+        Message::RuntimeUnavailable(unavailable) => format!(
+            "{} 已接受版本：{}。详见 http://127.0.0.1:{}/。",
+            chinese_fault(&unavailable.fault),
+            unavailable.versions,
+            unavailable.port
+        ),
+        Message::SignInRequired(address) => {
+            format!("官方运行时没有有效的登录。请在 {address} 登录。")
+        }
+        Message::QueueFull => format!(
+            "队列已满（{} 个请求）。请稍后再发送请求。",
+            crate::conductor::QUEUE_CAPACITY
+        ),
+        Message::QuotaWait { until, .. } => {
+            format!("Google 配额已用完。{until} 之前，acp2api 不启动 prompt 轮次。")
+        }
+        Message::RuntimeFailed => "运行时进程失败了，所以 acp2api 结束了这个 prompt 轮次。".into(),
+        Message::NoUpdate => format!(
+            "官方运行时 {} 分钟没有更新，所以 acp2api 取消了这个 prompt 轮次。",
+            crate::conductor::NO_UPDATE_LIMIT / 60_000
+        ),
+        Message::MaxTurnRequests => "这个 prompt 轮次达到了官方运行时的模型请求上限。".into(),
+        Message::Stopped => "acp2api 在这个请求结束之前停止了。".into(),
+        Message::BuiltInToolRan(name) => format!(
+            "官方运行时的内置工具 {name} 在没有权限请求的情况下运行，所以 acp2api 取消了这个 prompt 轮次。"
+        ),
+        Message::RetryWait { seconds, error } => format!(
+            "这个对话的一个请求在 {} 秒内失败过。请在 {seconds} 秒后再发送请求。错误：{}",
+            crate::conductor::WAIT_SECONDS,
+            chinese_api_message(error)
+        ),
+        Message::Upstream(text) => format!("上游错误：{text}"),
+        Message::UpstreamHttp(error) => {
+            let code = error
+                .code
+                .map(|code| format!("{code} "))
+                .unwrap_or_default();
+            format!("上游错误 {code}{}：{}", error.status, error.message)
+        }
+        Message::UpstreamAcp(error) => {
+            format!("上游 ACP 错误 {}：{}", error.code, error.message)
+        }
+        // These refuse the request of an API client, so no owner action gets them.
+        Message::Field { .. }
+        | Message::Model { .. }
+        | Message::Content(_)
+        | Message::Media(_)
+        | Message::Url(_)
+        | Message::Pdf(_)
+        | Message::Prefill
+        | Message::ToolSearch
+        | Message::ToolName(_)
+        | Message::AdvisorTool(_)
+        | Message::ServerTool { .. }
+        | Message::CodexWebSearch
+        | Message::ToolType { .. }
+        | Message::InvalidJson
+        | Message::Invalid(_)
+        | Message::Key
+        | Message::TooLarge => message.to_string(),
+    }
+}
+
+fn chinese_incompatibility(reason: &Incompatibility) -> String {
+    match reason {
+        Incompatibility::NoMcpOverHttp => "initialize 没有声明 HTTP 上的 MCP".into(),
+        Incompatibility::NoSystemPromptAddition => "initialize 没有声明系统提示词追加".into(),
+        Incompatibility::MissingProtocolSupport => {
+            "运行时必须支持 ACP 1、session/load 和 oauth-personal".into()
+        }
+        Incompatibility::NoVersion => "initialize 没有版本".into(),
+        Incompatibility::NoSystemCodeword => "回复里没有系统提示词中的暗号".into(),
+        Incompatibility::NoPermissionRequest => "没有客户端工具的权限请求".into(),
+        Incompatibility::ToolArgumentsDiffer => "客户端工具的参数和提示不一致".into(),
+        Incompatibility::SessionLoadFailed => "兼容性检查期间 session/load 失败了".into(),
+        Incompatibility::NoToolResultText => "回复里没有以文本发送的工具结果".into(),
+        Incompatibility::NoSessionFile => "检查会话在运行时主目录里没有文件".into(),
+        Incompatibility::SessionFilesInGeminiFolder => {
+            "检查会话在所有者的 Gemini 文件夹里有文件".into()
+        }
+        Incompatibility::UnexpectedStopReason => "兼容性检查的 prompt 轮次以意外的原因结束".into(),
+        Incompatibility::BuiltInToolRan(name) => {
+            format!("兼容性检查期间内置工具 {name} 运行了")
+        }
+        Incompatibility::PermissionForAnotherTool => "一个权限请求没有指向提供的客户端工具".into(),
+        Incompatibility::RuntimeFailed => "兼容性检查期间运行时进程失败了".into(),
+        Incompatibility::RuntimeExitedDuringLoad => {
+            "检查用的运行时进程在 session/load 期间退出了".into()
+        }
+        Incompatibility::RuntimeExited => "检查用的运行时进程意外退出了".into(),
+        Incompatibility::Diagnostic(text) => text.clone(),
+    }
+}
+
+fn chinese_owner_message(message: &OwnerMessage) -> String {
+    match message {
+        OwnerMessage::Api(message) => chinese_api_message(message),
+        OwnerMessage::SignInCannotStart => {
+            "登录或运行时进程替换正在进行，现在不能开始登录。".into()
+        }
+        OwnerMessage::QuotaRefreshTooSoon => "两次刷新配额至少间隔 60 秒。".into(),
+        OwnerMessage::PathNotAbsolute => "填写 agy_acp_server 的绝对路径。".into(),
+        OwnerMessage::PathWithoutServer => "这个路径上没有 agy_acp_server。".into(),
+        OwnerMessage::PathWithoutHarness => {
+            "这个文件夹里没有 localharness_external，acp2api 没有使用这个路径。".into()
+        }
+        OwnerMessage::ChooseUnacceptedBuild => "从搜索结果里选择一个不是已接受版本的构建。".into(),
+        OwnerMessage::ChooseAcceptedBuild => "从搜索结果里选择一个已接受版本的构建。".into(),
+        OwnerMessage::BuildChangedBeforeCheck => "选中的构建在兼容性检查之前变了。".into(),
+        OwnerMessage::CheckCopyChanged => "检查副本在兼容性检查期间变了。".into(),
+        OwnerMessage::CheckPassed { version } => format!("构建 {version} 通过了兼容性检查。"),
+        OwnerMessage::CheckFailed(reason) => {
+            format!("兼容性检查没有通过：{}。", chinese_incompatibility(reason))
+        }
+        OwnerMessage::Diagnostic(text) => text.clone(),
+    }
+}
+
+fn chinese_launch_failure(failure: &LaunchFailure) -> String {
+    match failure {
+        LaunchFailure::NoExecutable => chinese_fault(&RuntimeFault::NoExecutable),
+        LaunchFailure::NotAccepted => chinese_fault(&RuntimeFault::NotAccepted),
+        LaunchFailure::Io(error) => format!("操作系统错误：{error}"),
+        LaunchFailure::Runtime(text) => format!("运行时进程出错：{text}"),
+        LaunchFailure::Lockout { error, .. } => chinese_api_message(error),
+        LaunchFailure::Stopped => "acp2api 正在退出。".into(),
+        LaunchFailure::Owner(message) => chinese_owner_message(message),
     }
 }
 
@@ -168,20 +373,20 @@ mod tests {
     }
 
     #[test]
-    fn lines_of_other_modules_keep_their_values_in_chinese() {
-        let chinese = Language::Chinese;
+    fn an_external_diagnostic_keeps_its_text_inside_a_translated_frame() {
+        let diagnostic = "permission denied (os error 13)";
         assert_eq!(
             [
-                chinese.line("The compatibility check passed for 1.6.0."),
-                chinese.line(
-                    "The compatibility check failed: no build that acp2api found is an accepted version."
-                ),
-                chinese.line("permission denied"),
+                Language::Chinese.owner_message(&OwnerMessage::CheckFailed(
+                    Incompatibility::Diagnostic(diagnostic.into())
+                )),
+                Language::Chinese.launch_failure(&LaunchFailure::Runtime(diagnostic.into())),
+                Language::English.owner_message(&OwnerMessage::Diagnostic(diagnostic.into())),
             ],
             [
-                "构建 1.6.0 通过了兼容性检查。",
-                "兼容性检查没有通过：acp2api 找到的构建都不是已接受版本。",
-                "permission denied",
+                format!("兼容性检查没有通过：{diagnostic}。"),
+                format!("运行时进程出错：{diagnostic}"),
+                diagnostic.to_owned(),
             ]
         );
     }

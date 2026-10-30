@@ -1,4 +1,5 @@
-use super::texts::Language;
+use super::texts::{Labels, Language};
+use crate::conductor::{RuntimeProcess, State};
 
 pub(super) const COUNTDOWN: &str = r#"const timer = document.getElementById('sign-in-time');
 const seconds = Number(timer.dataset.seconds);
@@ -21,88 +22,379 @@ copyKey.addEventListener('click', async () => {
     }
 });"#;
 const STYLE: &str = r#"
-:root{color-scheme:light;font:17px/1.47 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#1d1d1f;background:#fff}
-*{box-sizing:border-box}
-body{margin:0}
-a{color:#0066cc}
-h1{font-size:40px;font-weight:600;line-height:1.1;margin:0 0 16px}
-h2{font-size:40px;font-weight:600;line-height:1.1;margin:0 0 24px}
-h3{font-size:21px;font-weight:600;line-height:1.19;margin:32px 0 12px}
-:lang(en) h1,:lang(en) h2{letter-spacing:-.28px}
-p{max-width:65ch}
-.global-bar{display:flex;justify-content:space-between;align-items:center;gap:16px;min-height:44px;padding:4px max(22px,calc((100% - 980px)/2));background:#000;color:#fff;font-size:14px}
-.global-bar button{margin:0;padding:4px 14px;font-size:12px}
-.section-bar{position:sticky;top:0;z-index:1;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:10px max(22px,calc((100% - 980px)/2));background:#f5f5f7cc;-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid #d2d2d7}
-.section-bar h1{font-size:21px;line-height:1.19;margin:0}
-.section-bar p{margin:0;font-size:14px}
-.section-bar nav{display:flex;gap:20px;margin-left:auto;max-width:100%;overflow-x:auto;font-size:14px;white-space:nowrap}
-section{padding:80px max(22px,calc((100% - 980px)/2));scroll-margin-top:96px}
-main>section:nth-of-type(even){background:#f5f5f7}
-.dark{background:#272729;color:#fff}
-.dark button:focus-visible,.global-bar button:focus-visible{outline-color:#fff}
-#sign-in{text-align:center}
-#sign-in p{margin-left:auto;margin-right:auto}
-#sign-in h2{font-size:56px;line-height:1.07}
-#sign-in h2 .dot{margin-right:14px}
-#sign-in .figures{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:56px}
-.figures p{display:flex;flex-direction:column-reverse;margin:0;font-size:14px}
-.figures span{font-size:40px;font-weight:600;line-height:1.1;overflow-wrap:anywhere}
-.surface{background:#fff;color:#1d1d1f;border:1px solid #d2d2d7;border-radius:18px;padding:16px 20px;overflow-wrap:anywhere}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:48px}
-.two>div{min-width:0}
-#notices section{padding-top:32px;padding-bottom:32px;background:#f5f5f7;border-bottom:1px solid #d2d2d7}
-#notices h2{font-size:21px;line-height:1.19;margin-bottom:8px}
-.notice-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 24px}
-.notice-row p{margin:12px 0;font-size:14px}
-.notice-row button{margin:0}
-.line{margin:0;max-width:none;padding:12px max(22px,calc((100% - 980px)/2));background:#f5f5f7;border-bottom:1px solid #d2d2d7;font-size:14px}
-.login{max-width:540px;margin:80px auto;padding:0 22px}
-.login section{padding:28px;border:1px solid #d2d2d7;border-radius:18px}
-.login .line{padding:12px 0 0;background:none;border:0}
-.intro{color:#616166;margin-bottom:36px}
-.fine{font-size:12px;color:#616166}
-.fine code{font-size:12px}
-.dot{display:inline-block;width:9px;height:9px;margin-right:8px;border-radius:50%;vertical-align:middle}
-.good{background:#0ca30c}
-.warning{background:#fab219}
-.serious{background:#ec835a}
-.critical{background:#d03b3b}
-form+form{margin-top:24px}
-.actions{display:flex;flex-wrap:wrap;gap:12px}
-.actions form{margin:0}
-label{display:block;margin-bottom:8px}
-input,select,button,summary{font:inherit}
-input,select{border:1px solid #86868b;border-radius:999px;padding:12px 18px;max-width:100%;width:100%;background:#fff;color:#1d1d1f}
-input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid #0066cc;outline-offset:3px}
-button{background:#0066cc;color:#fff;border:0;border-radius:999px;padding:12px 22px;cursor:pointer;margin-top:18px}
-summary{color:#0066cc;cursor:pointer;padding:12px 0}
-code{overflow-wrap:anywhere;font:14px ui-monospace,Menlo,Consolas,monospace}
-pre{overflow-x:auto;margin:0;padding:18px 20px;background:#fff;border:1px solid #d2d2d7;border-radius:18px;font:14px/1.6 ui-monospace,Menlo,Consolas,monospace}
-.quota-result{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
-.log-table{overflow-x:auto;margin-top:24px}
-table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}
-th,td{border-bottom:1px solid #d2d2d7;padding:8px 12px;vertical-align:top}
-thead th{font-size:12px;white-space:nowrap}
-.result{white-space:nowrap}
-caption{text-align:left;font-weight:600;margin-bottom:12px}
-@media(max-width:600px){
-.global-bar,.section-bar{padding-left:16px;padding-right:16px}
-.section-bar nav{margin-left:0}
-section{padding:48px 16px}
-h1{font-size:34px}
-h2{font-size:34px}
-#sign-in h2{font-size:40px}
-#sign-in .figures{gap:12px;margin-top:40px}
-.figures span{font-size:28px}
-.two{grid-template-columns:1fr}
-.line{padding-left:16px;padding-right:16px}
-.login{margin:40px auto;padding:0 16px}
-.login section{padding:22px}
+:root {
+    --gutter:max(22px,calc((100% - 980px)/2));
+    --hairline:#d2d2d7;
+    --action:#0066cc;
+    color-scheme:light;
+    font:17px/1.47 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    color:#1d1d1f;
+    background:#fff;
 }
-@media(forced-colors:active){
-section,input,select{border-color:CanvasText}
-button{border:1px solid ButtonText}
-.dot{background:CanvasText}
+* {
+    box-sizing:border-box;
+}
+body {
+    margin:0;
+}
+a {
+    color:var(--action);
+}
+h1 {
+    font-size:40px;
+    font-weight:600;
+    line-height:1.1;
+    margin:0 0 16px;
+}
+h2 {
+    font-size:40px;
+    font-weight:600;
+    line-height:1.1;
+    margin:0 0 24px;
+}
+h3 {
+    font-size:21px;
+    font-weight:600;
+    line-height:1.19;
+    margin:32px 0 12px;
+}
+:lang(en) h1,:lang(en) h2 {
+    letter-spacing:-.28px;
+}
+p {
+    max-width:65ch;
+}
+.global-bar {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:16px;
+    min-height:44px;
+    padding:4px var(--gutter);
+    background:#000;
+    color:#fff;
+    font-size:14px;
+}
+.global-bar button {
+    margin:0;
+    padding:4px 14px;
+    font-size:12px;
+}
+.section-bar {
+    position:sticky;
+    top:0;
+    z-index:1;
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:4px 16px;
+    padding:10px var(--gutter);
+    background:#f5f5f7cc;
+    -webkit-backdrop-filter:saturate(180%) blur(20px);
+    backdrop-filter:saturate(180%) blur(20px);
+    border-bottom:1px solid var(--hairline);
+}
+.section-bar p {
+    margin:0;
+    font-size:14px;
+}
+.section-bar .panel-title {
+    font-size:21px;
+    font-weight:600;
+    line-height:1.19;
+}
+.section-bar nav {
+    display:flex;
+    gap:20px;
+    margin-left:auto;
+    max-width:100%;
+    overflow-x:auto;
+    font-size:14px;
+    white-space:nowrap;
+}
+section {
+    padding:80px var(--gutter);
+    scroll-margin-top:96px;
+}
+main>section:nth-of-type(even) {
+    background:#f5f5f7;
+}
+.dark {
+    background:#272729;
+    color:#fff;
+}
+.dark button:focus-visible,.global-bar button:focus-visible {
+    outline-color:#fff;
+}
+#sign-in {
+    text-align:center;
+}
+#sign-in p {
+    margin-left:auto;
+    margin-right:auto;
+}
+#sign-in h1 {
+    font-size:56px;
+    line-height:1.07;
+}
+#sign-in h1 .dot {
+    margin-right:14px;
+}
+#sign-in .figures {
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:24px;
+    margin-top:56px;
+}
+.figures p {
+    display:flex;
+    flex-direction:column-reverse;
+    margin:0;
+    font-size:14px;
+}
+.figures span {
+    font-size:40px;
+    font-weight:600;
+    line-height:1.1;
+    overflow-wrap:anywhere;
+}
+.surface {
+    background:#fff;
+    color:#1d1d1f;
+    border:1px solid var(--hairline);
+    border-radius:18px;
+    padding:16px 20px;
+    overflow-wrap:anywhere;
+}
+.two {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:48px;
+}
+.two>div {
+    min-width:0;
+}
+#notices section {
+    padding-top:32px;
+    padding-bottom:32px;
+    background:#f5f5f7;
+    border-bottom:1px solid var(--hairline);
+}
+#notices h2 {
+    font-size:21px;
+    line-height:1.19;
+    margin-bottom:8px;
+}
+.notice-row {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    justify-content:space-between;
+    gap:0 24px;
+}
+.notice-row p {
+    margin:12px 0;
+    font-size:14px;
+}
+.notice-row button {
+    margin:0;
+}
+.line {
+    margin:0;
+    max-width:none;
+    padding:12px var(--gutter);
+    background:#f5f5f7;
+    border-bottom:1px solid var(--hairline);
+    font-size:14px;
+}
+.login {
+    max-width:540px;
+    margin:80px auto;
+    padding:0 22px;
+}
+.login section {
+    padding:28px;
+    border:1px solid var(--hairline);
+    border-radius:18px;
+}
+.login .line {
+    padding:12px 0 0;
+    background:none;
+    border:0;
+}
+.intro {
+    color:#616166;
+    margin-bottom:36px;
+}
+.fine {
+    font-size:12px;
+    color:#616166;
+}
+.fine code {
+    font-size:12px;
+}
+.dot {
+    display:inline-block;
+    width:9px;
+    height:9px;
+    margin-right:8px;
+    border-radius:50%;
+    vertical-align:middle;
+}
+.good {
+    background:#0ca30c;
+}
+.warning {
+    background:#fab219;
+}
+.serious {
+    background:#ec835a;
+}
+.critical {
+    background:#d03b3b;
+}
+form+form {
+    margin-top:24px;
+}
+.actions {
+    display:flex;
+    flex-wrap:wrap;
+    gap:12px;
+}
+.actions form {
+    margin:0;
+}
+label {
+    display:block;
+    margin-bottom:8px;
+}
+input,select,button,summary {
+    font:inherit;
+}
+input,select {
+    border:1px solid #86868b;
+    border-radius:999px;
+    padding:12px 18px;
+    max-width:100%;
+    width:100%;
+    background:#fff;
+    color:#1d1d1f;
+}
+input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible,a:focus-visible {
+    outline:3px solid var(--action);
+    outline-offset:3px;
+}
+button {
+    background:var(--action);
+    color:#fff;
+    border:0;
+    border-radius:999px;
+    padding:12px 22px;
+    cursor:pointer;
+    margin-top:18px;
+}
+summary {
+    color:var(--action);
+    cursor:pointer;
+    padding:12px 0;
+}
+code {
+    overflow-wrap:anywhere;
+    font:14px ui-monospace,Menlo,Consolas,monospace;
+}
+pre {
+    overflow-x:auto;
+    margin:0;
+    padding:18px 20px;
+    background:#fff;
+    border:1px solid var(--hairline);
+    border-radius:18px;
+    font:14px/1.6 ui-monospace,Menlo,Consolas,monospace;
+}
+.quota-result {
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
+    font:inherit;
+}
+.log-table {
+    overflow-x:auto;
+    margin-top:24px;
+}
+table {
+    border-collapse:collapse;
+    width:100%;
+    font-size:14px;
+    text-align:left;
+}
+th,td {
+    border-bottom:1px solid var(--hairline);
+    padding:8px 12px;
+    vertical-align:top;
+}
+thead th {
+    font-size:12px;
+    white-space:nowrap;
+}
+.result {
+    white-space:nowrap;
+}
+caption {
+    text-align:left;
+    font-weight:600;
+    margin-bottom:12px;
+}
+@media(max-width:600px) {
+    .global-bar,.section-bar {
+        padding-left:16px;
+        padding-right:16px;
+    }
+    .section-bar nav {
+        margin-left:0;
+    }
+    section {
+        padding:48px 16px;
+    }
+    h1 {
+        font-size:34px;
+    }
+    h2 {
+        font-size:34px;
+    }
+    #sign-in h1 {
+        font-size:40px;
+    }
+    #sign-in .figures {
+        gap:12px;
+        margin-top:40px;
+    }
+    .figures span {
+        font-size:28px;
+    }
+    .two {
+        grid-template-columns:1fr;
+    }
+    .line {
+        padding-left:16px;
+        padding-right:16px;
+    }
+    .login {
+        margin:40px auto;
+        padding:0 16px;
+    }
+    .login section {
+        padding:22px;
+    }
+}
+@media(forced-colors:active) {
+    section,input,select {
+        border-color:CanvasText;
+    }
+    button {
+        border:1px solid ButtonText;
+    }
+    .dot {
+        background:CanvasText;
+    }
 }
 "#;
 
@@ -122,19 +414,25 @@ fn dot(tone: Tone) -> String {
     };
     format!(r#"<span class="dot {class}"></span>"#)
 }
-fn state_tone(state: &str) -> Tone {
+fn state_tone(state: State) -> Tone {
     match state {
-        "Running" => Tone::Good,
-        "Quota wait" | "Sign-in required" => Tone::Warning,
-        "Runtime unavailable" => Tone::Serious,
-        _ => Tone::Critical,
+        State::Running => Tone::Good,
+        State::QuotaWait | State::SignInRequired => Tone::Warning,
+        State::RuntimeUnavailable => Tone::Serious,
+        State::Lockout => Tone::Critical,
     }
 }
-fn process_tone(process: &str) -> Tone {
-    match process {
-        "running" => Tone::Good,
-        "stopped" => Tone::Serious,
-        _ => Tone::Warning,
+fn state_shade(state: State) -> &'static str {
+    match state {
+        State::Running | State::QuotaWait => "light",
+        State::SignInRequired | State::RuntimeUnavailable | State::Lockout => "dark",
+    }
+}
+fn runtime_process_tone(runtime_process: RuntimeProcess) -> Tone {
+    match runtime_process {
+        RuntimeProcess::Running => Tone::Good,
+        RuntimeProcess::Starting | RuntimeProcess::Stopping => Tone::Warning,
+        RuntimeProcess::Stopped => Tone::Serious,
     }
 }
 fn escape(text: &str) -> String {
@@ -163,12 +461,13 @@ pub(super) struct Line<'a> {
 }
 fn line(line: &Line<'_>) -> String {
     let text = escape(line.text);
-    if line.error {
-        let dot = dot(Tone::Critical);
-        format!(r#"<p class="line" role="alert">{dot}{text}</p>"#)
+    let (tone, role) = if line.error {
+        (Tone::Critical, "alert")
     } else {
-        format!(r#"<p class="line" role="status">{text}</p>"#)
-    }
+        (Tone::Good, "status")
+    };
+    let dot = dot(tone);
+    format!(r#"<p class="line" role="{role}">{dot}{text}</p>"#)
 }
 fn sign_in_wait(
     language: Language,
@@ -211,12 +510,10 @@ fn first_tile(
     now: crate::Moment,
     build: Option<&str>,
 ) -> String {
-    let shade = match view.state {
-        "Sign-in required" | "Runtime unavailable" | "Lockout" => "dark",
-        _ => "light",
-    };
+    let labels = language.labels();
+    let shade = state_shade(view.state);
     let dot = dot(state_tone(view.state));
-    let state = language.line(view.state);
+    let state = language.state(view.state);
     let evidence = view
         .lockout_evidence
         .as_ref()
@@ -229,17 +526,11 @@ fn first_tile(
             &submit(language.pick("Sign in with Google", "用 Google 账户登录")),
         ),
     };
-    let places = figure(language.pick("Places in use", "在用名额"), view.places);
-    let queued = figure(
-        language.pick("Requests in the queue", "队列中的请求"),
-        view.queued,
-    );
-    let build = figure(
-        language.pick("Build in use", "在用的构建"),
-        build.unwrap_or("—"),
-    );
+    let places = figure(labels.places_in_use, view.places);
+    let queued = figure(labels.requests_in_the_queue, view.queued);
+    let build = figure(labels.build_in_use, build.unwrap_or("—"));
     format!(
-        r#"<section id="{entry_id}" class="{shade}"><h2>{dot}{state}</h2>{evidence}{sign_in}<div class="figures">{places}{queued}{build}</div></section>"#,
+        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{evidence}{sign_in}<div class="figures">{places}{queued}{build}</div></section>"#,
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )
 }
@@ -264,23 +555,33 @@ fn language_switch(language: Language) -> String {
         ),
     )
 }
-fn section_bar(language: Language, state: &str) -> String {
+fn section_bar(language: Language, state: State) -> String {
+    let Labels {
+        official_runtime,
+        quota,
+        places_and_queue,
+        setup,
+        logs,
+        settings,
+        notices,
+        ..
+    } = language.labels();
     let anchors = [
-        ("runtime", language.pick("Official runtime", "官方运行时")),
-        ("quota", language.pick("Quota", "配额")),
-        ("places", language.pick("Places and queue", "名额与队列")),
-        ("setup", language.pick("Setup", "接入")),
-        ("logs", language.pick("Logs", "日志")),
-        ("settings", language.pick("Settings", "设置")),
-        ("notices", language.pick("Notices", "通知")),
+        ("runtime", official_runtime),
+        ("quota", quota),
+        ("places", places_and_queue),
+        ("setup", setup),
+        ("logs", logs),
+        ("settings", settings),
+        ("notices", notices),
     ]
     .map(|(id, title)| format!(r##"<a href="#{id}">{title}</a>"##))
     .concat();
     format!(
-        r#"<div class="section-bar"><h1>{}</h1><p>{}{}</p><nav aria-label="{}">{anchors}</nav></div>"#,
+        r#"<div class="section-bar"><p class="panel-title">{}</p><p>{}{}</p><nav aria-label="{}">{anchors}</nav></div>"#,
         language.pick("Management panel", "管理面板"),
         dot(state_tone(state)),
-        language.line(state),
+        language.state(state),
         language.pick("Sections", "区块"),
     )
 }
@@ -293,7 +594,7 @@ pub(super) fn login(language: Language, error: Option<&str>) -> String {
         "Enter the management password to open this panel.",
         "输入管理密码，打开这个面板。",
     );
-    let password = language.pick("Management password", "管理密码");
+    let password = language.labels().management_password;
     let open = submit(language.pick("Open the management panel", "打开管理面板"));
     let form = post_form(
         "/manage/login",
@@ -362,17 +663,6 @@ pub(super) fn settings(page: Page<'_>) -> String {
     )
 }
 
-fn built_in_tool_notice(language: Language, name: &str) -> String {
-    match language {
-        Language::English => format!(
-            "The built-in tool {name} ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client."
-        ),
-        Language::Chinese => format!(
-            "内置工具 {name} 在没有权限请求的情况下运行。acp2api 取消了这个 prompt 轮次，并给 API 客户端返回了错误。"
-        ),
-    }
-}
-
 fn notices_band(page: &Page<'_>) -> String {
     let language = page.language;
     let dismiss = submit(language.pick("Dismiss", "知道了"));
@@ -380,7 +670,7 @@ fn notices_band(page: &Page<'_>) -> String {
         .notices
         .iter()
         .map(|notice| {
-            let text = escape(&built_in_tool_notice(language, &notice.name));
+            let text = escape(&language.built_in_tool_notice(&notice.name));
             let form = post_form(
                 "/manage/notice",
                 &format!(
@@ -397,7 +687,7 @@ fn notices_band(page: &Page<'_>) -> String {
     } else {
         format!(
             "<section><h2>{}</h2>{rows}</section>",
-            language.pick("Notices", "通知")
+            language.labels().notices
         )
     };
     let notice = page.notice.as_ref().map(line).unwrap_or_default();
@@ -406,16 +696,21 @@ fn notices_band(page: &Page<'_>) -> String {
 
 fn quota_tile(page: &Page<'_>) -> String {
     let language = page.language;
-    let title = language.pick("Quota", "配额");
+    let labels = language.labels();
+    let title = labels.quota;
     let result = page
         .quota_result
         .as_ref()
         .map(|result| {
+            let text = match &result.text {
+                Ok(text) => text.clone(),
+                Err(message) => language.api_message(message),
+            };
             format!(
                 r#"<p>{}<time datetime="{time}">{time}</time></p><pre class="quota-result">{text}</pre>"#,
                 language.pick("Last result: ", "上次结果："),
                 time = escape(&result.time),
-                text = escape(&result.text)
+                text = escape(&text)
             )
         })
         .unwrap_or_else(|| {
@@ -429,12 +724,9 @@ fn quota_tile(page: &Page<'_>) -> String {
         &submit(language.pick("Refresh the quota", "刷新配额")),
     );
     let refresh_rule = language.pick("Refresh at most once every 60 s.", "每 60 秒最多刷新一次。");
-    let places_title = language.pick("Places and queue", "名额与队列");
-    let places = figure(language.pick("Places in use", "在用名额"), page.view.places);
-    let queued = figure(
-        language.pick("Requests in the queue", "队列中的请求"),
-        page.view.queued,
-    );
+    let places_title = labels.places_and_queue;
+    let places = figure(labels.places_in_use, page.view.places);
+    let queued = figure(labels.requests_in_the_queue, page.view.queued);
     let limit_form = concurrency_form(page);
     format!(
         r#"<section id="quota" aria-labelledby="quota-title"><div class="two"><div><h2 id="quota-title">{title}</h2>{result}{refresh}<p class="fine">{refresh_rule}</p></div><div id="places"><h2>{places_title}</h2>{places}{queued}{limit_form}</div></div></section>"#
@@ -459,7 +751,7 @@ fn concurrency_form(page: &Page<'_>) -> String {
         "/manage/concurrency",
         &format!(
             r#"<label for="concurrency-limit">{}</label><select id="concurrency-limit" name="concurrency_limit">{options}</select>{}"#,
-            language.pick("Concurrency limit", "并发上限"),
+            language.labels().concurrency_limit,
             submit(language.pick("Save the concurrency limit", "保存并发上限")),
         ),
     )
@@ -467,11 +759,9 @@ fn concurrency_form(page: &Page<'_>) -> String {
 
 fn settings_tile(page: &Page<'_>) -> String {
     let language = page.language;
-    let title = language.pick("Settings", "设置");
-    let limit = figure(
-        language.pick("Concurrency limit", "并发上限"),
-        page.settings.concurrency_limit,
-    );
+    let labels = language.labels();
+    let title = labels.settings;
+    let limit = figure(labels.concurrency_limit, page.settings.concurrency_limit);
     let port = figure(language.pick("Port", "端口"), page.port);
     let folder_label = language.pick("Data folder", "数据文件夹");
     let data_folder = escape(&page.data_folder.display().to_string());
@@ -479,7 +769,7 @@ fn settings_tile(page: &Page<'_>) -> String {
         "Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.",
         "通过 <code>config.toml</code> 或 <code>--port</code> 修改端口。通过 <code>--data-dir</code> 修改数据文件夹。",
     );
-    let password_title = language.pick("Management password", "管理密码");
+    let password_title = labels.management_password;
     let password_rule = language.pick(
         "Changing the password ends every panel session.",
         "修改密码会结束每个面板会话。",
@@ -497,10 +787,7 @@ fn settings_tile(page: &Page<'_>) -> String {
     )
 }
 
-fn setup_tile(page: &Page<'_>) -> String {
-    let language = page.language;
-    let key = escape(&page.settings.local_api_key);
-    let address = format!("http://127.0.0.1:{}", page.port);
+fn client_setup_texts(page: &Page<'_>, address: &str) -> [String; 3] {
     let model = page
         .view
         .model_names
@@ -540,23 +827,10 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
         &serde_json::json!({"base_url":format!("{address}/v1"),"api_key":"<LOCAL_API_KEY>"}),
     )
     .unwrap();
-    let models = if page.view.model_names.is_empty() {
-        post_form(
-            "/manage/models",
-            &submit(language.pick("Read the model names now", "现在读取模型名")),
-        )
-    } else {
-        format!(
-            "<ul>{}</ul>",
-            page.view
-                .model_names
-                .iter()
-                .map(|name| format!("<li><code>{}</code></li>", escape(name)))
-                .collect::<String>()
-        )
-    };
-    let title = language.pick("Setup", "接入");
-    let address_label = language.pick("Address", "地址");
+    [claude, codex, chat]
+}
+
+fn local_api_key_entry(language: Language, key: &str) -> String {
     let key_label = language.pick("Local API key", "本地 API 密钥");
     let copy = language.pick("Copy local API key", "复制本地 API 密钥");
     let copied = language.pick("Local API key copied.", "本地 API 密钥已复制。");
@@ -573,17 +847,66 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
         "/manage/key",
         &submit(language.pick("Make a new key", "换一个新密钥")),
     );
+    format!(
+        r#"<label for="local-api-key">{key_label}</label>
+<input type="password" id="local-api-key" value="{key}" readonly autocomplete="off">
+<button type="button" id="copy-key" data-copied="{copied}" data-failed="{copy_failed}">{copy}</button>
+<p id="copy-key-status" role="status"></p>
+<details><summary>{show}</summary><code>{key}</code></details>
+<p class="fine">{new_key_rule}</p>
+{new_key}"#
+    )
+}
+
+fn model_names(page: &Page<'_>) -> String {
+    if page.view.model_names.is_empty() {
+        return post_form(
+            "/manage/models",
+            &submit(
+                page.language
+                    .pick("Read the model names now", "现在读取模型名"),
+            ),
+        );
+    }
+    let names = page
+        .view
+        .model_names
+        .iter()
+        .map(|name| format!("<li><code>{}</code></li>", escape(name)))
+        .collect::<String>();
+    format!("<ul>{names}</ul>")
+}
+
+fn setup_tile(page: &Page<'_>) -> String {
+    let language = page.language;
+    let address = format!("http://127.0.0.1:{}", page.port);
+    let [claude, codex, chat] = client_setup_texts(page, &address).map(|text| escape(&text));
+    let title = language.labels().setup;
+    let address_label = language.pick("Address", "地址");
+    let key = local_api_key_entry(language, &escape(&page.settings.local_api_key));
     let models_title = language.pick("Model names", "模型名");
+    let models = model_names(page);
     let placeholders = language.pick(
         "Replace the placeholders below. Copy the local API key separately.",
         "替换下面的占位符。本地 API 密钥要单独复制。",
     );
     let chat_title = language.pick("Chat Completions client", "Chat Completions 客户端");
     format!(
-        r#"<section id="setup"><h2>{title}</h2><p>{address_label} <code>{address}</code></p><label for="local-api-key">{key_label}</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><button type="button" id="copy-key" data-copied="{copied}" data-failed="{copy_failed}">{copy}</button><p id="copy-key-status" role="status"></p><details><summary>{show}</summary><code>{key}</code></details><p class="fine">{new_key_rule}</p>{new_key}<h3>{models_title}</h3>{models}<p>{placeholders}</p><h3>Claude Code</h3><pre>{}</pre><h3>Codex</h3><pre>{}</pre><h3>{chat_title}</h3><pre>{}</pre><script>{COPY_KEY}</script></section>"#,
-        escape(&claude),
-        escape(&codex),
-        escape(&chat)
+        r#"<section id="setup">
+<h2>{title}</h2>
+<p>{address_label} <code>{address}</code></p>
+{key}
+<h3>{models_title}</h3>
+{models}
+<p>{placeholders}</p>
+<h3>Claude Code</h3>
+<pre>{claude}</pre>
+<h3>Codex</h3>
+<pre>{codex}</pre>
+<h3>{chat_title}</h3>
+<pre>{chat}</pre>
+<script>{COPY_KEY}</script>
+</section>"#
     )
 }
 
@@ -690,7 +1013,7 @@ fn logs_tile(
         })
         .unwrap_or_default();
     let limit = crate::journal::REQUEST_HISTORY_LIMIT;
-    let title = language.pick("Logs", "日志");
+    let title = language.labels().logs;
     let folder_label = language.pick("Log folder", "日志文件夹");
     let folder = escape(&data_folder.join("logs").display().to_string());
     let requests_caption = match language {
@@ -719,8 +1042,8 @@ fn current_build(language: Language, build: Option<crate::runtime_builds::Curren
         .unwrap_or_else(|| language.pick("Not found.", "没有找到。").into());
     format!(
         "{}<p>{}</p><p>{}{source}</p>",
-        figure(language.pick("Build in use", "在用的构建"), &build.version),
-        language.line(build.acceptance),
+        figure(language.labels().build_in_use, &build.version),
+        language.build_acceptance(build.acceptance),
         language.pick("Source: ", "来源："),
     )
 }
@@ -728,7 +1051,10 @@ fn current_build(language: Language, build: Option<crate::runtime_builds::Curren
 fn found_row(language: Language, row: &crate::runtime_builds::BuildRow) -> String {
     let check = if row.version.is_none() {
         format!(
-            r#"<form method="post" action="/manage/compatibility-check" aria-describedby="compatibility-cost compatibility-risks"><input type="hidden" name="build" value="{}">{}</form>"#,
+            r#"<form method="post" action="/manage/compatibility-check" aria-describedby="compatibility-cost compatibility-risks">
+<input type="hidden" name="build" value="{}">
+{}
+</form>"#,
             escape(&row.identity),
             submit(language.pick("Run the compatibility check", "做兼容性检查")),
         )
@@ -744,8 +1070,65 @@ fn found_row(language: Language, row: &crate::runtime_builds::BuildRow) -> Strin
         escape(&row.path.display().to_string()),
         escape(version),
         row.acceptance
-            .map(|acceptance| language.line(acceptance))
+            .map(|acceptance| language.build_acceptance(acceptance))
             .unwrap_or_default()
+    )
+}
+
+fn newer_build(language: Language, version: &str) -> String {
+    let found = match language {
+        Language::English => format!("New build found: {version}"),
+        Language::Chinese => format!("发现新构建 {version}"),
+    };
+    let dot = dot(Tone::Warning);
+    format!("<p role=\"status\">{dot}{}</p>", escape(&found))
+}
+
+fn runtime_path_form(language: Language, settings: &crate::store::Settings) -> String {
+    let path = settings
+        .agy_acp_server_path
+        .as_ref()
+        .map(|path| escape(&path.display().to_string()))
+        .unwrap_or_default();
+    let label = language.pick("Path of agy_acp_server", "agy_acp_server 的路径");
+    let save = submit(language.pick(
+        "Set the path of agy_acp_server",
+        "填写 agy_acp_server 的路径",
+    ));
+    post_form(
+        "/manage/runtime-path",
+        &format!(
+            r#"
+<label for="runtime-path">{label}</label>
+<input id="runtime-path" name="agy_acp_server_path" value="{path}" required>
+{save}
+"#
+        ),
+    )
+}
+
+fn accepted_build_form(language: Language, choices: &[(String, String)]) -> String {
+    let options = choices
+        .iter()
+        .map(|(identity, version)| {
+            format!(
+                "<option value=\"{}\">{}</option>",
+                escape(identity),
+                escape(version)
+            )
+        })
+        .collect::<String>();
+    let label = language.pick("Accepted build", "已接受的构建");
+    let save = submit(language.pick("Use this build", "使用这个构建"));
+    post_form(
+        "/manage/build",
+        &format!(
+            r#"
+<label for="runtime-build">{label}</label>
+<select id="runtime-build" name="build">{options}</select>
+{save}
+"#
+        ),
     )
 }
 
@@ -753,9 +1136,9 @@ fn runtime(
     language: Language,
     builds: Result<crate::runtime_builds::Summary, String>,
     settings: &crate::store::Settings,
-    process: &str,
+    runtime_process: RuntimeProcess,
 ) -> String {
-    let title = language.pick("Official runtime", "官方运行时");
+    let title = language.labels().official_runtime;
     let crate::runtime_builds::Summary {
         current,
         found,
@@ -767,48 +1150,23 @@ fn runtime(
         Err(error) => {
             return format!(
                 "<section id=\"runtime\"><h2>{title}</h2><p role=\"status\">{}</p></section>",
-                escape(&language.line(&error))
+                escape(&error)
             );
         }
     };
     let current = current_build(language, current);
-    let release_label = language.line("On the release list");
+    let process_label = language.pick("Runtime process", "运行时进程");
+    let process_dot = dot(runtime_process_tone(runtime_process));
+    let process_word = language.runtime_process(runtime_process);
+    let newer = newer
+        .map(|version| newer_build(language, &version))
+        .unwrap_or_default();
+    let release_label =
+        language.build_acceptance(crate::runtime_builds::BuildAcceptance::OnTheReleaseList);
     let release = release
         .iter()
         .map(|version| format!("<li>{} — {release_label}</li>", escape(version)))
         .collect::<String>();
-    let rows = found
-        .iter()
-        .map(|row| found_row(language, row))
-        .collect::<String>();
-    let options = choices
-        .iter()
-        .map(|(identity, version)| {
-            format!(
-                "<option value=\"{}\">{}</option>",
-                escape(identity),
-                escape(version)
-            )
-        })
-        .collect::<String>();
-    let newer = newer
-        .map(|version| {
-            let found = match language {
-                Language::English => format!("New build found: {version}"),
-                Language::Chinese => format!("发现新构建 {version}"),
-            };
-            let dot = dot(Tone::Warning);
-            format!("<p role=\"status\">{dot}{}</p>", escape(&found))
-        })
-        .unwrap_or_default();
-    let path = settings
-        .agy_acp_server_path
-        .as_ref()
-        .map(|path| escape(&path.display().to_string()))
-        .unwrap_or_default();
-    let process_label = language.pick("Runtime process", "运行时进程");
-    let process_dot = dot(process_tone(process));
-    let process_word = language.line(process);
     let retry = post_form("/manage/retry", &submit(language.pick("Retry", "重试")));
     let search = post_form(
         "/manage/search",
@@ -822,27 +1180,26 @@ fn runtime(
         "The check does not check the stderr lines of the lockout signals, three prompt turns at the same time, or the memory that decides N.",
         "这个检查不检查锁死信号的 stderr 行、三个同时运行的 prompt 轮次，以及决定 N 的内存。",
     );
-    let path_form = post_form(
-        "/manage/runtime-path",
-        &format!(
-            r#"<label for="runtime-path">{}</label><input id="runtime-path" name="agy_acp_server_path" value="{path}" required>{}"#,
-            language.pick("Path of agy_acp_server", "agy_acp_server 的路径"),
-            submit(language.pick(
-                "Set the path of agy_acp_server",
-                "填写 agy_acp_server 的路径"
-            )),
-        ),
-    );
-    let build_form = post_form(
-        "/manage/build",
-        &format!(
-            r#"<label for="runtime-build">{}</label><select id="runtime-build" name="build">{options}</select>{}"#,
-            language.pick("Accepted build", "已接受的构建"),
-            submit(language.pick("Use this build", "使用这个构建")),
-        ),
-    );
+    let rows = found
+        .iter()
+        .map(|row| found_row(language, row))
+        .collect::<String>();
+    let path_form = runtime_path_form(language, settings);
+    let build_form = accepted_build_form(language, &choices);
     format!(
-        r#"<section id="runtime"><h2>{title}</h2>{current}<p>{process_label} <span>{process_dot}{process_word}</span></p>{newer}<ul>{release}</ul><div class="actions">{retry}{search}</div><p id="compatibility-cost">{cost}</p><p id="compatibility-risks">{risks}</p><ul>{rows}</ul>{path_form}{build_form}</section>"#
+        r#"<section id="runtime">
+<h2>{title}</h2>
+{current}
+<p>{process_label} <span>{process_dot}{process_word}</span></p>
+{newer}
+<ul>{release}</ul>
+<div class="actions">{retry}{search}</div>
+<p id="compatibility-cost">{cost}</p>
+<p id="compatibility-risks">{risks}</p>
+<ul>{rows}</ul>
+{path_form}
+{build_form}
+</section>"#
     )
 }
 
@@ -868,7 +1225,7 @@ mod tests {
         let builds = crate::runtime_builds::Summary {
             current: Some(crate::runtime_builds::CurrentBuild {
                 version: version.into(),
-                acceptance: "On the release list",
+                acceptance: crate::runtime_builds::BuildAcceptance::OnTheReleaseList,
                 source: Some(source.into()),
             }),
             found: vec![],

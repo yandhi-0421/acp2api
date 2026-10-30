@@ -300,7 +300,7 @@ async fn refresh_quota(
         Err(error) => panel.page(
             language,
             StatusCode::UNPROCESSABLE_ENTITY,
-            &language.line(&error),
+            &language.owner_message(&error),
         ),
     }
 }
@@ -324,7 +324,7 @@ async fn read_models(
         Err(error) => panel.page(
             language,
             StatusCode::UNPROCESSABLE_ENTITY,
-            &crate::journal::redact_error(&error),
+            &crate::journal::redact_error(&language.owner_message(&error)),
         ),
     }
 }
@@ -351,7 +351,7 @@ impl Panel {
             Err(error) => self.page(
                 language,
                 StatusCode::UNPROCESSABLE_ENTITY,
-                &language.line(&error),
+                &language.owner_message(&error),
             ),
         }
     }
@@ -382,13 +382,13 @@ async fn password(
     }
 }
 #[derive(Deserialize)]
-struct Limit {
+struct ConcurrencyLimitForm {
     concurrency_limit: String,
 }
 async fn concurrency(
     State(panel): State<Panel>,
     Extension(language): Extension<Language>,
-    Form(form): Form<Limit>,
+    Form(form): Form<ConcurrencyLimitForm>,
 ) -> Response {
     let limit = match form
         .concurrency_limit
@@ -457,11 +457,12 @@ async fn runtime_action(
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
     drop(lease.release());
     match panel.conductor.builds(action, hold).await {
-        Ok(notice) => panel.page(language, StatusCode::OK, &language.line(&notice)),
+        Ok(Some(notice)) => panel.page(language, StatusCode::OK, &language.owner_message(&notice)),
+        Ok(None) => Html(panel.html(language, None)).into_response(),
         Err(error) => panel.page(
             language,
             StatusCode::UNPROCESSABLE_ENTITY,
-            &language.line(&error.to_string()),
+            &language.launch_failure(&error),
         ),
     }
 }
@@ -608,7 +609,7 @@ mod tests {
         let empty = Password {
             password: String::new(),
         };
-        let zero = Limit {
+        let zero = ConcurrencyLimitForm {
             concurrency_limit: "0".into(),
         };
         let answers = [
@@ -626,7 +627,7 @@ mod tests {
             let status = answer.status().as_u16();
             let body = axum::body::to_bytes(answer.into_body(), 1 << 16).await;
             let body = String::from_utf8(body.unwrap().to_vec()).unwrap();
-            pages.push((status, body.contains("<h1>Management panel</h1>")));
+            pages.push((status, body.contains("id=\"local-api-key\"")));
         }
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(pages, [(500, true), (422, true), (422, true)]);
