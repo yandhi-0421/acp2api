@@ -30,6 +30,10 @@ mod lockout;
 mod lockout_support;
 #[path = "steps/panel.rs"]
 mod panel;
+#[path = "support/panel_document.rs"]
+mod panel_document;
+#[path = "steps/panel_language_visual.rs"]
+mod panel_language_visual;
 #[path = "steps/panel_tiles.rs"]
 mod panel_tiles;
 #[path = "support/panel_tiles.rs"]
@@ -126,6 +130,8 @@ struct World {
     server_tools: server_tools::ServerToolState,
     scenario: Scenario,
     panel: acp2api_acceptance::panel_check::Panel,
+    panel_dark: bool,
+    panel_rendered: Option<acp2api_acceptance::panel_visual::Audit>,
     models: model_names::ModelState,
     logs: logs::LogState,
     copy_failure: Option<copy_failure_support::DeniedCopy>,
