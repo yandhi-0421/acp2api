@@ -37,6 +37,7 @@ pub(crate) struct View {
     pub(crate) places: usize,
     pub(crate) queued: usize,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
+    pub(crate) lockout_evidence: Option<String>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -46,6 +47,7 @@ impl Default for View {
             places: 0,
             queued: 0,
             sign_in_wait: None,
+            lockout_evidence: None,
         }
     }
 }
@@ -730,6 +732,14 @@ impl Core {
             let _ = reply.send(Err(LaunchFailure::Stopped));
             return None;
         }
+        if !initial && self.lockout.is_some() {
+            let _ = reply.send(Err(self
+                .refusal(clock.now())
+                .expect("lockout just started")
+                .to_string()
+                .into()));
+            return None;
+        }
         let configured = publish.borrow().agy_acp_server_path.clone();
         let result = builds
             .discover(configured)
@@ -769,14 +779,63 @@ impl Core {
         builds: &crate::runtime_builds::Builds,
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) {
-        let result = builds.finish_check(&check.identity, check.result);
+        let result = match builds.finish_check(&check.identity, check.result) {
+            Err(LaunchFailure::Lockout { signal, error }) => {
+                self.apply_lockout(
+                    signal,
+                    error,
+                    runtime,
+                    read_open,
+                    &builds.start.clock,
+                    journal,
+                )
+                .await;
+                let _ = check.reply.send(Err(self
+                    .refusal(builds.start.clock.now())
+                    .expect("lockout just started")
+                    .to_string()
+                    .into()));
+                return;
+            }
+            result => result,
+        };
         self.launch(runtime, read_open, &builds.start.clock, journal, builds)
             .await;
+        if self.lockout.is_some() {
+            let _ = check.reply.send(Err(self
+                .refusal(builds.start.clock.now())
+                .expect("lockout just started")
+                .to_string()
+                .into()));
+            return;
+        }
         let configured = publish.borrow().agy_acp_server_path.clone();
         let discovered = builds.discover(configured).await;
         let _ = check
             .reply
             .send(discovered.map_err(LaunchFailure::Runtime).and(result));
+    }
+    async fn apply_lockout(
+        &mut self,
+        signal: &'static str,
+        error: crate::messages::Message,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+    ) {
+        self.apply(
+            Event::Lockout {
+                signal,
+                error,
+                signalling_work: None,
+            },
+            runtime,
+            read_open,
+            clock,
+            journal,
+        )
+        .await;
     }
     async fn launch(
         &mut self,
@@ -817,6 +876,11 @@ impl Core {
                 Err(LaunchFailure::Runtime(_) | LaunchFailure::Io(_)) => {
                     self.apply(Event::RuntimeFailure, runtime, read_open, clock, journal)
                         .await;
+                }
+                Err(LaunchFailure::Lockout { signal, error }) => {
+                    self.apply_lockout(signal, error, runtime, read_open, clock, journal)
+                        .await;
+                    return;
                 }
                 Err(LaunchFailure::Stopped) => {
                     self.apply(Event::Stop, runtime, read_open, clock, journal)
@@ -1796,6 +1860,10 @@ impl Core {
     fn publish_view(&self) {
         self.view.send_replace(Arc::new(View {
             sign_in_wait: self.sign_in_wait.clone(),
+            lockout_evidence: self
+                .lockout
+                .as_ref()
+                .map(|evidence| evidence.original_error_text.clone()),
             state: self.state(),
             runtime_process: self.runtime_state.process_word(),
             places: self
@@ -3227,6 +3295,8 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    use crate::{BoxFuture, ProcessTree};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     impl Core {
         fn fixture(limit: u8) -> Self {
             Self {
@@ -3259,6 +3329,33 @@ mod tests {
         }
     }
 
+    struct StoppedTree(Arc<AtomicUsize>);
+    impl ProcessTree for StoppedTree {
+        fn pid(&self) -> u32 {
+            std::process::id()
+        }
+        fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+            Box::pin(std::future::pending())
+        }
+        fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    }
+    struct Output(std::io::Cursor<Vec<u8>>);
+    impl tokio::io::AsyncRead for Output {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.0.position() < self.0.get_ref().len() as u64 {
+                std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+            } else {
+                std::task::Poll::Pending
+            }
+        }
+    }
     #[test]
     fn the_panel_process_word_changes_when_retirement_starts() {
         let mut core = Core::fixture(2);
@@ -3287,6 +3384,157 @@ mod tests {
             status: "RESOURCE_EXHAUSTED".into(),
             message: "Quota exhausted; no reset time.".into(),
         }
+    }
+
+    async fn assert_start_lockout(stdout: &str, stderr: &str, original: &str) {
+        use crate::{LaunchError, LaunchSpec, Launched, ProcessLauncher, ReleaseFacts};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Launcher {
+            stdout: Vec<u8>,
+            stderr: Vec<u8>,
+            starts: AtomicUsize,
+            stops: Arc<AtomicUsize>,
+        }
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: LaunchSpec) -> Result<Launched, LaunchError> {
+                assert!(
+                    self.starts.fetch_add(1, Ordering::SeqCst) < 3,
+                    "three starts cap"
+                );
+                Ok(Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(std::io::Cursor::new(self.stdout.clone())),
+                    stderr: Box::pin(std::io::Cursor::new(self.stderr.clone())),
+                    tree: Box::new(StoppedTree(self.stops.clone())),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            use sha2::{Digest, Sha256};
+            assert!(stdout.len() + stderr.len() <= 4096, "four KiB output cap");
+            assert!(stdout.lines().count() <= 2, "two ACP answers per start cap");
+            let folder = std::env::temp_dir().join(format!("acp2api-start-lockout-{}", crate::random_hex::<12>().unwrap()));
+            let clock = crate::Ports::production().clock;
+            let mut builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            let launcher = Arc::new(Launcher { stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), starts: AtomicUsize::new(0), stops: Arc::new(AtomicUsize::new(0)) });
+            builds.start.launcher = launcher.clone();
+            let copy = folder.join("official-runtime");
+            std::fs::create_dir_all(&copy).unwrap();
+            for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] {
+                std::fs::write(copy.join(name), b"accepted").unwrap();
+            }
+            let hash = crate::hex(&Sha256::digest(b"accepted"));
+            builds.start.release = Arc::new(Facts(vec![crate::ListedBuild { version: "1.4.0".into(), platform: Facts(Vec::new()).platform().into(), agy_acp_server_sha256: hash.clone(), localharness_external_sha256: hash }]));
+            let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let mut core = Core { state_path: folder.join(crate::store::STATE_FILE), runtime_state: RuntimeState::Restarting, ..Core::fixture(1) };
+            let mut runtime = None;
+            core.launch(&mut runtime, &mut false, &clock, &journal, &builds).await;
+            let evidence = crate::store::StateFile::read(&core.state_path).unwrap().lockout;
+            let actual = (core.state(), launcher.starts.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst), evidence.map(|e| (e.signal, e.original_error_text)));
+            if let Some(runtime) = runtime { runtime.stop().await; }
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(actual, ("Lockout", 1, 1, Some(("403".into(), original.into()))), "FR-034/FR-035: startup lockout stops and persists without a replacement");
+        }).await.expect("startup lockout cap: five seconds, three starts, two ACP answers and four KiB per start");
+    }
+
+    #[tokio::test]
+    async fn an_initialize_lockout_stops_without_replacement_and_persists_evidence() {
+        assert_start_lockout(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":403,\"message\":\"Account name%40example.com suspended; appeal https://example.com/appeal\"}}\n",
+            "",
+            "acp2api: upstream ACP error 403: Account <REDACTED> suspended; appeal https://example.com/appeal",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn a_session_new_lockout_stops_without_replacement_and_persists_evidence() {
+        assert_start_lockout(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"agentInfo\":{\"version\":\"1.4.0\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Authentication required: 403 Terms of Service\"}}\n",
+            ),
+            "",
+            "acp2api: upstream ACP error -32000: Authentication required: 403 Terms of Service",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn stderr_during_initialize_starts_lockout_without_replacement() {
+        assert_start_lockout(
+            "",
+            concat!(
+                "Antigravity SDK error processing prompt for session startup\n",
+                "Error 403, Message: Account name%40example.com suspended, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "acp2api: upstream error 403 PERMISSION_DENIED: Account <REDACTED> suspended",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn stderr_during_session_new_starts_lockout_without_replacement() {
+        assert_start_lockout(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"agentInfo\":{\"version\":\"1.4.0\"}}}\n",
+            concat!(
+                "Antigravity SDK error processing prompt for session startup\n",
+                "Error 403, Message: Verify your account, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "acp2api: upstream error 403 PERMISSION_DENIED: Verify your account",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_buffered_stderr_lockout_wins_over_a_startup_acp_failure() {
+        assert_start_lockout(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"agentInfo\":{\"version\":\"1.4.0\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}\n",
+            ),
+            concat!(
+                "Antigravity SDK error processing prompt for session startup\n",
+                "Error 403, Message: Verify your account, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "acp2api: upstream error 403 PERMISSION_DENIED: Verify your account",
+        ).await;
+    }
+
+    fn assert_state_file_diagnostic(folder: &std::path::Path, expected: &str) {
+        let path = folder.join(crate::store::STATE_FILE);
+        let clock = crate::Ports::production().clock;
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+        let evidence = lockout::load(&path, clock.as_ref(), &journal).unwrap();
+        let core = Core {
+            lockout: Some(evidence.clone()),
+            ..Core::fixture(1)
+        };
+        let response = core.refusal(0).unwrap().to_string();
+        let actual = (
+            evidence.signal,
+            evidence.original_error_text,
+            response.contains(expected),
+            response.contains(&*path.to_string_lossy()),
+        );
+        assert_eq!(
+            actual,
+            (expected.into(), expected.into(), true, false),
+            "#161: state-file evidence and the first refusal give the case and OS category without an owner path"
+        );
+    }
+
+    #[test]
+    fn a_damaged_state_file_lockout_names_the_case_and_category_without_a_path() {
+        let (folder, expected) =
+            crate::store::fixtures::state_file(crate::store::fixtures::StateFileFault::Damaged);
+        assert_state_file_diagnostic(&folder, &expected);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_state_file_lockout_names_the_case_and_category_without_a_path() {
+        let (folder, expected) =
+            crate::store::fixtures::state_file(crate::store::fixtures::StateFileFault::Unreadable);
+        assert_state_file_diagnostic(&folder, &expected);
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     fn prepare_quota_queries(core: &mut Core, commands: &[Command], now: Moment) -> Vec<Command> {
@@ -5403,8 +5651,333 @@ mod tests {
         std::fs::remove_dir_all(folder).unwrap();
     }
 
+    async fn check_fixture(
+        mut ports: crate::Ports,
+        stop: watch::Receiver<bool>,
+    ) -> (PathBuf, Conductor, tokio::task::JoinHandle<()>) {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-check-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let source = root.join("exe");
+        for (folder, bytes) in [
+            (&source, b"candidate".as_slice()),
+            (&root.join("official-runtime"), b"accepted".as_slice()),
+        ] {
+            std::fs::create_dir_all(folder).unwrap();
+            for name in [
+                crate::runtime_builds::SERVER,
+                crate::runtime_builds::HARNESS,
+            ] {
+                std::fs::write(folder.join(name), bytes).unwrap();
+            }
+        }
+        let hash = crate::hex(&Sha256::digest(b"accepted"));
+        ports.release = Arc::new(Facts(vec![crate::ListedBuild {
+            version: "1.4.0".into(),
+            platform: ports.release.platform().into(),
+            agy_acp_server_sha256: hash.clone(),
+            localharness_external_sha256: hash,
+        }]));
+        let builds = crate::runtime_builds::Builds::new(
+            &ports,
+            crate::Environment {
+                account_root: root.join("account"),
+                temp: root.join("temp"),
+                home: Some(root.join("home")),
+                local_app_data: None,
+                path: Vec::new(),
+                exe_dir: source,
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            stop,
+            0,
+        );
+        let configuration = root.join("config.toml");
+        let settings = crate::store::read(&configuration, 1).unwrap().settings;
+        let journal =
+            crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+        let (conductor, task) =
+            Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
+        conductor
+            .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+            .await
+            .unwrap();
+        (root, conductor, task)
+    }
+
+    async fn assert_compatibility_lockout(
+        check_answers: Vec<serde_json::Value>,
+        stderr: &str,
+        signal: &str,
+        original: &str,
+    ) {
+        use crate::{Launched, ProcessLauncher};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Launcher {
+            check_answers: Vec<serde_json::Value>,
+            stderr: Vec<u8>,
+            starts: AtomicUsize,
+            checks: AtomicUsize,
+            check_stops: Arc<AtomicUsize>,
+        }
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, spec: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                let check = spec
+                    .program
+                    .parent()
+                    .unwrap()
+                    .ends_with("official-runtime-check");
+                let answers = if check {
+                    assert_eq!(
+                        self.checks.fetch_add(1, Ordering::SeqCst),
+                        0,
+                        "one check start cap"
+                    );
+                    self.check_answers.clone()
+                } else {
+                    assert!(
+                        self.starts.fetch_add(1, Ordering::SeqCst) < 2,
+                        "one initial start and one erroneous restoration cap"
+                    );
+                    vec![
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"version":"1.4.0"}}}),
+                        serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"serving","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                    ]
+                };
+                assert!(answers.len() <= 4, "four ACP messages per process cap");
+                let stdout = answers
+                    .iter()
+                    .map(|answer| format!("{answer}\n"))
+                    .collect::<String>();
+                let stderr = if check {
+                    self.stderr.clone()
+                } else {
+                    Vec::new()
+                };
+                assert!(stdout.len() + stderr.len() <= 4096, "four KiB output cap");
+                Ok(Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(Output(std::io::Cursor::new(stdout.into_bytes()))),
+                    stderr: Box::pin(std::io::Cursor::new(stderr)),
+                    tree: Box::new(StoppedTree(if check {
+                        self.check_stops.clone()
+                    } else {
+                        Arc::new(AtomicUsize::new(0))
+                    })),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let launcher = Arc::new(Launcher { check_answers, stderr: stderr.as_bytes().to_vec(), starts: AtomicUsize::new(0), checks: AtomicUsize::new(0), check_stops: Arc::new(AtomicUsize::new(0)) });
+            let mut ports = crate::Ports::production();
+            ports.launcher = launcher.clone();
+            let (stopped, stop) = watch::channel(false);
+            let (root, conductor, task) = check_fixture(ports, stop).await;
+            let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
+            let check_result = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
+            let owner_lockout = matches!(check_result, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check failed") && !text.contains("Original error:"));
+            let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|evidence| (evidence.signal, evidence.original_error_text));
+            let refused = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string().starts_with("acp2api: lockout since "));
+            let check_removed = !root.join(crate::runtime_builds::CHECK).exists();
+            let actual = (conductor.view().state, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.check_stops.load(Ordering::SeqCst), evidence, refused, owner_lockout, check_removed);
+            stopped.send(true).unwrap();
+            task.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true, true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12, and removes the check folder");
+        }).await.expect("compatibility lockout cap: five seconds, three processes, four ACP messages and four KiB output per process");
+    }
+
+    #[tokio::test]
+    async fn a_lockout_while_restoring_after_a_check_returns_only_m12() {
+        struct Launcher {
+            starts: AtomicUsize,
+            checks: AtomicUsize,
+            stops: Arc<AtomicUsize>,
+        }
+        impl crate::ProcessLauncher for Launcher {
+            fn launch(
+                &self,
+                spec: crate::LaunchSpec,
+            ) -> Result<crate::Launched, crate::LaunchError> {
+                let stdout: crate::ProcessRead = if spec
+                    .program
+                    .parent()
+                    .unwrap()
+                    .ends_with(crate::runtime_builds::CHECK)
+                {
+                    assert_eq!(
+                        self.checks.fetch_add(1, Ordering::SeqCst),
+                        0,
+                        "one check start cap"
+                    );
+                    Box::pin(tokio::io::empty())
+                } else {
+                    let start = self.starts.fetch_add(1, Ordering::SeqCst);
+                    assert!(start < 2, "one initial start and one restoration cap");
+                    let answers = if start == 0 {
+                        vec![
+                            serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"version":"1.4.0"}}}),
+                            serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"serving","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                        ]
+                    } else {
+                        vec![
+                            serde_json::json!({"jsonrpc":"2.0","id":1,"error":{"code":403,"message":"Verify your account"}}),
+                        ]
+                    };
+                    let output = answers
+                        .iter()
+                        .map(|answer| format!("{answer}\n"))
+                        .collect::<String>();
+                    assert!(output.len() <= 1024, "one KiB output cap");
+                    Box::pin(Output(std::io::Cursor::new(output.into_bytes())))
+                };
+                Ok(crate::Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout,
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(StoppedTree(self.stops.clone())),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let launcher = Arc::new(Launcher { starts: AtomicUsize::new(0), checks: AtomicUsize::new(0), stops: Arc::new(AtomicUsize::new(0)) });
+            let mut ports = crate::Ports::production();
+            ports.launcher = launcher.clone();
+            let (stop, stopped) = watch::channel(false);
+            let (root, conductor, task) = check_fixture(ports, stopped).await;
+            let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
+            let owner = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
+            let owner_lockout = matches!(owner, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check") && !text.contains("Original error:"));
+            let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|lockout| lockout.signal);
+            let actual = (conductor.view().state, owner_lockout, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst), evidence);
+            stop.send(true).unwrap();
+            task.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, ("Lockout", true, 2, 1, 3, Some("403".into())), "FR-035: lockout during restoration replaces the check notice with only M-12 for its waiting owner");
+        }).await.expect("check restoration lockout cap: five seconds, three processes, at most two ACP replies and one KiB output per process");
+    }
+
+    #[tokio::test]
+    async fn a_lockout_during_an_owner_build_restart_returns_only_m12() {
+        struct Launcher {
+            starts: AtomicUsize,
+            stops: Arc<AtomicUsize>,
+        }
+        impl crate::ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                let start = self.starts.fetch_add(1, Ordering::SeqCst);
+                assert!(start < 2, "one initial start and one owner restart cap");
+                let answers = if start == 0 {
+                    vec![
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"version":"1.4.0"}}}),
+                        serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"serving","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                    ]
+                } else {
+                    vec![
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"error":{"code":403,"message":"Verify your account"}}),
+                    ]
+                };
+                let stdout = answers
+                    .iter()
+                    .map(|answer| format!("{answer}\n"))
+                    .collect::<String>();
+                assert!(stdout.len() <= 1024, "one KiB output cap");
+                Ok(crate::Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(Output(std::io::Cursor::new(stdout.into_bytes()))),
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(StoppedTree(self.stops.clone())),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let launcher = Arc::new(Launcher { starts: AtomicUsize::new(0), stops: Arc::new(AtomicUsize::new(0)) });
+            let mut ports = crate::Ports::production();
+            ports.launcher = launcher.clone();
+            let (stop, stopped) = watch::channel(false);
+            let (root, conductor, task) = check_fixture(ports, stopped).await;
+            let choice = conductor.builds_summary().unwrap().choices[0].0.clone();
+            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice), Hold::empty()).await;
+            let owner_lockout = matches!(owner, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("Original error:"));
+            let actual = (conductor.view().state, owner_lockout, launcher.starts.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst));
+            stop.send(true).unwrap();
+            task.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, ("Lockout", true, 2, 2), "FR-035/#70: lockout while restarting an owner-selected build must end that owner request with only M-12");
+        }).await.expect("owner restart lockout cap: five seconds, two starts, at most two ACP answers and one KiB output per start");
+    }
+
+    #[tokio::test]
+    async fn a_compatibility_prompt_acp_lockout_prevents_restoration() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"PERMISSION_DENIED: Account name%40example.com; Bearer abcdefghijklmnopqrstuvwxyz012345; appeal https://example.com/appeal"}}),
+            ],
+            "",
+            "PERMISSION_DENIED",
+            "acp2api: upstream ACP error -32603: PERMISSION_DENIED: Account <REDACTED>; Bearer <REDACTED>; appeal https://example.com/appeal",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn a_compatibility_prompt_stderr_lockout_prevents_restoration() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+            ],
+            concat!(
+                "Antigravity SDK error processing prompt for session checked\n",
+                "Error 403, Message: Account name%40example.com; Bearer abcdefghijklmnopqrstuvwxyz012345; appeal https://example.com/appeal, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "403",
+            "acp2api: upstream error 403 PERMISSION_DENIED: Account <REDACTED>; Bearer <REDACTED>; appeal https://example.com/appeal",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn a_prompt_end_before_stderr_lockout_prevents_check_restoration() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}),
+            ],
+            concat!(
+                "Antigravity SDK error processing prompt for session checked\n",
+                "Error 403, Message: Account name%40example.com; Bearer abcdefghijklmnopqrstuvwxyz012345; appeal https://example.com/appeal, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "403",
+            "acp2api: upstream error 403 PERMISSION_DENIED: Account <REDACTED>; Bearer <REDACTED>; appeal https://example.com/appeal",
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_reply_signals_lockout_without_persisting_private_text() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"checked","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"PRIVATE-REPLY Terms of Service"}}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}),
+            ],
+            concat!(
+                "Antigravity SDK error processing prompt for session checked\n",
+                "Error 503, Message: Service unavailable, Status: UNAVAILABLE, Details: []\n",
+            ),
+            "Terms of Service",
+            "acp2api: upstream error 503 UNAVAILABLE: Service unavailable",
+        ).await;
+    }
+
     async fn failed_checks(timeout: bool, restart_fails: bool) {
-        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree, ReleaseFacts};
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         struct Tree;
         impl ProcessTree for Tree {
@@ -5435,20 +6008,6 @@ mod tests {
             }
             fn hold(&self, _: HoldKind) -> Hold {
                 Hold::empty()
-            }
-        }
-        struct Output(std::io::Cursor<Vec<u8>>);
-        impl tokio::io::AsyncRead for Output {
-            fn poll_read(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                buf: &mut tokio::io::ReadBuf<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                if self.0.position() < self.0.get_ref().len() as u64 {
-                    std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
-                } else {
-                    std::task::Poll::Pending
-                }
             }
         }
         struct Launcher {
@@ -5504,45 +6063,13 @@ mod tests {
                 })
             }
         }
-        struct Facts(crate::ListedBuild);
-        impl ReleaseFacts for Facts {
-            fn version(&self) -> &str {
-                "test"
-            }
-            fn platform(&self) -> &str {
-                &self.0.platform
-            }
-            fn listed_builds(&self) -> &[crate::ListedBuild] {
-                std::slice::from_ref(&self.0)
-            }
-            fn highest_concurrency_limit(&self) -> u8 {
-                1
-            }
-        }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            use sha2::{Digest, Sha256};
-            let root = std::env::temp_dir().join(format!("acp2api-check-failures-{}", crate::random_hex::<12>().unwrap()));
-            let source = root.join("exe");
-            let accepted = root.join("official-runtime");
-            for (folder, bytes) in [(&source, b"candidate".as_slice()), (&accepted, b"accepted".as_slice())] {
-                std::fs::create_dir_all(folder).unwrap();
-                for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(folder.join(name), bytes).unwrap(); }
-            }
             let checking = Arc::new(AtomicBool::new(false));
             let launcher = Arc::new(Launcher { checks:AtomicUsize::new(0),starts:AtomicUsize::new(0),checking:checking.clone(),timeout,restart_fails });
             let mut ports = crate::Ports::production();
             ports.clock = Arc::new(CheckClock(checking, ports.clock));
-            let hash = crate::hex(&Sha256::digest(b"accepted"));
-            ports.release = Arc::new(Facts(crate::ListedBuild { version:"1.4.0".into(),platform:ports.release.platform().into(),agy_acp_server_sha256:hash.clone(),localharness_external_sha256:hash }));
             ports.launcher = launcher.clone();
-            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment {
-                account_root:root.join("account"), temp:root.join("temp"), home:Some(root.join("home")), local_app_data:None, path:vec![], exe_dir:source
-            }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
-            let configuration = root.join("config.toml");
-            let settings = crate::store::read(&configuration, 1).unwrap().settings;
-            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
-            let (conductor, task) = Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
-            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            let (root, conductor, task) = check_fixture(ports, watch::channel(false).1).await;
             assert_eq!(serde_json::to_value(conductor.model_names(Hold::empty()).await.ok().unwrap()).unwrap()[0]["id"], "m");
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
             for _ in 0..if restart_fails { 1 } else { 3 } {

@@ -689,11 +689,316 @@ async fn a_sign_in_address_accepts_four_kib_and_rejects_a_longer_line() {
     let address = format!("{prefix}{}", "a".repeat(4096 - prefix.len()));
     let line = format!("Open the following link to authenticate the ACP server: {address}");
     assert!(
-        matches!(runtime.stderr(&format!("{line}b")), RuntimeEvent::Stderr),
+        matches!(
+            Runtime::stderr(&mut runtime.stderr_session, &format!("{line}b")),
+            RuntimeEvent::Stderr
+        ),
         "the product rejects a sign-in address over 4 KiB"
     );
     assert!(
-        matches!(runtime.stderr(&line), RuntimeEvent::SignInAddress(value) if value == address),
+        matches!(Runtime::stderr(&mut runtime.stderr_session, &line), RuntimeEvent::SignInAddress(value) if value == address),
         "the product accepts a sign-in address of exactly 4 KiB"
     );
+}
+
+#[tokio::test]
+async fn a_stderr_lockout_after_the_acp_call_fails_wins_over_start_failure() {
+    struct LateStderr(tokio::io::DuplexStream);
+    impl ProcessTree for LateStderr {
+        fn pid(&self) -> u32 {
+            std::process::id()
+        }
+        fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
+            Box::pin(std::future::pending())
+        }
+        fn stop(mut self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+            Box::pin(async move {
+                self.0.write_all(concat!(
+                    "Antigravity SDK error processing prompt for session startup\n",
+                    "Error 403, Message: Verify your account, Status: PERMISSION_DENIED, Details: []\n",
+                ).as_bytes()).await.unwrap();
+            })
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let root = Root(Environment::from_process().temp.join(format!("acp2api-late-stderr-{}", crate::random_hex::<8>().unwrap())));
+        let (stderr, writer) = tokio::io::duplex(4096);
+        let mut ports = Ports::production();
+        ports.launcher = Arc::new(OneChild(Mutex::new(Some(Launched {
+            stdin: Box::pin(tokio::io::sink()),
+            stdout: Box::pin(std::io::Cursor::new(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}\n")),
+            stderr: Box::pin(stderr),
+            tree: Box::new(LateStderr(writer)),
+        }))));
+        let start = RuntimeStart {
+            stopped: tokio::sync::watch::channel(false).1,
+            clock: ports.clock, launcher: ports.launcher, release: ports.release,
+            data: root.0.clone(), temporary: crate::account::Temporary::fixture(&root.0), tool_sets: mcp::ToolSets::new(0),
+        };
+        let result = Runtime::start(&start, "1.4.0").await;
+        assert!(matches!(result, Err(LaunchFailure::Lockout { signal: "403", ref error }) if error.to_string() == "acp2api: upstream error 403 PERMISSION_DENIED: Verify your account"), "FR-034: stderr emitted only when the failed process stops must override the ACP failure");
+    }).await.expect("late startup stderr cap: five seconds, one process, one ACP error, two stderr lines under four KiB");
+}
+
+#[tokio::test]
+async fn buffered_shutdown_lockout_evidence_overrides_stopped() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct QueueClock(Arc<dyn Clock>, Arc<tokio::sync::Notify>, AtomicUsize);
+    impl Clock for QueueClock {
+        fn now(&self) -> Moment {
+            self.0.now()
+        }
+        fn wall(&self) -> SystemTime {
+            self.0.wall()
+        }
+        fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
+            self.0.sleep_until(at)
+        }
+        fn hold(&self, kind: HoldKind) -> Hold {
+            if matches!(kind, HoldKind::RuntimeLine) && self.2.fetch_add(1, Ordering::SeqCst) == 1 {
+                self.1.notify_one();
+            }
+            self.0.hold(kind)
+        }
+    }
+    struct QueuedStderr(Arc<tokio::sync::Notify>);
+    impl ProcessTree for QueuedStderr {
+        fn pid(&self) -> u32 {
+            std::process::id()
+        }
+        fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
+            Box::pin(std::future::pending())
+        }
+        fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+            Box::pin(async move { self.0.notified().await })
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let root = Root(Environment::from_process().temp.join(format!("acp2api-stopped-lockout-{}", crate::random_hex::<8>().unwrap())));
+        let queued = Arc::new(tokio::sync::Notify::new());
+        let mut ports = Ports::production();
+        ports.clock = Arc::new(QueueClock(ports.clock, queued.clone(), AtomicUsize::new(0)));
+        ports.launcher = Arc::new(OneChild(Mutex::new(Some(Launched {
+            stdin: Box::pin(tokio::io::sink()), stdout: Box::pin(tokio::io::empty()),
+            stderr: Box::pin(std::io::Cursor::new(concat!(
+                "Antigravity SDK error processing prompt for session startup\n",
+                "Error 403, Message: Verify your account, Status: PERMISSION_DENIED, Details: []\n",
+            ).as_bytes())),
+            tree: Box::new(QueuedStderr(queued)),
+        }))));
+        let start = RuntimeStart {
+            stopped: tokio::sync::watch::channel(true).1,
+            clock: ports.clock, launcher: ports.launcher, release: ports.release,
+            data: root.0.clone(), temporary: crate::account::Temporary::fixture(&root.0), tool_sets: mcp::ToolSets::new(0),
+        };
+        assert!(matches!(Runtime::start(&start, "1.4.0").await, Err(LaunchFailure::Lockout { signal: "403", .. })), "FR-034: buffered lockout evidence must still override Stopped during shutdown");
+    }).await.expect("shutdown lockout cap: five seconds, one process, no ACP requests, two stderr lines under one KiB");
+}
+
+#[cfg(unix)]
+mod escaped_stderr {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::sync::{mpsc, watch};
+
+    struct DrainClock {
+        time: watch::Sender<Moment>,
+        waits: mpsc::UnboundedSender<Moment>,
+    }
+    impl Clock for DrainClock {
+        fn now(&self) -> Moment {
+            *self.time.borrow()
+        }
+        fn wall(&self) -> SystemTime {
+            SystemTime::UNIX_EPOCH + Duration::from_millis(self.now())
+        }
+        fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
+            let mut time = self.time.subscribe();
+            let waits = self.waits.clone();
+            Box::pin(async move {
+                waits.send(at).unwrap();
+                time.wait_for(|now| *now >= at).await.unwrap();
+                Hold::empty()
+            })
+        }
+        fn hold(&self, _: HoldKind) -> Hold {
+            Hold::empty()
+        }
+    }
+
+    struct Fixture {
+        root: Root,
+        start: RuntimeStart,
+        clock: Arc<DrainClock>,
+        waits: mpsc::UnboundedReceiver<Moment>,
+        stop: watch::Sender<bool>,
+        helper_pid: PathBuf,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let Ok(pid) = std::fs::read_to_string(&self.helper_pid)
+                && let Ok(pid) = pid.trim().parse::<i32>()
+            {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+        }
+    }
+    fn fixture() -> Fixture {
+        let root = Root(Environment::from_process().temp.join(format!(
+            "acp2api-escaped-stderr-{}",
+            crate::random_hex::<8>().unwrap()
+        )));
+        let program = program(&root.0);
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        let fifo = std::ffi::CString::new(format!("{}.pipe", program.display())).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        std::fs::write(&program, r#"#!/bin/sh
+IFS= read -r request || exit 1
+[ "${#request}" -le 1024 ] || exit 1
+/usr/bin/perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid"; close(STDIN); close(STDOUT); open(my $pid, ">", $ARGV[1]) or die "pid"; print {$pid} "$$\n"; close($pid); open(my $ready, ">", $ARGV[0]) or die "fifo"; print {$ready} "ready\n"; close($ready); POSIX::pause();' "$0.pipe" "$0.pid" &
+IFS= read -r ready < "$0.pipe" || exit 1
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}'
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let helper_pid = PathBuf::from(format!("{}.pid", program.display()));
+        let (time, _) = watch::channel(0);
+        let (waits, received) = mpsc::unbounded_channel();
+        let clock = Arc::new(DrainClock { time, waits });
+        let (stop, stopped) = watch::channel(false);
+        let ports = Ports::production();
+        let start = RuntimeStart {
+            stopped,
+            clock: clock.clone(),
+            launcher: ports.launcher,
+            release: ports.release,
+            data: root.0.clone(),
+            temporary: crate::account::Temporary::fixture(&root.0),
+            tool_sets: mcp::ToolSets::new(0),
+        };
+        Fixture {
+            root,
+            start,
+            clock,
+            waits: received,
+            stop,
+            helper_pid,
+        }
+    }
+    async fn end_drain(waits: &mut mpsc::UnboundedReceiver<Moment>, end: impl FnOnce(Moment)) {
+        let mut answers = 0;
+        for _ in 0..4 {
+            let at = waits.recv().await.unwrap();
+            if at == ANSWER_TIMEOUT {
+                answers += 1;
+                if answers == 2 {
+                    end(at);
+                    return;
+                }
+            }
+        }
+        panic!("one answer wait, one process-stop grace, and one drain wait cap");
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_drain_ends_at_the_answer_deadline_with_escaped_stderr_open() {
+        let mut fixture = fixture();
+        let clock = fixture.clock.clone();
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                Runtime::start(&fixture.start, "1.4.0"),
+                end_drain(&mut fixture.waits, |at| {
+                    clock.time.send_replace(at);
+                }),
+            )
+            .0
+        })
+        .await;
+        let pid: i32 = std::fs::read_to_string(&fixture.helper_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::getsid(pid) },
+            pid,
+            "the live helper escaped the stopped process group and still holds stderr"
+        );
+        assert!(
+            matches!(completed, Ok(Err(LaunchFailure::Runtime(ref error))) if error == "acp2api: upstream ACP error -32603: Internal error"),
+            "the failed-start drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
+        );
+        assert_eq!(fixture.clock.now(), ANSWER_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn a_check_drain_ends_at_the_answer_deadline_with_escaped_stderr_open() {
+        let mut fixture = fixture();
+        let clock = fixture.clock.clone();
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                crate::compatibility_check::run(
+                    &fixture.start,
+                    program(&fixture.root.0),
+                    Some(fixture.root.0.join("gemini"))
+                ),
+                end_drain(&mut fixture.waits, |at| {
+                    clock.time.send_replace(at);
+                }),
+            )
+            .0
+        })
+        .await;
+        let pid: i32 = std::fs::read_to_string(&fixture.helper_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::getsid(pid) },
+            pid,
+            "the live helper escaped the stopped check process group and still holds stderr"
+        );
+        assert!(
+            matches!(completed, Ok(Err(crate::compatibility_check::Failure::Runtime(LaunchFailure::Runtime(ref error)))) if error == "acp2api: upstream ACP error -32603: Internal error"),
+            "the check drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
+        );
+        assert_eq!(fixture.clock.now(), ANSWER_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_drain_ends_on_stop_with_escaped_stderr_open() {
+        let mut fixture = fixture();
+        let stop = fixture.stop.clone();
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                Runtime::start(&fixture.start, "1.4.0"),
+                end_drain(&mut fixture.waits, |_| {
+                    stop.send_replace(true);
+                }),
+            )
+            .0
+        })
+        .await;
+        let pid: i32 = std::fs::read_to_string(&fixture.helper_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::getsid(pid) },
+            pid,
+            "the escaped helper still holds stderr when the owner stops acp2api"
+        );
+        assert!(
+            matches!(completed, Ok(Err(LaunchFailure::Runtime(ref error))) if error == "acp2api: upstream ACP error -32603: Internal error"),
+            "a terminal stop must end the drain while the escaped helper keeps stderr open"
+        );
+        assert_eq!(
+            fixture.clock.now(),
+            0,
+            "stop must end the drain without advancing to the answer deadline"
+        );
+    }
 }

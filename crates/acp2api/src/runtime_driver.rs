@@ -11,6 +11,7 @@ use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
+use futures_util::{Stream, StreamExt, stream};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -53,6 +54,31 @@ impl RuntimeStart {
         answer: impl std::future::Future<Output = Result<T, E>>,
     ) -> Result<T, E> {
         self.before_deadline(wait, self.until_stopped(answer)).await
+    }
+    /// Stop the process and read stderr to EOF, bounded by the answer timeout or stop.
+    /// Stdout can end before stderr carries lockout evidence; evidence already read is retained.
+    pub(crate) async fn stop_and_drain_stderr(
+        &self,
+        runtime: Runtime,
+        mut classify: impl FnMut(RuntimeEvent),
+    ) {
+        let stderr = runtime.stop_stderr().await;
+        tokio::pin!(stderr);
+        let _ = self
+            .before_deadline(ANSWER_TIMEOUT, async {
+                tokio::select! {
+                    // Preserve buffered lockout evidence when stop is already set.
+                    biased;
+                    result = async {
+                        while let Some(event) = stderr.next().await {
+                            classify(event);
+                        }
+                        Ok::<_, LaunchFailure>(())
+                    } => result,
+                    result = self.until_stopped(std::future::pending::<Result<(), LaunchFailure>>()) => result,
+                }
+            })
+            .await;
     }
     async fn until_stopped<T, E: From<LaunchFailure>>(
         &self,
@@ -135,6 +161,7 @@ pub(crate) struct Runtime {
     config: std::collections::HashMap<(String, String), String>,
     configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
     stderr_session: Option<String>,
+    stderr_closed: bool,
     authentication: Option<u64>,
 }
 struct CreatingSession {
@@ -164,14 +191,24 @@ impl Runtime {
             match runtime.new_session(&[], None).await {
                 Ok(catalog) => Ok(Some(catalog)),
                 Err(error) if error.requires_sign_in() => Ok(None),
-                Err(error) => Err(LaunchFailure::Runtime(error.to_string())),
+                Err(error) => Err(error.into()),
             }
         };
         let result = start.before_deadline(ANSWER_TIMEOUT, starting).await;
         match result {
             Ok(catalog) => Ok((runtime, catalog)),
-            Err(error) => {
-                runtime.stop().await;
+            Err(mut error) => {
+                start
+                    .stop_and_drain_stderr(runtime, |event| {
+                        if let Some((upstream, Some(signal))) = event.upstream_error("") {
+                            // FR-034 also applies during shutdown: a lockout signal overrides Stopped.
+                            error = LaunchFailure::Lockout {
+                                signal,
+                                error: upstream,
+                            };
+                        }
+                    })
+                    .await;
                 Err(error)
             }
         }
@@ -222,13 +259,13 @@ impl Runtime {
                         Ok(Some(line)) => Line::Stderr(line),
                         Ok(None) | Err(_) => {
                             stderr_open = false;
-                            continue;
+                            Line::StderrClosed
                         }
                     },
                     else => Line::Closed,
                 };
                 let closed = matches!(line, Line::Closed);
-                let hold = clock.hold(if closed {
+                let hold = clock.hold(if matches!(line, Line::Closed | Line::StderrClosed) {
                     HoldKind::TurnEvent
                 } else {
                     HoldKind::RuntimeLine
@@ -254,6 +291,7 @@ impl Runtime {
             config: std::collections::HashMap::new(),
             configuring: std::collections::HashMap::new(),
             stderr_session: None,
+            stderr_closed: false,
             authentication: None,
         };
         Ok(runtime)
@@ -266,7 +304,7 @@ impl Runtime {
             "protocolVersion": 1,
             "clientInfo": {"name":"acp2api", "title":"acp2api", "version":start.release.version()},
             "clientCapabilities": {}
-        })).await.map_err(|error| LaunchFailure::Runtime(error.to_string()))
+        })).await.map_err(LaunchFailure::from)
     }
     pub(crate) async fn new_session(
         &mut self,
@@ -431,7 +469,16 @@ impl Runtime {
         while let Some((line, _hold)) = self.lines.recv().await {
             let value = match line {
                 Line::Stdout(value) => value.map_err(Message::Upstream)?,
-                Line::Stderr(_) => continue,
+                Line::Stderr(line) => {
+                    if let Some(error) = self.stderr_lockout(&line) {
+                        return Err(error);
+                    }
+                    continue;
+                }
+                Line::StderrClosed => {
+                    self.stderr_closed = true;
+                    continue;
+                }
                 Line::Closed => {
                     return Err(Message::Upstream("runtime stdout closed".into()));
                 }
@@ -542,18 +589,31 @@ impl Runtime {
         Ok(())
     }
     pub(crate) async fn next(&mut self) -> (RuntimeEvent, Hold) {
-        let Some((line, hold)) = self.lines.recv().await else {
-            return (RuntimeEvent::Closed, self.clock.hold(HoldKind::TurnEvent));
-        };
-        let event = match line {
-            Line::Closed => RuntimeEvent::Closed,
-            Line::Stderr(line) => self.stderr(&String::from_utf8_lossy(&line)),
-            Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
-            Line::Stdout(Ok(value)) => self.decode(value).await,
-        };
-        (event, hold)
+        loop {
+            let Some((line, hold)) = self.lines.recv().await else {
+                return (RuntimeEvent::Closed, self.clock.hold(HoldKind::TurnEvent));
+            };
+            let event = match line {
+                Line::Closed => RuntimeEvent::Closed,
+                Line::StderrClosed => {
+                    self.stderr_closed = true;
+                    continue;
+                }
+                Line::Stderr(line) => {
+                    Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(&line))
+                }
+                Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
+                Line::Stdout(Ok(value)) => self.decode(value).await,
+            };
+            return (event, hold);
+        }
     }
-    fn stderr(&mut self, line: &str) -> RuntimeEvent {
+    fn stderr_lockout(&mut self, line: &[u8]) -> Option<Message> {
+        let event = Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(line));
+        let (error, signal) = event.upstream_error("")?;
+        signal.map(|_| error)
+    }
+    fn stderr(stderr_session: &mut Option<String>, line: &str) -> RuntimeEvent {
         if let Some(address) = line
             .trim()
             .strip_prefix("Open the following link to authenticate the ACP server: ")
@@ -567,11 +627,11 @@ impl Runtime {
         if let Some((_, session)) =
             line.split_once("Antigravity SDK error processing prompt for session ")
         {
-            self.stderr_session = Some(session.trim().to_owned());
+            *stderr_session = Some(session.trim().to_owned());
         } else if let Some((prefix, rest)) = line.split_once("Message: ")
             && let Some((message, rest)) = rest.split_once(", Status: ")
             && let Some((status, _)) = rest.split_once(", Details:")
-            && let Some(session) = self.stderr_session.take()
+            && let Some(session) = stderr_session.take()
         {
             // Some error lines report a status without a numeric HTTP code.
             let Ok(code) = prefix
@@ -802,7 +862,11 @@ impl Runtime {
             arguments,
         })
     }
-    pub(crate) async fn stop(mut self) {
+    pub(crate) async fn stop(self) {
+        drop(self.stop_stderr().await);
+    }
+    /// Retain stopped-process stderr for the bounded `stop_and_drain_stderr` reader.
+    async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
         let _ = self.input.shutdown().await;
         drop(self.input);
         self.tree.stop(self.clock).await;
@@ -813,6 +877,26 @@ impl Runtime {
         {
             self.tool_sets.remove(&tools.mcp_url);
         }
+        stream::unfold(
+            (self.lines, self.stderr_session, self.stderr_closed),
+            |(mut lines, mut session, closed)| async move {
+                if closed {
+                    return None;
+                }
+                while let Some((line, _hold)) = lines.recv().await {
+                    if matches!(line, Line::StderrClosed | Line::Closed) {
+                        return None;
+                    }
+                    if let Line::Stderr(line) = line {
+                        return Some((
+                            Self::stderr(&mut session, &String::from_utf8_lossy(&line)),
+                            (lines, session, false),
+                        ));
+                    }
+                }
+                None
+            },
+        )
     }
 }
 
@@ -834,6 +918,7 @@ struct SessionTools {
 enum Line {
     Stdout(Result<Value, String>),
     Stderr(Vec<u8>),
+    StderrClosed,
     Closed,
 }
 pub(crate) enum RuntimeEvent {
@@ -877,4 +962,33 @@ pub(crate) enum TurnUpdate {
         stop_reason: Option<StopReason>,
     },
     Failed(Message),
+}
+
+impl RuntimeEvent {
+    pub(crate) fn upstream_error(
+        &self,
+        failed_reply: &str,
+    ) -> Option<(Message, Option<&'static str>)> {
+        let error = match self {
+            Self::Authenticated(Err(error))
+            | Self::Prepared {
+                result: Err(error), ..
+            }
+            | Self::Turn {
+                update: TurnUpdate::Failed(error),
+                ..
+            } => error.clone(),
+            Self::UpstreamError { error, .. } => Message::UpstreamHttp(error.clone()),
+            _ => return None,
+        };
+        let signal = error.lockout_signal().or_else(|| {
+            // FR-034 counts reply text only in a prompt turn that stderr marks as failed.
+            if matches!(self, Self::UpstreamError { .. }) {
+                crate::messages::lockout_signal(None, failed_reply, None)
+            } else {
+                None
+            }
+        });
+        Some((error, signal))
+    }
 }
