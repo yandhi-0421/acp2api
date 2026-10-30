@@ -11,10 +11,18 @@ async fn script_supplies_oauth_mcp_permission_cancel_load_and_dynamic_reply_text
     // Three MCP requests, 16 KiB each, a 5 s base run cap, and no log file.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let preparing = std::sync::Arc::new(tokio::sync::Notify::new());
+    let resume = std::sync::Arc::new(tokio::sync::Notify::new());
+    let entered = preparing.clone();
+    let released = resume.clone();
     let endpoint = tokio::spawn(async move {
         tokio::time::timeout(real_limit(Duration::from_secs(5)), async move {
-            for _ in 0..3 {
+            for index in 0..3 {
                 let (stream, _) = listener.accept().await.unwrap();
+                if index == 0 {
+                    entered.notify_one();
+                    released.notified().await;
+                }
                 let mut stream = BufReader::new(stream);
                 let mut length = 0;
                 let mut size = 0;
@@ -54,6 +62,11 @@ async fn script_supplies_oauth_mcp_permission_cancel_load_and_dynamic_reply_text
         .unwrap()
         .to_owned();
     pipe.prompt(&session, 3).await;
+    tokio::time::timeout(real_limit(Duration::from_secs(5)), preparing.notified())
+        .await
+        .expect("fake reply preparation cap");
+    let acknowledged_while_preparing = pipe.scenario.hub.counts().stdin_got;
+    resume.notify_one();
     assert!(
         pipe.stdout().await["params"]["update"]["content"]["text"]
             .as_str()
@@ -96,6 +109,10 @@ async fn script_supplies_oauth_mcp_permission_cancel_load_and_dynamic_reply_text
         "lookup"
     );
     pipe.finish().await;
+    assert_eq!(
+        acknowledged_while_preparing, 2,
+        "initialize and session/new are complete, but the first prompt still needs its reply"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
