@@ -255,12 +255,16 @@ async fn available(w: &mut World) {
     expr = "the owner signs in through the management panel, and the official runtime keeps the token {string}"
 )]
 async fn with_token(w: &mut World, token: String) {
-    support::authenticate(w, true, Some(token)).await;
+    let synthetic = format!("{token}-{}", acp2api_acceptance::setup::random_hex(16));
+    w.sign_in.token = Some((token, synthetic.clone()));
+    support::authenticate(w, true, Some(synthetic)).await;
 }
 
 #[then(expr = "the configuration file, the state file, and the logs do not hold {string}")]
-async fn token_absent(w: &mut World, token: String) {
+async fn token_absent(w: &mut World, feature_token: String) {
     w.scenario.time.settle().await;
+    let (feature_value, token) = w.sign_in.token.as_ref().unwrap();
+    assert_eq!(feature_value, &feature_token, "scenario token label");
     assert_eq!(
         std::fs::read_to_string(
             w.scenario
@@ -269,15 +273,19 @@ async fn token_absent(w: &mut World, token: String) {
                 .join("data/runtime-home/synthetic-token")
         )
         .unwrap(),
-        token,
+        token.as_str(),
         "fake runtime kept the synthetic token"
     );
     for path in [
         w.scenario.root.path.join("data/config.toml"),
         w.scenario.root.path.join("data/state.json"),
     ] {
-        match std::fs::read_to_string(path) {
-            Ok(text) => assert!(!text.contains(&token), "FR-039 no token in acp2api storage"),
+        match std::fs::read_to_string(&path) {
+            Ok(text) => assert!(
+                !text.contains(token),
+                "FR-039 no token in acp2api storage: {}",
+                path.display()
+            ),
             Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
         }
     }
@@ -290,8 +298,9 @@ async fn token_absent(w: &mut World, token: String) {
         assert!(
             !std::fs::read_to_string(entry.path())
                 .unwrap()
-                .contains(&token),
-            "FR-039 no token in logs"
+                .contains(token),
+            "FR-039 no token in logs: {}",
+            entry.path().display()
         );
     }
 }
