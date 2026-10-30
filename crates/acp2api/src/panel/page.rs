@@ -47,7 +47,7 @@ fn first_tile(view: &crate::conductor::View, now: crate::Moment, build: Option<&
 fn document(content: &str) -> String {
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>acp2api</title><style>
-:root{{color-scheme:light;font:17px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d1d1f;background:#f5f5f7}}*{{box-sizing:border-box}}body{{margin:0}}header{{background:#fff;border-bottom:1px solid #d2d2d7;padding:18px max(24px,calc((100% - 960px)/2))}}header strong{{font-size:21px;letter-spacing:-.3px}}nav{{padding:12px max(24px,calc((100% - 960px)/2));background:#ffffffb3;backdrop-filter:blur(18px);border-bottom:1px solid #d2d2d7;font-size:14px}}main{{max-width:960px;margin:60px auto;padding:0 24px}}h1{{font-size:40px;line-height:1.15;letter-spacing:-1px;margin:0 0 16px}}h2{{font-size:21px;margin:0 0 18px}}p{{max-width:65ch}}.intro{{color:#616166;margin-bottom:36px}}section{{background:#fff;border:1px solid #d2d2d7;border-radius:18px;padding:28px;margin:20px 0}}.login{{max-width:540px;margin:80px auto}}label{{display:block;margin-bottom:8px}}input,select,button,summary{{font:inherit}}input,select{{border:1px solid #86868b;border-radius:999px;padding:12px 18px;max-width:100%;width:100%;background:#fff;color:#1d1d1f}}input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{{outline:3px solid #0066cc;outline-offset:3px}}button{{background:#0066cc;color:#fff;border:0;border-radius:999px;padding:12px 22px;cursor:pointer;margin-top:18px}}summary{{color:#0066cc;cursor:pointer;padding:12px 0}}code{{overflow-wrap:anywhere;font-size:14px}}.quota-result{{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}}.fine{{font-size:14px;color:#616166}}.notice{{border-top:1px solid #d2d2d7;padding-top:16px;font-size:14px}}@media(max-width:600px){{main{{margin:36px auto}}section{{padding:22px}}h1{{font-size:34px}}.login{{margin:40px auto}}}}@media(forced-colors:active){{section,input,select{{border-color:CanvasText}}button{{border:1px solid ButtonText}}}}
+:root{{color-scheme:light;font:17px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d1d1f;background:#f5f5f7}}*{{box-sizing:border-box}}body{{margin:0}}header{{background:#fff;border-bottom:1px solid #d2d2d7;padding:18px max(24px,calc((100% - 960px)/2))}}header strong{{font-size:21px;letter-spacing:-.3px}}nav{{padding:12px max(24px,calc((100% - 960px)/2));background:#ffffffb3;backdrop-filter:blur(18px);border-bottom:1px solid #d2d2d7;font-size:14px}}main{{max-width:960px;margin:60px auto;padding:0 24px}}h1{{font-size:40px;line-height:1.15;letter-spacing:-1px;margin:0 0 16px}}h2{{font-size:21px;margin:0 0 18px}}p{{max-width:65ch}}.intro{{color:#616166;margin-bottom:36px}}section{{background:#fff;border:1px solid #d2d2d7;border-radius:18px;padding:28px;margin:20px 0}}.login{{max-width:540px;margin:80px auto}}label{{display:block;margin-bottom:8px}}input,select,button,summary{{font:inherit}}input,select{{border:1px solid #86868b;border-radius:999px;padding:12px 18px;max-width:100%;width:100%;background:#fff;color:#1d1d1f}}input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{{outline:3px solid #0066cc;outline-offset:3px}}button{{background:#0066cc;color:#fff;border:0;border-radius:999px;padding:12px 22px;cursor:pointer;margin-top:18px}}summary{{color:#0066cc;cursor:pointer;padding:12px 0}}code{{overflow-wrap:anywhere;font-size:14px}}.quota-result{{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}}.log-table{{overflow-x:auto}}table{{border-collapse:collapse;width:100%;font-size:14px;text-align:left}}th,td{{border-bottom:1px solid #d2d2d7;padding:8px 12px;vertical-align:top}}caption{{text-align:left;font-weight:600;margin-bottom:12px}}pre{{overflow-x:auto;font-size:14px}}.fine{{font-size:14px;color:#616166}}.notice{{border-top:1px solid #d2d2d7;padding-top:16px;font-size:14px}}@media(max-width:600px){{main{{margin:36px auto}}section{{padding:22px}}h1{{font-size:34px}}.login{{margin:40px auto}}}}@media(forced-colors:active){{section,input,select{{border-color:CanvasText}}button{{border:1px solid ButtonText}}}}
 </style></head><body><header><strong>acp2api</strong></header><nav>Management panel</nav>{content}</body></html>"#
     )
 }
@@ -75,6 +75,7 @@ pub(super) struct Page<'a> {
     pub(super) notices: &'a [crate::conductor::Notice],
     pub(super) builds: Result<crate::runtime_builds::Summary, String>,
     pub(super) quota_result: &'a Option<crate::conductor::QuotaResult>,
+    pub(super) history: &'a crate::journal::History,
     pub(super) view: &'a crate::conductor::View,
     pub(super) now: crate::Moment,
 }
@@ -120,8 +121,55 @@ pub(super) fn settings(page: Page<'_>) -> String {
     let quota = format!(
         r#"<section aria-labelledby="quota-title"><h2 id="quota-title">Quota</h2>{places}{queued}{result}<form method="post" action="/manage/refresh-quota"><button type="submit">Refresh quota</button></form><p class="fine">Refresh at most once every 60 s.</p><form method="post" action="/manage/concurrency"><label for="concurrency-limit">Concurrency limit</label><select id="concurrency-limit" name="concurrency_limit">{options}</select><button type="submit">Save the concurrency limit</button></form></section>"#
     );
+    let columns = [
+        ("time", "Time"),
+        ("request_id", "Request ID"),
+        ("api", "API"),
+        ("model", "Model"),
+        ("session", "ACP session"),
+        ("session_use", "Session use"),
+        ("duration_ms", "Duration (ms)"),
+        ("input_tokens", "Input tokens"),
+        ("output_tokens", "Output tokens"),
+        ("result", "Result"),
+        ("error_code", "Error code"),
+        ("unknown_fields", "Unknown fields"),
+    ];
+    let headings = columns
+        .iter()
+        .map(|(_, label)| format!("<th scope=\"col\">{label}</th>"))
+        .collect::<String>();
+    let requests = page
+        .history
+        .requests
+        .iter()
+        .rev()
+        .map(|record| {
+            let metadata = serde_json::to_value(record).unwrap();
+            let cells = columns
+                .iter()
+                .map(|(name, _)| {
+                    let text = match &metadata[*name] {
+                        serde_json::Value::String(text) => text.clone(),
+                        serde_json::Value::Array(fields) => fields
+                            .iter()
+                            .map(|field| field.as_str().unwrap())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        value => value.to_string(),
+                    };
+                    format!("<td>{}</td>", escape(&text))
+                })
+                .collect::<String>();
+            format!("<tr>{cells}</tr>")
+        })
+        .collect::<String>();
+    let logs = format!(
+        r#"<section><h2>Logs</h2><p>Log folder <code>{}</code></p><div class="log-table"><table><caption>Last 50 requests</caption><thead><tr>{headings}</tr></thead><tbody>{requests}</tbody></table></div></section>"#,
+        escape(&page.data_folder.join("logs").display().to_string())
+    );
     document(&format!(
-        r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section><section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
+        r#"<main><h1>Management panel</h1><p class="intro">Manage access to acp2api and the concurrency limit.</p>{first_tile}{runtime_notices}{notice}{runtime}{quota}<section><h2>Local API key</h2><label for="local-api-key">Local API key</label><input type="password" id="local-api-key" value="{key}" readonly autocomplete="off"><details><summary>Show key</summary><code>{key}</code></details><p class="fine">A new key replaces the current key immediately.</p><form method="post" action="/manage/key"><button type="submit">Make a new key</button></form></section>{logs}<section><h2>Settings</h2>{limit}{port}<p>Data folder <code>{data_folder}</code></p><p class="fine">Change the port through <code>config.toml</code> or <code>--port</code>. Change the data folder through <code>--data-dir</code>.</p><h3>Management password</h3><p class="fine">Changing the password ends every panel session.</p><form method="post" action="/manage/password"><label for="new-password">New management password</label><input type="password" id="new-password" name="password" autocomplete="new-password" required><button type="submit">Change the management password</button></form></section></main>"#
     ))
 }
 
@@ -243,6 +291,7 @@ mod tests {
             notices: &[],
             builds: Ok(builds),
             quota_result: &None,
+            history: &crate::journal::History::default(),
             view,
             now: 0,
         })

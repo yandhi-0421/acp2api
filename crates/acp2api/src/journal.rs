@@ -243,8 +243,13 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
 pub(crate) struct Journal(std::sync::Arc<JournalState>);
 struct JournalState {
     writer: std::sync::Mutex<Writer>,
+    history: std::sync::Mutex<History>,
     prefix: String,
     sequence: std::sync::atomic::AtomicU64,
+}
+#[derive(Clone, Default)]
+pub(crate) struct History {
+    pub(crate) requests: std::collections::VecDeque<RequestRecord>,
 }
 #[derive(Clone)]
 pub(crate) struct Request {
@@ -350,6 +355,9 @@ fn os_error_category(cause: io::ErrorKind) -> String {
 }
 
 impl Journal {
+    pub(crate) fn history(&self) -> History {
+        self.0.history.lock().unwrap().clone()
+    }
     pub(crate) fn state(
         &self,
         state: &str,
@@ -470,6 +478,7 @@ impl Journal {
         let prefix = crate::random_hex::<8>().map_err(io::Error::other)?;
         Ok(Self(std::sync::Arc::new(JournalState {
             writer: std::sync::Mutex::new(writer),
+            history: std::sync::Mutex::default(),
             prefix,
             sequence: std::sync::atomic::AtomicU64::new(1),
         })))
@@ -530,6 +539,13 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
+        {
+            let mut history = self.0.history.lock().unwrap();
+            if history.requests.len() == 50 {
+                history.requests.pop_front();
+            }
+            history.requests.push_back(record.clone());
+        }
         self.emit_to_file_then_stdout_under_writer_lock(&record, serde_json::to_string(&record)?)
     }
 }

@@ -112,6 +112,7 @@ impl Panel {
             notices: &self.conductor.notices(),
             builds: self.conductor.builds_summary(),
             quota_result: &self.conductor.quota_result(),
+            history: &self.conductor.history(),
             view: &self.conductor.view(),
             now: self.clock.now(),
         })

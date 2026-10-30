@@ -23,6 +23,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot, watch};
 #[derive(Clone)]
 pub(crate) struct Conductor {
+    journal: crate::journal::Journal,
     view: watch::Receiver<Arc<View>>,
     quota_result: watch::Receiver<Arc<Option<QuotaResult>>>,
     send: mpsc::Sender<Input>,
@@ -2680,6 +2681,7 @@ impl Conductor {
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let (quota_result, quota_watch) = watch::channel(Arc::new(None));
+        let panel_journal = journal.clone();
         let task = tokio::spawn(async move {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
@@ -2939,6 +2941,7 @@ impl Conductor {
         });
         (
             Self {
+                journal: panel_journal,
                 view: view_watch,
                 quota_result: quota_watch,
                 send,
@@ -3126,6 +3129,9 @@ impl Conductor {
     }
     pub(crate) fn quota_result(&self) -> Arc<Option<QuotaResult>> {
         self.quota_result.borrow().clone()
+    }
+    pub(crate) fn history(&self) -> crate::journal::History {
+        self.journal.history()
     }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
@@ -6284,6 +6290,8 @@ mod tests {
                     .unwrap()
                     .settings;
                 let conductor = Conductor {
+                    journal: crate::journal::Journal::open(&folder.join("logs"), clock.wall())
+                        .unwrap(),
                     view: watch::channel(Arc::new(View::default())).1,
                     quota_result: watch::channel(Arc::new(None)).1,
                     send,
