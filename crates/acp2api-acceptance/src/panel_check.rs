@@ -105,7 +105,7 @@ impl Panel {
         let call = self
             .owner(name)
             .submit("/manage/login", json!({"password":password}));
-        let answer = call.finish(&mut self.time()).await;
+        let answer = call.finish_current(&mut self.time()).await;
         self.owner(name).remember(&answer);
         let opened = answer.headers.contains_key("set-cookie");
         self.login_answer = Some(answer);
@@ -133,11 +133,11 @@ impl Panel {
     }
     pub async fn page(&mut self, name: &str) -> Answer {
         let call = self.owner(name).page();
-        call.finish(&mut self.time()).await
+        call.finish_current(&mut self.time()).await
     }
     pub async fn submit(&mut self, name: &str, path: &str, body: Value) -> Answer {
         let call = self.owner(name).submit(path, body);
-        call.finish(&mut self.time()).await
+        call.finish_current(&mut self.time()).await
     }
     pub async fn api(&self, key: &str) -> Answer {
         ApiClient::new(
@@ -146,7 +146,7 @@ impl Panel {
             self.hub.as_ref().unwrap().clone(),
         )
         .model_names()
-        .finish(&mut self.time())
+        .finish_current(&mut self.time())
         .await
     }
     pub async fn valid(&mut self, name: &str, expected: bool) {

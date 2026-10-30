@@ -177,6 +177,15 @@ impl Call {
     pub fn events(&self) -> Vec<SseEvent> {
         self.progress.lock().unwrap().clone()
     }
+    /// Complete I/O without advancing virtual deadlines. The caller must know
+    /// that the response needs no virtual timer; `finish` drives timed responses.
+    pub async fn finish_current(mut self, time: &mut TimeLine) -> Answer {
+        time.settle().await;
+        (&mut self.task)
+            .await
+            .expect("API request task")
+            .expect("API request")
+    }
     pub async fn finish(mut self, time: &mut TimeLine) -> Answer {
         let start = time.hub.now();
         let real = Instant::now() + real_limit(Duration::from_secs(30));
