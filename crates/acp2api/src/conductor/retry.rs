@@ -29,7 +29,7 @@ impl Wait {
             crate::messages::Row::Temporary503(_) | crate::messages::Row::Other502
         )
         .then(|| Self {
-            hashes: active.hashes.clone(),
+            hashes: active.record.hashes().clone(),
             tools: active.client_tools_hash,
             model_name: active.model_name.clone(),
             effort: active.effort.clone(),
