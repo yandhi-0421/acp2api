@@ -22,8 +22,11 @@ fn global(w: &mut World, folder: String, server: String) {
 }
 #[when("acp2api starts a runtime process")]
 async fn start(w: &mut World) {
-    w.scenario.plan(safety::isolated());
-    w.scenario.start_isolated_owner().await;
+    let env = [
+        ("HOME", w.scenario.root.path.join("home")),
+        ("GEMINI_HOME", w.scenario.root.path.join("home/.gemini")),
+    ];
+    crate::runtime_support::pending_start_with(w, safety::isolated(), &env).await;
 }
 #[then(expr = "the runtime home of the runtime process is a folder in {string}")]
 fn home(w: &mut World, data: String) {
@@ -46,7 +49,20 @@ fn global_absent(w: &mut World, server: String) {
 #[then(
     "the official runtime gets no file system capability and no terminal capability from acp2api"
 )]
-fn capabilities(w: &mut World) {
+async fn capabilities(w: &mut World) {
+    let initialize = crate::runtime_support::calls(w, "initialize");
+    let reply = serde_json::json!({
+        "jsonrpc": "2.0", "id": initialize[0]["id"],
+        "result": {"protocolVersion": 1, "agentInfo": {"version": "1.4.0"}}
+    });
+    w.scenario.hub.command(
+        "normal",
+        serde_json::json!({"op":"Out", "line":reply.to_string()}),
+    );
+    crate::runtime_support::observe(w, |w| {
+        !crate::runtime_support::calls(w, "session/new").is_empty()
+    })
+    .await;
     safety::capabilities(&w.scenario);
 }
 #[given(

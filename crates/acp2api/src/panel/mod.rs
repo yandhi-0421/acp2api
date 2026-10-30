@@ -100,16 +100,21 @@ impl Panel {
         )
     }
     fn page(&self, status: StatusCode, notice: &str) -> Response {
-        let page = page::settings(
-            &self.conductor.settings(),
-            self.conductor.highest,
-            Some(notice),
-            &self.conductor.notices(),
-            self.conductor.builds_summary(),
-            &self.conductor.quota_result(),
-            &page::sign_in_section(&self.conductor.view(), self.clock.now()),
-        );
-        (status, Html(page)).into_response()
+        (status, Html(self.html(Some(notice)))).into_response()
+    }
+    fn html(&self, notice: Option<&str>) -> String {
+        page::settings(page::Page {
+            settings: &self.conductor.settings(),
+            highest: self.conductor.highest,
+            port: self.port,
+            data_folder: self.conductor.data_folder(),
+            notice,
+            notices: &self.conductor.notices(),
+            builds: self.conductor.builds_summary(),
+            quota_result: &self.conductor.quota_result(),
+            view: &self.conductor.view(),
+            now: self.clock.now(),
+        })
     }
 }
 async fn guard(
@@ -166,15 +171,7 @@ async fn guard(
 }
 async fn index(State(panel): State<Panel>, headers: HeaderMap) -> Html<String> {
     Html(if panel.session(&headers) {
-        page::settings(
-            &panel.conductor.settings(),
-            panel.conductor.highest,
-            None,
-            &panel.conductor.notices(),
-            panel.conductor.builds_summary(),
-            &panel.conductor.quota_result(),
-            &page::sign_in_section(&panel.conductor.view(), panel.clock.now()),
-        )
+        panel.html(None)
     } else {
         page::login(None)
     })
@@ -413,7 +410,9 @@ mod tests {
             let Html(html) = index(State(panel), headers).await;
             stopped.send(true).unwrap();
             task.await.unwrap();
-            assert_eq!((response.contains(expected), html.contains(expected), html.contains(&*folder.to_string_lossy())), (true, true, false), "#161: the first API refusal and the panel show the same path-free state-file diagnostic");
+            let first_tile = html.split(&format!("<section id=\"{}\">", crate::conductor::sign_in::ENTRY_ID)).nth(1).unwrap().split("</section>").next().unwrap();
+            let owner_path = &*folder.to_string_lossy();
+            assert_eq!((response.contains(expected), first_tile.contains(expected), response.contains(owner_path) || first_tile.contains(owner_path)), (true, true, false), "#161: the first API refusal and the lockout tile show the same path-free state-file diagnostic");
         }).await.expect("state-file panel test cap: five seconds, no runtime requests");
     }
 
@@ -473,7 +472,7 @@ mod tests {
             let status = answer.status().as_u16();
             let body = axum::body::to_bytes(answer.into_body(), 1 << 16).await;
             let body = String::from_utf8(body.unwrap().to_vec()).unwrap();
-            pages.push((status, body.contains("<h1>Settings</h1>")));
+            pages.push((status, body.contains("<h1>Management panel</h1>")));
         }
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(pages, [(500, true), (422, true), (422, true)]);
