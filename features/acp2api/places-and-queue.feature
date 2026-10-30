@@ -153,7 +153,7 @@ Feature: Places and queue
 
   @FR-037 @issue-71 @wip
   Scenario Outline: The start of a state ends the requests in the queue with the error of that state
-    Given each place holds a prompt turn
+    Given each place holds a prompt turn before <event>
     And two requests with no stream wait in the queue
     When <event> starts the state "<state>"
     Then each of the two requests gets HTTP <status> with the message of the state "<state>"

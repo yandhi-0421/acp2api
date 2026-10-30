@@ -48,7 +48,7 @@ Feature: Errors
 
   @FR-027 @issue-71 @wip
   Scenario Outline: An error after the acceptance is an error event in an Anthropic stream
-    Given a streamed request to "POST /v1/messages" was accepted
+    Given a streamed request to "POST /v1/messages" was accepted before <case>
     When <case> ends the request
     Then the stream has an "error" event with the "error.type" "<error type>"
     And no "message_stop" event follows the "error" event
@@ -72,7 +72,7 @@ Feature: Errors
 
   @FR-027 @issue-71 @wip
   Scenario Outline: Each error other than the 503 row is a response.failed event with the code invalid_prompt
-    Given a streamed request to "POST /v1/responses" was accepted
+    Given a streamed request to "POST /v1/responses" was accepted before <case>
     When <case> ends the request
     Then the stream has a "response.failed" event with the code "invalid_prompt"
 

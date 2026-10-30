@@ -1,6 +1,6 @@
 use crate::{
     World, error_support as support, lockout_support as lockout, places_support as queue,
-    quota_support as quota,
+    quota_support as quota, runtime_support as process, upstream_error,
 };
 use acp2api_acceptance::{TurnEndPlan, TurnPlan, TurnStep, endpoint_check};
 use cucumber::{given, then, when};
@@ -59,6 +59,41 @@ fn built_in(w: &mut World) {
     });
 }
 
+#[given(
+    regex = r#"^a streamed request to "([^"]+)" was accepted before (a lockout|the start of the state "sign-in required"|the start of the state "runtime unavailable"|the exit of acp2api|the start of a quota wait|an error of the 503 row|an error of the 502 row)$"#
+)]
+async fn accepted_before(w: &mut World, endpoint: String, case: String) {
+    if case == "the start of the state \"runtime unavailable\"" {
+        support::two_prior_failures(w).await;
+        queue::full_places(w).await;
+        w.request.plan = Some(TurnPlan::new().chunk("queued stream reply"));
+        let live = queue::send(w, endpoint_check::request(&endpoint, "queued stream", true)).await;
+        assert_eq!(
+            live.status(),
+            Some(200),
+            "queued stream accepted before third failure"
+        );
+        assert_eq!(
+            queue::prompts(w).len(),
+            2,
+            "tested stream waits without ACP work"
+        );
+        w.endpoint.set_live(live);
+    } else {
+        upstream_error::accepted_stream(w, &endpoint).await;
+    }
+}
+
+#[given(
+    regex = r#"^each place holds a prompt turn before (the stderr error line 429 "RESOURCE_EXHAUSTED"|the stderr error line 401|the third failure of the runtime process in 10 minutes)$"#
+)]
+async fn occupied_before(w: &mut World, event: String) {
+    if event == "the third failure of the runtime process in 10 minutes" {
+        support::two_prior_failures(w).await;
+    }
+    queue::full_places(w).await;
+}
+
 #[when(
     regex = r#"^(a lockout|the start of the state "sign-in required"|the start of the state "runtime unavailable"|the exit of acp2api|the start of a quota wait|an error of the 502 row) ends the request$"#
 )]
@@ -68,9 +103,7 @@ async fn stream_failure(w: &mut World, case: String) {
             support::stop_next_tick(w).await;
         }
         "the start of the state \"runtime unavailable\"" => {
-            panic!(
-                "BLOCKED: the frozen accepted-stream Given starts a prompt; runtime failure gives M-20 to active work before the third failure can flush queued work with M-14. The fixture needs an accepted queued stream after two prior failures."
-            );
+            process::exit(w).await;
         }
         _ => {
             let plan = match case.as_str() {
@@ -213,15 +246,21 @@ async fn queued_bodies(w: &mut World) {
     regex = r#"^(the stderr error line 429 "RESOURCE_EXHAUSTED"|the stderr error line 401|the third failure of the runtime process in 10 minutes) starts the state "([^"]+)"$"#
 )]
 async fn start_condition(w: &mut World, event: String, state: String) {
+    if state == "runtime unavailable" {
+        assert_eq!(
+            event,
+            "the third failure of the runtime process in 10 minutes"
+        );
+        process::exit(w).await;
+        return;
+    }
     let plan = match state.as_str() {
         "quota wait" => quota::error(429, Some(quota::RESET)),
         "sign-in required" => {
             w.scenario.fake().set_signed_in(false);
             support::upstream(401, "UNAUTHENTICATED")
         }
-        _ => panic!(
-            "BLOCKED: {event} requires two prior failures before the frozen full-places Given. Otherwise an earlier failure ends these queued requests with M-20, before M-14 is active. Add a fixture that records the two failures before filling the places."
-        ),
+        _ => unreachable!(),
     };
     w.scenario.fake().finish_gate("queue-A", plan);
     w.scenario.time.settle().await;
@@ -230,12 +269,42 @@ async fn start_condition(w: &mut World, event: String, state: String) {
 #[then(expr = "each of the two requests gets HTTP {int} with the message of the state {string}")]
 async fn queued_refusals(w: &mut World, status: u16, state: String) {
     for name in ["Q0", "Q1"] {
-        let answer = queue::take(w, name).finish(&mut w.scenario.time).await;
+        let answer = queue::take(w, name)
+            .finish_current(&mut w.scenario.time)
+            .await;
         support::state_refusal(w, &answer, status, &state);
         assert!(
             !queue::has_prompt(w, name),
             "FR-037 flushed request starts no ACP call"
         );
+    }
+    if state == "runtime unavailable" {
+        for name in ["A", "B"] {
+            let answer = queue::take(w, name)
+                .finish_current(&mut w.scenario.time)
+                .await;
+            assert_eq!(
+                answer.status, 200,
+                "active stream was accepted before failure"
+            );
+            let errors: Vec<_> = answer
+                .events
+                .iter()
+                .filter(|event| event.event == "error")
+                .collect();
+            assert_eq!(
+                errors.len(),
+                1,
+                "runtime failure ends each active stream once"
+            );
+            let error: serde_json::Value = serde_json::from_str(&errors[0].data).unwrap();
+            assert_eq!(error["error"]["type"], "api_error");
+            assert_eq!(
+                error["error"]["message"],
+                "acp2api: the runtime process failed, so acp2api ended the prompt turn."
+            );
+        }
+        return;
     }
     let survivor = &w.prompt_sessions["B"];
     assert!(

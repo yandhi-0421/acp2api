@@ -319,6 +319,10 @@ async fn text_stream(w: &mut World, first: String, last: String, endpoint: Strin
 
 #[given(expr = "a streamed request to {string} was accepted")]
 async fn accepted(w: &mut World, endpoint: String) {
+    accepted_stream(w, &endpoint).await;
+}
+
+pub async fn accepted_stream(w: &mut World, endpoint: &str) {
     w.request.plan = Some(TurnPlan {
         steps: vec![TurnStep::HoldUntil("upstream-error".into())],
         end: TurnEndPlan::Stop("end_turn".into()),
@@ -329,7 +333,7 @@ async fn accepted(w: &mut World, endpoint: String) {
         .unwrap()
         .steps
         .extend(error_steps("The service is currently unavailable."));
-    let call = endpoint_check::request(&endpoint, "Hello", true);
+    let call = endpoint_check::request(endpoint, "Hello", true);
     let live = wire::begin(w, call).await;
     assert_eq!(live.status(), Some(200), "stream accepted before error");
     w.endpoint.set_live(live);

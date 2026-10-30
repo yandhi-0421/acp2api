@@ -1,4 +1,6 @@
-use crate::{World, quota_support as quota, sign_in_support as sign_in};
+use crate::{
+    World, quota_support as quota, runtime_support as process, sign_in_support as sign_in,
+};
 use acp2api::Clock as _;
 use acp2api_acceptance::{
     TurnPlan, TurnStep,
@@ -54,6 +56,19 @@ pub async fn send(w: &mut World, call: ApiCall) {
 pub async fn send_current(w: &mut World, call: ApiCall) {
     let live = begin(w, call).await;
     w.scenario.answer = Some(live.finish_current(&mut w.scenario.time).await);
+}
+
+pub async fn two_prior_failures(w: &mut World) {
+    process::exit_at(w, &[0, 0]).await;
+    assert_eq!(
+        process::servers(w).len(),
+        3,
+        "two failures start two replacements"
+    );
+    assert!(
+        w.scenario.fake().record().prompts().is_empty(),
+        "prior failures precede accepted work"
+    );
 }
 
 pub async fn stop_next_tick(w: &mut World) {
