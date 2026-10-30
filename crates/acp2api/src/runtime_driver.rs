@@ -55,6 +55,28 @@ impl RuntimeStart {
     ) -> Result<T, E> {
         self.before_deadline(wait, self.until_stopped(answer)).await
     }
+    pub(crate) async fn stop_and_drain_stderr(
+        &self,
+        runtime: Runtime,
+        mut classify: impl FnMut(RuntimeEvent),
+    ) {
+        let stderr = runtime.stop_stderr().await;
+        tokio::pin!(stderr);
+        let _ = self
+            .before_deadline(ANSWER_TIMEOUT, async {
+                tokio::select! {
+                    biased;
+                    result = async {
+                        while let Some(event) = stderr.next().await {
+                            classify(event);
+                        }
+                        Ok::<_, LaunchFailure>(())
+                    } => result,
+                    result = self.until_stopped(std::future::pending::<Result<(), LaunchFailure>>()) => result,
+                }
+            })
+            .await;
+    }
     async fn until_stopped<T, E: From<LaunchFailure>>(
         &self,
         answer: impl std::future::Future<Output = Result<T, E>>,
@@ -173,16 +195,16 @@ impl Runtime {
         match result {
             Ok(catalog) => Ok((runtime, catalog)),
             Err(mut error) => {
-                let stderr = runtime.stop_stderr().await;
-                tokio::pin!(stderr);
-                while let Some(event) = stderr.next().await {
-                    if let Some((upstream, Some(signal))) = event.upstream_error("") {
-                        error = LaunchFailure::Lockout {
-                            signal,
-                            error: upstream,
-                        };
-                    }
-                }
+                start
+                    .stop_and_drain_stderr(runtime, |event| {
+                        if let Some((upstream, Some(signal))) = event.upstream_error("") {
+                            error = LaunchFailure::Lockout {
+                                signal,
+                                error: upstream,
+                            };
+                        }
+                    })
+                    .await;
                 Err(error)
             }
         }
@@ -839,7 +861,7 @@ impl Runtime {
     pub(crate) async fn stop(self) {
         drop(self.stop_stderr().await);
     }
-    pub(crate) async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
+    async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
         let _ = self.input.shutdown().await;
         drop(self.input);
         self.tree.stop(self.clock).await;

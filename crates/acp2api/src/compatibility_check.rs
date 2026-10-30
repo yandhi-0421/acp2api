@@ -3,7 +3,6 @@ use crate::{
     runtime_driver::{Runtime, RuntimeEvent, RuntimeStart, TurnUpdate},
 };
 use agent_client_protocol_schema::v1::StopReason;
-use futures_util::StreamExt;
 use serde_json::json;
 use std::{
     ffi::OsString,
@@ -186,14 +185,14 @@ pub(crate) async fn run(
         Ok((version, session))
     };
     let result = checking.await;
-    let stderr = runtime.stop_stderr().await;
-    tokio::pin!(stderr);
     let mut lockout = None;
-    while let Some(event) = stderr.next().await {
-        if let Some(error) = Failure::lockout(&event, &failed_reply) {
-            lockout = Some(error);
-        }
-    }
+    start
+        .stop_and_drain_stderr(runtime, |event| {
+            if let Some(error) = Failure::lockout(&event, &failed_reply) {
+                lockout = Some(error);
+            }
+        })
+        .await;
     if let Some(error) = lockout {
         return Err(error);
     }
