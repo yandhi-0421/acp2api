@@ -5649,11 +5649,12 @@ mod tests {
             let owner_lockout = matches!(check_result, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check failed") && !text.contains("Original error:"));
             let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|evidence| (evidence.signal, evidence.original_error_text));
             let refused = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string().starts_with("acp2api: lockout since "));
-            let actual = (conductor.view().state, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.check_stops.load(Ordering::SeqCst), evidence, refused, owner_lockout);
+            let check_removed = !root.join(crate::runtime_builds::CHECK).exists();
+            let actual = (conductor.view().state, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.check_stops.load(Ordering::SeqCst), evidence, refused, owner_lockout, check_removed);
             stopped.send(true).unwrap();
             task.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
-            assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12");
+            assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true, true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12, and removes the check folder");
         }).await.expect("compatibility lockout cap: five seconds, three processes, four ACP messages and four KiB output per process");
     }
 
