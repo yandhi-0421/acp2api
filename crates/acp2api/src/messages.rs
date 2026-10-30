@@ -189,6 +189,9 @@ pub(crate) enum Message {
     Upstream(String),
     MissingSessionId,
     RuntimeStdoutClosed,
+    RuntimeStdinWriteTimedOut,
+    RuntimeStdinQueueFull,
+    RuntimeStdinWriterStopped,
     RuntimeNotAvailable,
     ConfigOptionNotApplied {
         option: String,
@@ -330,6 +333,9 @@ impl Message {
             | Message::Upstream(_)
             | Message::MissingSessionId
             | Message::RuntimeStdoutClosed
+            | Message::RuntimeStdinWriteTimedOut
+            | Message::RuntimeStdinQueueFull
+            | Message::RuntimeStdinWriterStopped
             | Message::RuntimeNotAvailable
             | Message::ConfigOptionNotApplied { .. }
             | Message::MaxTurnRequests
@@ -419,6 +425,9 @@ impl fmt::Display for Message {
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
             Self::MissingSessionId => f.write_str("missing sessionId"),
             Self::RuntimeStdoutClosed => f.write_str("runtime stdout closed"),
+            Self::RuntimeStdinWriteTimedOut => write!(f, "runtime stdin write exceeded {} s", crate::runtime_driver::WRITE_TIMEOUT / 1000),
+            Self::RuntimeStdinQueueFull => write!(f, "runtime stdin queue exceeded {} bytes", crate::runtime_driver::MAX_QUEUED_BYTES),
+            Self::RuntimeStdinWriterStopped => f.write_str("runtime stdin writer stopped"),
             Self::RuntimeNotAvailable => f.write_str("official runtime is not available"),
             Self::ConfigOptionNotApplied { option, value } => write!(f, "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."),
             Self::UpstreamHttp(error) => {

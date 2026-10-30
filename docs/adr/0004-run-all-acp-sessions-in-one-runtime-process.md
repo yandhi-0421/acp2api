@@ -17,6 +17,8 @@ acp2api runs all ACP sessions in one runtime process. It starts the runtime proc
   - a failed start;
   - an exit that acp2api did not cause;
   - a prompt turn that does not end in 30 s after `session/cancel`.
+  - an ACP write to a live runtime process that does not end in 30 s;
+  - more than 128 MiB of ACP writes that wait for the runtime process.
 - **After a failure.**
   - Each prompt turn of the runtime process ends with an error. acp2api starts a new runtime process at once.
   - After 3 failures in 10 minutes, acp2api goes into the state "runtime unavailable". It then starts no runtime process by itself.

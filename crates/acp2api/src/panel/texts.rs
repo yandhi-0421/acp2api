@@ -237,6 +237,15 @@ fn chinese_api_message(message: &Message) -> String {
         Message::Upstream(text) => format!("上游错误：{text}"),
         Message::MissingSessionId => "官方运行时的回复里没有 sessionId。".into(),
         Message::RuntimeStdoutClosed => "运行时进程的标准输出关闭了。".into(),
+        Message::RuntimeStdinWriteTimedOut => format!(
+            "运行时进程的标准输入写入超过了 {} 秒。",
+            crate::runtime_driver::WRITE_TIMEOUT / 1000
+        ),
+        Message::RuntimeStdinQueueFull => format!(
+            "运行时进程的标准输入队列超过了 {} 字节。",
+            crate::runtime_driver::MAX_QUEUED_BYTES
+        ),
+        Message::RuntimeStdinWriterStopped => "运行时进程的标准输入写入任务已停止。".into(),
         Message::RuntimeNotAvailable => "官方运行时不可用。".into(),
         Message::ConfigOptionNotApplied { option, value } => format!(
             "官方运行时没有应用 {option} 的值 {value}，所以 acp2api 结束了这个 prompt 轮次。"
@@ -323,10 +332,9 @@ fn chinese_owner_message(message: &OwnerMessage) -> String {
         OwnerMessage::CheckFailed(reason) => {
             format!("兼容性检查没有通过：{}。", chinese_incompatibility(reason))
         }
-        OwnerMessage::CheckRunFailed(failure) => format!(
-            "兼容性检查没有通过：{}。",
-            chinese_launch_failure(failure).trim_end_matches('。')
-        ),
+        OwnerMessage::CheckRunFailed(failure) => {
+            format!("兼容性检查没有通过：{}", chinese_launch_failure(failure))
+        }
         OwnerMessage::NoAnswerBeforeDeadline => "官方运行时在截止时间之前没有回答。".into(),
         OwnerMessage::VersionDiffers => "initialize 的版本和已接受的构建不一致。".into(),
         OwnerMessage::GeminiFolderNotFound => "找不到所有者的 Gemini 文件夹。".into(),
@@ -413,6 +421,43 @@ mod tests {
             Language::Chinese.owner_message(&notice),
             "兼容性检查没有通过：官方运行时在截止时间之前没有回答。"
         );
+    }
+
+    #[test]
+    fn a_failed_check_preserves_the_external_diagnostics_final_full_stops() {
+        let notice = OwnerMessage::CheckRunFailed(std::sync::Arc::new(LaunchFailure::Runtime(
+            "external diagnostic。。".into(),
+        )));
+        assert_eq!(
+            Language::Chinese.owner_message(&notice),
+            "兼容性检查没有通过：运行时进程出错：external diagnostic。。"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_check_with_a_stalled_stdin_fails_in_chinese() {
+        // One frame, five real seconds, at most 16 KiB of recorded bytes, no real process.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut fixture = crate::runtime_driver::write_tests::fixture().await;
+            let checking = fixture.runtime.initialize(&fixture.start);
+            let advance = async {
+                assert_eq!(fixture.waits.recv().await.unwrap(), 30_000);
+                fixture.now.send_replace(30_000);
+            };
+            let (result, ()) = tokio::join!(checking, advance);
+            fixture.runtime.stop().await;
+            let notice = OwnerMessage::CheckRunFailed(std::sync::Arc::new(result.unwrap_err()));
+            assert_eq!(
+                Language::English.owner_message(&notice),
+                "The compatibility check failed: runtime stdin write exceeded 30 s."
+            );
+            assert_eq!(
+                Language::Chinese.owner_message(&notice),
+                "兼容性检查没有通过：运行时进程的标准输入写入超过了 30 秒。"
+            );
+        })
+        .await
+        .expect("panel stdin timeout test cap: 5 s");
     }
 
     #[test]

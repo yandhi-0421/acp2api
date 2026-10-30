@@ -333,6 +333,9 @@ pub(crate) fn refusal_code(refusal: &Refusal) -> &'static str {
         Message::Upstream(_)
         | Message::MissingSessionId
         | Message::RuntimeStdoutClosed
+        | Message::RuntimeStdinWriteTimedOut
+        | Message::RuntimeStdinQueueFull
+        | Message::RuntimeStdinWriterStopped
         | Message::RuntimeNotAvailable
         | Message::ConfigOptionNotApplied { .. }
         | Message::UpstreamHttp(_)

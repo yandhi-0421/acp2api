@@ -85,6 +85,8 @@ mod sign_in_support;
 mod slash_and_thought;
 #[path = "support/slash_and_thought.rs"]
 mod slash_and_thought_support;
+#[path = "steps/stdin_failures.rs"]
+mod stdin_failures;
 #[path = "steps/thinking_levels.rs"]
 mod thinking_levels;
 #[path = "support/thinking_levels.rs"]

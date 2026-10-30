@@ -91,7 +91,7 @@ impl From<crate::runtime_driver::CommandError> for Failure {
     fn from(error: crate::runtime_driver::CommandError) -> Self {
         match error {
             crate::runtime_driver::CommandError::Io(error) => {
-                Self::Runtime(LaunchFailure::Io(error))
+                Self::Runtime(LaunchFailure::Owner(OwnerMessage::Api(error)))
             }
             crate::runtime_driver::CommandError::Session(error) => {
                 Self::Internal(LaunchFailure::Owner(OwnerMessage::Api(error)))
@@ -214,6 +214,11 @@ pub(crate) async fn run(
                             break;
                         }
                         RuntimeEvent::Other | RuntimeEvent::Stderr => {}
+                        RuntimeEvent::WriteFailed(reason) => {
+                            return Err(Failure::Runtime(LaunchFailure::Owner(OwnerMessage::Api(
+                                reason,
+                            ))));
+                        }
                         RuntimeEvent::Closed => {
                             return Err(Failure::Incompatible(
                                 Incompatibility::RuntimeExitedDuringLoad,
@@ -352,6 +357,11 @@ async fn check_prompt(
                 }
             }
             RuntimeEvent::Other | RuntimeEvent::Stderr => {}
+            RuntimeEvent::WriteFailed(reason) => {
+                return Err(Failure::Runtime(LaunchFailure::Owner(OwnerMessage::Api(
+                    reason,
+                ))));
+            }
             RuntimeEvent::Closed => {
                 return Err(Failure::Incompatible(Incompatibility::RuntimeExited));
             }
