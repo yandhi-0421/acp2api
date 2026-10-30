@@ -134,7 +134,7 @@ Feature: Management panel
     Then the tile "quota" shows the last result of "/usage" and its time
     And the tile "quota" shows the refresh entry and the concurrency limit
 
-  @FR-054 @issue-74 @wip
+  @FR-054 @issue-74
   Scenario: The tile logs shows the last 50 requests from memory
     Given acp2api answered 51 requests since its start
     When the owner opens the management panel with a panel session
