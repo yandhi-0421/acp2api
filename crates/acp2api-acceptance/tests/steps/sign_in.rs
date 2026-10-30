@@ -592,3 +592,28 @@ async fn two_queued_checks(w: &mut World, first: String, second: String) {
     }
     support::queue_count(w, 2).await;
 }
+
+#[given(
+    expr = "the sign-in check of request {string} waits for the upstream error 429 RESOURCE_EXHAUSTED"
+)]
+async fn held_quota_check(w: &mut World, name: String) {
+    use acp2api_acceptance::{endpoint_check, rpc_script::RpcReply};
+
+    support::start(w).await;
+    w.scenario.fake().script_call(
+        "session/new",
+        RpcReply::Held {
+            gate: format!("sign-in-{name}"),
+            reply: Box::new(RpcReply::Error(json!({
+                "code": 429,
+                "message": format!("RESOURCE_EXHAUSTED; resets {}", crate::quota_support::RESET),
+            }))),
+        },
+    );
+    let live = queue::send(
+        w,
+        endpoint_check::request("POST /v1/messages", &queue::marker(&name), true),
+    )
+    .await;
+    w.places.calls.push((name, Some(live)));
+}
