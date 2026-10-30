@@ -249,10 +249,12 @@ struct JournalState {
 }
 #[derive(Clone, Default)]
 pub(crate) struct History {
-    pub(crate) requests: std::collections::VecDeque<RequestRecord>,
-    pub(crate) unknown_fields: std::collections::BTreeMap<(Api, String), UnknownField>,
+    pub(crate) requests: std::collections::VecDeque<std::sync::Arc<RequestRecord>>,
+    pub(crate) unknown_fields:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<Api, UnknownField>>,
+    pub(crate) other_names: Option<UnknownField>,
 }
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct UnknownField {
     pub(crate) count: u64,
     pub(crate) last_time: String,
@@ -545,25 +547,34 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
+        let snapshot = std::sync::Arc::new(record.clone());
         {
             let mut history = self.0.history.lock().unwrap();
             for field in &record.unknown_fields {
-                history
-                    .unknown_fields
-                    .entry((record.api, field.clone()))
-                    .and_modify(|row| {
-                        row.count += 1;
-                        row.last_time.clone_from(&record.time);
-                    })
-                    .or_insert_with(|| UnknownField {
-                        count: 1,
-                        last_time: record.time.clone(),
-                    });
+                let mut end = field.len().min(128);
+                while !field.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let name = &field[..end];
+                let row = if history.unknown_fields.contains_key(name)
+                    || history.unknown_fields.len() < 256
+                {
+                    history
+                        .unknown_fields
+                        .entry(name.to_owned())
+                        .or_default()
+                        .entry(record.api)
+                        .or_default()
+                } else {
+                    history.other_names.get_or_insert_default()
+                };
+                row.count += 1;
+                row.last_time.clone_from(&record.time);
             }
             if history.requests.len() == 50 {
                 history.requests.pop_front();
             }
-            history.requests.push_back(record.clone());
+            history.requests.push_back(snapshot);
         }
         self.emit_to_file_then_stdout_under_writer_lock(&record, serde_json::to_string(&record)?)
     }
@@ -604,6 +615,56 @@ mod tests {
             unknown_fields: Vec::new(),
         }
     }
+    #[test]
+    fn unknown_field_history_bounds_names_and_groups_overflow() {
+        let folder = folder("unknown-name-bounds");
+        let clock = crate::os::SystemClock::default();
+        let journal = Journal::open(&folder, clock.wall()).unwrap();
+        let long_name = format!("{}€tail", "x".repeat(127));
+        for (api, fields) in [
+            (
+                Api::Chat,
+                std::iter::once(long_name.clone())
+                    .chain((1..258).map(|i| format!("field-{i}")))
+                    .collect(),
+            ),
+            (
+                Api::Responses,
+                vec![long_name.clone(), "last-overflow".into()],
+            ),
+        ] {
+            let mut request = journal.begin(api, 0);
+            request.unknown_fields = fields;
+            journal.complete(
+                Completion {
+                    request,
+                    session: None,
+                    session_use: None,
+                    outcome: Outcome::Success {
+                        input: 1,
+                        output: 1,
+                    },
+                },
+                &clock,
+            );
+        }
+        let history = journal.history();
+        assert_eq!(
+            history.unknown_fields.len(),
+            256,
+            "at most 256 distinct names across APIs"
+        );
+        assert!(
+            history.unknown_fields.contains_key(&"x".repeat(127)),
+            "cut the name before the multibyte character at byte 128"
+        );
+        let other = history.other_names.as_ref().unwrap();
+        assert_eq!(other.count, 3, "further new names share one overflow row");
+        assert_eq!(other.last_time, history.requests.back().unwrap().time);
+        drop(journal);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
     #[test]
     fn email_boundaries_preserve_braces() {
         assert_eq!(redact_error("{a@example.com}"), "{<REDACTED>}");

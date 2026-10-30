@@ -212,7 +212,7 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
         .iter()
         .rev()
         .map(|record| {
-            let metadata = serde_json::to_value(record).unwrap();
+            let metadata = serde_json::to_value(record.as_ref()).unwrap();
             let cells = columns
                 .iter()
                 .map(|(name, _)| {
@@ -235,7 +235,8 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
         .history
         .unknown_fields
         .iter()
-        .map(|((api, name), row)| {
+        .flat_map(|(name, rows)| rows.iter().map(move |(api, row)| (name, api, row)))
+        .map(|(name, api, row)| {
             format!(
                 "<tr><th scope=\"row\">{}</th><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape(name),
@@ -250,8 +251,12 @@ experimental_bearer_token = "<LOCAL_API_KEY>""#,
             )
         })
         .collect::<String>();
+    let other_names = page.history.other_names.as_ref().map(|row| format!(
+        "<tr><th scope=\"row\">other names</th><td>All APIs</td><td>{}</td><td>{}</td></tr>",
+        row.count, escape(&row.last_time)
+    )).unwrap_or_default();
     let logs = format!(
-        r#"<section><h2>Logs</h2><p>Log folder <code>{}</code></p><div class="log-table"><table><caption>Last 50 requests</caption><thead><tr>{headings}</tr></thead><tbody>{requests}</tbody></table></div><div class="log-table"><table><caption>Unknown fields since start</caption><thead><tr><th scope="col">Field name</th><th scope="col">API</th><th scope="col">Count</th><th scope="col">Last time</th></tr></thead><tbody>{unknown_fields}</tbody></table></div></section>"#,
+        r#"<section><h2>Logs</h2><p>Log folder <code>{}</code></p><div class="log-table"><table><caption>Last 50 requests</caption><thead><tr>{headings}</tr></thead><tbody>{requests}</tbody></table></div><div class="log-table"><table><caption>Unknown fields since start</caption><thead><tr><th scope="col">Field name</th><th scope="col">API</th><th scope="col">Count</th><th scope="col">Last time</th></tr></thead><tbody>{unknown_fields}{other_names}</tbody></table></div></section>"#,
         escape(&page.data_folder.join("logs").display().to_string())
     );
     document(&format!(
