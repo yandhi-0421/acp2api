@@ -927,7 +927,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
             "the live helper escaped the stopped process group and still holds stderr"
         );
         assert!(
-            matches!(completed, Ok(Err(LaunchFailure::Runtime(ref error))) if error == "acp2api: upstream ACP error -32603: Internal error"),
+            matches!(completed, Ok(Err(ref error @ LaunchFailure::Owner(_))) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
             "the failed-start drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
         );
         assert_eq!(fixture.clock.now(), ANSWER_TIMEOUT);
@@ -962,7 +962,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
             "the live helper escaped the stopped check process group and still holds stderr"
         );
         assert!(
-            matches!(completed, Ok(Err(crate::compatibility_check::Failure::Runtime(LaunchFailure::Runtime(ref error)))) if error == "acp2api: upstream ACP error -32603: Internal error"),
+            matches!(completed, Ok(Err(crate::compatibility_check::Failure::Runtime(ref error @ LaunchFailure::Owner(_)))) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
             "the check drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
         );
         assert_eq!(fixture.clock.now(), ANSWER_TIMEOUT);
@@ -993,7 +993,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
             "the escaped helper still holds stderr when the owner stops acp2api"
         );
         assert!(
-            matches!(completed, Ok(Err(LaunchFailure::Runtime(ref error))) if error == "acp2api: upstream ACP error -32603: Internal error"),
+            matches!(completed, Ok(Err(ref error @ LaunchFailure::Owner(_))) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
             "a terminal stop must end the drain while the escaped helper keeps stderr open"
         );
         assert_eq!(

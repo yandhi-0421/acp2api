@@ -32,6 +32,7 @@ pub mod system_check;
 pub mod journal_check;
 
 pub mod panel_check;
+pub mod panel_visual;
 
 pub mod server_tool_check;
 

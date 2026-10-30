@@ -8,6 +8,7 @@ use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
     conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest},
+    messages::OwnerMessage,
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
@@ -33,11 +34,37 @@ pub(crate) struct Conductor {
     notices: watch::Receiver<Arc<Vec<Notice>>>,
     pub(crate) highest: u8,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum State {
+    Running,
+    QuotaWait,
+    SignInRequired,
+    RuntimeUnavailable,
+    Lockout,
+}
+impl State {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Running => "Running",
+            Self::QuotaWait => "Quota wait",
+            Self::SignInRequired => "Sign-in required",
+            Self::RuntimeUnavailable => "Runtime unavailable",
+            Self::Lockout => "Lockout",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum RuntimeProcess {
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+}
 pub(crate) struct View {
     pub(crate) model_names: Vec<String>,
     pub(crate) context_sizes: BTreeMap<String, u64>,
-    pub(crate) state: &'static str,
-    pub(crate) runtime_process: &'static str,
+    pub(crate) state: State,
+    pub(crate) runtime_process: RuntimeProcess,
     pub(crate) places: usize,
     pub(crate) queued: usize,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
@@ -48,8 +75,8 @@ impl Default for View {
         Self {
             model_names: Vec::new(),
             context_sizes: BTreeMap::new(),
-            state: "Running",
-            runtime_process: "starting",
+            state: State::Running,
+            runtime_process: RuntimeProcess::Starting,
             places: 0,
             queued: 0,
             sign_in_wait: None,
@@ -68,31 +95,23 @@ pub(crate) enum OwnerAction {
     DismissNotice(String),
 }
 pub(crate) struct QuotaResult {
-    pub(crate) text: String,
+    pub(crate) text: Result<String, crate::messages::Message>,
     pub(crate) time: String,
 }
 #[derive(Clone)]
 pub(crate) struct Notice {
     pub(crate) id: String,
-    name: String,
-}
-impl Notice {
-    pub(crate) fn text(&self) -> String {
-        format!(
-            "The built-in tool {} ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client.",
-            self.name
-        )
-    }
+    pub(crate) name: String,
 }
 enum Replacement {
     SignIn,
     Build {
-        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        reply: BuildReply,
         source: Option<SelectedBuild>,
         initial: bool,
     },
     Check {
-        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        reply: BuildReply,
         folder: PathBuf,
         identity: BuildIdentity,
     },
@@ -101,17 +120,17 @@ type CompatibilityCheck = crate::BoxFuture<'static, CompletedCheck>;
 struct CompletedCheck {
     identity: BuildIdentity,
     result: Result<String, CheckFailure>,
-    reply: oneshot::Sender<Result<String, LaunchFailure>>,
+    reply: BuildReply,
 }
 enum Input {
     Builds {
         action: crate::runtime_builds::Action,
-        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        reply: BuildReply,
         hold: Hold,
     },
     Owner {
         action: OwnerAction,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<Result<(), OwnerMessage>>,
         hold: Hold,
     },
     Turn(Box<TurnWork>),
@@ -140,16 +159,11 @@ pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const MAX_RUNTIME_FAILURES: usize = 3;
 const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
-const REPEATED_FAILURES: &str = "the runtime process failed 3 times in 10 minutes";
 
-fn copy_failed_reason(version: &str) -> String {
-    format!("the copy of the accepted build {version} failed")
-}
-
-const UNAVAILABLE: &str = "official runtime is not available";
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
+type BuildReply = oneshot::Sender<Result<Option<OwnerMessage>, LaunchFailure>>;
 struct Accepted {
     turn: TurnRequest,
     model: crate::catalog::SelectedModel,
@@ -183,7 +197,7 @@ enum Work {
 }
 struct ModelRead {
     work: String,
-    replies: Vec<oneshot::Sender<Result<(), String>>>,
+    replies: Vec<oneshot::Sender<Result<(), OwnerMessage>>>,
 }
 struct QuotaQuery {
     work: String,
@@ -207,7 +221,7 @@ impl QuotaQuery {
     }
 }
 enum QuotaPurpose {
-    Refresh(oneshot::Sender<Result<(), String>>),
+    Refresh(oneshot::Sender<Result<(), OwnerMessage>>),
     Reset {
         wait: quota::Wait,
         model: Option<String>,
@@ -526,7 +540,7 @@ impl Active {
     }
 }
 struct UnavailableReason {
-    message: String,
+    message: crate::messages::Unavailable,
     cause: Option<std::io::ErrorKind>,
 }
 enum RuntimeState {
@@ -538,12 +552,12 @@ enum RuntimeState {
     Stopping,
 }
 impl RuntimeState {
-    fn process_word(&self) -> &'static str {
+    fn runtime_process(&self) -> RuntimeProcess {
         match self {
-            Self::Serving => "running",
-            Self::Retiring { .. } => "stopping",
-            Self::Restarting => "starting",
-            Self::Stopped | Self::Unavailable(_) | Self::Stopping => "stopped",
+            Self::Serving => RuntimeProcess::Running,
+            Self::Retiring { .. } => RuntimeProcess::Stopping,
+            Self::Restarting => RuntimeProcess::Starting,
+            Self::Stopped | Self::Unavailable(_) | Self::Stopping => RuntimeProcess::Stopped,
         }
     }
 }
@@ -562,10 +576,7 @@ struct Core {
     runtime_state: RuntimeState,
     failures: VecDeque<Moment>,
     cleanup_before_start: bool,
-    changes: VecDeque<(
-        crate::runtime_builds::Action,
-        oneshot::Sender<Result<String, LaunchFailure>>,
-    )>,
+    changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
     replacement: Option<Replacement>,
     catalog: Option<crate::catalog::Catalog>,
     model_names: Vec<String>,
@@ -593,8 +604,8 @@ enum Event {
     },
     StartSignIn,
     EndSignInWait,
-    RefreshQuota(oneshot::Sender<Result<(), String>>),
-    ReadModelNames(oneshot::Sender<Result<(), String>>),
+    RefreshQuota(oneshot::Sender<Result<(), OwnerMessage>>),
+    ReadModelNames(oneshot::Sender<Result<(), OwnerMessage>>),
     RetireRuntime,
     RuntimeFailure,
     Stop,
@@ -606,17 +617,17 @@ enum Event {
     Disconnected(String),
     Limit(u8),
     DismissNotice(String),
-    StartFailed(String, String),
+    StartFailed(String, crate::messages::Message),
 }
 enum Command {
     ModelsRead {
-        reply: oneshot::Sender<Result<(), String>>,
-        result: Result<(), String>,
+        reply: oneshot::Sender<Result<(), OwnerMessage>>,
+        result: Result<(), OwnerMessage>,
     },
     Authenticate,
     Lockout(crate::store::Lockout),
     RefuseBuildChange {
-        reply: oneshot::Sender<Result<String, LaunchFailure>>,
+        reply: BuildReply,
         error: crate::messages::Message,
     },
     AdmitChecked {
@@ -627,7 +638,7 @@ enum Command {
         request: Box<PendingRequest>,
         error: crate::messages::Message,
     },
-    State(&'static str, Option<std::io::ErrorKind>),
+    State(State, Option<std::io::ErrorKind>),
     Usage {
         work: String,
         session: String,
@@ -656,17 +667,17 @@ enum Command {
     Forget(String),
 }
 impl Core {
-    fn state(&self) -> &'static str {
+    fn state(&self) -> State {
         if self.lockout.is_some() {
-            "Lockout"
+            State::Lockout
         } else if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
-            "Runtime unavailable"
+            State::RuntimeUnavailable
         } else if self.sign_in_required {
-            "Sign-in required"
+            State::SignInRequired
         } else if self.quota_wait.is_some() {
-            "Quota wait"
+            State::QuotaWait
         } else {
-            "Running"
+            State::Running
         }
     }
     async fn apply(
@@ -734,7 +745,9 @@ impl Core {
         {
             if initial {
                 self.make_unavailable(
-                    &copy_failed_reason(&selected.version),
+                    crate::messages::RuntimeFault::CopyFailed {
+                        version: selected.version.clone(),
+                    },
                     error.io_kind(),
                     runtime,
                     read_open,
@@ -743,7 +756,7 @@ impl Core {
                 )
                 .await;
                 // Startup must keep the management panel available after a failed copy.
-                let _ = reply.send(Ok(String::new()));
+                let _ = reply.send(Ok(None));
             } else {
                 self.resume_after_copy_error(runtime, read_open, clock, journal)
                     .await;
@@ -758,18 +771,14 @@ impl Core {
             return None;
         }
         if !initial && self.lockout.is_some() {
-            let _ = reply.send(Err(self
-                .refusal(clock.now())
-                .expect("lockout just started")
-                .to_string()
-                .into()));
+            let _ = reply.send(Err(self.lockout_failure(clock.now())));
             return None;
         }
         let configured = publish.borrow().agy_acp_server_path.clone();
         let result = builds
             .discover(configured)
             .await
-            .map(|()| String::new())
+            .map(|()| None)
             .map_err(Into::into);
         let _ = reply.send(result);
         None
@@ -806,11 +815,9 @@ impl Core {
                     journal,
                 )
                 .await;
-                let _ = check.reply.send(Err(self
-                    .refusal(builds.start.clock.now())
-                    .expect("lockout just started")
-                    .to_string()
-                    .into()));
+                let _ = check
+                    .reply
+                    .send(Err(self.lockout_failure(builds.start.clock.now())));
                 return;
             }
             result => result,
@@ -818,18 +825,18 @@ impl Core {
         self.launch(runtime, read_open, &builds.start.clock, journal, builds)
             .await;
         if self.lockout.is_some() {
-            let _ = check.reply.send(Err(self
-                .refusal(builds.start.clock.now())
-                .expect("lockout just started")
-                .to_string()
-                .into()));
+            let _ = check
+                .reply
+                .send(Err(self.lockout_failure(builds.start.clock.now())));
             return;
         }
         let configured = publish.borrow().agy_acp_server_path.clone();
         let discovered = builds.discover(configured).await;
-        let _ = check
-            .reply
-            .send(discovered.map_err(LaunchFailure::Runtime).and(result));
+        let _ = check.reply.send(
+            discovered
+                .map_err(LaunchFailure::Runtime)
+                .and(result.map(Some)),
+        );
     }
     async fn apply_lockout(
         &mut self,
@@ -866,8 +873,15 @@ impl Core {
             if matches!(self.runtime_state, RuntimeState::Restarting)
                 && self.failures.len() >= MAX_RUNTIME_FAILURES
             {
-                self.make_unavailable(REPEATED_FAILURES, None, runtime, read_open, journal, builds)
-                    .await;
+                self.make_unavailable(
+                    crate::messages::RuntimeFault::RepeatedFailures,
+                    None,
+                    runtime,
+                    read_open,
+                    journal,
+                    builds,
+                )
+                .await;
                 return;
             }
             let retained = self.cleanup_before_start.then(|| self.sessions.retained());
@@ -889,7 +903,7 @@ impl Core {
                     .await;
                     return;
                 }
-                Err(LaunchFailure::Runtime(_) | LaunchFailure::Io(_)) => {
+                Err(LaunchFailure::Runtime(_) | LaunchFailure::Io(_) | LaunchFailure::Owner(_)) => {
                     self.apply(Event::RuntimeFailure, runtime, read_open, clock, journal)
                         .await;
                 }
@@ -904,15 +918,13 @@ impl Core {
                     return;
                 }
                 Err(error @ (LaunchFailure::NoExecutable | LaunchFailure::NotAccepted)) => {
-                    self.make_unavailable(
-                        &error.to_string(),
-                        None,
-                        runtime,
-                        read_open,
-                        journal,
-                        builds,
-                    )
-                    .await;
+                    let fault = if matches!(error, LaunchFailure::NoExecutable) {
+                        crate::messages::RuntimeFault::NoExecutable
+                    } else {
+                        crate::messages::RuntimeFault::NotAccepted
+                    };
+                    self.make_unavailable(fault, None, runtime, read_open, journal, builds)
+                        .await;
                     return;
                 }
             }
@@ -920,7 +932,7 @@ impl Core {
     }
     async fn make_unavailable(
         &mut self,
-        reason: &str,
+        fault: crate::messages::RuntimeFault,
         cause: Option<std::io::ErrorKind>,
         runtime: &mut Option<Runtime>,
         read_open: &mut bool,
@@ -929,7 +941,7 @@ impl Core {
     ) {
         self.apply(
             Event::RuntimeUnavailable(UnavailableReason {
-                message: builds.unavailable(reason),
+                message: builds.unavailable(fault),
                 cause,
             }),
             runtime,
@@ -1037,15 +1049,24 @@ impl Core {
             .filter(|wait| wait.deadline > now)
             .map(|wait| wait.message(now))
     }
-    fn owner_work_refusal(&self) -> Option<String> {
+    fn lockout_failure(&self, now: Moment) -> LaunchFailure {
+        LaunchFailure::Owner(OwnerMessage::Api(
+            self.refusal(now).expect("lockout just started"),
+        ))
+    }
+    fn owner_work_refusal(&self) -> Option<crate::messages::Message> {
         if let Some(evidence) = &self.lockout {
-            Some(
-                crate::messages::Message::lockout(evidence, &self.panel_address, false).to_string(),
-            )
+            Some(crate::messages::Message::lockout(
+                evidence,
+                &self.panel_address,
+                false,
+            ))
         } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
-            Some(reason.message.clone())
+            Some(crate::messages::Message::RuntimeUnavailable(
+                reason.message.clone(),
+            ))
         } else if matches!(self.runtime_state, RuntimeState::Stopping) {
-            Some(crate::messages::Message::Stopped.to_string())
+            Some(crate::messages::Message::Stopped)
         } else {
             None
         }
@@ -1118,7 +1139,7 @@ impl Core {
     fn owner_action(
         &mut self,
         action: OwnerAction,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<Result<(), OwnerMessage>>,
         settings: &watch::Sender<Arc<crate::store::Settings>>,
         configuration: &std::path::Path,
         clock: &dyn Clock,
@@ -1130,7 +1151,7 @@ impl Core {
                     || self.sign_in_wait.is_some()
                     || !matches!(self.runtime_state, RuntimeState::Serving)
                 {
-                    let _ = reply.send(Err(sign_in::CANNOT_START.into()));
+                    let _ = reply.send(Err(OwnerMessage::SignInCannotStart));
                     return Vec::new();
                 }
                 let commands = self.handle(Event::StartSignIn, clock.now(), clock.wall());
@@ -1178,7 +1199,7 @@ impl Core {
                 commands
             }
             Err(error) => {
-                let _ = reply.send(Err(error));
+                let _ = reply.send(Err(OwnerMessage::Diagnostic(error)));
                 Vec::new()
             }
         }
@@ -1402,20 +1423,23 @@ impl Core {
                 self.quota_event(id, event, upstream_error, now, wall, &mut commands)
             }
             (None, Event::RefreshQuota(reply)) => {
-                let error = self.owner_work_refusal().or_else(|| {
-                    if self.sign_in_required {
-                        Some(self.sign_in_message().to_string())
-                    } else if self
-                        .last_refresh
-                        .is_some_and(|at| now.saturating_sub(at) < 60_000)
-                    {
-                        Some("Wait 60 s between quota refreshes.".into())
-                    } else if self.queue_full() {
-                        Some(crate::messages::Message::QueueFull.to_string())
-                    } else {
-                        None
-                    }
-                });
+                let error = self
+                    .owner_work_refusal()
+                    .map(OwnerMessage::Api)
+                    .or_else(|| {
+                        if self.sign_in_required {
+                            Some(OwnerMessage::Api(self.sign_in_message()))
+                        } else if self
+                            .last_refresh
+                            .is_some_and(|at| now.saturating_sub(at) < 60_000)
+                        {
+                            Some(OwnerMessage::QuotaRefreshTooSoon)
+                        } else if self.queue_full() {
+                            Some(OwnerMessage::Api(crate::messages::Message::QueueFull))
+                        } else {
+                            None
+                        }
+                    });
                 if let Some(error) = error {
                     let _ = reply.send(Err(error));
                 } else {
@@ -1434,10 +1458,10 @@ impl Core {
                 } else {
                     let error = self.owner_work_refusal().or_else(|| {
                         self.queue_full()
-                            .then(|| crate::messages::Message::QueueFull.to_string())
+                            .then_some(crate::messages::Message::QueueFull)
                     });
                     if let Some(error) = error {
-                        let _ = reply.send(Err(error));
+                        let _ = reply.send(Err(OwnerMessage::Api(error)));
                     } else {
                         let id = self.next_work;
                         self.next_work += 1;
@@ -1564,12 +1588,7 @@ impl Core {
             }
             (None, Event::StartFailed(_, error)) => {
                 if let Some(id) = work_id {
-                    self.finish(
-                        id,
-                        Err(Failure::at(crate::messages::Message::Upstream(error), now)),
-                        now,
-                        &mut commands,
-                    );
+                    self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Prepared { work, result })) => {
@@ -1928,7 +1947,7 @@ impl Core {
                 .as_ref()
                 .map(|evidence| evidence.original_error_text.clone()),
             state: self.state(),
-            runtime_process: self.runtime_state.process_word(),
+            runtime_process: self.runtime_state.runtime_process(),
             places: self
                 .work
                 .values()
@@ -2014,13 +2033,7 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         match event {
-            Event::StartFailed(_, error) => self.finish_quota(
-                id,
-                Err(crate::messages::Message::Upstream(error)),
-                now,
-                wall,
-                commands,
-            ),
+            Event::StartFailed(_, error) => self.finish_quota(id, Err(error), now, wall, commands),
             Event::Runtime(RuntimeEvent::Prepared { work, result }) => match result {
                 Ok((session, catalog)) => {
                     self.catalog = Some(catalog);
@@ -2129,8 +2142,8 @@ impl Core {
         let result = result.and(recorded);
         self.quota_result.send_replace(Arc::new(Some(QuotaResult {
             text: match &result {
-                Ok(()) => text.clone(),
-                Err(error) => error.to_string(),
+                Ok(()) => Ok(text.clone()),
+                Err(error) => Err(error.clone()),
             },
             time: crate::journal::timestamp(wall).expect("quota result time in UTC"),
         })));
@@ -2186,7 +2199,7 @@ impl Core {
     ) {
         let response = match query.purpose {
             QuotaPurpose::Refresh(reply) => {
-                let _ = reply.send(result.map_err(|failure| failure.message.to_string()));
+                let _ = reply.send(result.map_err(|failure| OwnerMessage::Api(failure.message)));
                 commands.extend(session.map(Command::Forget));
                 return;
             }
@@ -2390,7 +2403,7 @@ impl Core {
             };
             commands.extend(read.replies.into_iter().map(|reply| Command::ModelsRead {
                 reply,
-                result: Err(message.to_string()),
+                result: Err(OwnerMessage::Api(message.clone())),
             }));
         }
     }
@@ -2466,7 +2479,7 @@ impl Core {
             crate::runtime_driver::CommandError::Io(_) => Event::RuntimeFailure,
             crate::runtime_driver::CommandError::Session(error) => match work {
                 Some(work) => Event::StartFailed(work, error),
-                None => Event::Runtime(RuntimeEvent::Failed(error)),
+                None => Event::Runtime(RuntimeEvent::Failed(error.to_string())),
             },
         };
         self.handle(event, now, wall)
@@ -2525,7 +2538,7 @@ impl Core {
     ) {
         match self.work.remove(&id).unwrap() {
             Work::ModelsQueued(read) | Work::ModelsReading(read) => {
-                let result = result.map_err(|failure| failure.message.to_string());
+                let result = result.map_err(|failure| OwnerMessage::Api(failure.message));
                 commands.extend(read.replies.into_iter().map(|reply| Command::ModelsRead {
                     reply,
                     result: result.clone(),
@@ -2675,7 +2688,7 @@ impl Conductor {
             };
             let mut read_open = false;
             core.publish_view();
-            journal.state(core.state(), None, clock.as_ref());
+            journal.state(core.state().name(), None, clock.as_ref());
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
@@ -2719,7 +2732,7 @@ impl Conductor {
                             .await
                         {
                             Err(error) => {
-                                let _ = reply.send(Err(error.into()));
+                                let _ = reply.send(Err(error));
                             }
                             Ok(selection) => {
                                 publish.send_replace(Arc::new(changed));
@@ -2736,10 +2749,10 @@ impl Conductor {
                                             });
                                             break;
                                         }
-                                        let _ = reply.send(Ok(String::new()));
+                                        let _ = reply.send(Ok(None));
                                     }
                                     crate::runtime_builds::Selection::Notice(notice) => {
-                                        let _ = reply.send(Ok(notice.into()));
+                                        let _ = reply.send(Ok(Some(notice)));
                                     }
                                     crate::runtime_builds::Selection::Check {
                                         folder,
@@ -2914,7 +2927,7 @@ impl Conductor {
                     let _ = reply.send(result);
                 }
                 Command::RefuseBuildChange { reply, error } => {
-                    let _ = reply.send(Err(LaunchFailure::Runtime(error.to_string())));
+                    let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(error))));
                 }
                 Command::Lockout(evidence) => {
                     lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
@@ -2956,7 +2969,9 @@ impl Conductor {
                         hold: clock.hold(HoldKind::TurnEvent),
                     }));
                 }
-                Command::State(state, cause) => journal.state(state, cause, clock.as_ref()),
+                Command::State(state, cause) => {
+                    journal.state(state.name(), cause, clock.as_ref());
+                }
                 Command::Usage { work, session } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => {
@@ -2967,7 +2982,7 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(core.command_failed(
@@ -3016,7 +3031,7 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(core.command_failed(
@@ -3034,7 +3049,7 @@ impl Conductor {
                 } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => runtime.start_configured_prompt(prompt, &session).await,
-                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(core.command_failed(
@@ -3093,7 +3108,7 @@ impl Conductor {
         &self,
         action: crate::runtime_builds::Action,
         hold: Hold,
-    ) -> Result<String, LaunchFailure> {
+    ) -> Result<Option<OwnerMessage>, LaunchFailure> {
         let (reply, result) = oneshot::channel();
         self.send
             .send(Input::Builds {
@@ -3105,7 +3120,7 @@ impl Conductor {
             .map_err(|_| LaunchFailure::Stopped)?;
         result.await.map_err(|_| LaunchFailure::Stopped)?
     }
-    pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), String> {
+    pub(crate) async fn owner(&self, action: OwnerAction, hold: Hold) -> Result<(), OwnerMessage> {
         let (reply, result) = oneshot::channel();
         self.send
             .send(Input::Owner {
@@ -3114,8 +3129,10 @@ impl Conductor {
                 hold,
             })
             .await
-            .map_err(|_| "conductor stopped")?;
-        result.await.map_err(|_| "conductor stopped")?
+            .map_err(|_| OwnerMessage::Api(crate::messages::Message::Stopped))?;
+        result
+            .await
+            .map_err(|_| OwnerMessage::Api(crate::messages::Message::Stopped))?
     }
     pub(crate) async fn admit(
         &self,
@@ -3155,11 +3172,16 @@ impl Conductor {
         result.await.map_err(stopped)?
     }
 }
-fn readable(runtime: &mut Option<Runtime>, read_open: bool) -> Result<&mut Runtime, String> {
+fn readable(
+    runtime: &mut Option<Runtime>,
+    read_open: bool,
+) -> Result<&mut Runtime, crate::runtime_driver::CommandError> {
     runtime
         .as_mut()
         .filter(|_| read_open)
-        .ok_or_else(|| UNAVAILABLE.into())
+        .ok_or(crate::runtime_driver::CommandError::Session(
+            crate::messages::Message::RuntimeNotAvailable,
+        ))
 }
 async fn first_closed<T>(outputs: &[(String, mpsc::UnboundedSender<T>)]) -> String {
     let waits = outputs.iter().map(|(id, output)| {
@@ -3260,7 +3282,11 @@ mod tests {
         let stopped = core.view.borrow().runtime_process;
         assert_eq!(
             (ready, retiring, stopped),
-            ("running", "stopping", "stopped"),
+            (
+                RuntimeProcess::Running,
+                RuntimeProcess::Stopping,
+                RuntimeProcess::Stopped
+            ),
             "FR-054 a process being retired must not read running while its replacement is checked"
         );
     }
@@ -3278,10 +3304,12 @@ mod tests {
         for (event, expected) in [
             (
                 Event::RuntimeUnavailable(UnavailableReason {
-                    message: "runtime missing".into(),
+                    message: crate::messages::Unavailable::no_executable(),
                     cause: None,
                 }),
-                crate::messages::Message::RuntimeUnavailable("runtime missing".into()),
+                crate::messages::Message::RuntimeUnavailable(
+                    crate::messages::Unavailable::no_executable(),
+                ),
             ),
             (Event::Stop, crate::messages::Message::Stopped),
             (
@@ -3321,7 +3349,10 @@ mod tests {
                 Command::ModelsRead { result, .. } => Some(result),
                 _ => None,
             });
-            assert_eq!(answer, Some(Err(expected.to_string())));
+            assert_eq!(
+                answer.map(|result| result.map_err(|error| error.to_string())),
+                Some(Err(expected.to_string()))
+            );
             assert_eq!(core.view.borrow().queued, 0);
         }
     }
@@ -3387,14 +3418,13 @@ mod tests {
         assert!(
             answers
                 .iter_mut()
-                .all(|answer| answer.try_recv() == Ok(Ok(()))),
+                .all(|answer| matches!(answer.try_recv(), Ok(Ok(())))),
             "every waiter gets the shared result"
         );
         let (reply, mut answer) = oneshot::channel();
         let commands = core.handle(Event::ReadModelNames(reply), 4, std::time::UNIX_EPOCH);
-        assert_eq!(
-            answer.try_recv(),
-            Ok(Ok(())),
+        assert!(
+            matches!(answer.try_recv(), Ok(Ok(()))),
             "cached names answer immediately"
         );
         assert!(
@@ -3517,14 +3547,14 @@ mod tests {
             core.launch(&mut runtime, &mut false, &clock, &journal, &builds).await;
             let refusal = core.refusal(clock.now()).unwrap().to_string();
             for mut answer in model_replies {
-                assert_eq!(answer.try_recv(), Ok(Err(refusal.clone())), "startup apply_lockout ends every shared model read with M-12");
+                assert_eq!(answer.try_recv().map(|result| result.map_err(|error| error.to_string())), Ok(Err(refusal.clone())), "startup apply_lockout ends every shared model read with M-12");
             }
             assert_eq!(core.view.borrow().queued, 0);
             let evidence = crate::store::StateFile::read(&core.state_path).unwrap().lockout;
             let actual = (core.state(), launcher.starts.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst), evidence.map(|e| (e.signal, e.original_error_text)));
             if let Some(runtime) = runtime { runtime.stop().await; }
             std::fs::remove_dir_all(folder).unwrap();
-            assert_eq!(actual, ("Lockout", 1, 1, Some(("403".into(), original.into()))), "FR-034/FR-035: startup lockout stops and persists without a replacement");
+            assert_eq!(actual, (State::Lockout, 1, 1, Some(("403".into(), original.into()))), "FR-034/FR-035: startup lockout stops and persists without a replacement");
         }).await.expect("startup lockout cap: five seconds, three starts, two ACP answers and four KiB per start");
     }
 
@@ -3692,7 +3722,8 @@ mod tests {
         let state = core.state();
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(
-            state, "Running",
+            state,
+            State::Running,
             "FR-034: a longer number in an error is not an HTTP status"
         );
     }
@@ -3710,7 +3741,8 @@ mod tests {
         let state = core.state();
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(
-            state, "Quota wait",
+            state,
+            State::QuotaWait,
             "FR-034: an identifier in the error is not an HTTP status"
         );
     }
@@ -3892,7 +3924,7 @@ mod tests {
             std::fs::remove_dir_all(folder).unwrap();
             assert_eq!(
                 (view.state, view.runtime_process),
-                ("Lockout", "stopped"),
+                (State::Lockout, RuntimeProcess::Stopped),
                 "FR-035 and FR-054 publish a stopped process after the lockout stop completes"
             );
         })
@@ -3930,7 +3962,7 @@ mod tests {
             std::fs::remove_dir_all(folder).unwrap();
             assert_eq!(
                 (view.state, view.runtime_process),
-                ("Lockout", "stopped"),
+                (State::Lockout, RuntimeProcess::Stopped),
                 "FR-035 and FR-054 publish no running process at a start in stored lockout"
             );
         })
@@ -3973,7 +4005,7 @@ mod tests {
         let state = core.state();
         let later = core.refusal(1).unwrap().to_string();
         std::fs::remove_dir_all(folder).unwrap();
-        assert_eq!(state, "Lockout");
+        assert_eq!(state, State::Lockout);
         assert!(later.starts_with("acp2api: lockout since "));
         assert!(
             records
@@ -4115,7 +4147,9 @@ mod tests {
             "FR-045 cancels every live prompt, including /usage"
         );
         assert_eq!(
-            answer.try_recv(),
+            answer
+                .try_recv()
+                .map(|result| result.map_err(|error| error.to_string())),
             Ok(Err(crate::messages::Message::Stopped.to_string()))
         );
     }
@@ -4188,7 +4222,7 @@ mod tests {
         );
         let state = commands
             .iter()
-            .position(|command| matches!(command, Command::State("Lockout", _)))
+            .position(|command| matches!(command, Command::State(State::Lockout, _)))
             .unwrap();
         let cancel = commands
             .iter()
@@ -4204,7 +4238,7 @@ mod tests {
             .unwrap();
         let state_notices = commands
             .iter()
-            .filter(|command| matches!(command, Command::State("Lockout", _)))
+            .filter(|command| matches!(command, Command::State(State::Lockout, _)))
             .count();
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(state_notices, 1);
@@ -4465,7 +4499,7 @@ mod tests {
             Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::QuotaWait { until, retry_after: 59 })))
                 if until == "1970-01-01T00:02:00Z"
         )).count(), 1, "the running request ends with the queried reset time");
-        assert_eq!(core.view.borrow().state, "Running");
+        assert_eq!(core.view.borrow().state, State::Running);
         assert!(
             core.model_entries(61_402).is_ok(),
             "the query does not restart an expired quota wait"
@@ -4480,9 +4514,10 @@ mod tests {
             crate::random_hex::<12>().unwrap()
         ));
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
-        for (release, queries, responses, state) in
-            [(60_300, 0, 1, "Quota wait"), (120_001, 1, 0, "Running")]
-        {
+        for (release, queries, responses, state) in [
+            (60_300, 0, 1, State::QuotaWait),
+            (120_001, 1, 0, State::Running),
+        ] {
             let (mut core, second, _tickets) = prompting_with_waiter(&journal);
             core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
             let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
@@ -5043,13 +5078,24 @@ mod tests {
             core.enqueue_quota(purpose, None);
             let commands = core.handle(
                 Event::RuntimeUnavailable(UnavailableReason {
-                    message: "runtime missing".into(),
+                    message: crate::messages::Unavailable::no_executable(),
                     cause: None,
                 }),
                 0,
                 std::time::UNIX_EPOCH,
             );
-            let answers = commands.iter().filter(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(text)))) if text == "runtime missing")).count();
+            let answers = commands
+                .iter()
+                .filter(|command| {
+                    matches!(
+                        command,
+                        Command::Emit(
+                            _,
+                            TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(_)))
+                        )
+                    )
+                })
+                .count();
             observed.push((
                 answers,
                 core.work
@@ -5165,7 +5211,7 @@ mod tests {
         );
         commands.extend(core.handle(
             Event::RuntimeUnavailable(UnavailableReason {
-                message: "unavailable".into(),
+                message: crate::messages::Unavailable::no_executable(),
                 cause: None,
             }),
             1,
@@ -5187,7 +5233,7 @@ mod tests {
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(
             states,
-            ["Quota wait", "Runtime unavailable", "Running"],
+            [State::QuotaWait, State::RuntimeUnavailable, State::Running],
             "FR-002/FR-056 each condition keeps its own end rule, including expiry during an owner action"
         );
     }
@@ -5259,7 +5305,7 @@ mod tests {
                 );
                 core.handle(
                     Event::RuntimeUnavailable(UnavailableReason {
-                        message: "runtime unavailable".into(),
+                        message: crate::messages::Unavailable::no_executable(),
                         cause: None,
                     }),
                     1,
@@ -5709,7 +5755,10 @@ mod tests {
         let seed_id = seed.request.id.clone();
         core.handle(Event::Accepted(Box::new(seed)), 0, std::time::UNIX_EPOCH);
         core.handle(
-            Event::StartFailed(seed_id, "acp2api: session creation failed".into()),
+            Event::StartFailed(
+                seed_id,
+                crate::messages::Message::Upstream("acp2api: session creation failed".into()),
+            ),
             0,
             std::time::UNIX_EPOCH,
         );
@@ -5873,7 +5922,7 @@ mod tests {
             let (root, conductor, task) = check_fixture(ports, stop).await;
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
             let check_result = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
-            let owner_lockout = matches!(check_result, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check failed") && !text.contains("Original error:"));
+            let owner_lockout = matches!(check_result, Err(LaunchFailure::Owner(OwnerMessage::Api(crate::messages::Message::Lockout(_))))) && check_result.as_ref().is_err_and(|error| { let text = error.to_string(); text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check failed") && !text.contains("Original error:") });
             let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|evidence| (evidence.signal, evidence.original_error_text));
             let refused = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string().starts_with("acp2api: lockout since "));
             let check_removed = !root.join(crate::runtime_builds::CHECK).exists();
@@ -5881,7 +5930,7 @@ mod tests {
             stopped.send(true).unwrap();
             task.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
-            assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true, true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12, and removes the check folder");
+            assert_eq!(actual, (State::Lockout, 1, 1, 1, Some((signal.into(), original.into())), Some(true), true, true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12, and removes the check folder");
         }).await.expect("compatibility lockout cap: five seconds, three processes, four ACP messages and four KiB output per process");
     }
 
@@ -5945,13 +5994,13 @@ mod tests {
             let (root, conductor, task) = check_fixture(ports, stopped).await;
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
             let owner = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
-            let owner_lockout = matches!(owner, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check") && !text.contains("Original error:"));
+            let owner_lockout = matches!(owner, Err(LaunchFailure::Owner(OwnerMessage::Api(crate::messages::Message::Lockout(_))))) && owner.as_ref().is_err_and(|error| { let text = error.to_string(); text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check") && !text.contains("Original error:") });
             let evidence = crate::store::StateFile::read(&root.join(crate::store::STATE_FILE)).unwrap().lockout.map(|lockout| lockout.signal);
             let actual = (conductor.view().state, owner_lockout, launcher.starts.load(Ordering::SeqCst), launcher.checks.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst), evidence);
             stop.send(true).unwrap();
             task.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
-            assert_eq!(actual, ("Lockout", true, 2, 1, 3, Some("403".into())), "FR-035: lockout during restoration replaces the check notice with only M-12 for its waiting owner");
+            assert_eq!(actual, (State::Lockout, true, 2, 1, 3, Some("403".into())), "FR-035: lockout during restoration replaces the check notice with only M-12 for its waiting owner");
         }).await.expect("check restoration lockout cap: five seconds, three processes, at most two ACP replies and one KiB output per process");
     }
 
@@ -5996,12 +6045,12 @@ mod tests {
             let (root, conductor, task) = check_fixture(ports, stopped).await;
             let choice = conductor.builds_summary().unwrap().choices[0].0.clone();
             let owner = conductor.builds(crate::runtime_builds::Action::Build(choice), Hold::empty()).await;
-            let owner_lockout = matches!(owner, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("Original error:"));
+            let owner_lockout = matches!(owner, Err(LaunchFailure::Owner(OwnerMessage::Api(crate::messages::Message::Lockout(_))))) && owner.as_ref().is_err_and(|error| { let text = error.to_string(); text.starts_with("acp2api: lockout since ") && !text.contains("Original error:") });
             let actual = (conductor.view().state, owner_lockout, launcher.starts.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst));
             stop.send(true).unwrap();
             task.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
-            assert_eq!(actual, ("Lockout", true, 2, 2), "FR-035/#70: lockout while restarting an owner-selected build must end that owner request with only M-12");
+            assert_eq!(actual, (State::Lockout, true, 2, 2), "FR-035/#70: lockout while restarting an owner-selected build must end that owner request with only M-12");
         }).await.expect("owner restart lockout cap: five seconds, two starts, at most two ACP answers and one KiB output per start");
     }
 
@@ -6168,11 +6217,11 @@ mod tests {
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
             for _ in 0..if restart_fails { 1 } else { 3 } {
                 let notice = conductor.builds(crate::runtime_builds::Action::Check(identity.clone()), Hold::empty()).await.unwrap();
-                assert!(notice.contains("compatibility check failed"));
+                assert!(notice.unwrap().to_string().contains("compatibility check failed"));
                 let models = conductor.model_names(Hold::empty()).await;
                 if restart_fails {
                     let message = models.err().unwrap().message.to_string();
-                    assert!(message.contains(REPEATED_FAILURES), "the three failed restorations must count: {message}");
+                    assert!(message.contains(&crate::messages::RuntimeFault::RepeatedFailures.to_string()), "the three failed restorations must count: {message}");
                 } else {
                     assert_eq!(serde_json::to_value(models.unwrap_or_else(|error| panic!("a failed check must restore the accepted version: {}", error.message))).unwrap()[0]["id"], "m", "a failed check must restore the earlier accepted version without using its failure budget");
                 }
@@ -6695,10 +6744,10 @@ mod tests {
             let mut runtime = None;
             let mut read_open = false;
             core.replace(&mut runtime, &mut read_open, &clock, &journal, &builds, &settings).await;
-            let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason.message), _ => None };
-            let actual = (result.await.unwrap().map_err(|error| error.to_string()), reason, runtime.is_none() && !read_open);
+            let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason.message.to_string()), _ => None };
+            let actual = (result.await.unwrap().map(|notice| notice.map(|notice| notice.to_string())).map_err(|error| error.to_string()), reason, runtime.is_none() && !read_open);
             std::fs::remove_dir_all(folder).unwrap();
-            assert_eq!(actual, (Ok(String::new()), Some("acp2api: the official runtime is unavailable: the copy of the accepted build 1.4.0 failed. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
+            assert_eq!(actual, (Ok(None), Some("acp2api: the official runtime is unavailable: the copy of the accepted build 1.4.0 failed. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
         }).await.expect("initial-copy test cap: five seconds, one copy attempt, zero process launches");
     }
 
@@ -6733,7 +6782,7 @@ mod tests {
             std::fs::remove_file(source.join(crate::runtime_builds::HARNESS)).unwrap();
             std::fs::create_dir(source.join(crate::runtime_builds::HARNESS)).unwrap();
             let copy_error = std::fs::copy(source.join(crate::runtime_builds::HARNESS), folder.join("probe")).unwrap_err().to_string();
-            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice.to_string()), Hold::empty()).await.map_err(|error| error.to_string());
+            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice.to_string()), Hold::empty()).await.map(|notice| notice.map(|notice| notice.to_string())).map_err(|error| error.to_string());
             let after = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string());
             drop(conductor);
             task.await.unwrap();
@@ -6811,7 +6860,7 @@ mod tests {
                 let config = folder.join("config.toml");
                 let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
                 core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
-                let actual = (result.await.unwrap().map_err(|error| error.to_string()), core.failures.len(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.runtime_state, RuntimeState::Serving));
+                let actual = (result.await.unwrap().map(|notice| notice.map(|notice| notice.to_string())).map_err(|error| error.to_string()), core.failures.len(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.runtime_state, RuntimeState::Serving));
                 assert_eq!(actual, (Err(copy_error.clone()), 0, false, true, true), "owner copy errors must return to the owner while the existing runtime stays available");
             }
             if let Some(runtime) = runtime { runtime.stop().await; }
@@ -6859,7 +6908,7 @@ mod tests {
             let owner = result.await.unwrap();
             let mut unavailable = false;
             while let Ok((event, _hold)) = queued.try_recv() {
-                if let TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(message))) = event { unavailable = message.contains("the runtime process failed 3 times in 10 minutes"); }
+                if let TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(message))) = event { unavailable = message.to_string().contains("the runtime process failed 3 times in 10 minutes"); }
             }
             let actual = (owner.is_ok(), core.failures.len(), unavailable);
             std::fs::remove_dir_all(folder).unwrap();
@@ -6878,7 +6927,9 @@ mod tests {
         core.handle(Event::Stop, 1, std::time::UNIX_EPOCH);
         core.command_failed(
             None,
-            crate::runtime_driver::CommandError::Io(std::io::ErrorKind::BrokenPipe.into()),
+            crate::runtime_driver::CommandError::Io(crate::messages::Message::Upstream(
+                std::io::Error::from(std::io::ErrorKind::BrokenPipe).to_string(),
+            )),
             2,
             std::time::UNIX_EPOCH,
         );
@@ -6976,10 +7027,10 @@ mod tests {
         let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
         let (mut core, _, tickets) = prompting_with_waiter(&journal);
         core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
-        let message = "acp2api: the official runtime is unavailable: runtime launch failed. Accepted versions: 1.4.0. See http://127.0.0.1:8329/.";
+        let message = crate::messages::Unavailable::no_executable();
         let commands = core.handle(
             Event::RuntimeUnavailable(UnavailableReason {
-                message: message.into(),
+                message: message.clone(),
                 cause: None,
             }),
             2,
@@ -6991,13 +7042,13 @@ mod tests {
                 Command::Emit(
                     _,
                     TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(text))),
-                ) => Some(text.as_str()),
+                ) => Some(text.to_string()),
                 _ => None,
             })
             .collect();
         assert_eq!(
             ends,
-            [message],
+            [message.to_string()],
             "queued requests must receive M-14 when a planned replacement fails"
         );
         std::fs::remove_dir_all(folder).unwrap();
@@ -7596,7 +7647,8 @@ mod tests {
                 "the start keeps serving after a state-file write failure: {result:?}"
             );
             assert_eq!(
-                state, "Runtime unavailable",
+                state,
+                State::RuntimeUnavailable,
                 "the missing executable, rather than lockout, stops runtime work"
             );
             assert!(!file_exists);
@@ -8017,7 +8069,7 @@ mod tests {
         );
         assert_eq!(
             core.state(),
-            "Quota wait",
+            State::QuotaWait,
             "FR-038 a successful check clears sign-in required during the owner's wait"
         );
         assert_eq!(core.sign_in_wait.as_ref().unwrap().deadline, 600_000);
@@ -8028,14 +8080,14 @@ mod tests {
         );
         assert_eq!(
             core.state(),
-            "Quota wait",
+            State::QuotaWait,
             "FR-038 sign-in preserves the unexpired quota wait"
         );
         assert_eq!(core.next_deadline(), Some(120_000));
         core.handle(Event::StartSignIn, 40_000, std::time::UNIX_EPOCH);
         core.handle(
             Event::RuntimeUnavailable(UnavailableReason {
-                message: "runtime missing".into(),
+                message: crate::messages::Unavailable::no_executable(),
                 cause: None,
             }),
             40_000,
@@ -8048,7 +8100,7 @@ mod tests {
         );
         assert_eq!(
             core.state(),
-            "Runtime unavailable",
+            State::RuntimeUnavailable,
             "sign-in cannot clear runtime unavailability"
         );
         assert_eq!(core.quota_wait.as_ref().unwrap().deadline, 120_000);
@@ -8077,7 +8129,7 @@ mod tests {
             "FR-038 a signed-out runtime starts no queued request"
         );
         assert!(commands.iter().any(|command| matches!(command, Command::Complete(done) if done.request.id == queued && matches!(done.outcome, crate::journal::Outcome::Refused("sign_in_required")))), "FR-037 the queued request gets the condition that started");
-        assert_eq!(core.state(), "Sign-in required");
+        assert_eq!(core.state(), State::SignInRequired);
         std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]
@@ -8106,7 +8158,7 @@ mod tests {
                     if unavailable {
                         core.handle(
                             Event::RuntimeUnavailable(UnavailableReason {
-                                message: "runtime missing".into(),
+                                message: crate::messages::Unavailable::no_executable(),
                                 cause: None,
                             }),
                             1,
@@ -8396,7 +8448,7 @@ mod tests {
         let commands = core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
         assert_eq!(
             core.state(),
-            "Running",
+            State::Running,
             "FR-039 the wait alone does not require sign-in"
         );
         assert!(

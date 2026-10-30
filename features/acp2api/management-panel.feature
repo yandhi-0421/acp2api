@@ -232,7 +232,7 @@ Feature: Management panel
       | reasoning.summary                       |
       | thinking.display                        |
 
-  @FR-055 @issue-72 @wip
+  @FR-055 @issue-72
   Scenario Outline: The language of the browser selects the default language
     Given the browser language is "<browser language>"
     And acp2api is in the normal state
@@ -245,7 +245,7 @@ Feature: Management panel
       | en-US            | Running    |
       | fr-FR            | Running    |
 
-  @FR-055 @issue-72 @wip
+  @FR-055 @issue-72
   Scenario: The language switch changes the language
     Given the browser language is "en-US"
     And the owner opened the management panel
@@ -253,31 +253,31 @@ Feature: Management panel
     Then the first tile shows "运行中"
     And the sections are "官方运行时、配额、名额与队列、接入、日志、设置、通知"
 
-  @FR-055 @issue-72 @wip
+  @FR-055 @issue-72
   Scenario: A load of the page gives requests only to acp2api
     When the owner opens the management panel on the port 8329
     Then each request of the browser goes to "127.0.0.1:8329"
     And the page loads no font from an external address
 
-  @FR-055 @issue-72 @wip
+  @FR-055 @issue-72
   Scenario: Each control uses the color #0066cc
     When the owner opens the management panel with a panel session
     Then each control of the page has the color "#0066cc"
 
-  @FR-055 @issue-72 @wip
+  @FR-055 @issue-72
   Scenario: The styles of the page have no shadow and no web font
     When the owner opens the management panel with a panel session
     Then no element of the page has a shadow
     And the page uses only the system fonts
 
-  @FR-055 @issue-72 @wip
+  @FR-055 @issue-72
   Scenario: Each status color is only on a dot of 9 px next to its text
     Given acp2api is in the state "quota wait"
     When the owner opens the management panel with a panel session
     Then each element with one of the status colors "#0ca30c", "#fab219", "#ec835a", and "#d03b3b" is a dot of 9 px with text next to it
     And no control and no background has a status color
 
-  @FR-055 @issue-72 @wip
+  @FR-055 @issue-72
   Scenario: v1 has only the light mode
     Given the browser prefers the dark color scheme
     When the owner opens the management panel with a panel session

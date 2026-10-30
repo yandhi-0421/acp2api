@@ -13,6 +13,133 @@ pub(crate) struct AcpError {
     pub data: Option<serde_json::Value>,
 }
 #[derive(Clone, Debug)]
+pub(crate) struct LockoutMessage {
+    pub since: String,
+    pub signal: String,
+    pub address: String,
+    pub original: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub(crate) enum RuntimeFault {
+    NoExecutable,
+    NotAccepted,
+    RepeatedFailures,
+    CopyFailed { version: String },
+}
+impl fmt::Display for RuntimeFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoExecutable => {
+                f.write_str("acp2api found no executable of the official runtime")
+            }
+            Self::NotAccepted => f.write_str("no build that acp2api found is an accepted version"),
+            Self::RepeatedFailures => {
+                f.write_str("the runtime process failed 3 times in 10 minutes")
+            }
+            Self::CopyFailed { version } => {
+                write!(f, "the copy of the accepted build {version} failed")
+            }
+        }
+    }
+}
+#[derive(Clone, Debug)]
+pub(crate) struct Unavailable {
+    pub fault: RuntimeFault,
+    pub versions: String,
+    pub port: u16,
+}
+#[cfg(test)]
+impl Unavailable {
+    pub(crate) fn no_executable() -> Self {
+        Self {
+            fault: RuntimeFault::NoExecutable,
+            versions: "1.4.0".into(),
+            port: 8329,
+        }
+    }
+}
+impl fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "acp2api: the official runtime is unavailable: {}. Accepted versions: {}. See http://127.0.0.1:{}/.",
+            self.fault, self.versions, self.port
+        )
+    }
+}
+/// A text for the owner on the management panel. The panel renders it in the language of the page.
+#[derive(Clone, Debug)]
+pub(crate) enum OwnerMessage {
+    Api(Message),
+    SignInCannotStart,
+    QuotaRefreshTooSoon,
+    PathNotAbsolute,
+    PathWithoutServer,
+    PathWithoutHarness,
+    ChooseUnacceptedBuild,
+    ChooseAcceptedBuild,
+    BuildChangedBeforeCheck,
+    CheckCopyChanged,
+    CheckPassed {
+        version: String,
+    },
+    CheckFailed(crate::compatibility_check::Incompatibility),
+    CheckRunFailed(std::sync::Arc<crate::runtime_builds::LaunchFailure>),
+    NoAnswerBeforeDeadline,
+    VersionDiffers,
+    GeminiFolderNotFound,
+    /// A text from the OS or the official runtime, which stays as it is in each language.
+    Diagnostic(String),
+}
+impl OwnerMessage {
+    pub(crate) fn is_failure(&self) -> bool {
+        !matches!(self, Self::CheckPassed { .. })
+    }
+}
+impl fmt::Display for OwnerMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Api(message) => message.fmt(f),
+            Self::SignInCannotStart => f.write_str(
+                "Sign-in cannot start while a sign-in or runtime replacement is in progress.",
+            ),
+            Self::QuotaRefreshTooSoon => f.write_str("Wait 60 s between quota refreshes."),
+            Self::PathNotAbsolute => f.write_str("Enter an absolute path of agy_acp_server."),
+            Self::PathWithoutServer => f.write_str("This path has no agy_acp_server."),
+            Self::PathWithoutHarness => f.write_str(
+                "This folder has no localharness_external, so acp2api did not use this path.",
+            ),
+            Self::ChooseUnacceptedBuild => f.write_str(
+                "Choose a build that is not an accepted version from the search results.",
+            ),
+            Self::ChooseAcceptedBuild => {
+                f.write_str("Choose an accepted build from the search results.")
+            }
+            Self::BuildChangedBeforeCheck => {
+                f.write_str("the selected build changed before the compatibility check")
+            }
+            Self::CheckCopyChanged => {
+                f.write_str("the check copy changed during the compatibility check")
+            }
+            Self::CheckPassed { version } => {
+                write!(f, "The compatibility check passed for {version}.")
+            }
+            Self::CheckFailed(reason) => write!(f, "The compatibility check failed: {reason}."),
+            Self::CheckRunFailed(failure) => {
+                write!(f, "The compatibility check failed: {failure}.")
+            }
+            Self::NoAnswerBeforeDeadline => {
+                f.write_str("runtime gave no answer before its deadline")
+            }
+            Self::VersionDiffers => {
+                f.write_str("initialize version differs from the accepted build")
+            }
+            Self::GeminiFolderNotFound => f.write_str("cannot locate the owner's Gemini folder"),
+            Self::Diagnostic(text) => f.write_str(text),
+        }
+    }
+}
+#[derive(Clone, Debug)]
 pub(crate) enum Message {
     Field {
         path: String,
@@ -48,8 +175,8 @@ pub(crate) enum Message {
         until: String,
         retry_after: u64,
     },
-    Lockout(String),
-    RuntimeUnavailable(String),
+    Lockout(LockoutMessage),
+    RuntimeUnavailable(Unavailable),
     SignInRequired(String),
     RuntimeFailed,
     NoUpdate,
@@ -60,23 +187,28 @@ pub(crate) enum Message {
     },
     Stopped,
     Upstream(String),
+    MissingSessionId,
+    RuntimeStdoutClosed,
+    RuntimeStdinWriteTimedOut,
+    RuntimeStdinQueueFull,
+    RuntimeStdinWriterStopped,
+    RuntimeNotAvailable,
+    ConfigOptionNotApplied {
+        option: String,
+        value: String,
+    },
     UpstreamHttp(HttpError),
     UpstreamAcp(AcpError),
     BuiltInToolRan(String),
 }
 impl Message {
     pub(crate) fn lockout(evidence: &crate::store::Lockout, address: &str, original: bool) -> Self {
-        let mut text = format!(
-            "acp2api: lockout since {} after {}; acp2api sends no request to the official runtime until the owner ends the lockout at {address}.",
-            evidence.since, evidence.signal,
-        );
-        if original {
-            text.push_str(&format!(
-                " Original error: {}",
-                evidence.original_error_text
-            ));
-        }
-        Self::Lockout(text)
+        Self::Lockout(LockoutMessage {
+            since: evidence.since.clone(),
+            signal: evidence.signal.clone(),
+            address: address.into(),
+            original: original.then(|| evidence.original_error_text.clone()),
+        })
     }
     fn upstream_parts(&self) -> Option<(Option<i64>, &str, Option<&str>)> {
         match self {
@@ -199,6 +331,13 @@ impl Message {
             Message::UpstreamHttp(_)
             | Message::UpstreamAcp(_)
             | Message::Upstream(_)
+            | Message::MissingSessionId
+            | Message::RuntimeStdoutClosed
+            | Message::RuntimeStdinWriteTimedOut
+            | Message::RuntimeStdinQueueFull
+            | Message::RuntimeStdinWriterStopped
+            | Message::RuntimeNotAvailable
+            | Message::ConfigOptionNotApplied { .. }
             | Message::MaxTurnRequests
             | Message::BuiltInToolRan(_) => Row::Other502,
             Message::Lockout(_)
@@ -226,7 +365,14 @@ impl Message {
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Lockout(message) | Self::RuntimeUnavailable(message) => f.write_str(message),
+            Self::Lockout(LockoutMessage { since, signal, address, original }) => {
+                write!(f, "acp2api: lockout since {since} after {signal}; acp2api sends no request to the official runtime until the owner ends the lockout at {address}.")?;
+                if let Some(original) = original {
+                    write!(f, " Original error: {original}")?;
+                }
+                Ok(())
+            }
+            Self::RuntimeUnavailable(unavailable) => unavailable.fmt(f),
             Self::SignInRequired(address) => write!(f, "acp2api: the official runtime is not signed in. Sign in at {address}."),
             Self::Model { requested, names } => write!(
                 f,
@@ -277,6 +423,13 @@ impl fmt::Display for Message {
             Self::RetryWait { seconds, error } => write!(f, "acp2api: a request of this conversation failed less than {} s ago. Send the request again in {seconds} s. The error was: {}", crate::conductor::WAIT_SECONDS, error.to_string().trim_start_matches("acp2api: ")),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
+            Self::MissingSessionId => f.write_str("missing sessionId"),
+            Self::RuntimeStdoutClosed => f.write_str("runtime stdout closed"),
+            Self::RuntimeStdinWriteTimedOut => write!(f, "runtime stdin write exceeded {} s", crate::runtime_driver::WRITE_TIMEOUT / 1000),
+            Self::RuntimeStdinQueueFull => write!(f, "runtime stdin queue exceeded {} bytes", crate::runtime_driver::MAX_QUEUED_BYTES),
+            Self::RuntimeStdinWriterStopped => f.write_str("runtime stdin writer stopped"),
+            Self::RuntimeNotAvailable => f.write_str("official runtime is not available"),
+            Self::ConfigOptionNotApplied { option, value } => write!(f, "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."),
             Self::UpstreamHttp(error) => {
                 f.write_str("acp2api: upstream error ")?;
                 if let Some(code) = error.code { write!(f, "{code} ")?; }
