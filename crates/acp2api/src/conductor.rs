@@ -5649,6 +5649,23 @@ mod tests {
         ).await;
     }
 
+    #[tokio::test]
+    async fn a_prompt_end_before_stderr_lockout_prevents_check_restoration() {
+        assert_compatibility_lockout(
+            vec![
+                serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true},"_meta":{"antigravity":{"systemPrompt":{"append":true}}}},"authMethods":[{"id":"oauth-personal","name":"Google"}],"agentInfo":{"version":"1.6.0"}}}),
+                serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"checked","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                serde_json::json!({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}),
+            ],
+            concat!(
+                "Antigravity SDK error processing prompt for session checked\n",
+                "Error 403, Message: Account name%40example.com; Bearer abcdefghijklmnopqrstuvwxyz012345; appeal https://example.com/appeal, Status: PERMISSION_DENIED, Details: []\n",
+            ),
+            "403",
+            "acp2api: upstream error 403 PERMISSION_DENIED: Account <REDACTED>; Bearer <REDACTED>; appeal https://example.com/appeal",
+        ).await;
+    }
+
     async fn failed_checks(timeout: bool, restart_fails: bool) {
         use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree, ReleaseFacts};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

@@ -689,11 +689,14 @@ async fn a_sign_in_address_accepts_four_kib_and_rejects_a_longer_line() {
     let address = format!("{prefix}{}", "a".repeat(4096 - prefix.len()));
     let line = format!("Open the following link to authenticate the ACP server: {address}");
     assert!(
-        matches!(runtime.stderr(&format!("{line}b")), RuntimeEvent::Stderr),
+        matches!(
+            Runtime::stderr(&mut runtime.stderr_session, &format!("{line}b")),
+            RuntimeEvent::Stderr
+        ),
         "the product rejects a sign-in address over 4 KiB"
     );
     assert!(
-        matches!(runtime.stderr(&line), RuntimeEvent::SignInAddress(value) if value == address),
+        matches!(Runtime::stderr(&mut runtime.stderr_session, &line), RuntimeEvent::SignInAddress(value) if value == address),
         "the product accepts a sign-in address of exactly 4 KiB"
     );
 }

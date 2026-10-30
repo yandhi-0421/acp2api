@@ -11,6 +11,7 @@ use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
+use futures_util::{Stream, stream};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -135,6 +136,7 @@ pub(crate) struct Runtime {
     config: std::collections::HashMap<(String, String), String>,
     configuring: std::collections::HashMap<u64, ConfiguringPrompt>,
     stderr_session: Option<String>,
+    stderr_closed: bool,
     authentication: Option<u64>,
 }
 struct CreatingSession {
@@ -233,13 +235,13 @@ impl Runtime {
                         Ok(Some(line)) => Line::Stderr(line),
                         Ok(None) | Err(_) => {
                             stderr_open = false;
-                            continue;
+                            Line::StderrClosed
                         }
                     },
                     else => Line::Closed,
                 };
                 let closed = matches!(line, Line::Closed);
-                let hold = clock.hold(if closed {
+                let hold = clock.hold(if matches!(line, Line::Closed | Line::StderrClosed) {
                     HoldKind::TurnEvent
                 } else {
                     HoldKind::RuntimeLine
@@ -265,6 +267,7 @@ impl Runtime {
             config: std::collections::HashMap::new(),
             configuring: std::collections::HashMap::new(),
             stderr_session: None,
+            stderr_closed: false,
             authentication: None,
         };
         Ok(runtime)
@@ -448,6 +451,10 @@ impl Runtime {
                     }
                     continue;
                 }
+                Line::StderrClosed => {
+                    self.stderr_closed = true;
+                    continue;
+                }
                 Line::Closed => {
                     return Err(Message::Upstream("runtime stdout closed".into()));
                 }
@@ -558,26 +565,35 @@ impl Runtime {
         Ok(())
     }
     pub(crate) async fn next(&mut self) -> (RuntimeEvent, Hold) {
-        let Some((line, hold)) = self.lines.recv().await else {
-            return (RuntimeEvent::Closed, self.clock.hold(HoldKind::TurnEvent));
-        };
-        let event = match line {
-            Line::Closed => RuntimeEvent::Closed,
-            Line::Stderr(line) => self.stderr(&String::from_utf8_lossy(&line)),
-            Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
-            Line::Stdout(Ok(value)) => self.decode(value).await,
-        };
-        (event, hold)
+        loop {
+            let Some((line, hold)) = self.lines.recv().await else {
+                return (RuntimeEvent::Closed, self.clock.hold(HoldKind::TurnEvent));
+            };
+            let event = match line {
+                Line::Closed => RuntimeEvent::Closed,
+                Line::StderrClosed => {
+                    self.stderr_closed = true;
+                    continue;
+                }
+                Line::Stderr(line) => {
+                    Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(&line))
+                }
+                Line::Stdout(Err(error)) => RuntimeEvent::Failed(error),
+                Line::Stdout(Ok(value)) => self.decode(value).await,
+            };
+            return (event, hold);
+        }
     }
     fn stderr_lockout(&mut self, line: &[u8]) -> Option<Message> {
-        let RuntimeEvent::UpstreamError { error, .. } = self.stderr(&String::from_utf8_lossy(line))
+        let RuntimeEvent::UpstreamError { error, .. } =
+            Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(line))
         else {
             return None;
         };
         let error = Message::UpstreamHttp(error);
         error.lockout_signal().map(|_| error)
     }
-    fn stderr(&mut self, line: &str) -> RuntimeEvent {
+    fn stderr(stderr_session: &mut Option<String>, line: &str) -> RuntimeEvent {
         if let Some(address) = line
             .trim()
             .strip_prefix("Open the following link to authenticate the ACP server: ")
@@ -591,11 +607,11 @@ impl Runtime {
         if let Some((_, session)) =
             line.split_once("Antigravity SDK error processing prompt for session ")
         {
-            self.stderr_session = Some(session.trim().to_owned());
+            *stderr_session = Some(session.trim().to_owned());
         } else if let Some((prefix, rest)) = line.split_once("Message: ")
             && let Some((message, rest)) = rest.split_once(", Status: ")
             && let Some((status, _)) = rest.split_once(", Details:")
-            && let Some(session) = self.stderr_session.take()
+            && let Some(session) = stderr_session.take()
         {
             // Some error lines report a status without a numeric HTTP code.
             let Ok(code) = prefix
@@ -826,7 +842,10 @@ impl Runtime {
             arguments,
         })
     }
-    pub(crate) async fn stop(mut self) {
+    pub(crate) async fn stop(self) {
+        drop(self.stop_stderr().await);
+    }
+    pub(crate) async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
         let _ = self.input.shutdown().await;
         drop(self.input);
         self.tree.stop(self.clock).await;
@@ -837,6 +856,26 @@ impl Runtime {
         {
             self.tool_sets.remove(&tools.mcp_url);
         }
+        stream::unfold(
+            (self.lines, self.stderr_session, self.stderr_closed),
+            |(mut lines, mut session, closed)| async move {
+                if closed {
+                    return None;
+                }
+                while let Some((line, _hold)) = lines.recv().await {
+                    if matches!(line, Line::StderrClosed | Line::Closed) {
+                        return None;
+                    }
+                    if let Line::Stderr(line) = line {
+                        return Some((
+                            Self::stderr(&mut session, &String::from_utf8_lossy(&line)),
+                            (lines, session, false),
+                        ));
+                    }
+                }
+                None
+            },
+        )
     }
 }
 
@@ -858,6 +897,7 @@ struct SessionTools {
 enum Line {
     Stdout(Result<Value, String>),
     Stderr(Vec<u8>),
+    StderrClosed,
     Closed,
 }
 pub(crate) enum RuntimeEvent {
