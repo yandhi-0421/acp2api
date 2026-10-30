@@ -4,6 +4,7 @@ use crate::{
     Moment,
     conversation::{TurnEvent, Usage},
 };
+use std::collections::BTreeMap;
 pub(super) enum Location {
     Loaded,
     Unloaded(std::path::PathBuf),
@@ -59,6 +60,7 @@ pub(super) struct Sessions {
     records: Vec<Record>,
     startup: Option<String>,
     use_sequence: u64,
+    cancels: BTreeMap<String, Moment>,
 }
 impl Sessions {
     pub(super) fn records(&self) -> &[Record] {
@@ -134,6 +136,32 @@ impl Sessions {
             }
         });
         commands
+    }
+    pub(super) fn next_deadline(&self) -> Option<Moment> {
+        self.records
+            .iter()
+            .map(|record| record.expires)
+            .chain(self.cancels.values().copied())
+            .min()
+    }
+    pub(super) fn cancellation_due(&self, now: Moment) -> bool {
+        self.cancels.values().any(|at| *at <= now)
+    }
+    pub(super) fn cancel(&mut self, session: String, now: Moment) -> Command {
+        self.cancels
+            .entry(session.clone())
+            .or_insert_with(|| now.saturating_add(super::CANCEL_TIMEOUT));
+        Command::Cancel(session)
+    }
+    pub(super) fn prompt_ended(&mut self, session: &str) {
+        self.cancels.remove(session);
+    }
+    pub(super) fn clear_cancels(&mut self) {
+        self.cancels.clear();
+    }
+    pub(super) fn runtime_failed(&mut self) {
+        self.clear_cancels();
+        self.startup = None;
     }
     pub(super) fn complete_request(
         &mut self,
@@ -276,6 +304,7 @@ impl Sessions {
             records,
             startup,
             use_sequence,
+            cancels: BTreeMap::new(),
         }
     }
     #[cfg(test)]

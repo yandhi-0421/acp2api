@@ -571,7 +571,6 @@ struct Core {
     runtime_state: RuntimeState,
     failures: VecDeque<Moment>,
     cleanup_before_start: bool,
-    cancels: BTreeMap<String, Moment>,
     changes: VecDeque<(
         crate::runtime_builds::Action,
         oneshot::Sender<Result<String, LaunchFailure>>,
@@ -1020,8 +1019,7 @@ impl Core {
         self.work
             .values()
             .filter_map(Work::deadline)
-            .chain(self.sessions.records().iter().map(|record| record.expires))
-            .chain(self.cancels.values().copied())
+            .chain(self.sessions.next_deadline())
             .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
             .chain(self.sign_in_wait.as_ref().map(|wait| wait.deadline))
             .chain(self.retry_waits.iter().map(|wait| wait.deadline))
@@ -1301,7 +1299,7 @@ impl Core {
         now: Moment,
         wall: std::time::SystemTime,
     ) -> Vec<Command> {
-        if matches!(event, Event::Deadline) && self.cancels.values().any(|at| *at <= now) {
+        if matches!(event, Event::Deadline) && self.sessions.cancellation_due(now) {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
         if matches!(event, Event::Deadline)
@@ -1344,7 +1342,7 @@ impl Core {
             update: TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_),
         }) = &event
         {
-            self.cancels.remove(session);
+            self.sessions.prompt_ended(session);
         }
         let quota_work = work_id.filter(|id| matches!(self.work[id], Work::QuotaWorking { .. }));
         match (quota_work, event) {
@@ -1569,10 +1567,9 @@ impl Core {
                                 Phase::Settling { .. } | Phase::QuotaSettling { .. }
                             );
                             if active.phase.update_deadline().is_some() {
-                                self.cancel(
-                                    active.session.as_ref().unwrap().clone(),
-                                    now,
-                                    &mut commands,
+                                commands.push(
+                                    self.sessions
+                                        .cancel(active.session.as_ref().unwrap().clone(), now),
                                 );
                             }
                             self.work.insert(
@@ -1706,7 +1703,7 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Retired { session })) => {
-                self.cancels.remove(&session);
+                self.sessions.prompt_ended(&session);
                 if let Some(id) = self.by_session(&session) {
                     self.finish(id, Ok(()), now, &mut commands);
                 }
@@ -1797,11 +1794,10 @@ impl Core {
                 self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
                 self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Restarting;
-                self.cancels.clear();
+                self.sessions.runtime_failed();
                 self.failures
                     .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
                 self.failures.push_back(now);
-                self.sessions.replaced(None);
                 while let Some(id) = self
                     .work
                     .iter()
@@ -1973,7 +1969,7 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        self.cancels.clear();
+        self.sessions.clear_cancels();
         for work in self.work.values() {
             if let Work::QuotaWorking {
                 phase: QuotaPhase::Prompt(session),
@@ -2219,7 +2215,7 @@ impl Core {
             }
             TurnUpdate::UnpermittedTool(name) => {
                 *result = Err(crate::messages::Message::BuiltInToolRan(name));
-                self.cancel(session, now, commands);
+                commands.push(self.sessions.cancel(session, now));
             }
             TurnUpdate::Activity | TurnUpdate::Usage { .. } | TurnUpdate::ThoughtDropped => {}
         }
@@ -2409,7 +2405,7 @@ impl Core {
                     && active.release_or_cut_reply(Some(text), now, commands)
                 {
                     let session = active.session.as_ref().unwrap().clone();
-                    self.cancel(session, now, commands);
+                    commands.push(self.sessions.cancel(session, now));
                 }
             }
             TurnUpdate::Usage { used, .. } => active.input_tokens = used,
@@ -2483,7 +2479,7 @@ impl Core {
                     matches!(active.phase, Phase::Prompt { .. }) && active.tool_call.is_none();
                 if cancel {
                     active.tool_call = Some(call);
-                    self.cancel(session, now, commands);
+                    commands.push(self.sessions.cancel(session, now));
                 }
                 commands.push(Command::Permission(request));
             }
@@ -2586,12 +2582,6 @@ impl Core {
         };
         self.handle(event, now, wall)
     }
-    fn cancel(&mut self, session: String, now: Moment, commands: &mut Vec<Command>) {
-        self.cancels
-            .entry(session.clone())
-            .or_insert_with(|| now.saturating_add(CANCEL_TIMEOUT));
-        commands.push(Command::Cancel(session));
-    }
     fn fail_request(
         &mut self,
         id: WorkId,
@@ -2601,7 +2591,7 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         if self.work[&id].update_deadline().is_some() {
-            self.cancel(session, now, commands);
+            commands.push(self.sessions.cancel(session, now));
         }
         self.end_request(id, Failure::at(error, now), now, commands);
     }
@@ -2795,7 +2785,6 @@ impl Conductor {
                 view,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
-                cancels: BTreeMap::new(),
                 changes: VecDeque::new(),
                 replacement: None,
                 catalog: None,
@@ -3336,7 +3325,6 @@ mod tests {
                 view: watch::channel(Arc::new(View::default())).0,
                 failures: VecDeque::new(),
                 cleanup_before_start: false,
-                cancels: BTreeMap::new(),
                 changes: VecDeque::new(),
                 replacement: None,
                 catalog: None,
@@ -6773,9 +6761,7 @@ mod tests {
             core.sessions.replaced(Some("sibling".into()));
             core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
             drop(agent_input);
-            let mut batch = Vec::new();
-            core.cancel("running".into(), 0, &mut batch);
-            batch.push(Command::Permission(request));
+            let batch = vec![core.sessions.cancel("running".into(), 0), Command::Permission(request)];
             let mut batch: VecDeque<_> = batch.into();
             Conductor::commands(&mut core, &mut runtime, &mut read_open, &clock, &journal, &mut batch).await;
             let (event, _hold) = runtime.as_mut().unwrap().next().await;
