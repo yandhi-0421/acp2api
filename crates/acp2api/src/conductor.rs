@@ -23,6 +23,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot, watch};
 #[derive(Clone)]
 pub(crate) struct Conductor {
+    journal: crate::journal::Journal,
     view: watch::Receiver<Arc<View>>,
     quota_result: watch::Receiver<Arc<Option<QuotaResult>>>,
     send: mpsc::Sender<Input>,
@@ -32,6 +33,8 @@ pub(crate) struct Conductor {
     pub(crate) highest: u8,
 }
 pub(crate) struct View {
+    pub(crate) model_names: Vec<String>,
+    pub(crate) context_sizes: BTreeMap<String, u64>,
     pub(crate) state: &'static str,
     pub(crate) runtime_process: &'static str,
     pub(crate) places: usize,
@@ -42,6 +45,8 @@ pub(crate) struct View {
 impl Default for View {
     fn default() -> Self {
         Self {
+            model_names: Vec::new(),
+            context_sizes: BTreeMap::new(),
             state: "Running",
             runtime_process: "starting",
             places: 0,
@@ -55,6 +60,7 @@ pub(crate) enum OwnerAction {
     SignIn,
     CancelSignIn,
     RefreshQuota,
+    ReadModelNames,
     NewLocalApiKey,
     SetPasswordHash(String),
     SetConcurrencyLimit(u8),
@@ -156,6 +162,8 @@ struct ResponseChannel {
 type WorkId = u64;
 type WorkTable = BTreeMap<WorkId, Work>;
 enum Work {
+    ModelsQueued(ModelRead),
+    ModelsReading(ModelRead),
     CheckQueued(PendingRequest),
     Checking(PendingRequest),
     AcceptedQueued(Accepted),
@@ -171,6 +179,10 @@ enum Work {
         text: String,
         result: Result<(), crate::messages::Message>,
     },
+}
+struct ModelRead {
+    work: String,
+    replies: Vec<oneshot::Sender<Result<(), String>>>,
 }
 struct QuotaQuery {
     work: String,
@@ -231,6 +243,7 @@ enum PendingCompletion {
 impl Work {
     fn key(&self) -> &str {
         match self {
+            Self::ModelsQueued(read) | Self::ModelsReading(read) => &read.work,
             Self::CheckQueued(request) | Self::Checking(request) => &request.request.id,
             Self::AcceptedQueued(request) => &request.request.id,
             Self::AcceptedWorking(active) => &active.request.id,
@@ -246,7 +259,9 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn execution_mut(&mut self) -> Option<&mut Active> {
@@ -257,7 +272,9 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn into_queued(self) -> Option<Accepted> {
@@ -268,7 +285,9 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn into_active(self) -> Option<Active> {
@@ -279,13 +298,18 @@ impl Work {
             | Self::Checking(_)
             | Self::Retiring(_)
             | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. } => None,
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn is_queued(&self) -> bool {
         matches!(
             self,
-            Self::CheckQueued(_) | Self::AcceptedQueued(_) | Self::QuotaQueued { .. }
+            Self::CheckQueued(_)
+                | Self::AcceptedQueued(_)
+                | Self::QuotaQueued { .. }
+                | Self::ModelsQueued(_)
         )
     }
     fn occupies_place(&self) -> bool {
@@ -295,6 +319,7 @@ impl Work {
                 | Self::AcceptedWorking(_)
                 | Self::Retiring(_)
                 | Self::QuotaWorking { .. }
+                | Self::ModelsReading(_)
         )
     }
     fn reply(&self) -> Option<&ResponseChannel> {
@@ -309,7 +334,11 @@ impl Work {
                 }
                 QuotaPurpose::Refresh(_) => None,
             },
-            Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
+            Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn reply_mut(&mut self) -> Option<&mut ResponseChannel> {
@@ -324,7 +353,11 @@ impl Work {
                 }
                 QuotaPurpose::Refresh(_) => None,
             },
-            Self::CheckQueued(_) | Self::Checking(_) | Self::Retiring(_) => None,
+            Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
         }
     }
     fn update_deadline(&self) -> Option<Moment> {
@@ -548,6 +581,8 @@ struct Core {
     )>,
     replacement: Option<Replacement>,
     catalog: Option<crate::catalog::Catalog>,
+    model_names: Vec<String>,
+    context_sizes: BTreeMap<String, u64>,
     work: WorkTable,
     next_work: WorkId,
     records: Vec<records::Record>,
@@ -574,6 +609,7 @@ enum Event {
     StartSignIn,
     EndSignInWait,
     RefreshQuota(oneshot::Sender<Result<(), String>>),
+    ReadModelNames(oneshot::Sender<Result<(), String>>),
     RetireRuntime,
     RuntimeFailure,
     Stop,
@@ -588,6 +624,10 @@ enum Event {
     StartFailed(String, String),
 }
 enum Command {
+    ModelsRead {
+        reply: oneshot::Sender<Result<(), String>>,
+        result: Result<(), String>,
+    },
     Authenticate,
     Lockout(crate::store::Lockout),
     RefuseBuildChange {
@@ -969,7 +1009,9 @@ impl Core {
                 Work::CheckQueued(_)
                 | Work::Checking(_)
                 | Work::AcceptedQueued(_)
-                | Work::QuotaQueued { .. } => None,
+                | Work::QuotaQueued { .. }
+                | Work::ModelsQueued(_)
+                | Work::ModelsReading(_) => None,
                 Work::AcceptedWorking(active) => active.session.as_deref(),
                 Work::Retiring(outstanding) => outstanding.session.as_deref(),
                 Work::QuotaWorking { phase, .. } => phase.session(),
@@ -1014,6 +1056,19 @@ impl Core {
             .as_ref()
             .filter(|wait| wait.deadline > now)
             .map(|wait| wait.message(now))
+    }
+    fn owner_work_refusal(&self) -> Option<String> {
+        if let Some(evidence) = &self.lockout {
+            Some(
+                crate::messages::Message::lockout(evidence, &self.panel_address, false).to_string(),
+            )
+        } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+            Some(reason.message.clone())
+        } else if matches!(self.runtime_state, RuntimeState::Stopping) {
+            Some(crate::messages::Message::Stopped.to_string())
+        } else {
+            None
+        }
     }
     fn start_quota(
         &mut self,
@@ -1113,6 +1168,9 @@ impl Core {
             }
             OwnerAction::RefreshQuota => {
                 return self.handle(Event::RefreshQuota(reply), clock.now(), clock.wall());
+            }
+            OwnerAction::ReadModelNames => {
+                return self.handle(Event::ReadModelNames(reply), clock.now(), clock.wall());
             }
             OwnerAction::DismissNotice(id) => {
                 let commands = self.handle(Event::DismissNotice(id), clock.now(), clock.wall());
@@ -1364,32 +1422,53 @@ impl Core {
                 self.quota_event(id, event, upstream_error, now, wall, &mut commands)
             }
             (None, Event::RefreshQuota(reply)) => {
-                let error = if let Some(evidence) = &self.lockout {
-                    Some(
-                        crate::messages::Message::lockout(evidence, &self.panel_address, false)
-                            .to_string(),
-                    )
-                } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
-                    Some(reason.message.clone())
-                } else if matches!(self.runtime_state, RuntimeState::Stopping) {
-                    Some(crate::messages::Message::Stopped.to_string())
-                } else if self.sign_in_required {
-                    Some(self.sign_in_message().to_string())
-                } else if self
-                    .last_refresh
-                    .is_some_and(|at| now.saturating_sub(at) < 60_000)
-                {
-                    Some("Wait 60 s between quota refreshes.".into())
-                } else if self.queue_full() {
-                    Some(crate::messages::Message::QueueFull.to_string())
-                } else {
-                    None
-                };
+                let error = self.owner_work_refusal().or_else(|| {
+                    if self.sign_in_required {
+                        Some(self.sign_in_message().to_string())
+                    } else if self
+                        .last_refresh
+                        .is_some_and(|at| now.saturating_sub(at) < 60_000)
+                    {
+                        Some("Wait 60 s between quota refreshes.".into())
+                    } else if self.queue_full() {
+                        Some(crate::messages::Message::QueueFull.to_string())
+                    } else {
+                        None
+                    }
+                });
                 if let Some(error) = error {
                     let _ = reply.send(Err(error));
                 } else {
                     self.last_refresh = Some(now);
                     self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
+                }
+            }
+            (None, Event::ReadModelNames(reply)) => {
+                if self.catalog.is_some() || !self.model_names.is_empty() {
+                    let _ = reply.send(Ok(()));
+                } else if let Some(read) = self.work.values_mut().find_map(|work| match work {
+                    Work::ModelsQueued(read) | Work::ModelsReading(read) => Some(read),
+                    _ => None,
+                }) {
+                    read.replies.push(reply);
+                } else {
+                    let error = self.owner_work_refusal().or_else(|| {
+                        self.queue_full()
+                            .then(|| crate::messages::Message::QueueFull.to_string())
+                    });
+                    if let Some(error) = error {
+                        let _ = reply.send(Err(error));
+                    } else {
+                        let id = self.next_work;
+                        self.next_work += 1;
+                        self.work.insert(
+                            id,
+                            Work::ModelsQueued(ModelRead {
+                                work: format!("models-{id}"),
+                                replies: vec![reply],
+                            }),
+                        );
+                    }
                 }
             }
             (None, Event::Stop) => {
@@ -1519,6 +1598,8 @@ impl Core {
                             }
                         }
                         Work::Retiring(_)
+                        | Work::ModelsQueued(_)
+                        | Work::ModelsReading(_)
                         | Work::QuotaQueued { .. }
                         | Work::QuotaWorking { .. } => unreachable!(),
                     }
@@ -1541,6 +1622,12 @@ impl Core {
                             self.catalog = Some(catalog);
                             self.sign_in_required = false;
                             match self.work.get_mut(&id).unwrap() {
+                                Work::ModelsReading(_) => {
+                                    commands.extend(
+                                        self.startup_session.replace(session).map(Command::Forget),
+                                    );
+                                    self.finish(id, Ok(()), now, &mut commands);
+                                }
                                 Work::Checking(_) => {
                                     commands.push(Command::AdmitChecked { id, session });
                                 }
@@ -1576,6 +1663,10 @@ impl Core {
                                     }
                                 }
                             }
+                        }
+                        Err(error) if matches!(self.work[&id], Work::ModelsReading(_)) => {
+                            let _ = self.quota_signal(&error, now, wall, &mut commands);
+                            self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
                         }
                         Err(error) => {
                             if let Some((wait, known)) =
@@ -1713,8 +1804,12 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Closed))
-                if matches!(self.runtime_state, RuntimeState::Restarting) => {}
+                if matches!(self.runtime_state, RuntimeState::Restarting) =>
+            {
+                self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
+            }
             (None, Event::Runtime(RuntimeEvent::Closed) | Event::RuntimeFailure) => {
+                self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
                 self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Restarting;
                 self.cancels.clear();
@@ -1776,6 +1871,7 @@ impl Core {
             && places < usize::from(self.limit)
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
+                Work::ModelsQueued(_) => Some(*id),
                 Work::CheckQueued(_) => Some(*id),
                 Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
                 Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
@@ -1786,6 +1882,19 @@ impl Core {
                 break;
             };
             let request = match self.work.remove(&id).unwrap() {
+                Work::ModelsQueued(read) => {
+                    commands.push(Command::Prepare {
+                        work: read.work.clone(),
+                        settings: Session {
+                            tools: Vec::new(),
+                            system: None,
+                        },
+                        load: None,
+                    });
+                    self.work.insert(id, Work::ModelsReading(read));
+                    places += 1;
+                    continue;
+                }
                 Work::CheckQueued(request) => {
                     commands.push(Command::Prepare {
                         work: request.request.id.clone(),
@@ -1857,8 +1966,13 @@ impl Core {
         self.publish_view();
         commands
     }
-    fn publish_view(&self) {
+    fn publish_view(&mut self) {
+        if let Some(catalog) = &self.catalog {
+            self.model_names = catalog.names().map(|(name, _)| name).collect();
+        }
         self.view.send_replace(Arc::new(View {
+            model_names: self.model_names.clone(),
+            context_sizes: self.context_sizes.clone(),
             sign_in_wait: self.sign_in_wait.clone(),
             lockout_evidence: self
                 .lockout
@@ -2132,7 +2246,7 @@ impl Core {
                 *result = Err(crate::messages::Message::BuiltInToolRan(name));
                 self.cancel(session, now, commands);
             }
-            TurnUpdate::Activity | TurnUpdate::Usage(_) | TurnUpdate::ThoughtDropped => {}
+            TurnUpdate::Activity | TurnUpdate::Usage { .. } | TurnUpdate::ThoughtDropped => {}
         }
     }
     fn finish_quota(
@@ -2241,6 +2355,13 @@ impl Core {
         wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
     ) {
+        if let TurnUpdate::Usage { size, .. } = &update {
+            let model = match &self.work[&id] {
+                Work::Retiring(outstanding) => &outstanding.model,
+                work => &work.execution().unwrap().model,
+            };
+            self.context_sizes.insert(model.clone(), *size);
+        }
         if matches!(self.work[&id], Work::Retiring(_)) {
             match update {
                 TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
@@ -2252,7 +2373,7 @@ impl Core {
                 }
                 TurnUpdate::Activity
                 | TurnUpdate::Text(_)
-                | TurnUpdate::Usage(_)
+                | TurnUpdate::Usage { .. }
                 | TurnUpdate::ThoughtDropped
                 | TurnUpdate::UnpermittedTool(_) => {}
             }
@@ -2320,7 +2441,7 @@ impl Core {
                     self.cancel(session, now, commands);
                 }
             }
-            TurnUpdate::Usage(used) => active.input_tokens = used,
+            TurnUpdate::Usage { used, .. } => active.input_tokens = used,
             TurnUpdate::ThoughtDropped => {
                 if !active.thought_dropped {
                     active.thought_dropped = true;
@@ -2401,12 +2522,33 @@ impl Core {
         let idle = self.records.drain(..).map(|record| record.session);
         commands.extend(idle.chain(self.startup_session.take()).map(Command::Forget));
     }
+    fn refuse_model_reads(
+        &mut self,
+        message: &crate::messages::Message,
+        commands: &mut Vec<Command>,
+    ) {
+        let queued: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| matches!(work, Work::ModelsQueued(_)).then_some(*id))
+            .collect();
+        for id in queued {
+            let Work::ModelsQueued(read) = self.work.remove(&id).unwrap() else {
+                unreachable!()
+            };
+            commands.extend(read.replies.into_iter().map(|reply| Command::ModelsRead {
+                reply,
+                result: Err(message.to_string()),
+            }));
+        }
+    }
     fn refuse_queued(
         &mut self,
         outcome: crate::journal::Outcome,
         message: crate::messages::Message,
         commands: &mut Vec<Command>,
     ) {
+        self.refuse_model_reads(&message, commands);
         let queued: Vec<_> = self
             .work
             .iter()
@@ -2546,6 +2688,13 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         match self.work.remove(&id).unwrap() {
+            Work::ModelsQueued(read) | Work::ModelsReading(read) => {
+                let result = result.map_err(|failure| failure.message.to_string());
+                commands.extend(read.replies.into_iter().map(|reply| Command::ModelsRead {
+                    reply,
+                    result: result.clone(),
+                }));
+            }
             Work::CheckQueued(request) | Work::Checking(request) => {
                 commands.push(Command::RefusePending {
                     request: Box::new(request),
@@ -2748,6 +2897,16 @@ impl Conductor {
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
         let (quota_result, quota_watch) = watch::channel(Arc::new(None));
+        let conductor = Self {
+            journal: journal.clone(),
+            view: view_watch,
+            quota_result: quota_watch,
+            send,
+            builds,
+            settings: settings_watch,
+            notices: notices_watch,
+            highest,
+        };
         let task = tokio::spawn(async move {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
@@ -2774,6 +2933,8 @@ impl Conductor {
                 replacement: None,
                 startup_session: None,
                 catalog: None,
+                model_names: Vec::new(),
+                context_sizes: BTreeMap::new(),
                 records: Vec::new(),
                 use_sequence: 0,
                 limit,
@@ -3005,19 +3166,9 @@ impl Conductor {
                 runtime.stop().await;
             }
         });
-        (
-            Self {
-                view: view_watch,
-                quota_result: quota_watch,
-                send,
-                builds,
-                settings: settings_watch,
-                notices: notices_watch,
-                highest,
-            },
-            task,
-        )
+        (conductor, task)
     }
+
     async fn commands(
         core: &mut Core,
         runtime: &mut Option<Runtime>,
@@ -3028,6 +3179,9 @@ impl Conductor {
     ) {
         while let Some(command) = commands.pop_front() {
             match command {
+                Command::ModelsRead { reply, result } => {
+                    let _ = reply.send(result);
+                }
                 Command::RefuseBuildChange { reply, error } => {
                     let _ = reply.send(Err(LaunchFailure::Runtime(error.to_string())));
                 }
@@ -3195,6 +3349,9 @@ impl Conductor {
     pub(crate) fn quota_result(&self) -> Arc<Option<QuotaResult>> {
         self.quota_result.borrow().clone()
     }
+    pub(crate) fn history(&self) -> crate::journal::History {
+        self.journal.history()
+    }
     pub(crate) fn settings(&self) -> Arc<crate::store::Settings> {
         self.settings.borrow().clone()
     }
@@ -3318,6 +3475,8 @@ mod tests {
                 changes: VecDeque::new(),
                 replacement: None,
                 catalog: None,
+                model_names: Vec::new(),
+                context_sizes: BTreeMap::new(),
                 work: BTreeMap::new(),
                 next_work: 0,
                 records: Vec::new(),
@@ -3386,6 +3545,199 @@ mod tests {
         }
     }
 
+    #[test]
+    fn queued_model_reads_end_when_the_runtime_stops_requests() {
+        for (event, expected) in [
+            (
+                Event::RuntimeUnavailable(UnavailableReason {
+                    message: "runtime missing".into(),
+                    cause: None,
+                }),
+                crate::messages::Message::RuntimeUnavailable("runtime missing".into()),
+            ),
+            (Event::Stop, crate::messages::Message::Stopped),
+            (
+                Event::Runtime(RuntimeEvent::Closed),
+                crate::messages::Message::RuntimeFailed,
+            ),
+            (
+                Event::Lockout {
+                    signal: "403 PERMISSION_DENIED",
+                    error: crate::messages::Message::UpstreamHttp(crate::messages::HttpError {
+                        code: Some(403),
+                        status: "PERMISSION_DENIED".into(),
+                        message: "Account suspended".into(),
+                    }),
+                    signalling_work: None,
+                },
+                crate::messages::Message::lockout(
+                    &crate::store::Lockout {
+                        since: "1970-01-01T00:00:00Z".into(),
+                        signal: "403 PERMISSION_DENIED".into(),
+                        original_error_text:
+                            "acp2api: upstream error 403 PERMISSION_DENIED: Account suspended"
+                                .into(),
+                    },
+                    "http://127.0.0.1:8329/",
+                    false,
+                ),
+            ),
+        ] {
+            let mut core = Core::fixture(1);
+            core.runtime_state = RuntimeState::Restarting;
+            let (reply, _result) = oneshot::channel();
+            core.handle(Event::ReadModelNames(reply), 0, std::time::UNIX_EPOCH);
+            assert_eq!(core.view.borrow().queued, 1);
+            let commands = core.handle(event, 1, std::time::UNIX_EPOCH);
+            let answer = commands.into_iter().find_map(|command| match command {
+                Command::ModelsRead { result, .. } => Some(result),
+                _ => None,
+            });
+            assert_eq!(answer, Some(Err(expected.to_string())));
+            assert_eq!(core.view.borrow().queued, 0);
+        }
+    }
+
+    #[test]
+    fn model_name_callers_share_one_read_and_then_use_the_cached_names() {
+        let mut core = Core::fixture(2);
+        core.runtime_state = RuntimeState::Restarting;
+        let mut answers = Vec::new();
+        for _ in 0..2 {
+            let (reply, answer) = oneshot::channel();
+            answers.push(answer);
+            core.handle(Event::ReadModelNames(reply), 0, std::time::UNIX_EPOCH);
+        }
+        assert_eq!(core.view.borrow().queued, 1, "one shared queued read");
+        let commands = core.handle(
+            Event::RuntimeReady {
+                sign_in_required: false,
+            },
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|c| matches!(c, Command::Prepare { .. }))
+                .count(),
+            1
+        );
+        let (reply, answer) = oneshot::channel();
+        answers.push(answer);
+        let commands = core.handle(Event::ReadModelNames(reply), 2, std::time::UNIX_EPOCH);
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, Command::Prepare { .. }))
+        );
+        assert_eq!(core.view.borrow().places, 1, "one shared running read");
+
+        core.startup_session = Some("previous-session".into());
+        let metadata = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: "models-0".into(),
+                result: Ok((
+                    "models-session".into(),
+                    crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
+                )),
+            }),
+            3,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, Command::Forget(session) if session == "previous-session"))
+        );
+        for command in commands {
+            if let Command::ModelsRead { reply, result } = command {
+                reply.send(result).unwrap();
+            }
+        }
+        assert!(
+            answers
+                .iter_mut()
+                .all(|answer| answer.try_recv() == Ok(Ok(()))),
+            "every waiter gets the shared result"
+        );
+        let (reply, mut answer) = oneshot::channel();
+        let commands = core.handle(Event::ReadModelNames(reply), 4, std::time::UNIX_EPOCH);
+        assert_eq!(
+            answer.try_recv(),
+            Ok(Ok(())),
+            "cached names answer immediately"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, Command::Prepare { .. }))
+        );
+        assert_eq!(core.startup_session.as_deref(), Some("models-session"));
+        assert_eq!(core.view.borrow().model_names, ["m"]);
+        assert_eq!(
+            (core.view.borrow().places, core.view.borrow().queued),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn setup_keeps_the_last_context_size_of_each_model() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-context-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let mut core = Core::fixture(2);
+        let mut tickets = Vec::new();
+        for model in ["m", "n"] {
+            core.startup_session = Some(format!("session-{model}"));
+            let body =
+                serde_json::json!({"model":model,"messages":[{"role":"user","content":"Hi"}]});
+            let turn = crate::dialect::CHAT
+                .parse(&serde_json::to_vec(&body).unwrap())
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, ticket) = mpsc::unbounded_channel();
+            tickets.push(ticket);
+            core.handle(
+                Event::Accepted(Box::new(Accepted {
+                    turn,
+                    model: crate::catalog::SelectedModel {
+                        model: model.into(),
+                        level: None,
+                        level_from_name: false,
+                    },
+                    request: journal.begin(crate::journal::Api::Chat, 0),
+                    reply: ResponseChannel {
+                        output,
+                        keep_alive: None,
+                    },
+                })),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+        }
+        for (model, size) in [("m", 1024), ("n", 4096), ("m", 2048)] {
+            core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session: format!("session-{model}"),
+                    update: TurnUpdate::Usage { used: 13, size },
+                }),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+        }
+        assert_eq!(
+            core.view.borrow().context_sizes,
+            BTreeMap::from([("m".into(), 2048), ("n".into(), 4096)]),
+            "FR-054 the setup window is the last reported size for its own model"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
     async fn assert_start_lockout(stdout: &str, stderr: &str, original: &str) {
         use crate::{LaunchError, LaunchSpec, Launched, ProcessLauncher, ReleaseFacts};
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3427,8 +3779,19 @@ mod tests {
             builds.start.release = Arc::new(Facts(vec![crate::ListedBuild { version: "1.4.0".into(), platform: Facts(Vec::new()).platform().into(), agy_acp_server_sha256: hash.clone(), localharness_external_sha256: hash }]));
             let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
             let mut core = Core { state_path: folder.join(crate::store::STATE_FILE), runtime_state: RuntimeState::Restarting, ..Core::fixture(1) };
+            let mut model_replies = Vec::new();
+            for _ in 0..2 {
+                let (reply, answer) = oneshot::channel();
+                core.handle(Event::ReadModelNames(reply), clock.now(), clock.wall());
+                model_replies.push(answer);
+            }
             let mut runtime = None;
             core.launch(&mut runtime, &mut false, &clock, &journal, &builds).await;
+            let refusal = core.refusal(clock.now()).unwrap().to_string();
+            for mut answer in model_replies {
+                assert_eq!(answer.try_recv(), Ok(Err(refusal.clone())), "startup apply_lockout ends every shared model read with M-12");
+            }
+            assert_eq!(core.view.borrow().queued, 0);
             let evidence = crate::store::StateFile::read(&core.state_path).unwrap().lockout;
             let actual = (core.state(), launcher.starts.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst), evidence.map(|e| (e.signal, e.original_error_text)));
             if let Some(runtime) = runtime { runtime.stop().await; }
@@ -4856,7 +5219,10 @@ mod tests {
                 core.handle(
                     Event::Runtime(RuntimeEvent::Turn {
                         session: "running".into(),
-                        update: TurnUpdate::Usage(1000),
+                        update: TurnUpdate::Usage {
+                            used: 1000,
+                            size: 1_048_576,
+                        },
                     }),
                     240_000,
                     std::time::UNIX_EPOCH,
@@ -6811,6 +7177,8 @@ mod tests {
                     .unwrap()
                     .settings;
                 let conductor = Conductor {
+                    journal: crate::journal::Journal::open(&folder.join("logs"), clock.wall())
+                        .unwrap(),
                     view: watch::channel(Arc::new(View::default())).1,
                     quota_result: watch::channel(Arc::new(None)).1,
                     send,

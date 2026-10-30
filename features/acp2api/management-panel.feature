@@ -134,14 +134,14 @@ Feature: Management panel
     Then the tile "quota" shows the last result of "/usage" and its time
     And the tile "quota" shows the refresh entry and the concurrency limit
 
-  @FR-054 @issue-74 @wip
+  @FR-054 @issue-74
   Scenario: The tile logs shows the last 50 requests from memory
     Given acp2api answered 51 requests since its start
     When the owner opens the management panel with a panel session
     Then the tile "logs" shows 50 requests with their metadata
     And the tile "logs" does not show the first request
 
-  @FR-054 @issue-74 @wip
+  @FR-054 @issue-74
   Scenario: The tile logs shows a table of the unknown field names since the start
     Given an API client sent 2 requests to "POST /v1/chat/completions" with the top-level field "example_field"
     When the owner opens the management panel with a panel session
@@ -155,14 +155,14 @@ Feature: Management panel
     Then the tile "settings" shows the port 8329 and the data folder "D"
     And the tile "settings" has no entry that changes the port or the data folder
 
-  @FR-054 @issue-74 @wip
+  @FR-054 @issue-74
   Scenario: Before the first read of the model names, an entry reads them now
     Given acp2api has not read the model names
     When the owner uses the entry "Read the model names now"
     Then the read holds one place and makes one ACP session
     And the tile "setup" shows the model names
 
-  @FR-054 @issue-74 @wip
+  @FR-054 @issue-74
   Scenario: The setup text holds the values for each API client and a placeholder for the local API key
     Given the address of acp2api is "http://127.0.0.1:8329"
     And the official runtime reported the context size 1,048,576 for "gemini-3.8-flash"
@@ -175,7 +175,7 @@ Feature: Management panel
     And the setup text has a placeholder in each place of the local API key, also in "ANTHROPIC_AUTH_TOKEN"
     And the setup text does not hold the local API key
 
-  @FR-054 @issue-74 @wip
+  @FR-054 @issue-74
   Scenario: Before the official runtime reports a context size, the setup text has a placeholder for the window
     Given the official runtime reported no context size
     When the owner opens the management panel with a panel session

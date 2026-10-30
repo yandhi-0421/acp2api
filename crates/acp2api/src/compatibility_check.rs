@@ -280,7 +280,9 @@ async fn check_prompt(
                         }
                         return Ok((text.clone(), call));
                     }
-                    TurnUpdate::Activity | TurnUpdate::ThoughtDropped | TurnUpdate::Usage(_) => {}
+                    TurnUpdate::Activity
+                    | TurnUpdate::ThoughtDropped
+                    | TurnUpdate::Usage { .. } => {}
                     TurnUpdate::UnpermittedTool(name) => {
                         return Err(Failure::Incompatible(format!(
                             "the built-in tool {name} ran during the compatibility check"

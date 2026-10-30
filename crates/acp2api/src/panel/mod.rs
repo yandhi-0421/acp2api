@@ -18,10 +18,15 @@ mod page;
 static CONTENT_SECURITY_POLICY: LazyLock<axum::http::HeaderValue> = LazyLock::new(|| {
     use base64::Engine;
     use sha2::Digest;
-    let hash =
-        base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(page::COUNTDOWN));
+    let scripts = [page::COUNTDOWN, page::COPY_KEY]
+        .map(|script| {
+            let hash =
+                base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(script));
+            format!("'sha256-{hash}'")
+        })
+        .join(" ");
     let policy = format!(
-        "default-src 'none'; script-src 'sha256-{hash}'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        "default-src 'none'; script-src {scripts}; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     );
     policy.parse().unwrap()
 });
@@ -49,6 +54,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/password", post(password))
         .route("/manage/concurrency", post(concurrency))
         .route("/manage/refresh-quota", post(refresh_quota))
+        .route("/manage/models", post(read_models))
         .route("/manage/sign-in", post(sign_in))
         .route("/manage/cancel-sign-in", post(cancel_sign_in))
         .route("/manage/notice", post(dismiss_notice))
@@ -112,6 +118,7 @@ impl Panel {
             notices: &self.conductor.notices(),
             builds: self.conductor.builds_summary(),
             quota_result: &self.conductor.quota_result(),
+            history: &self.conductor.history(),
             view: &self.conductor.view(),
             now: self.clock.now(),
         })
@@ -238,6 +245,24 @@ async fn refresh_quota(
     match panel.conductor.owner(OwnerAction::RefreshQuota, hold).await {
         Ok(()) => panel.page(StatusCode::OK, "Quota refreshed."),
         Err(error) => panel.page(StatusCode::UNPROCESSABLE_ENTITY, &error),
+    }
+}
+async fn read_models(
+    State(panel): State<Panel>,
+    Extension(lease): Extension<crate::front::RequestHold>,
+) -> Response {
+    let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
+    drop(lease.release());
+    match panel
+        .conductor
+        .owner(OwnerAction::ReadModelNames, hold)
+        .await
+    {
+        Ok(()) => panel.page(StatusCode::OK, "Model names read."),
+        Err(error) => panel.page(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &crate::journal::redact_error(&error),
+        ),
     }
 }
 async fn sign_in(State(panel): State<Panel>) -> Response {

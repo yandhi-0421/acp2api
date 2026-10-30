@@ -776,7 +776,10 @@ impl Runtime {
                     ContentBlock::Text(content) => Some(TurnUpdate::Text(content.text)),
                     _ => None,
                 },
-                SessionUpdate::UsageUpdate(usage) => Some(TurnUpdate::Usage(usage.used)),
+                SessionUpdate::UsageUpdate(usage) => Some(TurnUpdate::Usage {
+                    used: usage.used,
+                    size: usage.size,
+                }),
                 SessionUpdate::AgentThoughtChunk(_) => Some(TurnUpdate::ThoughtDropped),
                 SessionUpdate::ToolCall(call) => self
                     .tool_calls
@@ -948,7 +951,10 @@ pub(crate) enum TurnUpdate {
     Activity,
     Text(String),
     ThoughtDropped,
-    Usage(u64),
+    Usage {
+        used: u64,
+        size: u64,
+    },
     Permission {
         request: PermissionRequest,
         call: crate::conversation::ToolCall,

@@ -1,7 +1,9 @@
 use serde::Serialize;
 use std::{io, path::Path, time::SystemTime};
 
-#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) const REQUEST_HISTORY_LIMIT: usize = 50;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Api {
     #[serde(rename = "models")]
     Models,
@@ -11,6 +13,24 @@ pub enum Api {
     Messages,
     #[serde(rename = "responses")]
     Responses,
+}
+impl Api {
+    pub(crate) fn display_name(self) -> &'static str {
+        match self {
+            Self::Models => "GET /v1/models",
+            Self::Chat => "OpenAI Chat Completions API",
+            Self::Messages => "Anthropic Messages API",
+            Self::Responses => "OpenAI Responses API",
+        }
+    }
+    pub(crate) fn log_name(self) -> &'static str {
+        match self {
+            Self::Models => "models",
+            Self::Chat => "chat.completions",
+            Self::Messages => "messages",
+            Self::Responses => "responses",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -243,8 +263,21 @@ pub(crate) fn timestamp(wall: SystemTime) -> io::Result<String> {
 pub(crate) struct Journal(std::sync::Arc<JournalState>);
 struct JournalState {
     writer: std::sync::Mutex<Writer>,
+    history: std::sync::Mutex<History>,
     prefix: String,
     sequence: std::sync::atomic::AtomicU64,
+}
+#[derive(Clone, Default)]
+pub(crate) struct History {
+    pub(crate) requests: std::collections::VecDeque<std::sync::Arc<RequestRecord>>,
+    pub(crate) unknown_fields:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<Api, UnknownField>>,
+    pub(crate) other_names: Option<UnknownField>,
+}
+#[derive(Clone, Default)]
+pub(crate) struct UnknownField {
+    pub(crate) count: u64,
+    pub(crate) last_time: String,
 }
 #[derive(Clone)]
 pub(crate) struct Request {
@@ -350,6 +383,9 @@ fn os_error_category(cause: io::ErrorKind) -> String {
 }
 
 impl Journal {
+    pub(crate) fn history(&self) -> History {
+        self.0.history.lock().unwrap().clone()
+    }
     pub(crate) fn state(
         &self,
         state: &str,
@@ -470,6 +506,7 @@ impl Journal {
         let prefix = crate::random_hex::<8>().map_err(io::Error::other)?;
         Ok(Self(std::sync::Arc::new(JournalState {
             writer: std::sync::Mutex::new(writer),
+            history: std::sync::Mutex::default(),
             prefix,
             sequence: std::sync::atomic::AtomicU64::new(1),
         })))
@@ -530,6 +567,35 @@ impl Journal {
             error_code: error_code.map(str::to_owned),
             unknown_fields: request.unknown_fields,
         };
+        let snapshot = std::sync::Arc::new(record.clone());
+        {
+            let mut history = self.0.history.lock().unwrap();
+            for field in &record.unknown_fields {
+                let mut end = field.len().min(128);
+                while !field.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let name = &field[..end];
+                let row = if history.unknown_fields.contains_key(name)
+                    || history.unknown_fields.len() < 256
+                {
+                    history
+                        .unknown_fields
+                        .entry(name.to_owned())
+                        .or_default()
+                        .entry(record.api)
+                        .or_default()
+                } else {
+                    history.other_names.get_or_insert_default()
+                };
+                row.count += 1;
+                row.last_time.clone_from(&record.time);
+            }
+            if history.requests.len() == REQUEST_HISTORY_LIMIT {
+                history.requests.pop_front();
+            }
+            history.requests.push_back(snapshot);
+        }
         self.emit_to_file_then_stdout_under_writer_lock(&record, serde_json::to_string(&record)?)
     }
 }
@@ -569,6 +635,56 @@ mod tests {
             unknown_fields: Vec::new(),
         }
     }
+    #[test]
+    fn unknown_field_history_bounds_names_and_groups_overflow() {
+        let folder = folder("unknown-name-bounds");
+        let clock = crate::os::SystemClock::default();
+        let journal = Journal::open(&folder, clock.wall()).unwrap();
+        let long_name = format!("{}€tail", "x".repeat(127));
+        for (api, fields) in [
+            (
+                Api::Chat,
+                std::iter::once(long_name.clone())
+                    .chain((1..258).map(|i| format!("field-{i}")))
+                    .collect(),
+            ),
+            (
+                Api::Responses,
+                vec![long_name.clone(), "last-overflow".into()],
+            ),
+        ] {
+            let mut request = journal.begin(api, 0);
+            request.unknown_fields = fields;
+            journal.complete(
+                Completion {
+                    request,
+                    session: None,
+                    session_use: None,
+                    outcome: Outcome::Success {
+                        input: 1,
+                        output: 1,
+                    },
+                },
+                &clock,
+            );
+        }
+        let history = journal.history();
+        assert_eq!(
+            history.unknown_fields.len(),
+            256,
+            "at most 256 distinct names across APIs"
+        );
+        assert!(
+            history.unknown_fields.contains_key(&"x".repeat(127)),
+            "cut the name before the multibyte character at byte 128"
+        );
+        let other = history.other_names.as_ref().unwrap();
+        assert_eq!(other.count, 3, "further new names share one overflow row");
+        assert_eq!(other.last_time, history.requests.back().unwrap().time);
+        drop(journal);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
     #[test]
     fn email_boundaries_preserve_braces() {
         assert_eq!(redact_error("{a@example.com}"), "{<REDACTED>}");

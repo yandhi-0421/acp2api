@@ -67,6 +67,10 @@ mod runtime_support;
 #[path = "steps/runtime_unavailable.rs"]
 mod runtime_unavailable;
 mod selection;
+#[path = "steps/setup_logs.rs"]
+mod setup_logs;
+#[path = "support/setup_logs.rs"]
+mod setup_logs_support;
 #[path = "steps/sign_in.rs"]
 mod sign_in;
 #[path = "support/sign_in_facts.rs"]
@@ -97,6 +101,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    setup_logs: setup_logs_support::SetupLogs,
     errors: error_support::ErrorCases,
     panel_tiles: panel_tiles_support::TileState,
     prompt_sessions: std::collections::HashMap<String, String>,
