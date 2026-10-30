@@ -130,6 +130,12 @@ Feature: Runtime process
       | 0 minutes, 4 minutes, and 9 minutes | acp2api is in the state "runtime unavailable"          |
       | 0 minutes, 5 minutes, and 11 minutes | acp2api starts a new runtime process after each exit  |
 
+  @FR-041 @issue-172
+  Scenario: Three runtime processes with stalled stdin give the state runtime unavailable
+    Given acp2api is in the normal state
+    When three runtime processes stop reading stdin at 0 minutes, 4 minutes, and 9 minutes
+    Then acp2api is in the state "runtime unavailable" with the reason "the runtime process failed 3 times in 10 minutes"
+
   @FR-045 @issue-63
   Scenario: At its exit, acp2api ends each request with a prompt turn and each request in the queue with M-15
     Given the concurrency limit is 1

@@ -337,6 +337,19 @@ Invariants and error modes:
 - A successful timer returns a `Hold` for the work that its wake starts. The owner keeps it until that work finishes.
 - A loop registers its next wait before it releases the earlier `Hold`. Cancellation releases a pending sleep.
 
+### Runtime stdin transport
+
+- Each runtime process has one writer task that owns stdin. Commands enqueue complete ACP frames in FIFO order and never await the pipe.
+- Each frame has a 30 s deadline from enqueue, for write and flush together. Queue time counts towards that deadline.
+- The writer retains at most 128 MiB of frame bytes, including the frame in progress. This equals four frames of 32 MiB.
+- A write error, timeout, or queue overflow fails the runtime through the existing failure rule. The writer drops the pipe and backlog without retry.
+- Cancellation permits at most 30 s before runtime failure. Process stop then adds at most 5 s on macOS: 35 s in total.
+- Windows adds 0 s of process-stop grace before Job Object termination. Its cancellation bound is 30 s in total.
+- Shutdown interrupts a pending write or flush and polls pipe shutdown once. The writer join adds 0 ms of clock wait.
+- Shutdown permits 5 s of process-stop grace on macOS and 0 s on Windows. `os::PROCESS_STOP_GRACE` supplies the shared platform value.
+- These bounds count conductor-clock waits. Executor scheduling and OS reaping follow termination.
+- No hold spans a pending pipe operation. Holds cover ready work and failure delivery until acknowledgement or stop.
+
 ### Domain types
 
 `conversation` owns the domain model of one request. Each dialect parses into it. Nothing outside `dialect` sees a wire type (boundary-discipline).

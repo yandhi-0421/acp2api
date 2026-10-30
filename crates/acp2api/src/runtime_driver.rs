@@ -4,6 +4,8 @@ pub(crate) mod mcp;
 #[cfg(test)]
 mod rpc_request_ids;
 mod safety;
+#[cfg(test)]
+pub(crate) mod write_tests;
 use crate::messages::Message;
 use crate::runtime_builds::LaunchFailure;
 use crate::*;
@@ -11,7 +13,7 @@ use agent_client_protocol_schema::v1::{
     ContentBlock, ImageContent, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{FutureExt, Stream, StreamExt, stream};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -47,6 +49,8 @@ pub(crate) struct RuntimeStart {
     pub(crate) tool_sets: mcp::ToolSets,
 }
 pub(crate) const ANSWER_TIMEOUT: Moment = 5 * 60 * 1000;
+const WRITE_TIMEOUT: Moment = 30_000;
+const MAX_QUEUED_BYTES: usize = 128 * 1024 * 1024;
 impl RuntimeStart {
     pub(crate) async fn answer<T, E: From<LaunchFailure>>(
         &self,
@@ -113,6 +117,7 @@ impl RuntimeStart {
         &self,
         retained: Vec<(String, PathBuf)>,
     ) -> Result<(), String> {
+        let _work = self.clock.hold(HoldKind::TurnEvent);
         let folders = self.temporary.sessions();
         let files = self.data.join("runtime-home/antigravity-acp/conversations");
         tokio::task::spawn_blocking(move || {
@@ -145,8 +150,23 @@ impl RuntimeStart {
     }
 }
 const MAX_SIGN_IN_ADDRESS_BYTES: usize = 4096;
+// Track runnable writer work without holding virtual time over a pipe wait.
+enum WriteState {
+    Idle,
+    Ready { _work: Hold },
+    Writing,
+    Stopped,
+}
+struct WriteQueue {
+    bytes: usize,
+    state: WriteState,
+}
 pub(crate) struct Runtime {
-    input: ProcessWrite,
+    input: mpsc::UnboundedSender<(Vec<u8>, Moment)>,
+    // JoinSet aborts on drop, so a discarded Runtime cannot leave stdin open in a detached task.
+    writer: tokio::task::JoinSet<()>,
+    stop_writer: tokio::sync::watch::Sender<bool>,
+    write_state: Arc<std::sync::Mutex<WriteQueue>>,
     lines: mpsc::Receiver<(Line, Hold)>,
     prompts: std::collections::HashMap<u64, String>,
     creating: std::collections::HashMap<u64, CreatingSession>,
@@ -174,6 +194,87 @@ struct ConfiguringPrompt {
     option: String,
     value: String,
     continuation: Option<(crate::conversation::PromptRequest, Vec<&'static str>)>,
+}
+async fn write_messages(
+    mut pipe: ProcessWrite,
+    mut messages: mpsc::UnboundedReceiver<(Vec<u8>, Moment)>,
+    mut stopping: tokio::sync::watch::Receiver<bool>,
+    writer_state: Arc<std::sync::Mutex<WriteQueue>>,
+    writer_clock: Arc<dyn Clock>,
+    writer_lines: mpsc::Sender<(Line, Hold)>,
+) {
+    while let Some((bytes, deadline)) = messages.recv().await {
+        // Keep completed I/O or the deadline visible until the state or failure handoff ends.
+        let (result, _work) = {
+            let mut _until_first_poll = {
+                let mut queue = writer_state.lock().unwrap();
+                if matches!(queue.state, WriteState::Stopped) {
+                    return;
+                }
+                std::mem::replace(&mut queue.state, WriteState::Writing)
+            };
+            let timer = writer_clock.sleep_until(deadline);
+            let writing = async {
+                pipe.write_all(&bytes).await?;
+                pipe.flush().await
+            };
+            tokio::pin!(writing);
+            let completion_clock = &writer_clock;
+            let writing = std::future::poll_fn(move |cx| {
+                let result = writing.as_mut().poll(cx);
+                let result =
+                    result.map(|result| (result, completion_clock.hold(HoldKind::TurnEvent)));
+                _until_first_poll = WriteState::Writing;
+                result
+            });
+            tokio::pin!(writing);
+            tokio::select! {
+                biased;
+                result = &mut writing => result,
+                work = timer => {
+                    (Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("runtime stdin write exceeded {} s", WRITE_TIMEOUT / 1000))), work)
+                }
+                _ = stopping.wait_for(|stopped| *stopped) => match writing.as_mut().now_or_never() {
+                    Some(result) => result,
+                    None => return,
+                },
+            }
+        };
+        if let Err(error) = result {
+            drop(messages);
+            drop(pipe);
+            drop(bytes);
+            {
+                let mut queue = writer_state.lock().unwrap();
+                queue.bytes = 0;
+                queue.state = WriteState::Stopped;
+            }
+            // The acknowledgement keeps _work held until the reader consumes the failure.
+            // Stop cancels this wait: a cancellation failure must not hold its own grace open.
+            let (acknowledge, received) = tokio::sync::oneshot::channel();
+            tokio::select! {
+                _ = async {
+                    let _ = writer_lines.send((Line::WriteFailed(error, acknowledge), Hold::empty())).await;
+                    let _ = received.await;
+                } => {}
+                _ = stopping.wait_for(|stopped| *stopped) => {}
+            }
+            return;
+        }
+        let mut queue = writer_state.lock().unwrap();
+        if matches!(queue.state, WriteState::Stopped) {
+            return;
+        }
+        queue.bytes -= bytes.len();
+        queue.state = if messages.is_empty() {
+            WriteState::Idle
+        } else {
+            WriteState::Ready {
+                _work: writer_clock.hold(HoldKind::TurnEvent),
+            }
+        };
+    }
+    let _ = pipe.shutdown().now_or_never();
 }
 impl Runtime {
     pub(crate) async fn start(
@@ -238,6 +339,21 @@ impl Runtime {
         )
         .await?;
         let (tx, lines) = mpsc::channel(128);
+        let (input, messages) = mpsc::unbounded_channel::<(Vec<u8>, Moment)>();
+        let mut writer = tokio::task::JoinSet::new();
+        let (stop_writer, stopping) = tokio::sync::watch::channel(false);
+        let write_state = Arc::new(std::sync::Mutex::new(WriteQueue {
+            bytes: 0,
+            state: WriteState::Idle,
+        }));
+        writer.spawn(write_messages(
+            child.stdin,
+            messages,
+            stopping,
+            write_state.clone(),
+            start.clock.clone(),
+            tx.clone(),
+        ));
         let clock = start.clock.clone();
         tokio::spawn(async move {
             let mut stdout = BufReader::new(child.stdout).split(b'\n');
@@ -276,7 +392,10 @@ impl Runtime {
             }
         });
         let runtime = Self {
-            input: child.stdin,
+            input,
+            writer,
+            stop_writer,
+            write_state,
             lines,
             prompts: std::collections::HashMap::new(),
             creating: std::collections::HashMap::new(),
@@ -430,11 +549,35 @@ impl Runtime {
         let mut bytes =
             serde_json::to_vec(&value).map_err(|e| CommandError::Session(e.to_string()))?;
         bytes.push(b'\n');
-        self.input
-            .write_all(&bytes)
-            .await
-            .map_err(CommandError::Io)?;
-        self.input.flush().await.map_err(CommandError::Io)
+        // Queue time counts too: backlog cannot extend the 30 s transport bound.
+        let deadline = self.clock.now().saturating_add(WRITE_TIMEOUT);
+        let mut queue = self.write_state.lock().unwrap();
+        if matches!(queue.state, WriteState::Stopped) {
+            return Err(CommandError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "runtime stdin writer stopped",
+            )));
+        }
+        if bytes.len() > MAX_QUEUED_BYTES - queue.bytes {
+            queue.state = WriteState::Stopped;
+            // Overflow fails the write: abort instead of draining bytes into a partial pipe.
+            self.writer.abort_all();
+            return Err(CommandError::Io(std::io::Error::other(format!(
+                "runtime stdin queue exceeded {MAX_QUEUED_BYTES} bytes"
+            ))));
+        }
+        queue.bytes += bytes.len();
+        if matches!(queue.state, WriteState::Idle) {
+            queue.state = WriteState::Ready {
+                _work: self.clock.hold(HoldKind::TurnEvent),
+            };
+        }
+        self.input.send((bytes, deadline)).map_err(|_| {
+            CommandError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "runtime stdin writer stopped",
+            ))
+        })
     }
     pub(crate) async fn permission(
         &mut self,
@@ -481,6 +624,10 @@ impl Runtime {
                 }
                 Line::Closed => {
                     return Err(Message::Upstream("runtime stdout closed".into()));
+                }
+                Line::WriteFailed(error, acknowledge) => {
+                    let _ = acknowledge.send(());
+                    return Err(Message::Upstream(error.to_string()));
                 }
             };
             if value.get("method").is_some() {
@@ -595,6 +742,10 @@ impl Runtime {
             };
             let event = match line {
                 Line::Closed => RuntimeEvent::Closed,
+                Line::WriteFailed(error, acknowledge) => {
+                    let _ = acknowledge.send(());
+                    RuntimeEvent::WriteFailed(error.to_string())
+                }
                 Line::StderrClosed => {
                     self.stderr_closed = true;
                     continue;
@@ -679,7 +830,7 @@ impl Runtime {
                 };
                 return match self.configure_prompt(prompt, &session, sent).await {
                     Ok(()) => RuntimeEvent::Other,
-                    Err(CommandError::Io(_)) => RuntimeEvent::Closed,
+                    Err(CommandError::Io(error)) => RuntimeEvent::WriteFailed(error.to_string()),
                     Err(CommandError::Session(error)) => RuntimeEvent::Turn {
                         session,
                         update: TurnUpdate::Failed(Message::Upstream(error)),
@@ -810,7 +961,7 @@ impl Runtime {
         } else if value.get("method").is_some() && value.get("id").is_some() {
             match self.refuse(&value).await {
                 Ok(()) => RuntimeEvent::Other,
-                Err(CommandError::Io(_)) => RuntimeEvent::Closed,
+                Err(CommandError::Io(error)) => RuntimeEvent::WriteFailed(error.to_string()),
                 Err(CommandError::Session(error)) => RuntimeEvent::Failed(error),
             }
         } else {
@@ -870,8 +1021,14 @@ impl Runtime {
     }
     /// Retain stopped-process stderr for the bounded `stop_and_drain_stderr` reader.
     async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
-        let _ = self.input.shutdown().await;
+        // Pipe writes, flush, shutdown, and the writer join add 0 ms of clock wait to stop.
+        // Shutdown: 5 s grace on macOS; 0 s on Windows before Job Object termination.
+        // Cancellation: 30 s to failure, then stop: 35 s on macOS, 30 s on Windows.
+        // These bounds exclude executor scheduling and OS reaping after termination.
+        // Finish only immediately-ready writes and poll pipe shutdown once.
         drop(self.input);
+        self.stop_writer.send_replace(true);
+        let _ = self.writer.join_next().await;
         self.tree.stop(self.clock).await;
         for tools in self
             .tools
@@ -919,6 +1076,7 @@ struct SessionTools {
     tools: Vec<crate::conversation::ClientTool>,
 }
 enum Line {
+    WriteFailed(std::io::Error, tokio::sync::oneshot::Sender<()>),
     Stdout(Result<Value, String>),
     Stderr(Vec<u8>),
     StderrClosed,
@@ -946,6 +1104,7 @@ pub(crate) enum RuntimeEvent {
     Stderr,
     Other,
     Closed,
+    WriteFailed(String),
 }
 pub(crate) enum TurnUpdate {
     Activity,

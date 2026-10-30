@@ -971,9 +971,18 @@ impl Core {
         journal: &crate::journal::Journal,
         builds: &crate::runtime_builds::Builds,
     ) {
-        self.stop_runtime(runtime, read_open).await;
-        self.launch(runtime, read_open, clock, journal, builds)
-            .await;
+        let restarting = async {
+            self.stop_runtime(runtime, read_open).await;
+            self.launch(runtime, read_open, clock, journal, builds)
+                .await;
+        };
+        tokio::pin!(restarting);
+        std::future::poll_fn(|cx| {
+            // Keep stop-to-launch work visible, releasing it whenever the restart waits.
+            let _processing = clock.hold(HoldKind::TurnEvent);
+            restarting.as_mut().poll(cx)
+        })
+        .await;
     }
     async fn stop_runtime(&mut self, runtime: &mut Option<Runtime>, read_open: &mut bool) {
         *read_open = false;
@@ -1803,12 +1812,16 @@ impl Core {
                     );
                 }
             }
-            (None, Event::Runtime(RuntimeEvent::Closed))
+            (None, Event::Runtime(RuntimeEvent::Closed | RuntimeEvent::WriteFailed(_)))
                 if matches!(self.runtime_state, RuntimeState::Restarting) =>
             {
                 self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
             }
-            (None, Event::Runtime(RuntimeEvent::Closed) | Event::RuntimeFailure) => {
+            (
+                None,
+                Event::Runtime(RuntimeEvent::Closed | RuntimeEvent::WriteFailed(_))
+                | Event::RuntimeFailure,
+            ) => {
                 self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
                 self.sign_in_wait = None;
                 self.runtime_state = RuntimeState::Restarting;
@@ -3144,7 +3157,7 @@ impl Conductor {
                     (event, hold) = async {
                         runtime.as_mut().expect("readable runtime").next().await
                     }, if read_open => {
-                        if matches!(event, RuntimeEvent::Closed) {
+                        if matches!(event, RuntimeEvent::Closed | RuntimeEvent::WriteFailed(_)) {
                             read_open = false;
                         }
                         (Event::Runtime(event), hold)
@@ -6894,6 +6907,12 @@ mod tests {
             agent_output.write_all(format!("{permission}\n").as_bytes()).await.unwrap();
             builds.start.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(Launched { stdin:Box::pin(stdin), stdout:Box::pin(stdout), stderr:Box::pin(tokio::io::empty()), tree:Box::new(Tree) }))));
             let (mut runtime, _) = Runtime::start(&builds.start, "1.4.0").await.unwrap();
+            let mut agent_input = tokio::io::BufReader::new(agent_input);
+            for method in ["initialize", "session/new"] {
+                let mut line = String::new();
+                tokio::io::AsyncBufReadExt::read_line(&mut agent_input, &mut line).await.unwrap();
+                assert_eq!(serde_json::from_str::<serde_json::Value>(&line).unwrap()["method"], method);
+            }
             let (RuntimeEvent::Turn { update:TurnUpdate::RefusedPermission { request, .. }, .. }, _hold) = runtime.next().await else { panic!("the fake must send its permission request"); };
             let mut runtime = Some(runtime);
             let mut read_open = true;
@@ -6909,6 +6928,10 @@ mod tests {
             batch.push(Command::Permission(request));
             let mut batch: VecDeque<_> = batch.into();
             Conductor::commands(&mut core, &mut runtime, &mut read_open, &clock, &journal, &mut batch).await;
+            let (event, _hold) = runtime.as_mut().unwrap().next().await;
+            assert!(matches!(event, RuntimeEvent::WriteFailed(_)), "the writer must report the broken pipe even while stdout stays open");
+            read_open = false;
+            core.apply(Event::Runtime(event), &mut runtime, &mut read_open, &clock, &journal).await;
             assert_eq!(core.failures.len(), 1, "two writes to one closed stdin are one runtime failure");
             let closed = core.handle(Event::Runtime(RuntimeEvent::Closed), 1, std::time::UNIX_EPOCH);
             let deadline = core.handle(Event::Deadline, 30_000, std::time::UNIX_EPOCH);

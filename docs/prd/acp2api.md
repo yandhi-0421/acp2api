@@ -707,6 +707,8 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
   - a start with no answer in 5 minutes;
   - an exit that acp2api did not cause;
   - a prompt turn that does not end 30 s after its cancel.
+  - an ACP write to a live runtime process that does not end in 30 s;
+  - more than 128 MiB of ACP writes that wait for the runtime process.
 - After a failure, each prompt turn of the runtime process ends with the 503 row of FR-033 and message M-20. acp2api starts a new runtime process at once. After 3 failures in 10 minutes, acp2api goes into the state "runtime unavailable" (FR-040).
 
 **Pass:**
@@ -714,6 +716,7 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
 - After a start, one runtime process runs, and two prompt turns at the same time use it.
 - With N ACP sessions, the next request that needs a new ACP session waits, then gets its response from a new runtime process.
 - Three exits of the fake ACP agent in 10 minutes give the state "runtime unavailable".
+- Three runtime processes that stop reading stdin in 10 minutes give the state "runtime unavailable".
 
 #### FR-042 — Search for the official runtime
 
