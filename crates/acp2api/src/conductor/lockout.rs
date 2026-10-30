@@ -22,11 +22,19 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
             }
             state.lockout
         }
-        Err(error) => Some(Lockout {
-            since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
-            signal: "unreadable or damaged state file".into(),
-            original_error_text: crate::journal::redact_error(&error.to_string()),
-        }),
+        Err(error) => {
+            let case = if error.kind() == std::io::ErrorKind::InvalidData {
+                "damaged state file"
+            } else {
+                "state file cannot be read"
+            };
+            let diagnostic = format!("{case}: {:?}", error.kind());
+            Some(Lockout {
+                since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
+                signal: diagnostic.clone(),
+                original_error_text: diagnostic,
+            })
+        }
     }
 }
 
@@ -56,57 +64,57 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) -> Option<Message> {
-        let mut upstream_error = None;
-        let mut failed_reply_signal = None;
-        let error = match event {
-            Event::Runtime(
-                RuntimeEvent::Authenticated(Err(error))
-                | RuntimeEvent::Prepared {
-                    result: Err(error), ..
-                }
-                | RuntimeEvent::Turn {
-                    update: TurnUpdate::Failed(error),
-                    ..
-                },
-            ) => Some(error),
-            Event::Runtime(RuntimeEvent::UpstreamError { session, error }) => {
-                if let Some(active) = self
-                    .by_session(session)
-                    .and_then(|id| self.work[&id].execution())
-                {
-                    let reply = format!(
+        let Event::Runtime(runtime_event) = event else {
+            return None;
+        };
+        let failed_reply = match runtime_event {
+            RuntimeEvent::UpstreamError { session, .. } => self
+                .by_session(session)
+                .and_then(|id| self.work[&id].execution())
+                .map(|active| {
+                    format!(
                         "{}{}{}",
                         active.text,
                         active.stop_prefix,
                         active.held.as_deref().unwrap_or("")
-                    );
-                    // FR-034 counts reply text only in a prompt turn that stderr marks as failed.
-                    failed_reply_signal = crate::messages::lockout_signal(None, &reply, None);
-                }
-                Some(upstream_error.insert(Message::UpstreamHttp(error.clone())))
-            }
-            _ => None,
+                    )
+                })
+                .unwrap_or_default(),
+            _ => String::new(),
         };
-        if let Some(error) = error {
-            if let Some(signal) = error.lockout_signal().or(failed_reply_signal)
-                && self.lockout.is_none()
-            {
-                let error = error.clone();
-                let signalling_work = match event {
-                    Event::Runtime(RuntimeEvent::Prepared { work, .. }) => self.by_request(work),
-                    Event::Runtime(
-                        RuntimeEvent::Turn { session, .. }
-                        | RuntimeEvent::UpstreamError { session, .. },
-                    ) => self.by_session(session),
-                    _ => None,
-                };
-                *event = Event::Lockout {
-                    signal,
-                    error,
-                    signalling_work,
-                };
-            } else {
-                *error = self.sign_in_error(error.clone(), now, commands);
+        let (error, signal) = runtime_event.upstream_error(&failed_reply)?;
+        let mut upstream_error =
+            matches!(runtime_event, RuntimeEvent::UpstreamError { .. }).then(|| error.clone());
+        if let Some(signal) = signal
+            && self.lockout.is_none()
+        {
+            let signalling_work = match runtime_event {
+                RuntimeEvent::Prepared { work, .. } => self.by_request(work),
+                RuntimeEvent::Turn { session, .. }
+                | RuntimeEvent::UpstreamError { session, .. } => self.by_session(session),
+                _ => None,
+            };
+            *event = Event::Lockout {
+                signal,
+                error,
+                signalling_work,
+            };
+        } else {
+            let error = self.sign_in_error(error, now, commands);
+            if let Some(upstream) = &mut upstream_error {
+                *upstream = error.clone();
+            }
+            match runtime_event {
+                RuntimeEvent::Authenticated(Err(target))
+                | RuntimeEvent::Prepared {
+                    result: Err(target),
+                    ..
+                }
+                | RuntimeEvent::Turn {
+                    update: TurnUpdate::Failed(target),
+                    ..
+                } => *target = error,
+                _ => {}
             }
         }
         upstream_error

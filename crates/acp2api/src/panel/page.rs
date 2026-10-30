@@ -24,6 +24,11 @@ fn figure(label: &str, value: impl std::fmt::Display) -> String {
     )
 }
 fn first_tile(view: &crate::conductor::View, now: crate::Moment, build: Option<&str>) -> String {
+    let evidence = view
+        .lockout_evidence
+        .as_ref()
+        .map(|text| format!("<p>{}</p>", escape(text)))
+        .unwrap_or_default();
     let sign_in = if let Some(wait) = &view.sign_in_wait {
         let seconds = wait.deadline.saturating_sub(now).div_ceil(1000);
         let address = wait
@@ -48,7 +53,7 @@ fn first_tile(view: &crate::conductor::View, now: crate::Moment, build: Option<&
     let queued = figure("Requests in the queue", view.queued);
     let build = figure("Build in use", build.unwrap_or("—"));
     format!(
-        r#"<section id="{entry_id}"><h2>{}</h2>{places}{queued}{build}{sign_in}</section>"#,
+        r#"<section id="{entry_id}"><h2>{}</h2>{evidence}{places}{queued}{build}{sign_in}</section>"#,
         view.state,
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )

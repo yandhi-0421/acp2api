@@ -19,6 +19,7 @@ pub struct SignInState {
     pub wait_started: u64,
     pub queued_before: usize,
     pub calls_before_disconnect: usize,
+    pub token: Option<(String, String)>,
 }
 
 pub fn initialize(fake: &FakeRuntime) {

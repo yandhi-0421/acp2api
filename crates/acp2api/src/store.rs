@@ -336,6 +336,37 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     })
 }
 #[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+    pub(crate) enum StateFileFault {
+        Damaged,
+        Unreadable,
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    pub(crate) fn state_file(fault: StateFileFault) -> (PathBuf, String) {
+        let folder = std::env::temp_dir().join(format!(
+            "PRIVATE-OWNER-state-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(STATE_FILE);
+        let diagnostic = match fault {
+            StateFileFault::Damaged => {
+                fs::write(path, b"{damaged").unwrap();
+                "damaged state file: InvalidData".into()
+            }
+            StateFileFault::Unreadable => {
+                fs::create_dir(&path).unwrap();
+                let category = fs::read(path).unwrap_err().kind();
+                format!("state file cannot be read: {category:?}")
+            }
+        };
+        (folder, diagnostic)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)]
