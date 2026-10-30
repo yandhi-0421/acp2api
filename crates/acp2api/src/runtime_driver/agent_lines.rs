@@ -162,7 +162,7 @@ async fn next(runtime: &mut Runtime) -> String {
             TurnUpdate::Activity => "activity".into(),
             TurnUpdate::Text(text) => format!("text {text}"),
             TurnUpdate::ThoughtDropped => "thought dropped".into(),
-            TurnUpdate::Usage(used) => format!("usage {used}"),
+            TurnUpdate::Usage(used, _) => format!("usage {used}"),
             TurnUpdate::Permission { call, .. } => format!("permission {call:?}"),
             TurnUpdate::RefusedPermission { name, .. } => format!("permission of {name}"),
             TurnUpdate::UnpermittedTool(name) => format!("unpermitted {name}"),

@@ -138,7 +138,12 @@ pub(super) fn settings(page: Page<'_>) -> String {
         .map(String::as_str)
         .unwrap_or("<MODEL_NAME>");
     let shell_model = format!("'{}'", model.replace('\'', "'\\''"));
-    let window = "<CONTEXT_WINDOW>";
+    let window = page
+        .view
+        .context_sizes
+        .get(model)
+        .map(u64::to_string)
+        .unwrap_or_else(|| "<CONTEXT_WINDOW>".into());
     let claude = format!(
         r#"export ANTHROPIC_BASE_URL="{address}"
 export ANTHROPIC_AUTH_TOKEN="<LOCAL_API_KEY>"

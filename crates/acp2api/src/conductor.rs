@@ -34,6 +34,7 @@ pub(crate) struct Conductor {
 }
 pub(crate) struct View {
     pub(crate) model_names: Vec<String>,
+    pub(crate) context_sizes: BTreeMap<String, u64>,
     pub(crate) state: &'static str,
     pub(crate) runtime_process: &'static str,
     pub(crate) places: usize,
@@ -44,6 +45,7 @@ impl Default for View {
     fn default() -> Self {
         Self {
             model_names: Vec::new(),
+            context_sizes: BTreeMap::new(),
             state: "Running",
             runtime_process: "starting",
             places: 0,
@@ -549,6 +551,7 @@ struct Core {
     )>,
     replacement: Option<Replacement>,
     catalog: Option<crate::catalog::Catalog>,
+    context_sizes: BTreeMap<String, u64>,
     work: WorkTable,
     next_work: WorkId,
     records: Vec<records::Record>,
@@ -1803,6 +1806,7 @@ impl Core {
         );
         self.view.send_replace(Arc::new(View {
             model_names,
+            context_sizes: self.context_sizes.clone(),
             sign_in_wait: self.sign_in_wait.clone(),
             state: self.state(),
             runtime_process: self.runtime_state.process_word(),
@@ -2072,7 +2076,7 @@ impl Core {
                 *result = Err(crate::messages::Message::BuiltInToolRan(name));
                 self.cancel(session, now, commands);
             }
-            TurnUpdate::Activity | TurnUpdate::Usage(_) | TurnUpdate::ThoughtDropped => {}
+            TurnUpdate::Activity | TurnUpdate::Usage(_, _) | TurnUpdate::ThoughtDropped => {}
         }
     }
     fn finish_quota(
@@ -2181,6 +2185,13 @@ impl Core {
         wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
     ) {
+        if let TurnUpdate::Usage(_, size) = &update {
+            let model = match &self.work[&id] {
+                Work::Retiring(outstanding) => &outstanding.model,
+                work => &work.execution().unwrap().model,
+            };
+            self.context_sizes.insert(model.clone(), *size);
+        }
         if matches!(self.work[&id], Work::Retiring(_)) {
             match update {
                 TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
@@ -2192,7 +2203,7 @@ impl Core {
                 }
                 TurnUpdate::Activity
                 | TurnUpdate::Text(_)
-                | TurnUpdate::Usage(_)
+                | TurnUpdate::Usage(_, _)
                 | TurnUpdate::ThoughtDropped
                 | TurnUpdate::UnpermittedTool(_) => {}
             }
@@ -2260,7 +2271,7 @@ impl Core {
                     self.cancel(session, now, commands);
                 }
             }
-            TurnUpdate::Usage(used) => active.input_tokens = used,
+            TurnUpdate::Usage(used, _) => active.input_tokens = used,
             TurnUpdate::ThoughtDropped => {
                 if !active.thought_dropped {
                     active.thought_dropped = true;
@@ -2715,6 +2726,7 @@ impl Conductor {
                 replacement: None,
                 startup_session: None,
                 catalog: None,
+                context_sizes: BTreeMap::new(),
                 records: Vec::new(),
                 use_sequence: 0,
                 limit,
@@ -3261,6 +3273,7 @@ mod tests {
                 changes: VecDeque::new(),
                 replacement: None,
                 catalog: None,
+                context_sizes: BTreeMap::new(),
                 work: BTreeMap::new(),
                 next_work: 0,
                 records: Vec::new(),
@@ -3300,6 +3313,62 @@ mod tests {
             status: "RESOURCE_EXHAUSTED".into(),
             message: "Quota exhausted; no reset time.".into(),
         }
+    }
+
+    #[test]
+    fn setup_keeps_the_last_context_size_of_each_model() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-context-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        let mut core = Core::fixture(2);
+        let mut tickets = Vec::new();
+        for model in ["m", "n"] {
+            core.startup_session = Some(format!("session-{model}"));
+            let body =
+                serde_json::json!({"model":model,"messages":[{"role":"user","content":"Hi"}]});
+            let turn = crate::dialect::CHAT
+                .parse(&serde_json::to_vec(&body).unwrap())
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, ticket) = mpsc::unbounded_channel();
+            tickets.push(ticket);
+            core.handle(
+                Event::Accepted(Box::new(Accepted {
+                    turn,
+                    model: crate::catalog::SelectedModel {
+                        model: model.into(),
+                        level: None,
+                        level_from_name: false,
+                    },
+                    request: journal.begin(crate::journal::Api::Chat, 0),
+                    reply: ResponseChannel {
+                        output,
+                        keep_alive: None,
+                    },
+                })),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+        }
+        for (model, size) in [("m", 1024), ("n", 4096), ("m", 2048)] {
+            core.handle(
+                Event::Runtime(RuntimeEvent::Turn {
+                    session: format!("session-{model}"),
+                    update: TurnUpdate::Usage(13, size),
+                }),
+                0,
+                std::time::UNIX_EPOCH,
+            );
+        }
+        assert_eq!(
+            core.view.borrow().context_sizes,
+            BTreeMap::from([("m".into(), 2048), ("n".into(), 4096)]),
+            "FR-054 the setup window is the last reported size for its own model"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     fn prepare_quota_queries(core: &mut Core, commands: &[Command], now: Moment) -> Vec<Command> {
@@ -4621,7 +4690,7 @@ mod tests {
                 core.handle(
                     Event::Runtime(RuntimeEvent::Turn {
                         session: "running".into(),
-                        update: TurnUpdate::Usage(1000),
+                        update: TurnUpdate::Usage(1000, 1_048_576),
                     }),
                     240_000,
                     std::time::UNIX_EPOCH,
