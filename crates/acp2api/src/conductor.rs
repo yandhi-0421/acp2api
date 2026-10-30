@@ -758,12 +758,9 @@ impl Core {
     ) {
         let result = match builds.finish_check(&check.identity, check.result) {
             Err(LaunchFailure::Lockout { signal, error }) => {
-                self.apply(
-                    Event::Lockout {
-                        signal,
-                        error,
-                        signalling_work: None,
-                    },
+                self.apply_lockout(
+                    signal,
+                    error,
                     runtime,
                     read_open,
                     &builds.start.clock,
@@ -772,7 +769,7 @@ impl Core {
                 .await;
                 let _ = check.reply.send(Err(self
                     .refusal(builds.start.clock.now())
-                    .unwrap()
+                    .expect("lockout just started")
                     .to_string()
                     .into()));
                 return;
@@ -786,6 +783,28 @@ impl Core {
         let _ = check
             .reply
             .send(discovered.map_err(LaunchFailure::Runtime).and(result));
+    }
+    async fn apply_lockout(
+        &mut self,
+        signal: &'static str,
+        error: crate::messages::Message,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        clock: &Arc<dyn Clock>,
+        journal: &crate::journal::Journal,
+    ) {
+        self.apply(
+            Event::Lockout {
+                signal,
+                error,
+                signalling_work: None,
+            },
+            runtime,
+            read_open,
+            clock,
+            journal,
+        )
+        .await;
     }
     async fn launch(
         &mut self,
@@ -828,18 +847,8 @@ impl Core {
                         .await;
                 }
                 Err(LaunchFailure::Lockout { signal, error }) => {
-                    self.apply(
-                        Event::Lockout {
-                            signal,
-                            error,
-                            signalling_work: None,
-                        },
-                        runtime,
-                        read_open,
-                        clock,
-                        journal,
-                    )
-                    .await;
+                    self.apply_lockout(signal, error, runtime, read_open, clock, journal)
+                        .await;
                     return;
                 }
                 Err(LaunchFailure::Stopped) => {
@@ -3240,6 +3249,8 @@ fn stopped<T>(_: T) -> crate::messages::Refusal {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    use crate::{BoxFuture, ProcessTree};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     impl Core {
         fn fixture(limit: u8) -> Self {
             Self {
@@ -3272,6 +3283,33 @@ mod tests {
         }
     }
 
+    struct StoppedTree(Arc<AtomicUsize>);
+    impl ProcessTree for StoppedTree {
+        fn pid(&self) -> u32 {
+            std::process::id()
+        }
+        fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+            Box::pin(std::future::pending())
+        }
+        fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    }
+    struct Output(std::io::Cursor<Vec<u8>>);
+    impl tokio::io::AsyncRead for Output {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.0.position() < self.0.get_ref().len() as u64 {
+                std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+            } else {
+                std::task::Poll::Pending
+            }
+        }
+    }
     fn quota_error_without_reset_time() -> crate::messages::HttpError {
         crate::messages::HttpError {
             code: Some(429),
@@ -3281,24 +3319,8 @@ mod tests {
     }
 
     async fn assert_start_lockout(stdout: &str, stderr: &str, original: &str) {
-        use crate::{
-            BoxFuture, LaunchError, LaunchSpec, Launched, ProcessLauncher, ProcessTree,
-            ReleaseFacts,
-        };
+        use crate::{LaunchError, LaunchSpec, Launched, ProcessLauncher, ReleaseFacts};
         use std::sync::atomic::{AtomicUsize, Ordering};
-        struct Tree(Arc<AtomicUsize>);
-        impl ProcessTree for Tree {
-            fn pid(&self) -> u32 {
-                std::process::id()
-            }
-            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
-                Box::pin(std::future::pending())
-            }
-            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async {})
-            }
-        }
         struct Launcher {
             stdout: Vec<u8>,
             stderr: Vec<u8>,
@@ -3315,7 +3337,7 @@ mod tests {
                     stdin: Box::pin(tokio::io::sink()),
                     stdout: Box::pin(std::io::Cursor::new(self.stdout.clone())),
                     stderr: Box::pin(std::io::Cursor::new(self.stderr.clone())),
-                    tree: Box::new(Tree(self.stops.clone())),
+                    tree: Box::new(StoppedTree(self.stops.clone())),
                 })
             }
         }
@@ -3433,26 +3455,17 @@ mod tests {
 
     #[test]
     fn a_damaged_state_file_lockout_names_the_case_and_category_without_a_path() {
-        let folder = std::env::temp_dir().join(format!(
-            "PRIVATE-OWNER-state-{}",
-            crate::random_hex::<12>().unwrap()
-        ));
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join(crate::store::STATE_FILE), b"{damaged").unwrap();
-        assert_state_file_diagnostic(&folder, "damaged state file: InvalidData");
+        let (folder, expected) =
+            crate::store::fixtures::state_file(crate::store::fixtures::StateFileFault::Damaged);
+        assert_state_file_diagnostic(&folder, &expected);
         std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
     fn an_unreadable_state_file_lockout_names_the_case_and_category_without_a_path() {
-        let folder = std::env::temp_dir().join(format!(
-            "PRIVATE-OWNER-state-{}",
-            crate::random_hex::<12>().unwrap()
-        ));
-        let path = folder.join(crate::store::STATE_FILE);
-        std::fs::create_dir_all(&path).unwrap();
-        let category = std::fs::read(&path).unwrap_err().kind();
-        assert_state_file_diagnostic(&folder, &format!("state file cannot be read: {category:?}"));
+        let (folder, expected) =
+            crate::store::fixtures::state_file(crate::store::fixtures::StateFileFault::Unreadable);
+        assert_state_file_diagnostic(&folder, &expected);
         std::fs::remove_dir_all(folder).unwrap();
     }
 
@@ -5497,41 +5510,72 @@ mod tests {
         std::fs::remove_dir_all(folder).unwrap();
     }
 
+    async fn check_fixture(
+        mut ports: crate::Ports,
+        stop: watch::Receiver<bool>,
+    ) -> (PathBuf, Conductor, tokio::task::JoinHandle<()>) {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!(
+            "acp2api-check-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let source = root.join("exe");
+        for (folder, bytes) in [
+            (&source, b"candidate".as_slice()),
+            (&root.join("official-runtime"), b"accepted".as_slice()),
+        ] {
+            std::fs::create_dir_all(folder).unwrap();
+            for name in [
+                crate::runtime_builds::SERVER,
+                crate::runtime_builds::HARNESS,
+            ] {
+                std::fs::write(folder.join(name), bytes).unwrap();
+            }
+        }
+        let hash = crate::hex(&Sha256::digest(b"accepted"));
+        ports.release = Arc::new(Facts(vec![crate::ListedBuild {
+            version: "1.4.0".into(),
+            platform: ports.release.platform().into(),
+            agy_acp_server_sha256: hash.clone(),
+            localharness_external_sha256: hash,
+        }]));
+        let builds = crate::runtime_builds::Builds::new(
+            &ports,
+            crate::Environment {
+                account_root: root.join("account"),
+                temp: root.join("temp"),
+                home: Some(root.join("home")),
+                local_app_data: None,
+                path: Vec::new(),
+                exe_dir: source,
+            },
+            root.clone(),
+            crate::account::Temporary::fixture(&root),
+            crate::runtime_driver::mcp::ToolSets::new(0),
+            stop,
+            0,
+        );
+        let configuration = root.join("config.toml");
+        let settings = crate::store::read(&configuration, 1).unwrap().settings;
+        let journal =
+            crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+        let (conductor, task) =
+            Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
+        conductor
+            .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+            .await
+            .unwrap();
+        (root, conductor, task)
+    }
+
     async fn assert_compatibility_lockout(
         check_answers: Vec<serde_json::Value>,
         stderr: &str,
         signal: &str,
         original: &str,
     ) {
-        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
+        use crate::{Launched, ProcessLauncher};
         use std::sync::atomic::{AtomicUsize, Ordering};
-        struct Output(std::io::Cursor<Vec<u8>>);
-        impl tokio::io::AsyncRead for Output {
-            fn poll_read(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                buf: &mut tokio::io::ReadBuf<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                if self.0.position() < self.0.get_ref().len() as u64 {
-                    std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
-                } else {
-                    std::task::Poll::Pending
-                }
-            }
-        }
-        struct Tree(Arc<AtomicUsize>);
-        impl ProcessTree for Tree {
-            fn pid(&self) -> u32 {
-                std::process::id()
-            }
-            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
-                Box::pin(std::future::pending())
-            }
-            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async {})
-            }
-        }
         struct Launcher {
             check_answers: Vec<serde_json::Value>,
             stderr: Vec<u8>,
@@ -5578,7 +5622,7 @@ mod tests {
                     stdin: Box::pin(tokio::io::sink()),
                     stdout: Box::pin(Output(std::io::Cursor::new(stdout.into_bytes()))),
                     stderr: Box::pin(std::io::Cursor::new(stderr)),
-                    tree: Box::new(Tree(if check {
+                    tree: Box::new(StoppedTree(if check {
                         self.check_stops.clone()
                     } else {
                         Arc::new(AtomicUsize::new(0))
@@ -5587,25 +5631,11 @@ mod tests {
             }
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            use sha2::{Digest, Sha256};
-            let root = std::env::temp_dir().join(format!("acp2api-check-lockout-{}", crate::random_hex::<12>().unwrap()));
-            let source = root.join("exe");
-            for (folder, bytes) in [(&source, b"candidate".as_slice()), (&root.join("official-runtime"), b"accepted".as_slice())] {
-                std::fs::create_dir_all(folder).unwrap();
-                for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(folder.join(name), bytes).unwrap(); }
-            }
             let launcher = Arc::new(Launcher { check_answers, stderr: stderr.as_bytes().to_vec(), starts: AtomicUsize::new(0), checks: AtomicUsize::new(0), check_stops: Arc::new(AtomicUsize::new(0)) });
             let mut ports = crate::Ports::production();
-            let hash = crate::hex(&Sha256::digest(b"accepted"));
-            ports.release = Arc::new(Facts(vec![crate::ListedBuild { version: "1.4.0".into(), platform: ports.release.platform().into(), agy_acp_server_sha256: hash.clone(), localharness_external_sha256: hash }]));
             ports.launcher = launcher.clone();
             let (stopped, stop) = watch::channel(false);
-            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment { account_root: root.join("account"), temp: root.join("temp"), home: Some(root.join("home")), local_app_data: None, path: Vec::new(), exe_dir: source }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), stop, 0);
-            let configuration = root.join("config.toml");
-            let settings = crate::store::read(&configuration, 1).unwrap().settings;
-            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
-            let (conductor, task) = Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
-            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            let (root, conductor, task) = check_fixture(ports, stop).await;
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
             let check_result = conductor.builds(crate::runtime_builds::Action::Check(identity), Hold::empty()).await;
             let owner_lockout = matches!(check_result, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("compatibility check failed") && !text.contains("Original error:"));
@@ -5685,7 +5715,7 @@ mod tests {
     }
 
     async fn failed_checks(timeout: bool, restart_fails: bool) {
-        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree, ReleaseFacts};
+        use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         struct Tree;
         impl ProcessTree for Tree {
@@ -5716,20 +5746,6 @@ mod tests {
             }
             fn hold(&self, _: HoldKind) -> Hold {
                 Hold::empty()
-            }
-        }
-        struct Output(std::io::Cursor<Vec<u8>>);
-        impl tokio::io::AsyncRead for Output {
-            fn poll_read(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                buf: &mut tokio::io::ReadBuf<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                if self.0.position() < self.0.get_ref().len() as u64 {
-                    std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
-                } else {
-                    std::task::Poll::Pending
-                }
             }
         }
         struct Launcher {
@@ -5785,45 +5801,13 @@ mod tests {
                 })
             }
         }
-        struct Facts(crate::ListedBuild);
-        impl ReleaseFacts for Facts {
-            fn version(&self) -> &str {
-                "test"
-            }
-            fn platform(&self) -> &str {
-                &self.0.platform
-            }
-            fn listed_builds(&self) -> &[crate::ListedBuild] {
-                std::slice::from_ref(&self.0)
-            }
-            fn highest_concurrency_limit(&self) -> u8 {
-                1
-            }
-        }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            use sha2::{Digest, Sha256};
-            let root = std::env::temp_dir().join(format!("acp2api-check-failures-{}", crate::random_hex::<12>().unwrap()));
-            let source = root.join("exe");
-            let accepted = root.join("official-runtime");
-            for (folder, bytes) in [(&source, b"candidate".as_slice()), (&accepted, b"accepted".as_slice())] {
-                std::fs::create_dir_all(folder).unwrap();
-                for name in [crate::runtime_builds::SERVER, crate::runtime_builds::HARNESS] { std::fs::write(folder.join(name), bytes).unwrap(); }
-            }
             let checking = Arc::new(AtomicBool::new(false));
             let launcher = Arc::new(Launcher { checks:AtomicUsize::new(0),starts:AtomicUsize::new(0),checking:checking.clone(),timeout,restart_fails });
             let mut ports = crate::Ports::production();
             ports.clock = Arc::new(CheckClock(checking, ports.clock));
-            let hash = crate::hex(&Sha256::digest(b"accepted"));
-            ports.release = Arc::new(Facts(crate::ListedBuild { version:"1.4.0".into(),platform:ports.release.platform().into(),agy_acp_server_sha256:hash.clone(),localharness_external_sha256:hash }));
             ports.launcher = launcher.clone();
-            let builds = crate::runtime_builds::Builds::new(&ports, crate::Environment {
-                account_root:root.join("account"), temp:root.join("temp"), home:Some(root.join("home")), local_app_data:None, path:vec![], exe_dir:source
-            }, root.clone(), crate::account::Temporary::fixture(&root), crate::runtime_driver::mcp::ToolSets::new(0), watch::channel(false).1, 0);
-            let configuration = root.join("config.toml");
-            let settings = crate::store::read(&configuration, 1).unwrap().settings;
-            let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
-            let (conductor, task) = Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
-            conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
+            let (root, conductor, task) = check_fixture(ports, watch::channel(false).1).await;
             assert_eq!(serde_json::to_value(conductor.model_names(Hold::empty()).await.ok().unwrap()).unwrap()[0]["id"], "m");
             let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
             for _ in 0..if restart_fails { 1 } else { 3 } {

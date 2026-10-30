@@ -419,30 +419,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_damaged_state_file_shows_the_same_diagnostic_in_the_panel_and_first_response() {
-        let folder = std::env::temp_dir().join(format!(
-            "PRIVATE-OWNER-panel-{}",
-            crate::random_hex::<12>().unwrap()
-        ));
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join(crate::store::STATE_FILE), b"{damaged").unwrap();
-        assert_state_file_panel_diagnostic(&folder, "damaged state file: InvalidData").await;
+        let (folder, expected) =
+            crate::store::fixtures::state_file(crate::store::fixtures::StateFileFault::Damaged);
+        assert_state_file_panel_diagnostic(&folder, &expected).await;
         std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[tokio::test]
     async fn an_unreadable_state_file_shows_the_same_diagnostic_in_the_panel_and_first_response() {
-        let folder = std::env::temp_dir().join(format!(
-            "PRIVATE-OWNER-panel-{}",
-            crate::random_hex::<12>().unwrap()
-        ));
-        let path = folder.join(crate::store::STATE_FILE);
-        std::fs::create_dir_all(&path).unwrap();
-        let category = std::fs::read(&path).unwrap_err().kind();
-        assert_state_file_panel_diagnostic(
-            &folder,
-            &format!("state file cannot be read: {category:?}"),
-        )
-        .await;
+        let (folder, expected) =
+            crate::store::fixtures::state_file(crate::store::fixtures::StateFileFault::Unreadable);
+        assert_state_file_panel_diagnostic(&folder, &expected).await;
         std::fs::remove_dir_all(folder).unwrap();
     }
 
