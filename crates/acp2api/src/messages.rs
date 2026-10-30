@@ -84,8 +84,17 @@ pub(crate) enum OwnerMessage {
         version: String,
     },
     CheckFailed(crate::compatibility_check::Incompatibility),
+    CheckRunFailed(std::sync::Arc<crate::runtime_builds::LaunchFailure>),
+    NoAnswerBeforeDeadline,
+    VersionDiffers,
+    GeminiFolderNotFound,
     /// A text from the OS or the official runtime, which stays as it is in each language.
     Diagnostic(String),
+}
+impl OwnerMessage {
+    pub(crate) fn is_failure(&self) -> bool {
+        !matches!(self, Self::CheckPassed { .. })
+    }
 }
 impl fmt::Display for OwnerMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -116,6 +125,16 @@ impl fmt::Display for OwnerMessage {
                 write!(f, "The compatibility check passed for {version}.")
             }
             Self::CheckFailed(reason) => write!(f, "The compatibility check failed: {reason}."),
+            Self::CheckRunFailed(failure) => {
+                write!(f, "The compatibility check failed: {failure}.")
+            }
+            Self::NoAnswerBeforeDeadline => {
+                f.write_str("runtime gave no answer before its deadline")
+            }
+            Self::VersionDiffers => {
+                f.write_str("initialize version differs from the accepted build")
+            }
+            Self::GeminiFolderNotFound => f.write_str("cannot locate the owner's Gemini folder"),
             Self::Diagnostic(text) => f.write_str(text),
         }
     }
@@ -168,6 +187,13 @@ pub(crate) enum Message {
     },
     Stopped,
     Upstream(String),
+    MissingSessionId,
+    RuntimeStdoutClosed,
+    RuntimeNotAvailable,
+    ConfigOptionNotApplied {
+        option: String,
+        value: String,
+    },
     UpstreamHttp(HttpError),
     UpstreamAcp(AcpError),
     BuiltInToolRan(String),
@@ -302,6 +328,10 @@ impl Message {
             Message::UpstreamHttp(_)
             | Message::UpstreamAcp(_)
             | Message::Upstream(_)
+            | Message::MissingSessionId
+            | Message::RuntimeStdoutClosed
+            | Message::RuntimeNotAvailable
+            | Message::ConfigOptionNotApplied { .. }
             | Message::MaxTurnRequests
             | Message::BuiltInToolRan(_) => Row::Other502,
             Message::Lockout(_)
@@ -387,6 +417,10 @@ impl fmt::Display for Message {
             Self::RetryWait { seconds, error } => write!(f, "acp2api: a request of this conversation failed less than {} s ago. Send the request again in {seconds} s. The error was: {}", crate::conductor::WAIT_SECONDS, error.to_string().trim_start_matches("acp2api: ")),
             Self::InvalidJson => f.write_str("acp2api: the request body is not valid JSON, or it has more than 128 levels."),
             Self::Invalid(message) | Self::Upstream(message) => f.write_str(message),
+            Self::MissingSessionId => f.write_str("missing sessionId"),
+            Self::RuntimeStdoutClosed => f.write_str("runtime stdout closed"),
+            Self::RuntimeNotAvailable => f.write_str("official runtime is not available"),
+            Self::ConfigOptionNotApplied { option, value } => write!(f, "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."),
             Self::UpstreamHttp(error) => {
                 f.write_str("acp2api: upstream error ")?;
                 if let Some(code) = error.code { write!(f, "{code} ")?; }

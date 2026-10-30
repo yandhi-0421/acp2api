@@ -159,7 +159,6 @@ pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const MAX_RUNTIME_FAILURES: usize = 3;
 const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 
-const UNAVAILABLE: &str = "official runtime is not available";
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
@@ -633,7 +632,7 @@ enum Event {
     Disconnected(String),
     Limit(u8),
     DismissNotice(String),
-    StartFailed(String, String),
+    StartFailed(String, crate::messages::Message),
 }
 enum Command {
     ModelsRead {
@@ -1632,12 +1631,7 @@ impl Core {
             }
             (None, Event::StartFailed(_, error)) => {
                 if let Some(id) = work_id {
-                    self.finish(
-                        id,
-                        Err(Failure::at(crate::messages::Message::Upstream(error), now)),
-                        now,
-                        &mut commands,
-                    );
+                    self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Prepared { work, result })) => {
@@ -2179,13 +2173,7 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         match event {
-            Event::StartFailed(_, error) => self.finish_quota(
-                id,
-                Err(crate::messages::Message::Upstream(error)),
-                now,
-                wall,
-                commands,
-            ),
+            Event::StartFailed(_, error) => self.finish_quota(id, Err(error), now, wall, commands),
             Event::Runtime(RuntimeEvent::Prepared { work, result }) => match result {
                 Ok((session, catalog)) => {
                     self.catalog = Some(catalog);
@@ -2639,7 +2627,7 @@ impl Core {
             crate::runtime_driver::CommandError::Io(_) => Event::RuntimeFailure,
             crate::runtime_driver::CommandError::Session(error) => match work {
                 Some(work) => Event::StartFailed(work, error),
-                None => Event::Runtime(RuntimeEvent::Failed(error)),
+                None => Event::Runtime(RuntimeEvent::Failed(error.to_string())),
             },
         };
         self.handle(event, now, wall)
@@ -3263,7 +3251,7 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(core.command_failed(
@@ -3312,7 +3300,7 @@ impl Conductor {
                                 )
                                 .await
                         }
-                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(core.command_failed(
@@ -3330,7 +3318,7 @@ impl Conductor {
                 } => {
                     let result = match readable(runtime, *read_open) {
                         Ok(runtime) => runtime.start_configured_prompt(prompt, &session).await,
-                        Err(error) => Err(crate::runtime_driver::CommandError::Session(error)),
+                        Err(error) => Err(error),
                     };
                     if let Err(error) = result {
                         commands.extend(core.command_failed(
@@ -3453,11 +3441,16 @@ impl Conductor {
         result.await.map_err(stopped)?
     }
 }
-fn readable(runtime: &mut Option<Runtime>, read_open: bool) -> Result<&mut Runtime, String> {
+fn readable(
+    runtime: &mut Option<Runtime>,
+    read_open: bool,
+) -> Result<&mut Runtime, crate::runtime_driver::CommandError> {
     runtime
         .as_mut()
         .filter(|_| read_open)
-        .ok_or_else(|| UNAVAILABLE.into())
+        .ok_or(crate::runtime_driver::CommandError::Session(
+            crate::messages::Message::RuntimeNotAvailable,
+        ))
 }
 async fn first_closed<T>(outputs: &[(String, mpsc::UnboundedSender<T>)]) -> String {
     let waits = outputs.iter().map(|(id, output)| {
@@ -6034,7 +6027,10 @@ mod tests {
         let seed_id = seed.request.id.clone();
         core.handle(Event::Accepted(Box::new(seed)), 0, std::time::UNIX_EPOCH);
         core.handle(
-            Event::StartFailed(seed_id, "acp2api: session creation failed".into()),
+            Event::StartFailed(
+                seed_id,
+                crate::messages::Message::Upstream("acp2api: session creation failed".into()),
+            ),
             0,
             std::time::UNIX_EPOCH,
         );

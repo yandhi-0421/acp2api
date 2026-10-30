@@ -24,6 +24,15 @@ pub(crate) struct BuildIdentity {
     server: String,
     harness: String,
 }
+#[cfg(test)]
+impl BuildIdentity {
+    pub(crate) fn fixture() -> Self {
+        Self {
+            server: String::new(),
+            harness: String::new(),
+        }
+    }
+}
 impl std::fmt::Display for BuildIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.server, self.harness)
@@ -139,7 +148,7 @@ impl From<crate::messages::Message> for LaunchFailure {
     fn from(error: crate::messages::Message) -> Self {
         match error.lockout_signal() {
             Some(signal) => Self::Lockout { signal, error },
-            None => Self::Runtime(error.to_string()),
+            None => Self::Owner(crate::messages::OwnerMessage::Api(error)),
         }
     }
 }
@@ -443,7 +452,7 @@ impl Builds {
         self.start
             .clean_sessions(retained)
             .await
-            .map_err(crate::compatibility_check::Failure::Internal)?;
+            .map_err(|error| crate::compatibility_check::Failure::Internal(error.into()))?;
         crate::compatibility_check::run(
             &self.start,
             program,
@@ -459,10 +468,7 @@ impl Builds {
         identity: &BuildIdentity,
         outcome: Result<String, crate::compatibility_check::Failure>,
     ) -> Result<crate::messages::OwnerMessage, LaunchFailure> {
-        use crate::{
-            compatibility_check::{Failure, Incompatibility},
-            messages::OwnerMessage,
-        };
+        use crate::{compatibility_check::Failure, messages::OwnerMessage};
         let result = match outcome {
             Ok(version) => self
                 .accept_check(version.clone(), identity)
@@ -470,11 +476,11 @@ impl Builds {
             Err(Failure::Runtime(
                 error @ (LaunchFailure::Stopped | LaunchFailure::Lockout { .. }),
             )) => Err(error),
-            Err(Failure::Runtime(error)) => Ok(OwnerMessage::CheckFailed(
-                Incompatibility::Diagnostic(error.to_string()),
-            )),
+            Err(Failure::Runtime(error)) => {
+                Ok(OwnerMessage::CheckRunFailed(std::sync::Arc::new(error)))
+            }
             Err(Failure::Incompatible(reason)) => Ok(OwnerMessage::CheckFailed(reason)),
-            Err(Failure::Internal(error)) => Err(LaunchFailure::Runtime(error)),
+            Err(Failure::Internal(error)) => Err(error),
         };
         let _ = fs::remove_dir_all(self.start.data.join(CHECK));
         result

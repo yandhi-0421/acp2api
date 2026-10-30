@@ -1,4 +1,5 @@
 use crate::{
+    messages::{Message, OwnerMessage},
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent, RuntimeStart, TurnUpdate},
 };
@@ -27,7 +28,7 @@ pub(crate) enum Incompatibility {
     RuntimeFailed,
     RuntimeExitedDuringLoad,
     RuntimeExited,
-    Diagnostic(String),
+    Refused(Message),
 }
 impl std::fmt::Display for Incompatibility {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -62,7 +63,7 @@ impl std::fmt::Display for Incompatibility {
             Self::RuntimeFailed => "runtime failed during the compatibility check",
             Self::RuntimeExitedDuringLoad => "the check runtime exited during session/load",
             Self::RuntimeExited => "the check runtime exited unexpectedly",
-            Self::Diagnostic(text) => text,
+            Self::Refused(message) => return message.fmt(f),
         };
         f.write_str(text)
     }
@@ -70,7 +71,7 @@ impl std::fmt::Display for Incompatibility {
 pub(crate) enum Failure {
     Incompatible(Incompatibility),
     Runtime(LaunchFailure),
-    Internal(String),
+    Internal(LaunchFailure),
 }
 impl Failure {
     fn lockout(event: &RuntimeEvent, failed_reply: &str) -> Option<Self> {
@@ -90,9 +91,11 @@ impl From<crate::runtime_driver::CommandError> for Failure {
     fn from(error: crate::runtime_driver::CommandError) -> Self {
         match error {
             crate::runtime_driver::CommandError::Io(error) => {
-                Self::Runtime(LaunchFailure::Runtime(error.to_string()))
+                Self::Runtime(LaunchFailure::Io(error))
             }
-            crate::runtime_driver::CommandError::Session(error) => Self::Internal(error),
+            crate::runtime_driver::CommandError::Session(error) => {
+                Self::Internal(LaunchFailure::Owner(OwnerMessage::Api(error)))
+            }
         }
     }
 }
@@ -101,8 +104,9 @@ pub(crate) async fn run(
     program: PathBuf,
     gemini: Option<PathBuf>,
 ) -> Result<String, Failure> {
-    let gemini = gemini
-        .ok_or_else(|| Failure::Internal("cannot locate the owner's Gemini folder".into()))?;
+    let gemini = gemini.ok_or_else(|| {
+        Failure::Internal(LaunchFailure::Owner(OwnerMessage::GeminiFolderNotFound))
+    })?;
     let mut runtime = Runtime::open(start, program)
         .await
         .map_err(Failure::Runtime)?;
@@ -142,12 +146,13 @@ pub(crate) async fn run(
             .filter(|version| !version.is_empty())
             .ok_or_else(|| Failure::Incompatible(Incompatibility::NoVersion))?
             .to_owned();
-        let codeword =
-            crate::random_hex::<16>().map_err(|error| Failure::Internal(error.to_string()))?;
+        let codeword = crate::random_hex::<16>()
+            .map_err(|error| Failure::Internal(error.to_string().into()))?;
         let tools = vec![crate::conversation::ClientTool {
             name: format!(
                 "compatibility_{}",
-                crate::random_hex::<12>().map_err(|error| Failure::Internal(error.to_string()))?
+                crate::random_hex::<12>()
+                    .map_err(|error| Failure::Internal(error.to_string().into()))?
             ),
             description: "Return a value for the compatibility check.".into(),
             schema: json!({"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}),
@@ -204,9 +209,7 @@ pub(crate) async fn run(
                     match event {
                         RuntimeEvent::Prepared { result, .. } => {
                             result.map_err(|error| {
-                                Failure::Incompatible(Incompatibility::Diagnostic(
-                                    error.to_string(),
-                                ))
+                                Failure::Incompatible(Incompatibility::Refused(error))
                             })?;
                             break;
                         }
@@ -224,8 +227,8 @@ pub(crate) async fn run(
                 Ok(())
             })
             .await?;
-        let result =
-            crate::random_hex::<16>().map_err(|error| Failure::Internal(error.to_string()))?;
+        let result = crate::random_hex::<16>()
+            .map_err(|error| Failure::Internal(error.to_string().into()))?;
         let prompt = format!(
             "The tool {} returned this result as text: {result}\nReply with that result exactly, without calling any tool.",
             call.name
@@ -252,12 +255,12 @@ pub(crate) async fn run(
     }
     let (version, session) = result?;
     let files = session_files(&start.data.join("runtime-home"), &session)
-        .map_err(|error| Failure::Internal(error.to_string()))?;
+        .map_err(|error| Failure::Internal(error.to_string().into()))?;
     if !files.contains(&OsString::from(format!("{session}.db"))) {
         return Err(Failure::Incompatible(Incompatibility::NoSessionFile));
     }
     if !session_files(&gemini, &session)
-        .map_err(|error| Failure::Internal(error.to_string()))?
+        .map_err(|error| Failure::Internal(error.to_string().into()))?
         .is_empty()
     {
         return Err(Failure::Incompatible(
@@ -344,9 +347,7 @@ async fn check_prompt(
                         ));
                     }
                     TurnUpdate::Failed(error) => {
-                        return Err(Failure::Incompatible(Incompatibility::Diagnostic(
-                            error.to_string(),
-                        )));
+                        return Err(Failure::Incompatible(Incompatibility::Refused(error)));
                     }
                 }
             }

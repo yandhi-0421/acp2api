@@ -13,12 +13,16 @@ update();"#;
 // The Content-Security-Policy holds the hash of this script, so its texts stay in the page.
 pub(super) const COPY_KEY: &str = r#"const copyKey = document.getElementById('copy-key');
 copyKey.addEventListener('click', async () => {
-    const status = document.getElementById('copy-key-status');
+    const report = (tone, text) => {
+        const dot = document.createElement('span');
+        dot.className = `dot ${tone}`;
+        document.getElementById('copy-key-status').replaceChildren(dot, text);
+    };
     try {
         await navigator.clipboard.writeText(document.getElementById('local-api-key').value);
-        status.textContent = copyKey.dataset.copied;
+        report('good', copyKey.dataset.copied);
     } catch {
-        status.textContent = copyKey.dataset.failed;
+        report('critical', copyKey.dataset.failed);
     }
 });"#;
 const STYLE: &str = r#"

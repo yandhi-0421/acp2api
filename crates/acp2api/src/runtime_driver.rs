@@ -18,11 +18,11 @@ use tokio::sync::mpsc;
 #[derive(Debug)]
 pub(crate) enum CommandError {
     Io(std::io::Error),
-    Session(String),
+    Session(Message),
 }
 impl From<String> for CommandError {
     fn from(error: String) -> Self {
-        Self::Session(error)
+        Self::Session(Message::Upstream(error))
     }
 }
 impl std::fmt::Display for CommandError {
@@ -91,7 +91,7 @@ impl RuntimeStart {
             result = answer => result,
         }
     }
-    async fn before_deadline<T, E: From<LaunchFailure>>(
+    pub(crate) async fn before_deadline<T, E: From<LaunchFailure>>(
         &self,
         wait: Moment,
         answer: impl std::future::Future<Output = Result<T, E>>,
@@ -106,7 +106,7 @@ impl RuntimeStart {
         });
         tokio::select! {
             result = answer => result,
-            _hold = self.clock.sleep_until(self.clock.now().saturating_add(wait)) => Err(LaunchFailure::Runtime("runtime gave no answer before its deadline".into()).into()),
+            _hold = self.clock.sleep_until(self.clock.now().saturating_add(wait)) => Err(LaunchFailure::Owner(crate::messages::OwnerMessage::NoAnswerBeforeDeadline).into()),
         }
     }
     pub(crate) async fn clean_sessions(
@@ -184,8 +184,8 @@ impl Runtime {
         let starting = async {
             let initialized = start.until_stopped(runtime.initialize(start)).await?;
             if initialized["agentInfo"]["version"].as_str() != Some(expected_version) {
-                return Err(LaunchFailure::Runtime(
-                    "initialize version differs from the accepted build".into(),
+                return Err(LaunchFailure::Owner(
+                    crate::messages::OwnerMessage::VersionDiffers,
                 ));
             }
             match runtime.new_session(&[], None).await {
@@ -319,7 +319,7 @@ impl Runtime {
             .map_err(Message::Upstream)?;
         let session_id = session["sessionId"]
             .as_str()
-            .ok_or_else(|| Message::Upstream("missing sessionId".into()))?
+            .ok_or(Message::MissingSessionId)?
             .to_owned();
         self.remember_config(&session_id, &session);
         self.tools.insert(session_id.clone(), tools);
@@ -428,7 +428,7 @@ impl Runtime {
     }
     async fn write(&mut self, value: Value) -> Result<(), CommandError> {
         let mut bytes =
-            serde_json::to_vec(&value).map_err(|e| CommandError::Session(e.to_string()))?;
+            serde_json::to_vec(&value).map_err(|e| CommandError::from(e.to_string()))?;
         bytes.push(b'\n');
         self.input
             .write_all(&bytes)
@@ -480,7 +480,7 @@ impl Runtime {
                     continue;
                 }
                 Line::Closed => {
-                    return Err(Message::Upstream("runtime stdout closed".into()));
+                    return Err(Message::RuntimeStdoutClosed);
                 }
             };
             if value.get("method").is_some() {
@@ -498,7 +498,7 @@ impl Runtime {
                     .ok_or_else(|| acp_error(&value["error"]));
             }
         }
-        Err(Message::Upstream("runtime stdout closed".into()))
+        Err(Message::RuntimeStdoutClosed)
     }
     pub(crate) async fn start_configured_prompt(
         &mut self,
@@ -528,9 +528,10 @@ impl Runtime {
             });
         if let Some((option, value)) = changed {
             if sent.contains(&option) {
-                return Err(format!(
-                    "acp2api: the official runtime did not apply the {option} value {value}, so acp2api ended the prompt turn."
-                ).into());
+                return Err(CommandError::Session(Message::ConfigOptionNotApplied {
+                    option: option.into(),
+                    value: value.into(),
+                }));
             }
             sent.push(option);
             let option = option.to_owned();
@@ -682,7 +683,7 @@ impl Runtime {
                     Err(CommandError::Io(_)) => RuntimeEvent::Closed,
                     Err(CommandError::Session(error)) => RuntimeEvent::Turn {
                         session,
-                        update: TurnUpdate::Failed(Message::Upstream(error)),
+                        update: TurnUpdate::Failed(error),
                     },
                 };
             }
@@ -811,7 +812,7 @@ impl Runtime {
             match self.refuse(&value).await {
                 Ok(()) => RuntimeEvent::Other,
                 Err(CommandError::Io(_)) => RuntimeEvent::Closed,
-                Err(CommandError::Session(error)) => RuntimeEvent::Failed(error),
+                Err(CommandError::Session(error)) => RuntimeEvent::Failed(error.to_string()),
             }
         } else {
             RuntimeEvent::Other
@@ -829,7 +830,7 @@ impl Runtime {
             Some(id) => id,
             None => response["sessionId"]
                 .as_str()
-                .ok_or_else(|| Message::Upstream("missing sessionId".into()))?
+                .ok_or(Message::MissingSessionId)?
                 .to_owned(),
         };
         let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())

@@ -103,6 +103,13 @@ impl Panel {
             ),
         )
     }
+    fn notice(&self, language: Language, notice: &crate::messages::OwnerMessage) -> Response {
+        let line = page::Line {
+            text: &language.owner_message(notice),
+            error: notice.is_failure(),
+        };
+        Html(self.html(language, Some(line))).into_response()
+    }
     fn page(&self, language: Language, status: StatusCode, text: &str) -> Response {
         let line = page::Line {
             text,
@@ -457,7 +464,7 @@ async fn runtime_action(
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
     drop(lease.release());
     match panel.conductor.builds(action, hold).await {
-        Ok(Some(notice)) => panel.page(language, StatusCode::OK, &language.owner_message(&notice)),
+        Ok(Some(notice)) => panel.notice(language, &notice),
         Ok(None) => Html(panel.html(language, None)).into_response(),
         Err(error) => panel.page(
             language,
@@ -704,6 +711,55 @@ mod tests {
             ),
             (true, false),
             "FR-009 each management endpoint needs a panel session"
+        );
+    }
+    #[tokio::test]
+    async fn the_meaning_of_a_build_notice_selects_its_dot() {
+        use crate::{compatibility_check::Incompatibility, messages::OwnerMessage};
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-notice-dot-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder, clock.wall()).unwrap();
+        let settings = crate::store::Settings {
+            port: 8329,
+            concurrency_limit: 1,
+            local_api_key: "acp2api-test".into(),
+            management_password_hash: String::new(),
+            agy_acp_server_path: None,
+        };
+        let (conductor, _task) = Conductor::start(
+            crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
+            clock.clone(),
+            journal,
+            settings,
+            folder.join("config.toml"),
+            1,
+        );
+        let panel = Panel::new(conductor, clock, 8329);
+        let mut lines = Vec::new();
+        for notice in [
+            OwnerMessage::CheckFailed(Incompatibility::NoVersion),
+            OwnerMessage::CheckPassed {
+                version: "1.6.0".into(),
+            },
+        ] {
+            let answer = panel.notice(Language::English, &notice);
+            let status = answer.status();
+            let body = axum::body::to_bytes(answer.into_body(), 1 << 18).await;
+            let body = String::from_utf8(body.unwrap().to_vec()).unwrap();
+            lines.push((
+                status,
+                body.contains(&format!("<span class=\"dot critical\"></span>{notice}")),
+                body.contains(&format!("<span class=\"dot good\"></span>{notice}")),
+            ));
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            lines,
+            [(StatusCode::OK, true, false), (StatusCode::OK, false, true)],
+            "a failed check keeps its HTTP 200 and gets the critical dot"
         );
     }
     #[tokio::test(flavor = "current_thread")]

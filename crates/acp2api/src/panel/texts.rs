@@ -235,6 +235,12 @@ fn chinese_api_message(message: &Message) -> String {
             chinese_api_message(error)
         ),
         Message::Upstream(text) => format!("上游错误：{text}"),
+        Message::MissingSessionId => "官方运行时的回复里没有 sessionId。".into(),
+        Message::RuntimeStdoutClosed => "运行时进程的标准输出关闭了。".into(),
+        Message::RuntimeNotAvailable => "官方运行时不可用。".into(),
+        Message::ConfigOptionNotApplied { option, value } => format!(
+            "官方运行时没有应用 {option} 的值 {value}，所以 acp2api 结束了这个 prompt 轮次。"
+        ),
         Message::UpstreamHttp(error) => {
             let code = error
                 .code
@@ -293,7 +299,7 @@ fn chinese_incompatibility(reason: &Incompatibility) -> String {
             "检查用的运行时进程在 session/load 期间退出了".into()
         }
         Incompatibility::RuntimeExited => "检查用的运行时进程意外退出了".into(),
-        Incompatibility::Diagnostic(text) => text.clone(),
+        Incompatibility::Refused(message) => chinese_api_message(message),
     }
 }
 
@@ -317,6 +323,13 @@ fn chinese_owner_message(message: &OwnerMessage) -> String {
         OwnerMessage::CheckFailed(reason) => {
             format!("兼容性检查没有通过：{}。", chinese_incompatibility(reason))
         }
+        OwnerMessage::CheckRunFailed(failure) => format!(
+            "兼容性检查没有通过：{}。",
+            chinese_launch_failure(failure).trim_end_matches('。')
+        ),
+        OwnerMessage::NoAnswerBeforeDeadline => "官方运行时在截止时间之前没有回答。".into(),
+        OwnerMessage::VersionDiffers => "initialize 的版本和已接受的构建不一致。".into(),
+        OwnerMessage::GeminiFolderNotFound => "找不到所有者的 Gemini 文件夹。".into(),
         OwnerMessage::Diagnostic(text) => text.clone(),
     }
 }
@@ -334,6 +347,7 @@ fn chinese_launch_failure(failure: &LaunchFailure) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -372,19 +386,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_check_with_no_answer_before_the_deadline_fails_in_chinese() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-check-deadline-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let clock: std::sync::Arc<dyn crate::Clock> =
+            std::sync::Arc::new(crate::os::SystemClock::default());
+        let builds = crate::runtime_builds::Builds::fixture(&folder, clock);
+        let failure = builds
+            .start
+            .before_deadline(0, std::future::pending::<Result<(), LaunchFailure>>())
+            .await
+            .unwrap_err();
+        let identity = crate::runtime_builds::BuildIdentity::fixture();
+        let notice = builds
+            .finish_check(
+                &identity,
+                Err(crate::compatibility_check::Failure::Runtime(failure)),
+            )
+            .unwrap();
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(
+            Language::Chinese.owner_message(&notice),
+            "兼容性检查没有通过：官方运行时在截止时间之前没有回答。"
+        );
+    }
+
     #[test]
     fn an_external_diagnostic_keeps_its_text_inside_a_translated_frame() {
         let diagnostic = "permission denied (os error 13)";
         assert_eq!(
             [
                 Language::Chinese.owner_message(&OwnerMessage::CheckFailed(
-                    Incompatibility::Diagnostic(diagnostic.into())
+                    Incompatibility::Refused(Message::Upstream(diagnostic.into()))
                 )),
                 Language::Chinese.launch_failure(&LaunchFailure::Runtime(diagnostic.into())),
                 Language::English.owner_message(&OwnerMessage::Diagnostic(diagnostic.into())),
             ],
             [
-                format!("兼容性检查没有通过：{diagnostic}。"),
+                format!("兼容性检查没有通过：上游错误：{diagnostic}。"),
                 format!("运行时进程出错：{diagnostic}"),
                 diagnostic.to_owned(),
             ]
