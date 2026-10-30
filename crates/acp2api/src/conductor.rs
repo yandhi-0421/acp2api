@@ -717,6 +717,14 @@ impl Core {
             let _ = reply.send(Err(LaunchFailure::Stopped));
             return None;
         }
+        if !initial && self.lockout.is_some() {
+            let _ = reply.send(Err(self
+                .refusal(clock.now())
+                .expect("lockout just started")
+                .to_string()
+                .into()));
+            return None;
+        }
         let configured = publish.borrow().agy_acp_server_path.clone();
         let result = builds
             .discover(configured)
@@ -5647,6 +5655,56 @@ mod tests {
             std::fs::remove_dir_all(root).unwrap();
             assert_eq!(actual, ("Lockout", 1, 1, 1, Some((signal.into(), original.into())), Some(true), true), "FR-034/FR-035: a check lockout persists redacted evidence, prevents restoration, and ends the owner request with only M-12");
         }).await.expect("compatibility lockout cap: five seconds, three processes, four ACP messages and four KiB output per process");
+    }
+
+    #[tokio::test]
+    async fn a_lockout_during_an_owner_build_restart_returns_only_m12() {
+        struct Launcher {
+            starts: AtomicUsize,
+            stops: Arc<AtomicUsize>,
+        }
+        impl crate::ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<crate::Launched, crate::LaunchError> {
+                let start = self.starts.fetch_add(1, Ordering::SeqCst);
+                assert!(start < 2, "one initial start and one owner restart cap");
+                let answers = if start == 0 {
+                    vec![
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"agentInfo":{"version":"1.4.0"}}}),
+                        serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"serving","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                    ]
+                } else {
+                    vec![
+                        serde_json::json!({"jsonrpc":"2.0","id":1,"error":{"code":403,"message":"Verify your account"}}),
+                    ]
+                };
+                let stdout = answers
+                    .iter()
+                    .map(|answer| format!("{answer}\n"))
+                    .collect::<String>();
+                assert!(stdout.len() <= 1024, "one KiB output cap");
+                Ok(crate::Launched {
+                    stdin: Box::pin(tokio::io::sink()),
+                    stdout: Box::pin(Output(std::io::Cursor::new(stdout.into_bytes()))),
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(StoppedTree(self.stops.clone())),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let launcher = Arc::new(Launcher { starts: AtomicUsize::new(0), stops: Arc::new(AtomicUsize::new(0)) });
+            let mut ports = crate::Ports::production();
+            ports.launcher = launcher.clone();
+            let (stop, stopped) = watch::channel(false);
+            let (root, conductor, task) = check_fixture(ports, stopped).await;
+            let choice = conductor.builds_summary().unwrap().choices[0].0.clone();
+            let owner = conductor.builds(crate::runtime_builds::Action::Build(choice), Hold::empty()).await;
+            let owner_lockout = matches!(owner, Err(LaunchFailure::Runtime(text)) if text.starts_with("acp2api: lockout since ") && !text.contains("Original error:"));
+            let actual = (conductor.view().state, owner_lockout, launcher.starts.load(Ordering::SeqCst), launcher.stops.load(Ordering::SeqCst));
+            stop.send(true).unwrap();
+            task.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(actual, ("Lockout", true, 2, 2), "FR-035/#70: lockout while restarting an owner-selected build must end that owner request with only M-12");
+        }).await.expect("owner restart lockout cap: five seconds, two starts, at most two ACP answers and one KiB output per start");
     }
 
     #[tokio::test]
