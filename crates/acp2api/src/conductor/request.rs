@@ -66,11 +66,13 @@ pub(super) enum UpdateRoute {
     Reply,
     QuotaSettlement,
 }
+
 #[must_use]
 pub(super) enum TurnAction {
     Continue,
     Cancel,
 }
+
 pub(super) enum TurnEnd {
     Prompt(Option<StopReason>),
     Failed(crate::messages::Message),
@@ -144,15 +146,28 @@ impl Active {
         }
     }
 
+    pub(super) fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
     pub(super) fn update_deadline(&self) -> Option<Moment> {
         self.phase.update_deadline()
     }
+
     pub(super) fn completion_deadline(&self) -> Option<Moment> {
         match self.phase {
             Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. } => Some(at),
             _ => None,
         }
     }
+
+    pub(super) fn quota_wait(&self) -> Option<&quota::Wait> {
+        match &self.phase {
+            Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } => Some(wait),
+            _ => None,
+        }
+    }
+
     pub(super) fn exit(&self) -> Exit {
         if matches!(
             self.phase,
@@ -166,9 +181,6 @@ impl Active {
         }
     }
 
-    pub(super) fn session(&self) -> Option<&str> {
-        self.session.as_deref()
-    }
     /// All reply text of the request so far, also the text that it still holds back.
     pub(super) fn reply_text(&self) -> String {
         format!(
@@ -178,17 +190,47 @@ impl Active {
             self.held.as_deref().unwrap_or("")
         )
     }
-    pub(super) fn disconnected(self) -> Command {
-        Command::Complete(crate::journal::Completion {
-            request: self.request,
-            session: self.session,
-            session_use: Some(self.kind),
-            outcome: crate::journal::Outcome::Disconnected,
-        })
+
+    /// Resets the no-update deadline. A quota phase ignores the reply content of the update.
+    pub(super) fn update_received(&mut self, now: Moment) -> UpdateRoute {
+        match &mut self.phase {
+            Phase::Prompt { .. } => self.phase = Phase::prompt(now),
+            Phase::AwaitingQuotaEnd {
+                update_deadline: Some(update_deadline),
+                ..
+            } => {
+                *update_deadline = now + NO_UPDATE_LIMIT;
+            }
+            _ => {}
+        }
+        if matches!(
+            self.phase,
+            Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
+        ) {
+            UpdateRoute::QuotaSettlement
+        } else {
+            UpdateRoute::Reply
+        }
     }
+
+    /// Cancels the prompt turn when the text ends the reply at a stop sequence.
+    pub(super) fn text_received(
+        &mut self,
+        text: String,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) -> TurnAction {
+        if self.tool_call.is_none() && self.release_or_cut_reply(Some(text), now, commands) {
+            TurnAction::Cancel
+        } else {
+            TurnAction::Continue
+        }
+    }
+
     pub(super) fn usage_received(&mut self, used: u64) {
         self.input_tokens = used;
     }
+
     pub(super) fn thought_dropped(&mut self) -> Option<Command> {
         if self.thought_dropped {
             return None;
@@ -198,6 +240,117 @@ impl Active {
             self.request.clone(),
             crate::journal::Diagnostic::DroppedThoughtText,
         ))
+    }
+
+    pub(super) fn client_tool_called(&mut self, call: crate::conversation::ToolCall) -> TurnAction {
+        let cancel = matches!(self.phase, Phase::Prompt { .. }) && self.tool_call.is_none();
+        if cancel {
+            self.tool_call = Some(call);
+            TurnAction::Cancel
+        } else {
+            TurnAction::Continue
+        }
+    }
+
+    pub(super) fn turn_ended(&mut self, end: TurnEnd, now: Moment) {
+        match &self.phase {
+            Phase::AwaitingQuotaEnd { wait, .. } => {
+                self.phase = Phase::QuotaSettling {
+                    at: now.saturating_add(SETTLE_DELAY),
+                    wait: wait.clone(),
+                };
+            }
+            Phase::QuotaSettling { .. } => {}
+            _ => match end {
+                TurnEnd::Prompt(stop_reason) => self.prompt_ended(stop_reason, now),
+                TurnEnd::Failed(error) => {
+                    self.phase = Phase::Settling {
+                        at: now.saturating_add(SETTLE_DELAY),
+                        can_continue: false,
+                        result: Err(Failure::at(error, now)),
+                    };
+                }
+            },
+        }
+    }
+
+    pub(super) fn quota_signal(&mut self, wait: quota::Wait) {
+        self.phase = match self.phase {
+            Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. } => {
+                Phase::QuotaSettling { at, wait }
+            }
+            _ => Phase::AwaitingQuotaEnd {
+                wait,
+                update_deadline: self.phase.update_deadline(),
+            },
+        };
+    }
+
+    pub(super) fn quota_failure(&mut self, wait: quota::Wait, now: Moment) {
+        self.phase = Phase::QuotaSettling {
+            at: now.saturating_add(SETTLE_DELAY),
+            wait,
+        };
+    }
+
+    pub(super) fn prepared(&mut self, session: String, now: Moment) -> Option<PromptRequest> {
+        self.session = Some(session);
+        if let Phase::AwaitingQuotaEnd { wait, .. } = &self.phase {
+            self.phase = Phase::QuotaSettling {
+                at: now,
+                wait: wait.clone(),
+            };
+            return None;
+        }
+        match std::mem::replace(&mut self.phase, Phase::prompt(now)) {
+            Phase::Preparing(prompt) => Some(prompt),
+            _ => None,
+        }
+    }
+
+    /// Decides what ends the request after its prompt turn.
+    pub(super) fn end(
+        &mut self,
+        result: Result<(), Failure>,
+        can_query_reset: bool,
+        refusal: Option<crate::messages::Message>,
+        now: Moment,
+    ) -> Ending {
+        let result = match (
+            result,
+            std::mem::replace(&mut self.phase, Phase::AwaitingQuotaQuery),
+        ) {
+            (Ok(()), Phase::QuotaSettling { wait, .. }) => {
+                if can_query_reset {
+                    return Ending::QueryQuotaReset(wait);
+                }
+                Err(Failure::at(
+                    refusal.unwrap_or_else(|| wait.message(now)),
+                    now,
+                ))
+            }
+            (result, phase) => {
+                self.phase = phase;
+                result
+            }
+        };
+        if result.is_ok() && matches!(self.stop, crate::conversation::Stop::Refusal) {
+            return Ending::QueryRefusal;
+        }
+        Ending::Complete(result)
+    }
+
+    pub(super) fn hold_for_quota_query(&mut self) {
+        self.phase = Phase::AwaitingQuotaQuery;
+    }
+
+    pub(super) fn disconnected(self) -> Command {
+        Command::Complete(crate::journal::Completion {
+            request: self.request,
+            session: self.session,
+            session_use: Some(self.kind),
+            outcome: crate::journal::Outcome::Disconnected,
+        })
     }
 
     pub(super) fn finish(
@@ -288,6 +441,26 @@ impl Active {
         (commands, retry, record)
     }
 
+    fn prompt_ended(&mut self, stop_reason: Option<StopReason>, now: Moment) {
+        if stop_reason == Some(StopReason::Refusal) {
+            self.stop = crate::conversation::Stop::Refusal;
+        }
+        if stop_reason == Some(StopReason::MaxTokens) && self.stop.sequence().is_none() {
+            self.stop = crate::conversation::Stop::MaxTokens;
+        }
+        self.phase = Phase::Settling {
+            at: now.saturating_add(SETTLE_DELAY),
+            result: if stop_reason == Some(StopReason::MaxTurnRequests) {
+                Err(Failure::at(crate::messages::Message::MaxTurnRequests, now))
+            } else {
+                Ok(())
+            },
+            can_continue: stop_reason == Some(StopReason::EndTurn)
+                || stop_reason == Some(StopReason::MaxTokens)
+                || stop_reason == Some(StopReason::Cancelled) && self.tool_call.is_some(),
+        };
+    }
+
     fn earliest_stop(&self, text: &str) -> Option<(usize, String)> {
         self.stops
             .iter()
@@ -352,167 +525,5 @@ impl Active {
             return !complete;
         }
         false
-    }
-
-    /// Resets the no-update deadline. A quota phase ignores the reply content of the update.
-    pub(super) fn update_received(&mut self, now: Moment) -> UpdateRoute {
-        match &mut self.phase {
-            Phase::Prompt { .. } => self.phase = Phase::prompt(now),
-            Phase::AwaitingQuotaEnd {
-                update_deadline: Some(update_deadline),
-                ..
-            } => {
-                *update_deadline = now + NO_UPDATE_LIMIT;
-            }
-            _ => {}
-        }
-        if matches!(
-            self.phase,
-            Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
-        ) {
-            UpdateRoute::QuotaSettlement
-        } else {
-            UpdateRoute::Reply
-        }
-    }
-
-    /// Cancels the prompt turn when the text ends the reply at a stop sequence.
-    pub(super) fn text_received(
-        &mut self,
-        text: String,
-        now: Moment,
-        commands: &mut Vec<Command>,
-    ) -> TurnAction {
-        if self.tool_call.is_none() && self.release_or_cut_reply(Some(text), now, commands) {
-            TurnAction::Cancel
-        } else {
-            TurnAction::Continue
-        }
-    }
-
-    pub(super) fn turn_ended(&mut self, end: TurnEnd, now: Moment) {
-        match &self.phase {
-            Phase::AwaitingQuotaEnd { wait, .. } => {
-                self.phase = Phase::QuotaSettling {
-                    at: now.saturating_add(SETTLE_DELAY),
-                    wait: wait.clone(),
-                };
-            }
-            Phase::QuotaSettling { .. } => {}
-            _ => match end {
-                TurnEnd::Prompt(stop_reason) => self.prompt_ended(stop_reason, now),
-                TurnEnd::Failed(error) => {
-                    self.phase = Phase::Settling {
-                        at: now.saturating_add(SETTLE_DELAY),
-                        can_continue: false,
-                        result: Err(Failure::at(error, now)),
-                    };
-                }
-            },
-        }
-    }
-
-    fn prompt_ended(&mut self, stop_reason: Option<StopReason>, now: Moment) {
-        if stop_reason == Some(StopReason::Refusal) {
-            self.stop = crate::conversation::Stop::Refusal;
-        }
-        if stop_reason == Some(StopReason::MaxTokens) && self.stop.sequence().is_none() {
-            self.stop = crate::conversation::Stop::MaxTokens;
-        }
-        self.phase = Phase::Settling {
-            at: now.saturating_add(SETTLE_DELAY),
-            result: if stop_reason == Some(StopReason::MaxTurnRequests) {
-                Err(Failure::at(crate::messages::Message::MaxTurnRequests, now))
-            } else {
-                Ok(())
-            },
-            can_continue: stop_reason == Some(StopReason::EndTurn)
-                || stop_reason == Some(StopReason::MaxTokens)
-                || stop_reason == Some(StopReason::Cancelled) && self.tool_call.is_some(),
-        };
-    }
-
-    pub(super) fn client_tool_called(&mut self, call: crate::conversation::ToolCall) -> TurnAction {
-        let cancel = matches!(self.phase, Phase::Prompt { .. }) && self.tool_call.is_none();
-        if cancel {
-            self.tool_call = Some(call);
-            TurnAction::Cancel
-        } else {
-            TurnAction::Continue
-        }
-    }
-
-    pub(super) fn quota_signal(&mut self, wait: quota::Wait) {
-        self.phase = match self.phase {
-            Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. } => {
-                Phase::QuotaSettling { at, wait }
-            }
-            _ => Phase::AwaitingQuotaEnd {
-                wait,
-                update_deadline: self.phase.update_deadline(),
-            },
-        };
-    }
-
-    pub(super) fn quota_failure(&mut self, wait: quota::Wait, now: Moment) {
-        self.phase = Phase::QuotaSettling {
-            at: now.saturating_add(SETTLE_DELAY),
-            wait,
-        };
-    }
-
-    pub(super) fn prepared(&mut self, session: String, now: Moment) -> Option<PromptRequest> {
-        self.session = Some(session);
-        if let Phase::AwaitingQuotaEnd { wait, .. } = &self.phase {
-            self.phase = Phase::QuotaSettling {
-                at: now,
-                wait: wait.clone(),
-            };
-            return None;
-        }
-        match std::mem::replace(&mut self.phase, Phase::prompt(now)) {
-            Phase::Preparing(prompt) => Some(prompt),
-            _ => None,
-        }
-    }
-    /// Decides what ends the request after its prompt turn.
-    pub(super) fn end(
-        &mut self,
-        result: Result<(), Failure>,
-        can_query_reset: bool,
-        refusal: Option<crate::messages::Message>,
-        now: Moment,
-    ) -> Ending {
-        let result = match (
-            result,
-            std::mem::replace(&mut self.phase, Phase::AwaitingQuotaQuery),
-        ) {
-            (Ok(()), Phase::QuotaSettling { wait, .. }) => {
-                if can_query_reset {
-                    return Ending::QueryQuotaReset(wait);
-                }
-                Err(Failure::at(
-                    refusal.unwrap_or_else(|| wait.message(now)),
-                    now,
-                ))
-            }
-            (result, phase) => {
-                self.phase = phase;
-                result
-            }
-        };
-        if result.is_ok() && matches!(self.stop, crate::conversation::Stop::Refusal) {
-            return Ending::QueryRefusal;
-        }
-        Ending::Complete(result)
-    }
-    pub(super) fn hold_for_quota_query(&mut self) {
-        self.phase = Phase::AwaitingQuotaQuery;
-    }
-    pub(super) fn quota_wait(&self) -> Option<&quota::Wait> {
-        match &self.phase {
-            Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } => Some(wait),
-            _ => None,
-        }
     }
 }
