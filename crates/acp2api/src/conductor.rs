@@ -5205,6 +5205,67 @@ mod tests {
     }
 
     #[test]
+    fn a_checked_session_is_forgotten_only_when_its_request_does_not_start() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-checked-session-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for (content, closed, forgotten) in [
+            ("First", true, true),
+            ("First", false, true),
+            ("Other", false, false),
+        ] {
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.handle(Event::Deadline, 300_000, std::time::UNIX_EPOCH);
+            let body =
+                serde_json::json!({"model":"m","messages":[{"role":"user","content":content}]});
+            let turn = crate::dialect::CHAT
+                .parse(&serde_json::to_vec(&body).unwrap())
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, ticket) = mpsc::unbounded_channel();
+            let _ticket = if closed {
+                drop(ticket);
+                None
+            } else {
+                Some(ticket)
+            };
+            let accepted = Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 0),
+                reply: ResponseChannel {
+                    output,
+                    keep_alive: None,
+                },
+            };
+            let commands = core.handle(
+                Event::Checked {
+                    id: 99,
+                    accepted: Some(Box::new(accepted)),
+                    session: "checked".into(),
+                },
+                305_000,
+                std::time::UNIX_EPOCH,
+            );
+            assert_eq!(
+                commands.iter().any(
+                    |command| matches!(command, Command::Forget(session) if session == "checked")
+                ),
+                forgotten,
+                "row {content} closed={closed}"
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
     fn runtime_unavailable_ends_each_kind_of_queued_quota_query() {
         let folder = std::env::temp_dir().join(format!(
             "acp2api-queued-quota-{}",
