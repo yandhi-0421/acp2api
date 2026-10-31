@@ -835,4 +835,49 @@ impl Core {
             }
         }
     }
+
+    pub(super) fn client_disconnected(
+        &mut self,
+        request_id: &str,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        let id = self.by_request(request_id).unwrap();
+        if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
+            self.work.get_mut(&id).unwrap()
+        {
+            query.disconnect(commands);
+        } else {
+            match self.work.remove(&id).unwrap() {
+                Work::CheckQueued(request) => {
+                    commands.push(Command::Complete(crate::journal::Completion {
+                        request: request.request,
+                        session: None,
+                        session_use: None,
+                        outcome: crate::journal::Outcome::Disconnected,
+                    }))
+                }
+                Work::Checking(request) => {
+                    self.work.insert(
+                        id,
+                        Work::Retiring(OutstandingWork::disconnected_check(request)),
+                    );
+                }
+                Work::AcceptedQueued(request) => Self::drop_queued(request, commands),
+                Work::AcceptedWorking(active) => {
+                    self.keep_quota_wait_reset_query(&active);
+                    let (outstanding, disconnected) = self.sessions.disconnect(active, now);
+                    commands.extend(disconnected);
+                    if let Some(outstanding) = outstanding {
+                        self.work.insert(id, Work::Retiring(outstanding));
+                    }
+                }
+                Work::Retiring(_)
+                | Work::ModelsQueued(_)
+                | Work::ModelsReading(_)
+                | Work::QuotaQueued { .. }
+                | Work::QuotaWorking { .. } => unreachable!(),
+            }
+        }
+    }
 }

@@ -1,7 +1,7 @@
 use super::{
-    Accepted, Active, Command, Core, Event, PendingRequest, QUEUE_CAPACITY, ResponseChannel,
-    ResponseMode, RuntimeState, Session, TurnWork, Work, WorkId, keep_alive::KEEP_ALIVE_INTERVAL,
-    records, request, retry,
+    Accepted, Active, Command, Core, Event, Failure, PendingRequest, QUEUE_CAPACITY, QuotaPhase,
+    QuotaPurpose, ResponseChannel, ResponseMode, RuntimeState, Session, TurnWork, Work, WorkId,
+    keep_alive::KEEP_ALIVE_INTERVAL, records, request, retry,
 };
 use crate::{
     Clock, Hold, HoldKind, Moment,
@@ -329,5 +329,101 @@ impl Core {
             session_use: None,
             outcome: crate::journal::Outcome::Disconnected,
         }));
+    }
+    pub(super) fn start_queued_work(&mut self, now: Moment, commands: &mut Vec<Command>) {
+        let mut places = self
+            .work
+            .values()
+            .filter(|work| work.occupies_place())
+            .count();
+        while self.lockout.is_none()
+            && matches!(self.runtime_state, RuntimeState::Serving)
+            && places < usize::from(self.limit)
+        {
+            let Some(id) = self.work.iter().find_map(|(id, work)| match work {
+                Work::ModelsQueued(_) => Some(*id),
+                Work::CheckQueued(_) => Some(*id),
+                Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
+                Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
+                    Some(*id)
+                }
+                _ => None,
+            }) else {
+                break;
+            };
+            let request = match self.work.remove(&id).unwrap() {
+                Work::ModelsQueued(read) => {
+                    commands.push(Command::Prepare {
+                        work: read.work.clone(),
+                        settings: Session {
+                            tools: Vec::new(),
+                            system: None,
+                        },
+                        load: None,
+                    });
+                    self.work.insert(id, Work::ModelsReading(read));
+                    places += 1;
+                    continue;
+                }
+                Work::CheckQueued(request) => {
+                    commands.push(Command::Prepare {
+                        work: request.request.id.clone(),
+                        settings: Session::for_turn(&request.turn),
+                        load: None,
+                    });
+                    self.work.insert(id, Work::Checking(request));
+                    places += 1;
+                    continue;
+                }
+                Work::QuotaQueued { query, session } => {
+                    if let QuotaPurpose::Reset { wait, .. } = &query.purpose
+                        && !self.can_query_quota_reset(wait)
+                    {
+                        let error = self.quota_wait.as_ref().unwrap().message(now);
+                        self.complete_quota(
+                            query,
+                            session,
+                            Err(Failure::at(error, now)),
+                            now,
+                            commands,
+                        );
+                        continue;
+                    }
+                    let phase =
+                        if let Some(session) = session.or_else(|| self.sessions.take_startup()) {
+                            commands.push(Command::Usage {
+                                work: query.work.clone(),
+                                session: session.clone(),
+                            });
+                            QuotaPhase::Prompt(session)
+                        } else {
+                            commands.push(Command::Prepare {
+                                work: query.work.clone(),
+                                settings: Session {
+                                    tools: Vec::new(),
+                                    system: None,
+                                },
+                                load: None,
+                            });
+                            QuotaPhase::Preparing
+                        };
+                    self.work.insert(
+                        id,
+                        Work::QuotaWorking {
+                            query,
+                            phase,
+                            text: String::new(),
+                            result: Ok(()),
+                        },
+                    );
+                    places += 1;
+                    continue;
+                }
+                work => work.into_queued().unwrap(),
+            };
+            if self.start_request(id, request, None, now, commands) {
+                places += 1;
+            }
+        }
     }
 }

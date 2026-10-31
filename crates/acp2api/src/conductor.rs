@@ -577,43 +577,7 @@ impl Core {
                 self.limit = limit;
             }
             (None, Event::Disconnected(request_id)) => {
-                let id = self.by_request(&request_id).unwrap();
-                if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
-                    self.work.get_mut(&id).unwrap()
-                {
-                    query.disconnect(&mut commands);
-                } else {
-                    match self.work.remove(&id).unwrap() {
-                        Work::CheckQueued(request) => {
-                            commands.push(Command::Complete(crate::journal::Completion {
-                                request: request.request,
-                                session: None,
-                                session_use: None,
-                                outcome: crate::journal::Outcome::Disconnected,
-                            }))
-                        }
-                        Work::Checking(request) => {
-                            self.work.insert(
-                                id,
-                                Work::Retiring(OutstandingWork::disconnected_check(request)),
-                            );
-                        }
-                        Work::AcceptedQueued(request) => Self::drop_queued(request, &mut commands),
-                        Work::AcceptedWorking(active) => {
-                            self.keep_quota_wait_reset_query(&active);
-                            let (outstanding, disconnected) = self.sessions.disconnect(active, now);
-                            commands.extend(disconnected);
-                            if let Some(outstanding) = outstanding {
-                                self.work.insert(id, Work::Retiring(outstanding));
-                            }
-                        }
-                        Work::Retiring(_)
-                        | Work::ModelsQueued(_)
-                        | Work::ModelsReading(_)
-                        | Work::QuotaQueued { .. }
-                        | Work::QuotaWorking { .. } => unreachable!(),
-                    }
-                }
+                self.client_disconnected(&request_id, now, &mut commands)
             }
             (None, Event::StartFailed(_, error)) => {
                 if let Some(id) = work_id {
@@ -833,100 +797,7 @@ impl Core {
             }
         }
         commands.extend(self.sessions.expire(now));
-        let mut places = self
-            .work
-            .values()
-            .filter(|work| work.occupies_place())
-            .count();
-        while self.lockout.is_none()
-            && matches!(self.runtime_state, RuntimeState::Serving)
-            && places < usize::from(self.limit)
-        {
-            let Some(id) = self.work.iter().find_map(|(id, work)| match work {
-                Work::ModelsQueued(_) => Some(*id),
-                Work::CheckQueued(_) => Some(*id),
-                Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
-                Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
-                    Some(*id)
-                }
-                _ => None,
-            }) else {
-                break;
-            };
-            let request = match self.work.remove(&id).unwrap() {
-                Work::ModelsQueued(read) => {
-                    commands.push(Command::Prepare {
-                        work: read.work.clone(),
-                        settings: Session {
-                            tools: Vec::new(),
-                            system: None,
-                        },
-                        load: None,
-                    });
-                    self.work.insert(id, Work::ModelsReading(read));
-                    places += 1;
-                    continue;
-                }
-                Work::CheckQueued(request) => {
-                    commands.push(Command::Prepare {
-                        work: request.request.id.clone(),
-                        settings: Session::for_turn(&request.turn),
-                        load: None,
-                    });
-                    self.work.insert(id, Work::Checking(request));
-                    places += 1;
-                    continue;
-                }
-                Work::QuotaQueued { query, session } => {
-                    if let QuotaPurpose::Reset { wait, .. } = &query.purpose
-                        && !self.can_query_quota_reset(wait)
-                    {
-                        let error = self.quota_wait.as_ref().unwrap().message(now);
-                        self.complete_quota(
-                            query,
-                            session,
-                            Err(Failure::at(error, now)),
-                            now,
-                            &mut commands,
-                        );
-                        continue;
-                    }
-                    let phase =
-                        if let Some(session) = session.or_else(|| self.sessions.take_startup()) {
-                            commands.push(Command::Usage {
-                                work: query.work.clone(),
-                                session: session.clone(),
-                            });
-                            QuotaPhase::Prompt(session)
-                        } else {
-                            commands.push(Command::Prepare {
-                                work: query.work.clone(),
-                                settings: Session {
-                                    tools: Vec::new(),
-                                    system: None,
-                                },
-                                load: None,
-                            });
-                            QuotaPhase::Preparing
-                        };
-                    self.work.insert(
-                        id,
-                        Work::QuotaWorking {
-                            query,
-                            phase,
-                            text: String::new(),
-                            result: Ok(()),
-                        },
-                    );
-                    places += 1;
-                    continue;
-                }
-                work => work.into_queued().unwrap(),
-            };
-            if self.start_request(id, request, None, now, &mut commands) {
-                places += 1;
-            }
-        }
+        self.start_queued_work(now, &mut commands);
         self.emit_keep_alives(now, &mut commands);
         if self.state() != previous {
             let cause = match &self.runtime_state {
