@@ -390,4 +390,16 @@ mod tests {
             "ADR-0003 longest eligible record wins before recency"
         );
     }
+
+    #[test]
+    fn a_later_cancel_keeps_the_first_cancellation_deadline() {
+        let mut sessions = AcpSessions::default();
+        sessions.cancel("running".into(), 1_000);
+        sessions.cancel("running".into(), 20_000);
+        assert!(!sessions.cancellation_due(30_999));
+        assert!(
+            sessions.cancellation_due(31_000),
+            "FR-041 the first cancel sets the 30 s deadline"
+        );
+    }
 }
