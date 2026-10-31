@@ -1,5 +1,5 @@
 use super::request::{Active, Exit};
-use super::work::Session;
+use super::work::SessionSettings;
 use super::{Command, PendingRequest};
 use crate::Moment;
 use crate::conversation::{self, Item, Prompt, RecordHashes, ToolSetHash};
@@ -185,7 +185,7 @@ impl AcpSessions {
     pub(super) fn select(
         &mut self,
         turn: &crate::conversation::TurnRequest,
-        settings: &Session,
+        settings: &SessionSettings,
         mut checked_session: Option<String>,
         now: Moment,
     ) -> (Selection, Vec<Command>) {
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn the_session_used_last_continues_among_records_of_the_same_length() {
         let first_turn = turn_a();
-        let settings = Session::for_turn(&first_turn);
+        let settings = SessionSettings::for_turn(&first_turn);
         let mut sessions = AcpSessions::default();
         let (used_first, _) = sessions.select(&first_turn, &settings, None, 0);
         let (used_last, _) = sessions.select(&first_turn, &settings, None, 0);
@@ -460,7 +460,7 @@ mod tests {
     fn a_forgotten_startup_session_is_not_used_again() {
         for (forgotten, expected) in [("other", Some("startup")), ("startup", None)] {
             let turn = turn_a();
-            let settings = Session::for_turn(&turn);
+            let settings = SessionSettings::for_turn(&turn);
             let mut sessions = AcpSessions::fixture(Vec::new(), Some("startup".into()), 0);
             sessions.forget(forgotten.into());
             let (selection, _) = sessions.select(&turn, &settings, None, 0);
@@ -476,7 +476,7 @@ mod tests {
     fn a_runtime_failure_drops_the_startup_session() {
         for (failed, expected) in [(false, Some("startup")), (true, None)] {
             let turn = turn_a();
-            let settings = Session::for_turn(&turn);
+            let settings = SessionSettings::for_turn(&turn);
             let mut sessions = AcpSessions::fixture(Vec::new(), Some("startup".into()), 0);
             if failed {
                 sessions.runtime_failed();
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn a_checked_session_is_forgotten_when_a_record_continues_the_request() {
         let first_turn = turn_a();
-        let settings = Session::for_turn(&first_turn);
+        let settings = SessionSettings::for_turn(&first_turn);
         let mut sessions = AcpSessions::default();
         let (selection, _) = sessions.select(&first_turn, &settings, None, 0);
         sessions.keep(

@@ -1,7 +1,7 @@
 use super::{
     Conductor, Core, Event, PendingRequest, RuntimeState, State, Work, WorkId, lockout,
     runtime_lifecycle::BuildReply,
-    work::{Output, Session},
+    work::{Output, SessionSettings},
 };
 use crate::{
     Clock, HoldKind, Moment,
@@ -48,7 +48,7 @@ pub(super) enum Command {
     Cancel(String),
     Prepare {
         work: String,
-        settings: Session,
+        settings: SessionSettings,
         load: Option<(String, PathBuf)>,
     },
     Prompt {

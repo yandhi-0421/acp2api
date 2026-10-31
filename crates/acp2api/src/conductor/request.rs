@@ -772,7 +772,7 @@ impl Core {
         let (forget, completion) = self.complete_request(active, Err(error), now);
         commands.extend(completion);
         if let Some(outstanding) = outstanding {
-            self.work.insert(id, Work::Retiring(outstanding));
+            self.work.restore(id, Work::Retiring(outstanding));
         } else {
             commands.extend(forget.map(Command::Forget));
         }
@@ -923,7 +923,7 @@ impl Core {
                     }))
                 }
                 Work::Checking(request) => {
-                    self.work.insert(
+                    self.work.restore(
                         id,
                         Work::Retiring(OutstandingWork::disconnected_check(request)),
                     );
@@ -934,7 +934,7 @@ impl Core {
                     let (outstanding, disconnected) = self.sessions.disconnect(active, now);
                     commands.extend(disconnected);
                     if let Some(outstanding) = outstanding {
-                        self.work.insert(id, Work::Retiring(outstanding));
+                        self.work.restore(id, Work::Retiring(outstanding));
                     }
                 }
                 Work::Retiring(_)

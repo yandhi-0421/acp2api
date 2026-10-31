@@ -5,7 +5,7 @@ use super::{
     records, request,
     request::Active,
     retry,
-    work::{ModelRead, ResponseChannel, Session},
+    work::{ModelRead, ResponseChannel, SessionSettings},
 };
 use crate::{
     Clock, Hold, HoldKind, Moment,
@@ -212,7 +212,7 @@ impl Core {
             );
             return false;
         }
-        let settings = Session::for_turn(&request.turn);
+        let settings = SessionSettings::for_turn(&request.turn);
         let (selection, selected) =
             self.sessions
                 .select(&request.turn, &settings, checked_session, now);
@@ -255,7 +255,7 @@ impl Core {
                 (None, request::Start::Prepare(prompt))
             }
         };
-        self.work.insert(
+        self.work.restore(
             id,
             Work::AcceptedWorking(Active::new(request, session, start, record, kind)),
         );
@@ -357,23 +357,23 @@ impl Core {
                 Work::ModelsQueued(read) => {
                     commands.push(Command::Prepare {
                         work: read.work.clone(),
-                        settings: Session {
+                        settings: SessionSettings {
                             tools: Vec::new(),
                             system: None,
                         },
                         load: None,
                     });
-                    self.work.insert(id, Work::ModelsReading(read));
+                    self.work.restore(id, Work::ModelsReading(read));
                     places += 1;
                     continue;
                 }
                 Work::CheckQueued(request) => {
                     commands.push(Command::Prepare {
                         work: request.request.id.clone(),
-                        settings: Session::for_turn(&request.turn),
+                        settings: SessionSettings::for_turn(&request.turn),
                         load: None,
                     });
-                    self.work.insert(id, Work::Checking(request));
+                    self.work.restore(id, Work::Checking(request));
                     places += 1;
                     continue;
                 }
@@ -407,11 +407,12 @@ impl Core {
             if let Some(error) = error {
                 let _ = reply.send(Err(OwnerMessage::Api(error)));
             } else {
-                let id = self.work.next_id();
-                self.work.add(Work::ModelsQueued(ModelRead {
-                    work: format!("models-{id}"),
-                    replies: vec![reply],
-                }));
+                self.work.add_with(|id| {
+                    Work::ModelsQueued(ModelRead {
+                        work: format!("models-{id}"),
+                        replies: vec![reply],
+                    })
+                });
             }
         }
     }

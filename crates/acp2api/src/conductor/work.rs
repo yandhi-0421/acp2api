@@ -43,14 +43,27 @@ pub(super) struct WorkTable {
 }
 impl WorkTable {
     /// Adds work at the end of the queue.
-    pub(super) fn add(&mut self, work: Work) -> WorkId {
+    pub(super) fn add(&mut self, work: Work) {
+        self.add_with(|_| work);
+    }
+    /// Adds work whose value holds its own id.
+    pub(super) fn add_with(&mut self, work: impl FnOnce(WorkId) -> Work) {
         let id = self.next;
         self.next += 1;
-        self.items.insert(id, work);
-        id
+        self.items.insert(id, work(id));
     }
-    pub(super) fn next_id(&self) -> WorkId {
-        self.next
+    /// Puts work that `remove` took back under its id.
+    pub(super) fn restore(&mut self, id: WorkId, work: Work) {
+        self.items.insert(id, work);
+    }
+    pub(super) fn remove(&mut self, id: &WorkId) -> Option<Work> {
+        self.items.remove(id)
+    }
+    pub(super) fn get_mut(&mut self, id: &WorkId) -> Option<&mut Work> {
+        self.items.get_mut(id)
+    }
+    pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut Work> {
+        self.items.values_mut()
     }
     pub(super) fn places(&self) -> usize {
         self.items
@@ -89,9 +102,10 @@ impl std::ops::Deref for WorkTable {
         &self.items
     }
 }
-impl std::ops::DerefMut for WorkTable {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.items
+#[cfg(test)]
+impl WorkTable {
+    pub(super) fn clear(&mut self) {
+        self.items.clear();
     }
 }
 
@@ -266,12 +280,12 @@ impl Work {
 }
 
 #[derive(Clone)]
-pub(super) struct Session {
+pub(super) struct SessionSettings {
     pub(super) tools: Vec<crate::conversation::ClientTool>,
     pub(super) system: Option<String>,
 }
 
-impl Session {
+impl SessionSettings {
     pub(super) fn for_turn(turn: &TurnRequest) -> Self {
         Self {
             system: crate::conversation::system_prompt_addition(&turn.conversation.system),

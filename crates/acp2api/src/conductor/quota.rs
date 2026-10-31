@@ -1,6 +1,6 @@
 use super::{
     Command, Core, Event, Failure, QuotaResult, SETTLE_DELAY, Work, WorkId, request::Active,
-    work::Session,
+    work::SessionSettings,
 };
 use crate::{
     Moment,
@@ -370,12 +370,13 @@ impl Core {
         );
     }
     pub(super) fn enqueue_quota(&mut self, purpose: QuotaPurpose, session: Option<String>) {
-        let id = self.work.next_id();
-        let query = QuotaQuery {
-            work: format!("quota-{id}"),
-            purpose,
-        };
-        self.work.add(Work::QuotaQueued { query, session });
+        self.work.add_with(|id| {
+            let query = QuotaQuery {
+                work: format!("quota-{id}"),
+                purpose,
+            };
+            Work::QuotaQueued { query, session }
+        });
     }
     fn update_quota(
         &mut self,
@@ -590,7 +591,7 @@ impl Core {
         } else {
             commands.push(Command::Prepare {
                 work: query.work.clone(),
-                settings: Session {
+                settings: SessionSettings {
                     tools: Vec::new(),
                     system: None,
                 },
@@ -598,7 +599,7 @@ impl Core {
             });
             QuotaPhase::Preparing
         };
-        self.work.insert(
+        self.work.restore(
             id,
             Work::QuotaWorking {
                 query,
