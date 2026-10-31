@@ -61,6 +61,8 @@
                 focus: null, focus_active: false, focus_visible: false
             };
         });
+        // Headless Chrome activates the page after load; before that, no element matches :focus-visible.
+        while (!document.hasFocus()) await new Promise(resolve => setTimeout(resolve, 10));
         for (const node of nodes) {
             if (!node.visible || node.disabled || !['input', 'select'].includes(node.tag)) continue;
             const element = elements[node.index];
