@@ -2406,13 +2406,17 @@ impl Core {
             Work::Retiring(outstanding) => commands.extend(outstanding.finish()),
             work => {
                 let mut active = work.into_active().unwrap();
-                let mut result = result;
-                if result.is_ok()
-                    && let Some(wait) = active.take_quota_settlement()
-                {
-                    if self.can_query_quota_reset(&wait) {
+                let can_query_reset = active
+                    .quota_wait()
+                    .is_some_and(|wait| self.can_query_quota_reset(wait));
+                match active.end(result, can_query_reset, self.refusal(now), now) {
+                    request::Ending::Complete(result) => {
+                        let (forget, completion) = self.complete_request(active, result, now);
+                        commands.extend(completion);
+                        commands.extend(forget.map(Command::Forget));
+                    }
+                    request::Ending::QueryQuotaReset(wait) => {
                         let session = active.session.clone();
-                        active.hold_for_quota_query();
                         self.enqueue_quota(
                             QuotaPurpose::Reset {
                                 wait,
@@ -2421,28 +2425,19 @@ impl Core {
                             },
                             session,
                         );
-                        return;
                     }
-                    result = Err(Failure::at(
-                        self.refusal(now).unwrap_or_else(|| wait.message(now)),
-                        now,
-                    ));
+                    request::Ending::QueryRefusal => {
+                        let model = active.model.clone();
+                        let session = active.session.clone();
+                        self.enqueue_quota(
+                            QuotaPurpose::Refusal {
+                                model,
+                                response: Some(active),
+                            },
+                            session,
+                        );
+                    }
                 }
-                if result.is_ok() && active.refused() {
-                    let model = active.model.clone();
-                    let session = active.session.clone();
-                    self.enqueue_quota(
-                        QuotaPurpose::Refusal {
-                            model,
-                            response: Some(active),
-                        },
-                        session,
-                    );
-                    return;
-                }
-                let (forget, completion) = self.complete_request(active, result, now);
-                commands.extend(completion);
-                commands.extend(forget.map(Command::Forget));
             }
         }
     }

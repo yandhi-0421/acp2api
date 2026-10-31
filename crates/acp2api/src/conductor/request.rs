@@ -7,7 +7,7 @@ use crate::{
 };
 
 enum Phase {
-    Completing,
+    AwaitingQuotaQuery,
     Preparing(PromptRequest),
     Prompt {
         update_deadline: Moment,
@@ -78,6 +78,12 @@ pub(super) enum TurnAction {
 pub(super) enum TurnEnd {
     Prompt(Option<StopReason>),
     Failed(crate::messages::Message),
+}
+
+pub(super) enum Ending {
+    Complete(Result<(), Failure>),
+    QueryQuotaReset(quota::Wait),
+    QueryRefusal,
 }
 
 pub(super) struct Active {
@@ -163,17 +169,16 @@ impl Active {
         Option<records::RequestRecord>,
     ) {
         let mut commands = Vec::new();
-        let (can_continue, result) = match std::mem::replace(&mut self.phase, Phase::Completing) {
+        let (can_continue, result) = match &mut self.phase {
             Phase::Settling {
                 can_continue,
                 result: pending,
                 ..
-            } => (can_continue, result.and(pending)),
-            Phase::Completing
-            | Phase::Preparing(_)
-            | Phase::Prompt { .. }
-            | Phase::AwaitingQuotaEnd { .. }
-            | Phase::QuotaSettling { .. } => (false, result),
+            } => (
+                *can_continue,
+                result.and(std::mem::replace(pending, Ok(()))),
+            ),
+            _ => (false, result),
         };
         let tool_hash = self
             .tool_call
@@ -342,9 +347,6 @@ impl Active {
             TurnAction::Continue
         }
     }
-    pub(super) fn refused(&self) -> bool {
-        matches!(self.stop, crate::conversation::Stop::Refusal)
-    }
 
     pub(super) fn turn_ended(&mut self, end: TurnEnd, now: Moment) {
         match &self.phase {
@@ -431,23 +433,39 @@ impl Active {
             _ => None,
         }
     }
-    /// Takes the quota wait of a prompt turn that ended while its quota signal settles.
-    pub(super) fn take_quota_settlement(&mut self) -> Option<quota::Wait> {
-        match std::mem::replace(&mut self.phase, Phase::Completing) {
-            Phase::QuotaSettling { wait, .. } => Some(wait),
-            phase => {
-                self.phase = phase;
-                None
+    /// Decides what ends the request after its prompt turn.
+    pub(super) fn end(
+        &mut self,
+        result: Result<(), Failure>,
+        can_query_reset: bool,
+        refusal: Option<crate::messages::Message>,
+        now: Moment,
+    ) -> Ending {
+        let result = match (
+            result,
+            std::mem::replace(&mut self.phase, Phase::AwaitingQuotaQuery),
+        ) {
+            (Ok(()), Phase::QuotaSettling { wait, .. }) => {
+                if can_query_reset {
+                    return Ending::QueryQuotaReset(wait);
+                }
+                Err(Failure::at(
+                    refusal.unwrap_or_else(|| wait.message(now)),
+                    now,
+                ))
             }
-        }
-    }
-    /// The request has no pending error while it waits for its quota query.
-    pub(super) fn hold_for_quota_query(&mut self) {
-        self.phase = Phase::Settling {
-            at: 0,
-            can_continue: false,
-            result: Ok(()),
+            (result, phase) => {
+                self.phase = phase;
+                result
+            }
         };
+        if result.is_ok() && matches!(self.stop, crate::conversation::Stop::Refusal) {
+            return Ending::QueryRefusal;
+        }
+        Ending::Complete(result)
+    }
+    pub(super) fn hold_for_quota_query(&mut self) {
+        self.phase = Phase::AwaitingQuotaQuery;
     }
     pub(super) fn quota_wait(&self) -> Option<&quota::Wait> {
         match &self.phase {
