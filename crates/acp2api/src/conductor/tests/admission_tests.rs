@@ -40,7 +40,7 @@ fn queued_model_reads_end_when_the_runtime_stops_requests() {
         ),
     ] {
         let mut core = Core::fixture(1);
-        core.runtime_state = RuntimeState::Restarting;
+        core.lifecycle.set_state(RuntimeState::Restarting);
         let (reply, _result) = oneshot::channel();
         core.handle(Event::ReadModelNames(reply), 0, std::time::UNIX_EPOCH);
         assert_eq!(core.view.borrow().queued, 1);
@@ -60,7 +60,7 @@ fn queued_model_reads_end_when_the_runtime_stops_requests() {
 #[test]
 fn model_name_callers_share_one_read_and_then_use_the_cached_names() {
     let mut core = Core::fixture(2);
-    core.runtime_state = RuntimeState::Restarting;
+    core.lifecycle.set_state(RuntimeState::Restarting);
     let mut answers = Vec::new();
     for _ in 0..2 {
         let (reply, answer) = oneshot::channel();

@@ -18,17 +18,13 @@ impl Core {
             quota_wait: None,
             retry_waits: Vec::new(),
             next_quota: quota::TimerId::default(),
-            runtime_state: RuntimeState::Serving,
+            lifecycle: Lifecycle::new(RuntimeState::Serving),
             lockout: None,
             sign_in_required: false,
             sign_in_wait: None,
             panel_address: "http://127.0.0.1:8329/".into(),
             state_path: PathBuf::new(),
             view: watch::channel(Arc::new(View::default())).0,
-            failures: VecDeque::new(),
-            cleanup_before_start: false,
-            changes: VecDeque::new(),
-            replacement: None,
             catalog: None,
             model_names: Vec::new(),
             context_sizes: BTreeMap::new(),
@@ -135,7 +131,7 @@ async fn assert_start_lockout(stdout: &str, stderr: &str, original: &str) {
         let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
         let mut core = Core {
             state_path: folder.join(crate::store::STATE_FILE),
-            runtime_state: RuntimeState::Restarting,
+            lifecycle: Lifecycle::new(RuntimeState::Restarting),
             ..Core::fixture(1)
         };
         let mut model_replies = Vec::new();

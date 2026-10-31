@@ -80,7 +80,7 @@ impl Conductor {
                 Command::Lockout(evidence) => {
                     lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
                     core.stop_runtime(runtime, read_open).await;
-                    core.runtime_state = RuntimeState::Stopped;
+                    core.lifecycle.lockout_stopped();
                     core.publish_view();
                 }
                 Command::Authenticate => {
@@ -253,12 +253,12 @@ impl Core {
         now: Moment,
         wall: std::time::SystemTime,
     ) -> Vec<Command> {
-        if self.lockout.is_some() || matches!(self.runtime_state, RuntimeState::Restarting) {
+        if self.lockout.is_some() || matches!(self.lifecycle.state(), RuntimeState::Restarting) {
             return Vec::new();
         }
         let event = match error {
             crate::runtime_driver::CommandError::Io(_)
-                if matches!(self.runtime_state, RuntimeState::Stopping) =>
+                if matches!(self.lifecycle.state(), RuntimeState::Stopping) =>
             {
                 Event::Stop
             }

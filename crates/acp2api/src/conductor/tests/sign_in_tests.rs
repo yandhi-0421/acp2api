@@ -148,7 +148,7 @@ fn retirement_and_unavailability_end_the_sign_in_wait_in_either_order() {
                     );
                 } else {
                     core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
-                    core.replacement = Some(Replacement::Build {
+                    core.lifecycle.plan(Replacement::Build {
                         reply: oneshot::channel().0,
                         source: None,
                         initial: false,
@@ -163,23 +163,26 @@ fn retirement_and_unavailability_end_the_sign_in_wait_in_either_order() {
                 );
                 if unavailable {
                     assert!(
-                        matches!(core.runtime_state, RuntimeState::Unavailable(_)),
+                        matches!(core.lifecycle.state(), RuntimeState::Unavailable(_)),
                         "FR-040 a wait cannot restart an unavailable runtime"
                     );
                     assert!(
-                        core.replacement.is_none(),
+                        core.lifecycle.replacement().is_none(),
                         "FR-040 no automatic replacement remains"
                     );
                 } else {
                     assert!(
-                        matches!(core.runtime_state, RuntimeState::Retiring { .. }),
+                        matches!(core.lifecycle.state(), RuntimeState::Retiring { .. }),
                         "a wait cannot overwrite the build retirement"
                     );
                     assert!(
                         core.replacement_ready(),
                         "the existing build replacement can proceed"
                     );
-                    assert!(matches!(core.replacement, Some(Replacement::Build { .. })));
+                    assert!(matches!(
+                        core.lifecycle.replacement(),
+                        Some(Replacement::Build { .. })
+                    ));
                 }
             }
         }
@@ -198,7 +201,7 @@ fn a_sign_in_replacement_waits_for_running_prompt_turns() {
     core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
     let commands = core.handle(Event::EndSignInWait, 1, std::time::UNIX_EPOCH);
     assert!(
-        core.replacement.is_some(),
+        core.lifecycle.replacement().is_some(),
         "FR-039 sign-in uses the ordinary replacement path"
     );
     assert!(
@@ -230,7 +233,7 @@ fn a_sign_in_replacement_waits_for_running_prompt_turns() {
         "FR-039 the replacement proceeds after the prompt ends"
     );
     assert!(
-        core.failures.is_empty(),
+        core.lifecycle.failure_count() == 0,
         "FR-039 planned replacement is not a runtime failure"
     );
     std::fs::remove_dir_all(folder).unwrap();
@@ -247,7 +250,7 @@ fn aborting_retirement_replaces_a_runtime_with_an_ended_sign_in_wait() {
     );
     core.handle(Event::ResumeRuntime, 2, std::time::UNIX_EPOCH);
     assert!(
-        matches!(core.replacement, Some(Replacement::SignIn)),
+        matches!(core.lifecycle.replacement(), Some(Replacement::SignIn)),
         "FR-039 an aborted retirement must still stop the runtime's authenticate call"
     );
     assert!(
@@ -255,7 +258,7 @@ fn aborting_retirement_replaces_a_runtime_with_an_ended_sign_in_wait() {
         "the planned replacement can proceed"
     );
     assert!(
-        core.failures.is_empty(),
+        core.lifecycle.failure_count() == 0,
         "FR-039 replacement is not a runtime failure"
     );
 }

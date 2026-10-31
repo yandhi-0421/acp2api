@@ -20,7 +20,7 @@ impl Core {
                 false,
             ));
         }
-        if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+        if let RuntimeState::Unavailable(reason) = self.lifecycle.state() {
             return Some(crate::messages::Message::RuntimeUnavailable(
                 reason.message.clone(),
             ));
@@ -45,11 +45,11 @@ impl Core {
                 &self.panel_address,
                 false,
             ))
-        } else if let RuntimeState::Unavailable(reason) = &self.runtime_state {
+        } else if let RuntimeState::Unavailable(reason) = self.lifecycle.state() {
             Some(crate::messages::Message::RuntimeUnavailable(
                 reason.message.clone(),
             ))
-        } else if matches!(self.runtime_state, RuntimeState::Stopping) {
+        } else if matches!(self.lifecycle.state(), RuntimeState::Stopping) {
             Some(crate::messages::Message::Stopped)
         } else {
             None
@@ -108,7 +108,7 @@ impl Core {
         let TurnWork { pending, hold } = work;
         if self.sign_in_required
             && self.lockout.is_none()
-            && !matches!(self.runtime_state, RuntimeState::Unavailable(_))
+            && !matches!(self.lifecycle.state(), RuntimeState::Unavailable(_))
         {
             if !self.queue_full() {
                 return Some((Event::CheckPending(Box::new(pending)), hold));
@@ -337,7 +337,7 @@ impl Core {
             .filter(|work| work.occupies_place())
             .count();
         while self.lockout.is_none()
-            && matches!(self.runtime_state, RuntimeState::Serving)
+            && matches!(self.lifecycle.state(), RuntimeState::Serving)
             && places < usize::from(self.limit)
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {

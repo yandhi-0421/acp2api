@@ -223,16 +223,16 @@ async fn a_lockout_answers_the_waiting_and_queued_build_changes() {
     core.state_path = folder.join(crate::store::STATE_FILE);
     let (waiting, mut waiting_reply) = oneshot::channel();
     let (queued, mut queued_reply) = oneshot::channel();
-    core.runtime_state = RuntimeState::Retiring {
+    core.lifecycle.set_state(RuntimeState::Retiring {
         sign_in_wait_ended: false,
-    };
-    core.replacement = Some(Replacement::Build {
+    });
+    core.lifecycle.plan(Replacement::Build {
         reply: waiting,
         source: None,
         initial: false,
     });
-    core.changes
-        .push_back((crate::runtime_builds::Action::Search, queued));
+    core.lifecycle
+        .queue_change(crate::runtime_builds::Action::Search, queued);
     let commands = core.handle(
         Event::Runtime(RuntimeEvent::UpstreamError {
             session: "running".into(),

@@ -199,10 +199,10 @@ async fn a_broken_stdin_counts_once_for_a_command_batch_and_later_closed() {
         assert!(matches!(event, RuntimeEvent::WriteFailed(_)), "the writer must report the broken pipe even while stdout stays open");
         read_open = false;
         core.apply(Event::Runtime(event), &mut runtime, &mut read_open, &clock, &journal).await;
-        assert_eq!(core.failures.len(), 1, "two writes to one closed stdin are one runtime failure");
+        assert_eq!(core.lifecycle.failure_count(), 1, "two writes to one closed stdin are one runtime failure");
         let closed = core.handle(Event::Runtime(RuntimeEvent::Closed), 1, std::time::UNIX_EPOCH);
         let deadline = core.handle(Event::Deadline, 30_000, std::time::UNIX_EPOCH);
-        assert_eq!(core.failures.len(), 1, "Closed and the old deadline must not count the failed runtime again");
+        assert_eq!(core.lifecycle.failure_count(), 1, "Closed and the old deadline must not count the failed runtime again");
         assert!(closed.is_empty() && deadline.is_empty(), "the failed runtime must emit no second M-20");
         let mut message = None;
         while let Ok((event, _hold)) = b.try_recv() { if let TurnEvent::End(Err(error)) = event { message = Some(error.to_string()); } }
@@ -244,12 +244,12 @@ async fn a_failed_initial_copy_succeeds_with_a_prd_unavailable_reason() {
         let mut core = Core::fixture(1);
         core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
         let (reply, result) = oneshot::channel();
-        core.replacement = Some(Replacement::Build { reply, source:selected, initial:true });
+        core.lifecycle.plan(Replacement::Build { reply, source:selected, initial:true });
         let settings = watch::channel(Arc::new(settings)).0;
         let mut runtime = None;
         let mut read_open = false;
         core.replace(&mut runtime, &mut read_open, &clock, &journal, &builds, &settings).await;
-        let reason = match core.runtime_state { RuntimeState::Unavailable(reason) => Some(reason.message.to_string()), _ => None };
+        let reason = match core.lifecycle.state() { RuntimeState::Unavailable(reason) => Some(reason.message.to_string()), _ => None };
         let actual = (result.await.unwrap().map(|notice| notice.map(|notice| notice.to_string())).map_err(|error| error.to_string()), reason, runtime.is_none() && !read_open);
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(actual, (Ok(None), Some("acp2api: the official runtime is unavailable: the copy of the accepted build 1.4.0 failed. Accepted versions: 1.4.0. See http://127.0.0.1:0/.".into()), true), "a failed automatic copy must let startup keep the management panel available with FR-040 M-14");
@@ -360,12 +360,12 @@ async fn a_failed_owner_copy_keeps_the_running_runtime_and_counts_no_failure() {
             core.handle(Event::RetireRuntime, 0, std::time::UNIX_EPOCH);
             core.handle(Event::Runtime(RuntimeEvent::Turn { session:"running".into(), update:TurnUpdate::PromptEnded { stop_reason:Some(agent_client_protocol_schema::v1::StopReason::EndTurn) } }), 1, std::time::UNIX_EPOCH);
             core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH);
-            core.cleanup_before_start = true;
-            core.replacement = Some(replacement);
+            core.lifecycle.set_cleanup_before_start();
+            core.lifecycle.plan(replacement);
             let config = folder.join("config.toml");
             let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
             core.replace(&mut runtime, &mut read_open, &ports.clock, &journal, &builds, &settings).await;
-            let actual = (result.await.unwrap().map(|notice| notice.map(|notice| notice.to_string())).map_err(|error| error.to_string()), core.failures.len(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.runtime_state, RuntimeState::Serving));
+            let actual = (result.await.unwrap().map(|notice| notice.map(|notice| notice.to_string())).map_err(|error| error.to_string()), core.lifecycle.failure_count(), stopped.load(Ordering::SeqCst), runtime.is_some() && read_open, matches!(core.lifecycle.state(), RuntimeState::Serving));
             assert_eq!(actual, (Err(copy_error.clone()), 0, false, true, true), "owner copy errors must return to the owner while the existing runtime stays available");
         }
         if let Some(runtime) = runtime { runtime.stop().await; }
@@ -404,9 +404,9 @@ async fn a_cleanup_error_during_replacement_counts_failures_and_ends_the_queue()
         core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH);
         assert_eq!(core.sessions.records().len(), 1);
         core.sessions.unload(|_| cwd.clone());
-        core.cleanup_before_start = true;
+        core.lifecycle.set_cleanup_before_start();
         let (reply, result) = oneshot::channel();
-        core.replacement = Some(Replacement::Build { reply, source:None, initial:false });
+        core.lifecycle.plan(Replacement::Build { reply, source:None, initial:false });
         let config = folder.join("config.toml");
         let settings = watch::channel(Arc::new(crate::store::read(&config, 1).unwrap().settings)).0;
         let mut runtime = None; let mut read_open = false;
@@ -416,7 +416,7 @@ async fn a_cleanup_error_during_replacement_counts_failures_and_ends_the_queue()
         while let Ok((event, _hold)) = queued.try_recv() {
             if let TurnEvent::End(Err(crate::messages::Message::RuntimeUnavailable(message))) = event { unavailable = message.to_string().contains("the runtime process failed 3 times in 10 minutes"); }
         }
-        let actual = (owner.is_ok(), core.failures.len(), unavailable);
+        let actual = (owner.is_ok(), core.lifecycle.failure_count(), unavailable);
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(actual, (true, 3, true), "a verified copy whose preparation fails must not leave a serving conductor without a runtime");
     }).await.expect("cleanup failure cap: five seconds, one local obstruction, no process launch or HTTP request");
@@ -439,8 +439,8 @@ fn a_broken_pipe_during_exit_keeps_the_conductor_stopping() {
         2,
         std::time::UNIX_EPOCH,
     );
-    let exit_without_restart =
-        matches!(core.runtime_state, RuntimeState::Stopping) && core.failures.is_empty();
+    let exit_without_restart = matches!(core.lifecycle.state(), RuntimeState::Stopping)
+        && core.lifecycle.failure_count() == 0;
     std::fs::remove_dir_all(folder).unwrap();
     assert!(
         exit_without_restart,

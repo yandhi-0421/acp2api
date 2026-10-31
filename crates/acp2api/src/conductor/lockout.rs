@@ -151,24 +151,6 @@ impl Core {
                 .take_while(|command| matches!(command, Command::Cancel(_)))
                 .count();
         commands.insert(after_cancels, Command::Lockout(evidence));
-        if let Some(replacement) = self.replacement.take() {
-            match replacement {
-                Replacement::Build { reply, .. } | Replacement::Check { reply, .. } => {
-                    commands.push(Command::RefuseBuildChange {
-                        reply,
-                        error: message.clone(),
-                    });
-                }
-                Replacement::SignIn => {}
-            }
-        }
-        commands.extend(
-            self.changes
-                .drain(..)
-                .map(|(_, reply)| Command::RefuseBuildChange {
-                    reply,
-                    error: message.clone(),
-                }),
-        );
+        self.lifecycle.refuse_build_changes(&message, commands);
     }
 }

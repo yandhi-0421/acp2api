@@ -25,14 +25,14 @@ use quota::{QuotaPhase, QuotaPurpose, QuotaQuery};
 use records::OutstandingWork;
 use request::{Active, Failure};
 pub(crate) use retry::WAIT_SECONDS;
+#[cfg(test)]
+use runtime_lifecycle::Replacement;
 use runtime_lifecycle::{
-    BuildSelection, CompatibilityCheck, Replacement, RuntimeState, UnavailableReason,
+    BuildSelection, CompatibilityCheck, Lifecycle, RuntimeState, UnavailableReason,
 };
-use std::{
-    collections::{BTreeMap, VecDeque},
-    path::PathBuf,
-    sync::Arc,
-};
+#[cfg(test)]
+use std::collections::VecDeque;
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, watch};
 use work::{Accepted, PendingRequest, ResponseChannel, Session, Work, WorkId, WorkTable};
 #[derive(Clone)]
@@ -161,11 +161,7 @@ struct Core {
     quota_wait: Option<quota::Wait>,
     retry_waits: Vec<retry::Wait>,
     next_quota: quota::TimerId,
-    runtime_state: RuntimeState,
-    failures: VecDeque<Moment>,
-    cleanup_before_start: bool,
-    changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
-    replacement: Option<Replacement>,
+    lifecycle: Lifecycle,
     catalog: Option<crate::catalog::Catalog>,
     model_names: Vec<String>,
     context_sizes: BTreeMap<String, u64>,
@@ -211,7 +207,7 @@ impl Core {
     fn state(&self) -> State {
         if self.lockout.is_some() {
             State::Lockout
-        } else if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+        } else if matches!(self.lifecycle.state(), RuntimeState::Unavailable(_)) {
             State::RuntimeUnavailable
         } else if self.sign_in_required {
             State::SignInRequired
@@ -278,7 +274,7 @@ impl Core {
             OwnerAction::SignIn => {
                 if self.lockout.is_some()
                     || self.sign_in_wait.is_some()
-                    || !matches!(self.runtime_state, RuntimeState::Serving)
+                    || !matches!(self.lifecycle.state(), RuntimeState::Serving)
                 {
                     let _ = reply.send(Err(OwnerMessage::SignInCannotStart));
                     return Vec::new();
@@ -515,7 +511,7 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Closed | RuntimeEvent::WriteFailed(_)))
-                if matches!(self.runtime_state, RuntimeState::Restarting) =>
+                if matches!(self.lifecycle.state(), RuntimeState::Restarting) =>
             {
                 self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
             }
@@ -550,7 +546,7 @@ impl Core {
         self.start_queued_work(now, &mut commands);
         self.emit_keep_alives(now, &mut commands);
         if self.state() != previous {
-            let cause = match &self.runtime_state {
+            let cause = match self.lifecycle.state() {
                 RuntimeState::Unavailable(reason) => reason.cause,
                 _ => None,
             };
@@ -572,7 +568,7 @@ impl Core {
                 .as_ref()
                 .map(|evidence| evidence.original_error_text.clone()),
             state: self.state(),
-            runtime_process: self.runtime_state.runtime_process(),
+            runtime_process: self.lifecycle.state().runtime_process(),
             places: self
                 .work
                 .values()
@@ -619,21 +615,17 @@ impl Conductor {
                 quota_wait: None,
                 retry_waits: Vec::new(),
                 next_quota: quota::TimerId::default(),
-                runtime_state: if lockout.is_some() {
+                lifecycle: Lifecycle::new(if lockout.is_some() {
                     RuntimeState::Stopped
                 } else {
                     RuntimeState::Serving
-                },
+                }),
                 lockout,
                 sign_in_required: false,
                 sign_in_wait: None,
                 panel_address,
                 state_path,
                 view,
-                failures: VecDeque::new(),
-                cleanup_before_start: false,
-                changes: VecDeque::new(),
-                replacement: None,
                 catalog: None,
                 model_names: Vec::new(),
                 context_sizes: BTreeMap::new(),
@@ -649,7 +641,7 @@ impl Conductor {
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
-                if core.replacement_ready() && core.replacement.is_some() {
+                if core.replacement_ready() && core.lifecycle.replacement_pending() {
                     checking = core
                         .replace(
                             &mut runtime,
@@ -660,13 +652,13 @@ impl Conductor {
                             &publish,
                         )
                         .await;
-                    if matches!(core.runtime_state, RuntimeState::Stopping) {
+                    if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
                         break;
                     }
                 }
                 if core.lockout.is_none()
-                    && matches!(core.runtime_state, RuntimeState::Restarting)
-                    && core.replacement.is_none()
+                    && matches!(core.lifecycle.state(), RuntimeState::Restarting)
+                    && !core.lifecycle.replacement_pending()
                 {
                     core.restart(
                         &mut runtime,
@@ -676,11 +668,11 @@ impl Conductor {
                         &actor_builds,
                     )
                     .await;
-                    if matches!(core.runtime_state, RuntimeState::Stopping) {
+                    if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
                         break;
                     }
                 }
-                if core.replacement.is_none() && checking.is_none() {
+                if !core.lifecycle.replacement_pending() && checking.is_none() {
                     match core
                         .next_build_change(&actor_builds, &publish, &configuration)
                         .await
@@ -694,18 +686,18 @@ impl Conductor {
                                 &journal,
                             )
                             .await;
-                            core.replacement = Some(replacement);
+                            core.lifecycle.plan(replacement);
                         }
                         Some(BuildSelection::Ready(replacement)) => {
-                            core.replacement = Some(replacement)
+                            core.lifecycle.plan(replacement)
                         }
                         None => {}
                     }
-                    if core.replacement.is_some() && core.replacement_ready() {
+                    if core.lifecycle.replacement_pending() && core.replacement_ready() {
                         continue;
                     }
-                    if core.replacement.is_none()
-                        && matches!(core.runtime_state, RuntimeState::Retiring { .. })
+                    if !core.lifecycle.replacement_pending()
+                        && matches!(core.lifecycle.state(), RuntimeState::Retiring { .. })
                     {
                         core.apply(
                             Event::ResumeRuntime,
@@ -806,7 +798,7 @@ impl Conductor {
                 core.apply(event, &mut runtime, &mut read_open, &clock, &journal)
                     .await;
                 drop(hold);
-                if matches!(core.runtime_state, RuntimeState::Stopping) {
+                if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
                     break;
                 }
             }

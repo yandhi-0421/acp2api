@@ -8,7 +8,7 @@ use crate::{
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::Runtime,
 };
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 use tokio::sync::watch;
 
 pub(super) enum Replacement {
@@ -63,6 +63,95 @@ impl RuntimeState {
     }
 }
 
+pub(super) struct Lifecycle {
+    state: RuntimeState,
+    failures: VecDeque<Moment>,
+    cleanup_before_start: bool,
+    changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
+    replacement: Option<Replacement>,
+}
+
+impl Lifecycle {
+    pub(super) fn new(state: RuntimeState) -> Self {
+        Self {
+            state,
+            failures: VecDeque::new(),
+            cleanup_before_start: false,
+            changes: VecDeque::new(),
+            replacement: None,
+        }
+    }
+
+    pub(super) fn state(&self) -> &RuntimeState {
+        &self.state
+    }
+
+    pub(super) fn replacement_pending(&self) -> bool {
+        self.replacement.is_some()
+    }
+
+    pub(super) fn plan(&mut self, replacement: Replacement) {
+        self.replacement = Some(replacement);
+    }
+
+    pub(super) fn lockout_stopped(&mut self) {
+        self.state = RuntimeState::Stopped;
+    }
+
+    pub(super) fn refuse_build_changes(
+        &mut self,
+        message: &crate::messages::Message,
+        commands: &mut Vec<Command>,
+    ) {
+        if let Some(replacement) = self.replacement.take() {
+            match replacement {
+                Replacement::Build { reply, .. } | Replacement::Check { reply, .. } => {
+                    commands.push(Command::RefuseBuildChange {
+                        reply,
+                        error: message.clone(),
+                    });
+                }
+                Replacement::SignIn => {}
+            }
+        }
+        commands.extend(
+            self.changes
+                .drain(..)
+                .map(|(_, reply)| Command::RefuseBuildChange {
+                    reply,
+                    error: message.clone(),
+                }),
+        );
+    }
+}
+
+#[cfg(test)]
+impl Lifecycle {
+    pub(super) fn set_state(&mut self, state: RuntimeState) {
+        self.state = state;
+    }
+
+    pub(super) fn set_cleanup_before_start(&mut self) {
+        self.cleanup_before_start = true;
+    }
+
+    pub(super) fn failure_count(&self) -> usize {
+        self.failures.len()
+    }
+
+    pub(super) fn replacement(&self) -> Option<&Replacement> {
+        self.replacement.as_ref()
+    }
+
+    pub(super) fn queue_change(
+        &mut self,
+        action: crate::runtime_builds::Action,
+        reply: BuildReply,
+    ) {
+        self.changes.push_back((action, reply));
+    }
+}
+
 const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 
 impl Core {
@@ -75,7 +164,7 @@ impl Core {
         builds: &crate::runtime_builds::Builds,
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) -> Option<CompatibilityCheck> {
-        let (reply, source, initial) = match self.replacement.take().unwrap() {
+        let (reply, source, initial) = match self.lifecycle.replacement.take().unwrap() {
             Replacement::SignIn => {
                 self.restart(runtime, read_open, clock, journal, builds)
                     .await;
@@ -92,7 +181,7 @@ impl Core {
                 identity,
             } => match builds.check_copy(&folder, &identity) {
                 Ok(program) => {
-                    self.runtime_state = RuntimeState::Retiring {
+                    self.lifecycle.state = RuntimeState::Retiring {
                         sign_in_wait_ended: false,
                     };
                     self.stop_runtime(runtime, read_open).await;
@@ -141,7 +230,7 @@ impl Core {
         }
         self.restart(runtime, read_open, clock, journal, builds)
             .await;
-        if matches!(self.runtime_state, RuntimeState::Stopping) {
+        if matches!(self.lifecycle.state, RuntimeState::Stopping) {
             let _ = reply.send(Err(LaunchFailure::Stopped));
             return None;
         }
@@ -166,7 +255,7 @@ impl Core {
         clock: &Arc<dyn Clock>,
         journal: &crate::journal::Journal,
     ) {
-        if matches!(self.runtime_state, RuntimeState::Retiring { .. }) && runtime.is_some() {
+        if matches!(self.lifecycle.state, RuntimeState::Retiring { .. }) && runtime.is_some() {
             self.apply(Event::ResumeRuntime, runtime, read_open, clock, journal)
                 .await;
         }
@@ -249,8 +338,8 @@ impl Core {
     ) {
         *read_open = false;
         loop {
-            if matches!(self.runtime_state, RuntimeState::Restarting)
-                && self.failures.len() >= MAX_RUNTIME_FAILURES
+            if matches!(self.lifecycle.state, RuntimeState::Restarting)
+                && self.lifecycle.failures.len() >= MAX_RUNTIME_FAILURES
             {
                 self.make_unavailable(
                     crate::messages::RuntimeFault::RepeatedFailures,
@@ -263,8 +352,11 @@ impl Core {
                 .await;
                 return;
             }
-            let retained = self.cleanup_before_start.then(|| self.sessions.retained());
-            self.cleanup_before_start = true;
+            let retained = self
+                .lifecycle
+                .cleanup_before_start
+                .then(|| self.sessions.retained());
+            self.lifecycle.cleanup_before_start = true;
             match builds.launch(retained).await {
                 Ok((started, catalog)) => {
                     let sign_in_required = catalog.is_none();
@@ -371,7 +463,7 @@ impl Core {
     pub(super) fn replacement_ready(&self) -> bool {
         self.lockout.is_none()
             && matches!(
-                self.runtime_state,
+                self.lifecycle.state,
                 RuntimeState::Retiring { .. }
                     | RuntimeState::Restarting
                     | RuntimeState::Unavailable(_)
@@ -390,7 +482,7 @@ impl Core {
 
     pub(super) fn stopping(&mut self, now: Moment, commands: &mut Vec<Command>) {
         self.sign_in_wait = None;
-        self.runtime_state = RuntimeState::Stopping;
+        self.lifecycle.state = RuntimeState::Stopping;
         self.end_all_work(
             "stopped",
             |_| crate::messages::Message::Stopped,
@@ -406,11 +498,11 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         self.sign_in_wait = None;
-        if matches!(self.replacement, Some(Replacement::SignIn)) {
-            self.replacement = None;
+        if matches!(self.lifecycle.replacement, Some(Replacement::SignIn)) {
+            self.lifecycle.replacement = None;
         }
         let error = crate::messages::Message::RuntimeUnavailable(reason.message.clone());
-        self.runtime_state = RuntimeState::Unavailable(reason);
+        self.lifecycle.state = RuntimeState::Unavailable(reason);
         self.refuse_queued(
             crate::journal::Outcome::Refused("runtime_unavailable"),
             error.clone(),
@@ -429,37 +521,40 @@ impl Core {
     pub(super) fn retire_runtime(&mut self) {
         let sign_in_wait_ended = self.sign_in_wait.take().is_some()
             || matches!(
-                self.runtime_state,
+                self.lifecycle.state,
                 RuntimeState::Retiring {
                     sign_in_wait_ended: true
                 }
             );
-        if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
-            self.runtime_state = RuntimeState::Retiring { sign_in_wait_ended };
+        if !matches!(self.lifecycle.state, RuntimeState::Unavailable(_)) {
+            self.lifecycle.state = RuntimeState::Retiring { sign_in_wait_ended };
         }
     }
 
     pub(super) fn resume_runtime(&mut self) {
         if matches!(
-            self.runtime_state,
+            self.lifecycle.state,
             RuntimeState::Retiring {
                 sign_in_wait_ended: true
             }
         ) {
-            self.replacement.get_or_insert(Replacement::SignIn);
+            self.lifecycle
+                .replacement
+                .get_or_insert(Replacement::SignIn);
         } else {
-            self.runtime_state = RuntimeState::Serving;
+            self.lifecycle.state = RuntimeState::Serving;
         }
     }
 
     pub(super) fn runtime_failed(&mut self, now: Moment, commands: &mut Vec<Command>) {
         self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, commands);
         self.sign_in_wait = None;
-        self.runtime_state = RuntimeState::Restarting;
+        self.lifecycle.state = RuntimeState::Restarting;
         self.sessions.runtime_failed();
-        self.failures
+        self.lifecycle
+            .failures
             .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
-        self.failures.push_back(now);
+        self.lifecycle.failures.push_back(now);
         while let Some(id) = self
             .work
             .iter()
@@ -492,7 +587,7 @@ impl Core {
             };
             let _ = reply.send(result);
         } else {
-            self.changes.push_back((action, reply));
+            self.lifecycle.changes.push_back((action, reply));
         }
     }
 
@@ -502,7 +597,7 @@ impl Core {
         publish: &watch::Sender<Arc<crate::store::Settings>>,
         configuration: &std::path::Path,
     ) -> Option<BuildSelection> {
-        while let Some((action, reply)) = self.changes.pop_front() {
+        while let Some((action, reply)) = self.lifecycle.changes.pop_front() {
             let initial = matches!(action, crate::runtime_builds::Action::Initial);
             let mut changed = (**publish.borrow()).clone();
             match builds.select(action, &mut changed, configuration).await {
@@ -513,7 +608,7 @@ impl Core {
                     publish.send_replace(Arc::new(changed));
                     match selection {
                         crate::runtime_builds::Selection::Keep => {
-                            if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+                            if matches!(self.lifecycle.state, RuntimeState::Unavailable(_)) {
                                 return Some(BuildSelection::Ready(Replacement::Build {
                                     reply,
                                     source: None,
@@ -548,16 +643,18 @@ impl Core {
 
     pub(super) fn sign_in_wait_ended(&mut self) {
         self.sign_in_wait = None;
-        if matches!(self.runtime_state, RuntimeState::Serving) {
-            self.runtime_state = RuntimeState::Retiring {
+        if matches!(self.lifecycle.state, RuntimeState::Serving) {
+            self.lifecycle.state = RuntimeState::Retiring {
                 sign_in_wait_ended: true,
             };
-            self.replacement.get_or_insert(Replacement::SignIn);
+            self.lifecycle
+                .replacement
+                .get_or_insert(Replacement::SignIn);
         }
     }
 
     pub(super) fn runtime_ready(&mut self, sign_in_required: bool, commands: &mut Vec<Command>) {
-        self.runtime_state = RuntimeState::Serving;
+        self.lifecycle.state = RuntimeState::Serving;
         if sign_in_required {
             self.require_sign_in(commands);
         } else {
