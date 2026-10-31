@@ -69,16 +69,10 @@ impl Core {
         };
         let failed_reply = match runtime_event {
             RuntimeEvent::UpstreamError { session, .. } => self
+                .work
                 .by_session(session)
                 .and_then(|id| self.work[&id].execution())
-                .map(|active| {
-                    format!(
-                        "{}{}{}",
-                        active.text,
-                        active.stop_prefix,
-                        active.held.as_deref().unwrap_or("")
-                    )
-                })
+                .map(|active| active.reply_text())
                 .unwrap_or_default(),
             _ => String::new(),
         };
@@ -89,9 +83,9 @@ impl Core {
             && self.lockout.is_none()
         {
             let signalling_work = match runtime_event {
-                RuntimeEvent::Prepared { work, .. } => self.by_request(work),
+                RuntimeEvent::Prepared { work, .. } => self.work.by_request(work),
                 RuntimeEvent::Turn { session, .. }
-                | RuntimeEvent::UpstreamError { session, .. } => self.by_session(session),
+                | RuntimeEvent::UpstreamError { session, .. } => self.work.by_session(session),
                 _ => None,
             };
             *event = Event::Lockout {
@@ -137,7 +131,7 @@ impl Core {
         let message = Message::lockout(&evidence, &self.panel_address, false);
         let first_message = Message::lockout(&evidence, &self.panel_address, true);
         self.lockout = Some(evidence.clone());
-        self.sign_in_wait = None;
+        self.sign_in.end_wait();
         let before = commands.len();
         self.end_all_work(
             "lockout",
@@ -158,45 +152,6 @@ impl Core {
                 .take_while(|command| matches!(command, Command::Cancel(_)))
                 .count();
         commands.insert(after_cancels, Command::Lockout(evidence));
-        if let Some(replacement) = self.replacement.take() {
-            match replacement {
-                Replacement::Build { reply, .. } | Replacement::Check { reply, .. } => {
-                    commands.push(Command::RefuseBuildChange {
-                        reply,
-                        error: message.clone(),
-                    });
-                }
-                Replacement::SignIn => {}
-            }
-        }
-        commands.extend(
-            self.changes
-                .drain(..)
-                .map(|(_, reply)| Command::RefuseBuildChange {
-                    reply,
-                    error: message.clone(),
-                }),
-        );
-    }
-
-    pub(super) fn build_change(
-        &mut self,
-        action: crate::runtime_builds::Action,
-        reply: BuildReply,
-    ) {
-        if let Some(evidence) = &self.lockout {
-            let result = if matches!(action, crate::runtime_builds::Action::Initial) {
-                Ok(None)
-            } else {
-                Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
-                    evidence,
-                    &self.panel_address,
-                    false,
-                ))))
-            };
-            let _ = reply.send(result);
-        } else {
-            self.changes.push_back((action, reply));
-        }
+        self.lifecycle.refuse_build_changes(&message, commands);
     }
 }
