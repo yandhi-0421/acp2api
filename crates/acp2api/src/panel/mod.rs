@@ -88,8 +88,7 @@ impl Panel {
         sessions.retain(|_, s| s.password_hash == hash && now.saturating_sub(s.since) < LIFETIME);
         cookie(headers, COOKIE).is_some_and(|value| sessions.contains_key(value))
     }
-    async fn verify(&self, password: String) -> bool {
-        let hash = self.conductor.settings().management_password_hash.clone();
+    async fn verify(&self, password: String, hash: String) -> bool {
         let permit = self
             .logins
             .acquire()
@@ -258,7 +257,8 @@ async fn login(
     Extension(language): Extension<Language>,
     Form(form): Form<Password>,
 ) -> Response {
-    if !panel.verify(form.password).await {
+    let hash = panel.conductor.settings().management_password_hash.clone();
+    if !panel.verify(form.password, hash.clone()).await {
         return (
             StatusCode::UNAUTHORIZED,
             Html(page::login(
@@ -282,7 +282,7 @@ async fn login(
         token.clone(),
         Session {
             since: panel.clock.now(),
-            password_hash: panel.conductor.settings().management_password_hash.clone(),
+            password_hash: hash,
         },
     );
     let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
@@ -377,7 +377,13 @@ async fn end_lockout(
     Extension(language): Extension<Language>,
     Form(form): Form<EndLockoutForm>,
 ) -> Response {
-    if !panel.verify(form.password).await {
+    if !panel
+        .verify(
+            form.password,
+            panel.conductor.settings().management_password_hash.clone(),
+        )
+        .await
+    {
         return panel.page(
             language,
             StatusCode::UNAUTHORIZED,

@@ -508,6 +508,16 @@ fn sign_in_wait(
     );
     format!(r#"<p class="surface">{waits}{address}</p>{cancel}<script>{COUNTDOWN}</script>"#)
 }
+fn end_lockout(language: Language) -> String {
+    post_form(
+        "/manage/end-lockout",
+        &format!(
+            r#"<label for="end-lockout-password">{}</label><input type="password" id="end-lockout-password" name="password" autocomplete="current-password" required>{}"#,
+            language.pick("Management password", "管理密码"),
+            submit(language.pick("End the lockout", "结束锁死")),
+        ),
+    )
+}
 fn first_tile(
     language: Language,
     view: &crate::conductor::View,
@@ -523,12 +533,16 @@ fn first_tile(
         .as_ref()
         .map(|text| format!("<p>{}</p>", escape(text)))
         .unwrap_or_default();
-    let sign_in = match &view.sign_in_wait {
-        Some(wait) => sign_in_wait(language, wait, now),
-        None => post_form(
-            "/manage/sign-in",
-            &submit(language.pick("Sign in with Google", "用 Google 账户登录")),
-        ),
+    let sign_in = if view.state == State::Lockout {
+        end_lockout(language)
+    } else {
+        match &view.sign_in_wait {
+            Some(wait) => sign_in_wait(language, wait, now),
+            None => post_form(
+                "/manage/sign-in",
+                &submit(language.pick("Sign in with Google", "用 Google 账户登录")),
+            ),
+        }
     };
     let places = figure(labels.places_in_use, view.places);
     let queued = figure(labels.requests_in_the_queue, view.queued);
