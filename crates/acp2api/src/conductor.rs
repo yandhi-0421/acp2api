@@ -6,6 +6,7 @@ mod records;
 mod request;
 mod retry;
 pub(crate) mod sign_in;
+mod work;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
@@ -27,6 +28,9 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{mpsc, oneshot, watch};
+use work::{
+    Accepted, ModelRead, PendingRequest, ResponseChannel, Session, Work, WorkId, WorkTable,
+};
 #[derive(Clone)]
 pub(crate) struct Conductor {
     journal: crate::journal::Journal,
@@ -152,13 +156,6 @@ pub(crate) enum ResponseMode {
     Body,
     Stream,
 }
-struct PendingRequest {
-    mode: ResponseMode,
-    turn: TurnRequest,
-    request: crate::journal::Request,
-    admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
-    connection: mpsc::UnboundedSender<()>,
-}
 pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const MAX_RUNTIME_FAILURES: usize = 3;
@@ -168,41 +165,6 @@ const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 
 const SETTLE_DELAY: Moment = 200;
 type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 type BuildReply = oneshot::Sender<Result<Option<OwnerMessage>, LaunchFailure>>;
-struct Accepted {
-    turn: TurnRequest,
-    model: crate::catalog::SelectedModel,
-    request: crate::journal::Request,
-    reply: ResponseChannel,
-}
-struct ResponseChannel {
-    output: Output,
-    keep_alive: Option<Moment>,
-}
-type WorkId = u64;
-type WorkTable = BTreeMap<WorkId, Work>;
-enum Work {
-    ModelsQueued(ModelRead),
-    ModelsReading(ModelRead),
-    CheckQueued(PendingRequest),
-    Checking(PendingRequest),
-    AcceptedQueued(Accepted),
-    AcceptedWorking(Active),
-    Retiring(OutstandingWork),
-    QuotaQueued {
-        query: QuotaQuery,
-        session: Option<String>,
-    },
-    QuotaWorking {
-        query: QuotaQuery,
-        phase: QuotaPhase,
-        text: String,
-        result: Result<(), crate::messages::Message>,
-    },
-}
-struct ModelRead {
-    work: String,
-    replies: Vec<oneshot::Sender<Result<(), OwnerMessage>>>,
-}
 struct QuotaQuery {
     work: String,
     purpose: QuotaPurpose,
@@ -241,166 +203,6 @@ impl QuotaPhase {
         match self {
             Self::Preparing => None,
             Self::Prompt(session) | Self::Settling { session, .. } => Some(session),
-        }
-    }
-}
-impl Work {
-    fn key(&self) -> &str {
-        match self {
-            Self::ModelsQueued(read) | Self::ModelsReading(read) => &read.work,
-            Self::CheckQueued(request) | Self::Checking(request) => &request.request.id,
-            Self::AcceptedQueued(request) => &request.request.id,
-            Self::AcceptedWorking(active) => &active.request.id,
-            Self::Retiring(outstanding) => outstanding.request_id(),
-            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => &query.work,
-        }
-    }
-    fn execution(&self) -> Option<&Active> {
-        match self {
-            Self::AcceptedWorking(active) => Some(active),
-            Self::AcceptedQueued(_)
-            | Self::CheckQueued(_)
-            | Self::Checking(_)
-            | Self::Retiring(_)
-            | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. }
-            | Self::ModelsQueued(_)
-            | Self::ModelsReading(_) => None,
-        }
-    }
-    fn execution_mut(&mut self) -> Option<&mut Active> {
-        match self {
-            Self::AcceptedWorking(active) => Some(active),
-            Self::AcceptedQueued(_)
-            | Self::CheckQueued(_)
-            | Self::Checking(_)
-            | Self::Retiring(_)
-            | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. }
-            | Self::ModelsQueued(_)
-            | Self::ModelsReading(_) => None,
-        }
-    }
-    fn into_queued(self) -> Option<Accepted> {
-        match self {
-            Self::AcceptedQueued(request) => Some(request),
-            Self::AcceptedWorking(_)
-            | Self::CheckQueued(_)
-            | Self::Checking(_)
-            | Self::Retiring(_)
-            | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. }
-            | Self::ModelsQueued(_)
-            | Self::ModelsReading(_) => None,
-        }
-    }
-    fn into_active(self) -> Option<Active> {
-        match self {
-            Self::AcceptedWorking(active) => Some(active),
-            Self::AcceptedQueued(_)
-            | Self::CheckQueued(_)
-            | Self::Checking(_)
-            | Self::Retiring(_)
-            | Self::QuotaQueued { .. }
-            | Self::QuotaWorking { .. }
-            | Self::ModelsQueued(_)
-            | Self::ModelsReading(_) => None,
-        }
-    }
-    fn is_queued(&self) -> bool {
-        matches!(
-            self,
-            Self::CheckQueued(_)
-                | Self::AcceptedQueued(_)
-                | Self::QuotaQueued { .. }
-                | Self::ModelsQueued(_)
-        )
-    }
-    fn occupies_place(&self) -> bool {
-        matches!(
-            self,
-            Self::Checking(_)
-                | Self::AcceptedWorking(_)
-                | Self::Retiring(_)
-                | Self::QuotaWorking { .. }
-                | Self::ModelsReading(_)
-        )
-    }
-    fn reply(&self) -> Option<&ResponseChannel> {
-        match self {
-            Self::AcceptedQueued(request) => Some(&request.reply),
-            Self::AcceptedWorking(active) => Some(&active.reply),
-            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => match &query
-                .purpose
-            {
-                QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
-                    response.as_ref().map(|active| &active.reply)
-                }
-                QuotaPurpose::Refresh(_) => None,
-            },
-            Self::CheckQueued(_)
-            | Self::Checking(_)
-            | Self::Retiring(_)
-            | Self::ModelsQueued(_)
-            | Self::ModelsReading(_) => None,
-        }
-    }
-    fn reply_mut(&mut self) -> Option<&mut ResponseChannel> {
-        match self {
-            Self::AcceptedQueued(request) => Some(&mut request.reply),
-            Self::AcceptedWorking(active) => Some(&mut active.reply),
-            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => match &mut query
-                .purpose
-            {
-                QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
-                    response.as_mut().map(|active| &mut active.reply)
-                }
-                QuotaPurpose::Refresh(_) => None,
-            },
-            Self::CheckQueued(_)
-            | Self::Checking(_)
-            | Self::Retiring(_)
-            | Self::ModelsQueued(_)
-            | Self::ModelsReading(_) => None,
-        }
-    }
-    fn update_deadline(&self) -> Option<Moment> {
-        match self {
-            Self::AcceptedWorking(active) => active.update_deadline(),
-            _ => None,
-        }
-    }
-    fn deadline(&self) -> Option<Moment> {
-        self.completion_deadline()
-            .into_iter()
-            .chain(self.update_deadline())
-            .chain(self.reply().and_then(|reply| reply.keep_alive))
-            .min()
-    }
-    fn completion_deadline(&self) -> Option<Moment> {
-        match self {
-            Self::AcceptedWorking(active) => active.completion_deadline(),
-            Self::QuotaWorking {
-                phase: QuotaPhase::Settling { at, .. },
-                ..
-            } => Some(*at),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone)]
-struct Session {
-    tools: Vec<crate::conversation::ClientTool>,
-    system: Option<String>,
-}
-impl Session {
-    fn for_turn(turn: &TurnRequest) -> Self {
-        Self {
-            system: crate::conversation::system_prompt_addition(&turn.conversation.system),
-            tools: match turn.tool_choice {
-                crate::conversation::ToolChoice::Off => Vec::new(),
-                crate::conversation::ToolChoice::Auto => turn.tools.clone(),
-            },
         }
     }
 }

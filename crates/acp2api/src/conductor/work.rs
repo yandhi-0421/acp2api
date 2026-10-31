@@ -1,0 +1,219 @@
+use super::{Active, Output, OutstandingWork, QuotaPhase, QuotaPurpose, QuotaQuery, ResponseMode};
+use crate::{
+    Moment,
+    conversation::{Ticket, TurnRequest},
+    messages::OwnerMessage,
+};
+use std::collections::BTreeMap;
+use tokio::sync::{mpsc, oneshot};
+
+pub(super) struct PendingRequest {
+    pub(super) mode: ResponseMode,
+    pub(super) turn: TurnRequest,
+    pub(super) request: crate::journal::Request,
+    pub(super) admission: oneshot::Sender<Result<Ticket, crate::messages::Refusal>>,
+    pub(super) connection: mpsc::UnboundedSender<()>,
+}
+
+pub(super) struct Accepted {
+    pub(super) turn: TurnRequest,
+    pub(super) model: crate::catalog::SelectedModel,
+    pub(super) request: crate::journal::Request,
+    pub(super) reply: ResponseChannel,
+}
+
+pub(super) struct ResponseChannel {
+    pub(super) output: Output,
+    pub(super) keep_alive: Option<Moment>,
+}
+
+pub(super) type WorkId = u64;
+pub(super) type WorkTable = BTreeMap<WorkId, Work>;
+
+pub(super) enum Work {
+    ModelsQueued(ModelRead),
+    ModelsReading(ModelRead),
+    CheckQueued(PendingRequest),
+    Checking(PendingRequest),
+    AcceptedQueued(Accepted),
+    AcceptedWorking(Active),
+    Retiring(OutstandingWork),
+    QuotaQueued {
+        query: QuotaQuery,
+        session: Option<String>,
+    },
+    QuotaWorking {
+        query: QuotaQuery,
+        phase: QuotaPhase,
+        text: String,
+        result: Result<(), crate::messages::Message>,
+    },
+}
+
+pub(super) struct ModelRead {
+    pub(super) work: String,
+    pub(super) replies: Vec<oneshot::Sender<Result<(), OwnerMessage>>>,
+}
+
+impl Work {
+    pub(super) fn key(&self) -> &str {
+        match self {
+            Self::ModelsQueued(read) | Self::ModelsReading(read) => &read.work,
+            Self::CheckQueued(request) | Self::Checking(request) => &request.request.id,
+            Self::AcceptedQueued(request) => &request.request.id,
+            Self::AcceptedWorking(active) => &active.request.id,
+            Self::Retiring(outstanding) => outstanding.request_id(),
+            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => &query.work,
+        }
+    }
+    pub(super) fn execution(&self) -> Option<&Active> {
+        match self {
+            Self::AcceptedWorking(active) => Some(active),
+            Self::AcceptedQueued(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
+        }
+    }
+    pub(super) fn execution_mut(&mut self) -> Option<&mut Active> {
+        match self {
+            Self::AcceptedWorking(active) => Some(active),
+            Self::AcceptedQueued(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
+        }
+    }
+    pub(super) fn into_queued(self) -> Option<Accepted> {
+        match self {
+            Self::AcceptedQueued(request) => Some(request),
+            Self::AcceptedWorking(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
+        }
+    }
+    pub(super) fn into_active(self) -> Option<Active> {
+        match self {
+            Self::AcceptedWorking(active) => Some(active),
+            Self::AcceptedQueued(_)
+            | Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::QuotaQueued { .. }
+            | Self::QuotaWorking { .. }
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
+        }
+    }
+    pub(super) fn is_queued(&self) -> bool {
+        matches!(
+            self,
+            Self::CheckQueued(_)
+                | Self::AcceptedQueued(_)
+                | Self::QuotaQueued { .. }
+                | Self::ModelsQueued(_)
+        )
+    }
+    pub(super) fn occupies_place(&self) -> bool {
+        matches!(
+            self,
+            Self::Checking(_)
+                | Self::AcceptedWorking(_)
+                | Self::Retiring(_)
+                | Self::QuotaWorking { .. }
+                | Self::ModelsReading(_)
+        )
+    }
+    pub(super) fn reply(&self) -> Option<&ResponseChannel> {
+        match self {
+            Self::AcceptedQueued(request) => Some(&request.reply),
+            Self::AcceptedWorking(active) => Some(&active.reply),
+            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => match &query
+                .purpose
+            {
+                QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                    response.as_ref().map(|active| &active.reply)
+                }
+                QuotaPurpose::Refresh(_) => None,
+            },
+            Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
+        }
+    }
+    pub(super) fn reply_mut(&mut self) -> Option<&mut ResponseChannel> {
+        match self {
+            Self::AcceptedQueued(request) => Some(&mut request.reply),
+            Self::AcceptedWorking(active) => Some(&mut active.reply),
+            Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => match &mut query
+                .purpose
+            {
+                QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                    response.as_mut().map(|active| &mut active.reply)
+                }
+                QuotaPurpose::Refresh(_) => None,
+            },
+            Self::CheckQueued(_)
+            | Self::Checking(_)
+            | Self::Retiring(_)
+            | Self::ModelsQueued(_)
+            | Self::ModelsReading(_) => None,
+        }
+    }
+    pub(super) fn update_deadline(&self) -> Option<Moment> {
+        match self {
+            Self::AcceptedWorking(active) => active.update_deadline(),
+            _ => None,
+        }
+    }
+    pub(super) fn deadline(&self) -> Option<Moment> {
+        self.completion_deadline()
+            .into_iter()
+            .chain(self.update_deadline())
+            .chain(self.reply().and_then(|reply| reply.keep_alive))
+            .min()
+    }
+    pub(super) fn completion_deadline(&self) -> Option<Moment> {
+        match self {
+            Self::AcceptedWorking(active) => active.completion_deadline(),
+            Self::QuotaWorking {
+                phase: QuotaPhase::Settling { at, .. },
+                ..
+            } => Some(*at),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct Session {
+    pub(super) tools: Vec<crate::conversation::ClientTool>,
+    pub(super) system: Option<String>,
+}
+
+impl Session {
+    pub(super) fn for_turn(turn: &TurnRequest) -> Self {
+        Self {
+            system: crate::conversation::system_prompt_addition(&turn.conversation.system),
+            tools: match turn.tool_choice {
+                crate::conversation::ToolChoice::Off => Vec::new(),
+                crate::conversation::ToolChoice::Auto => turn.tools.clone(),
+            },
+        }
+    }
+}
