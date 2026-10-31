@@ -1,5 +1,119 @@
 use super::*;
 
+async fn failed_checks(timeout: bool, restart_fails: bool) {
+    use crate::{BoxFuture, Launched, ProcessLauncher, ProcessTree};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    struct Tree;
+    impl ProcessTree for Tree {
+        fn pid(&self) -> u32 {
+            std::process::id()
+        }
+        fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+            Box::pin(std::future::pending())
+        }
+        fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+            Box::pin(async {})
+        }
+    }
+    struct CheckClock(Arc<AtomicBool>, Arc<dyn Clock>);
+    impl Clock for CheckClock {
+        fn now(&self) -> Moment {
+            self.1.now()
+        }
+        fn wall(&self) -> std::time::SystemTime {
+            self.1.wall()
+        }
+        fn sleep_until(&self, _: Moment) -> BoxFuture<'static, Hold> {
+            if self.0.load(Ordering::SeqCst) {
+                Box::pin(async { Hold::empty() })
+            } else {
+                Box::pin(std::future::pending())
+            }
+        }
+        fn hold(&self, _: HoldKind) -> Hold {
+            Hold::empty()
+        }
+    }
+    struct Launcher {
+        checks: AtomicUsize,
+        starts: AtomicUsize,
+        checking: Arc<AtomicBool>,
+        timeout: bool,
+        restart_fails: bool,
+    }
+    impl ProcessLauncher for Launcher {
+        fn launch(&self, spec: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+            let check = spec
+                .program
+                .parent()
+                .unwrap()
+                .ends_with("official-runtime-check");
+            self.checking.store(check, Ordering::SeqCst);
+            let stdout: crate::ProcessRead = if check {
+                assert!(
+                    self.checks.fetch_add(1, Ordering::SeqCst) < 3,
+                    "three candidate starts cap"
+                );
+                if self.timeout {
+                    Box::pin(Output(std::io::Cursor::new(Vec::new())))
+                } else {
+                    Box::pin(tokio::io::empty())
+                }
+            } else {
+                let start = self.starts.fetch_add(1, Ordering::SeqCst);
+                assert!(start < 4, "one start and three restoration attempts cap");
+                if self.restart_fails && start > 0 {
+                    return Err(crate::LaunchError::Io(std::io::Error::other(
+                        "accepted build restart failed",
+                    )));
+                }
+                let replies = [
+                    serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}),
+                    serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"restored","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+                ];
+                Box::pin(Output(std::io::Cursor::new(
+                    replies
+                        .iter()
+                        .map(|reply| format!("{reply}\n"))
+                        .collect::<String>()
+                        .into_bytes(),
+                )))
+            };
+            Ok(Launched {
+                stdin: Box::pin(tokio::io::sink()),
+                stdout,
+                stderr: Box::pin(tokio::io::empty()),
+                tree: Box::new(Tree),
+            })
+        }
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let checking = Arc::new(AtomicBool::new(false));
+        let launcher = Arc::new(Launcher { checks:AtomicUsize::new(0),starts:AtomicUsize::new(0),checking:checking.clone(),timeout,restart_fails });
+        let mut ports = crate::Ports::production();
+        ports.clock = Arc::new(CheckClock(checking, ports.clock));
+        ports.launcher = launcher.clone();
+        let (root, conductor, task) = check_fixture(ports, watch::channel(false).1).await;
+        assert_eq!(serde_json::to_value(conductor.model_names(Hold::empty()).await.ok().unwrap()).unwrap()[0]["id"], "m");
+        let identity = conductor.builds_summary().unwrap().found[0].identity.clone();
+        for _ in 0..if restart_fails { 1 } else { 3 } {
+            let notice = conductor.builds(crate::runtime_builds::Action::Check(identity.clone()), Hold::empty()).await.unwrap();
+            assert!(notice.unwrap().to_string().contains("compatibility check failed"));
+            let models = conductor.model_names(Hold::empty()).await;
+            if restart_fails {
+                let message = models.err().unwrap().message.to_string();
+                assert!(message.contains(&crate::messages::RuntimeFault::RepeatedFailures.to_string()), "the three failed restorations must count: {message}");
+            } else {
+                assert_eq!(serde_json::to_value(models.unwrap_or_else(|error| panic!("a failed check must restore the accepted version: {}", error.message))).unwrap()[0]["id"], "m", "a failed check must restore the earlier accepted version without using its failure budget");
+            }
+        }
+        assert_eq!(launcher.starts.load(Ordering::SeqCst), 4);
+        drop(conductor);
+        task.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }).await.expect("failure check cap: 5 seconds, three candidates, four serving starts, two replies under 1 KiB per serving start, no prompts or logs");
+}
+
 #[test]
 fn stopping_cancels_a_prompt_still_awaiting_its_quota_end() {
     let folder = std::env::temp_dir().join(format!(

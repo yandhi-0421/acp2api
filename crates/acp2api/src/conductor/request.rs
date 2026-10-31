@@ -1,7 +1,7 @@
 use super::quota::{QuotaPhase, QuotaPurpose};
 use super::work::ResponseChannel;
 use super::{
-    Command, Core, NO_UPDATE_LIMIT, Notice, SETTLE_DELAY, Work, WorkId, quota, records,
+    Command, Core, Event, NO_UPDATE_LIMIT, Notice, SETTLE_DELAY, Work, WorkId, quota, records,
     records::{OutstandingWork, PendingCompletion},
     retry,
 };
@@ -982,6 +982,47 @@ impl Core {
             }
         } else {
             commands.push(self.sessions.forget(session));
+        }
+    }
+
+    pub(super) fn end_occupying_work(
+        &mut self,
+        message: crate::messages::Message,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        while let Some(id) = self
+            .work
+            .iter()
+            .find_map(|(id, work)| work.occupies_place().then_some(*id))
+        {
+            self.finish(id, Err(Failure::at(message.clone(), now)), now, commands);
+        }
+    }
+
+    pub(super) fn deadline_reached(
+        &mut self,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        self.retire_idle(now, commands);
+        let due: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| {
+                work.completion_deadline()
+                    .filter(|at| *at <= now)
+                    .map(|_| *id)
+            })
+            .collect();
+        for id in due {
+            match &self.work[&id] {
+                Work::QuotaWorking { .. } => {
+                    self.quota_event(id, Event::Deadline, None, now, wall, commands)
+                }
+                _ => self.finish(id, Ok(()), now, commands),
+            }
         }
     }
 }

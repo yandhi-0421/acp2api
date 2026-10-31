@@ -1,5 +1,24 @@
 use super::*;
 
+fn prepare_quota_queries(core: &mut Core, commands: &[Command], now: Moment) -> Vec<Command> {
+    let mut prepared = Vec::new();
+    for command in commands {
+        if let Command::Prepare { work, .. } = command {
+            let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+            let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+            prepared.extend(core.handle(
+                Event::Runtime(RuntimeEvent::Prepared {
+                    work: work.clone(),
+                    result: Ok(("quota-query".into(), catalog)),
+                }),
+                now,
+                std::time::UNIX_EPOCH,
+            ));
+        }
+    }
+    prepared
+}
+
 #[test]
 fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
     let folder = std::env::temp_dir().join(format!(

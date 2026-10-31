@@ -556,18 +556,7 @@ impl Core {
             .failures
             .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
         self.lifecycle.failures.push_back(now);
-        while let Some(id) = self
-            .work
-            .iter()
-            .find_map(|(id, work)| work.occupies_place().then_some(*id))
-        {
-            self.finish(
-                id,
-                Err(Failure::at(crate::messages::Message::RuntimeFailed, now)),
-                now,
-                commands,
-            );
-        }
+        self.end_occupying_work(crate::messages::Message::RuntimeFailed, now, commands);
         self.catalog = None;
     }
 

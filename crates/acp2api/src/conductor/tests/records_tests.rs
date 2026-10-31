@@ -1,5 +1,30 @@
 use super::*;
 
+fn answer_quota(core: &mut Core, mut commands: Vec<Command>, now: Moment) -> Vec<Command> {
+    let sessions: Vec<_> = commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::Usage { session, .. } => Some(session.clone()),
+            _ => None,
+        })
+        .collect();
+    for session in sessions {
+        commands.extend(core.handle(Event::Runtime(RuntimeEvent::Turn { session:session.clone(), update:TurnUpdate::Text("### Quota Limits\n- **Gemini Models**\n  *(Models within this group: Gemini Flash, Gemini Pro)*\n  - **Weekly Limit Remaining:** 75% remaining (resets Oct 24, 2026, 12:34 UTC)".into()) }), now + 1, std::time::UNIX_EPOCH));
+        commands.extend(core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session,
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::EndTurn),
+                },
+            }),
+            now + 1,
+            std::time::UNIX_EPOCH,
+        ));
+        commands.extend(core.handle(Event::Deadline, now + 201, std::time::UNIX_EPOCH));
+    }
+    commands
+}
+
 #[test]
 fn a_checked_session_is_forgotten_only_when_its_request_does_not_start() {
     let folder = std::env::temp_dir().join(format!(

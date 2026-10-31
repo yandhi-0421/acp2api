@@ -9,8 +9,6 @@ mod retry;
 mod runtime_lifecycle;
 pub(crate) mod sign_in;
 mod work;
-#[cfg(test)]
-use crate::runtime_builds::SelectedBuild;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnRequest},
@@ -22,13 +20,9 @@ use commands::Command;
 pub(crate) use keep_alive::NO_UPDATE_LIMIT;
 use request::Failure;
 pub(crate) use retry::WAIT_SECONDS;
-#[cfg(test)]
-use runtime_lifecycle::Replacement;
 use runtime_lifecycle::{
     BuildReply, BuildSelection, CompatibilityCheck, Lifecycle, RuntimeState, UnavailableReason,
 };
-#[cfg(test)]
-use std::collections::VecDeque;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, watch};
 use work::{Accepted, PendingRequest, Work, WorkId, WorkTable};
@@ -445,21 +439,11 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::Failed(error))) => {
                 commands.extend(self.sessions.forget_idle());
-                while let Some(id) = self
-                    .work
-                    .iter()
-                    .find_map(|(id, work)| work.occupies_place().then_some(*id))
-                {
-                    self.finish(
-                        id,
-                        Err(Failure::at(
-                            crate::messages::Message::Upstream(error.clone()),
-                            now,
-                        )),
-                        now,
-                        &mut commands,
-                    );
-                }
+                self.end_occupying_work(
+                    crate::messages::Message::Upstream(error.clone()),
+                    now,
+                    &mut commands,
+                );
             }
             (None, Event::Runtime(RuntimeEvent::Closed | RuntimeEvent::WriteFailed(_)))
                 if matches!(self.lifecycle.state(), RuntimeState::Restarting) =>
@@ -472,26 +456,7 @@ impl Core {
                 | Event::RuntimeFailure,
             ) => self.runtime_failed(now, &mut commands),
             (None, Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other)) => {}
-            (None, Event::Deadline) => {
-                self.retire_idle(now, &mut commands);
-                let due: Vec<_> = self
-                    .work
-                    .iter()
-                    .filter_map(|(id, work)| {
-                        work.completion_deadline()
-                            .filter(|at| *at <= now)
-                            .map(|_| *id)
-                    })
-                    .collect();
-                for id in due {
-                    match &self.work[&id] {
-                        Work::QuotaWorking { .. } => {
-                            self.quota_event(id, Event::Deadline, None, now, wall, &mut commands)
-                        }
-                        _ => self.finish(id, Ok(()), now, &mut commands),
-                    }
-                }
-            }
+            (None, Event::Deadline) => self.deadline_reached(now, wall, &mut commands),
         }
         commands.extend(self.sessions.expire(now));
         self.start_queued_work(now, &mut commands);
