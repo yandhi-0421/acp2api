@@ -21,7 +21,12 @@ impl Core {
             .filter_map(|(id, work)| work.update_deadline().filter(|at| *at <= now).map(|_| *id))
             .collect();
         for id in idle {
-            let session = self.work[&id].execution().unwrap().session.clone().unwrap();
+            let session = self.work[&id]
+                .execution()
+                .unwrap()
+                .session()
+                .unwrap()
+                .to_owned();
             self.fail_request(id, session, Message::NoUpdate, now, commands);
         }
     }

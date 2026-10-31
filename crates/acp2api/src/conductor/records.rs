@@ -27,7 +27,7 @@ impl OutstandingWork {
         Self {
             model: active.model.clone(),
             request: active.request.clone(),
-            session: active.session.clone(),
+            session: active.session().map(str::to_owned),
             completion,
         }
     }
@@ -270,7 +270,7 @@ impl AcpSessions {
         let mut commands = Vec::new();
         let exit = active.exit();
         if matches!(exit, Exit::CancelAndRetire) {
-            commands.push(self.cancel(active.session.as_ref().unwrap().clone(), now));
+            commands.push(self.cancel(active.session().unwrap().to_owned(), now));
         }
         let outstanding = OutstandingWork::from_active(
             &active,

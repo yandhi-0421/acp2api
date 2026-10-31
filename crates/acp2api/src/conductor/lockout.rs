@@ -71,14 +71,7 @@ impl Core {
             RuntimeEvent::UpstreamError { session, .. } => self
                 .by_session(session)
                 .and_then(|id| self.work[&id].execution())
-                .map(|active| {
-                    format!(
-                        "{}{}{}",
-                        active.text,
-                        active.stop_prefix,
-                        active.held.as_deref().unwrap_or("")
-                    )
-                })
+                .map(|active| active.reply_text())
                 .unwrap_or_default(),
             _ => String::new(),
         };

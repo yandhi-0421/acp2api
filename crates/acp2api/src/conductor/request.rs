@@ -92,14 +92,14 @@ pub(super) enum Exit {
 pub(super) struct Active {
     pub(super) reply: ResponseChannel,
     pub(super) request: crate::journal::Request,
-    pub(super) session: Option<String>,
+    session: Option<String>,
     pub(super) record: records::RequestRecord,
     pub(super) client_tools_hash: crate::conversation::ToolSetHash,
     pub(super) kind: crate::journal::SessionUse,
-    pub(super) held: Option<String>,
-    pub(super) text: String,
-    pub(super) thought_dropped: bool,
-    pub(super) input_tokens: u64,
+    held: Option<String>,
+    text: String,
+    thought_dropped: bool,
+    input_tokens: u64,
     pub(super) model: String,
     pub(super) model_name: String,
     pub(super) effort: EffortAsk,
@@ -107,7 +107,7 @@ pub(super) struct Active {
     tool_call: Option<crate::conversation::ToolCall>,
     stop: crate::conversation::Stop,
     stops: Vec<String>,
-    pub(super) stop_prefix: String,
+    stop_prefix: String,
 }
 
 impl Active {
@@ -164,6 +164,40 @@ impl Active {
         } else {
             Exit::Retire
         }
+    }
+
+    pub(super) fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+    /// All reply text of the request so far, also the text that it still holds back.
+    pub(super) fn reply_text(&self) -> String {
+        format!(
+            "{}{}{}",
+            self.text,
+            self.stop_prefix,
+            self.held.as_deref().unwrap_or("")
+        )
+    }
+    pub(super) fn disconnected(self) -> Command {
+        Command::Complete(crate::journal::Completion {
+            request: self.request,
+            session: self.session,
+            session_use: Some(self.kind),
+            outcome: crate::journal::Outcome::Disconnected,
+        })
+    }
+    pub(super) fn usage_received(&mut self, used: u64) {
+        self.input_tokens = used;
+    }
+    pub(super) fn thought_dropped(&mut self) -> Option<Command> {
+        if self.thought_dropped {
+            return None;
+        }
+        self.thought_dropped = true;
+        Some(Command::Diagnostic(
+            self.request.clone(),
+            crate::journal::Diagnostic::DroppedThoughtText,
+        ))
     }
 
     pub(super) fn finish(

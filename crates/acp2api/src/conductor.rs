@@ -214,12 +214,7 @@ impl QuotaQuery {
             QuotaPurpose::Refresh(_) => unreachable!(),
         };
         let active = response.take().unwrap();
-        commands.push(Command::Complete(crate::journal::Completion {
-            request: active.request,
-            session: active.session,
-            session_use: Some(active.kind),
-            outcome: crate::journal::Outcome::Disconnected,
-        }));
+        commands.push(active.disconnected());
     }
 }
 enum QuotaPurpose {
@@ -873,7 +868,7 @@ impl Core {
                 | Work::QuotaQueued { .. }
                 | Work::ModelsQueued(_)
                 | Work::ModelsReading(_) => None,
-                Work::AcceptedWorking(active) => active.session.as_deref(),
+                Work::AcceptedWorking(active) => active.session(),
                 Work::Retiring(outstanding) => outstanding.session(),
                 Work::QuotaWorking { phase, .. } => phase.session(),
             };
@@ -1817,9 +1812,9 @@ impl Core {
             }
             if let Some(active) = work.execution()
                 && matches!(active.exit(), request::Exit::CancelAndRetire)
-                && let Some(session) = &active.session
+                && let Some(session) = active.session()
             {
-                commands.push(Command::Cancel(session.clone()));
+                commands.push(Command::Cancel(session.to_owned()));
             }
         }
         while let Some(id) = self.work.keys().next().copied() {
@@ -2176,20 +2171,12 @@ impl Core {
                     active.text_received(text, now, commands),
                     request::TurnAction::Cancel
                 ) {
-                    let session = active.session.as_ref().unwrap().clone();
+                    let session = active.session().unwrap().to_owned();
                     commands.push(self.sessions.cancel(session, now));
                 }
             }
-            TurnUpdate::Usage { used, .. } => active.input_tokens = used,
-            TurnUpdate::ThoughtDropped => {
-                if !active.thought_dropped {
-                    active.thought_dropped = true;
-                    commands.push(Command::Diagnostic(
-                        active.request.clone(),
-                        crate::journal::Diagnostic::DroppedThoughtText,
-                    ));
-                }
-            }
+            TurnUpdate::Usage { used, .. } => active.usage_received(used),
+            TurnUpdate::ThoughtDropped => commands.extend(active.thought_dropped()),
             TurnUpdate::UnpermittedTool(name) => {
                 let notice = Notice {
                     id: active.request.id.clone(),
@@ -2419,7 +2406,7 @@ impl Core {
                         commands.extend(forget.map(Command::Forget));
                     }
                     request::Ending::QueryQuotaReset(wait) => {
-                        let session = active.session.clone();
+                        let session = active.session().map(str::to_owned);
                         self.enqueue_quota(
                             QuotaPurpose::Reset {
                                 wait,
@@ -2431,7 +2418,7 @@ impl Core {
                     }
                     request::Ending::QueryRefusal => {
                         let model = active.model.clone();
-                        let session = active.session.clone();
+                        let session = active.session().map(str::to_owned);
                         self.enqueue_quota(
                             QuotaPurpose::Refusal {
                                 model,
@@ -2451,7 +2438,7 @@ impl Core {
         now: Moment,
     ) -> (Option<String>, Vec<Command>) {
         self.keep_quota_wait_reset_query(&active);
-        let session = active.session.clone();
+        let session = active.session().map(str::to_owned);
         let (commands, retry, record) = active.finish(result, now, self.catalog.as_ref());
         self.retry_waits.extend(retry);
         let forget = session.and_then(|session| self.sessions.keep(session, record));
@@ -7415,7 +7402,10 @@ mod tests {
                 record,
                 crate::journal::SessionUse::New,
             );
-            active.held = Some("Before".into());
+            assert!(matches!(
+                active.text_received("Before".into(), 0, &mut Vec::new()),
+                request::TurnAction::Continue
+            ));
             assert!(matches!(
                 active.client_tool_called(crate::conversation::ToolCall {
                     name: "read".into(),
