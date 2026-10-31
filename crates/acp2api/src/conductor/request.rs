@@ -1,14 +1,14 @@
 use super::{
-    Command, Core, Event, NO_UPDATE_LIMIT, Notice, QuotaPhase, QuotaPurpose, ResponseChannel,
-    RuntimeState, SETTLE_DELAY, StopReason, Work, WorkId, quota, records,
+    Command, Core, NO_UPDATE_LIMIT, Notice, QuotaPhase, QuotaPurpose, ResponseChannel,
+    SETTLE_DELAY, StopReason, Work, WorkId, quota, records,
     records::{OutstandingWork, PendingCompletion},
     retry,
 };
 use crate::{
     Moment,
     conversation::{EffortAsk, PromptRequest, TurnEvent, Usage},
-    messages::OwnerMessage,
-    runtime_driver::{RuntimeEvent, TurnUpdate},
+    messages::{Message, OwnerMessage},
+    runtime_driver::TurnUpdate,
 };
 use std::sync::Arc;
 
@@ -652,29 +652,92 @@ impl Core {
         }
     }
 
-    pub(super) fn command_failed(
+    pub(super) fn runtime_prepared(
         &mut self,
-        work: Option<String>,
-        error: crate::runtime_driver::CommandError,
+        work_id: Option<WorkId>,
+        work: String,
+        result: Result<(String, crate::catalog::Catalog), Message>,
         now: Moment,
         wall: std::time::SystemTime,
-    ) -> Vec<Command> {
-        if self.lockout.is_some() || matches!(self.runtime_state, RuntimeState::Restarting) {
-            return Vec::new();
-        }
-        let event = match error {
-            crate::runtime_driver::CommandError::Io(_)
-                if matches!(self.runtime_state, RuntimeState::Stopping) =>
-            {
-                Event::Stop
+        commands: &mut Vec<Command>,
+    ) {
+        if let Some(id) = work_id {
+            match result {
+                Ok((session, catalog)) => {
+                    self.catalog = Some(catalog);
+                    self.sign_in_required = false;
+                    match self.work.get_mut(&id).unwrap() {
+                        Work::ModelsReading(_) => {
+                            commands.extend(self.sessions.models_ready(session));
+                            self.finish(id, Ok(()), now, commands);
+                        }
+                        Work::Checking(_) => {
+                            commands.push(Command::AdmitChecked { id, session });
+                        }
+                        Work::Retiring(outstanding) => {
+                            outstanding.prepared(session);
+                            self.finish(id, Ok(()), now, commands);
+                        }
+                        entry => {
+                            let active = entry.execution_mut().unwrap();
+                            if let Some(prompt) = active.prepared(session.clone(), now) {
+                                if let Some(message) = self.refusal(now) {
+                                    self.finish(id, Err(Failure::at(message, now)), now, commands);
+                                } else {
+                                    commands.push(Command::Prompt {
+                                        work,
+                                        session,
+                                        prompt,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(error) if matches!(self.work[&id], Work::ModelsReading(_)) => {
+                    let _ = self.quota_signal(&error, now, wall, commands);
+                    self.finish(id, Err(Failure::at(error, now)), now, commands);
+                }
+                Err(error) => {
+                    if let Some((wait, known)) = self.quota_signal(&error, now, wall, commands) {
+                        let pending_model = match &self.work[&id] {
+                            Work::Checking(request) => Some(request.turn.model.clone()),
+                            Work::Retiring(outstanding) => Some(outstanding.model().to_owned()),
+                            _ => None,
+                        };
+                        if known || pending_model.is_some() {
+                            self.finish(
+                                id,
+                                Err(Failure::at(
+                                    self.refusal(now).unwrap_or_else(|| wait.message(now)),
+                                    now,
+                                )),
+                                now,
+                                commands,
+                            );
+                            if !known {
+                                self.enqueue_reset_query(wait, pending_model);
+                            }
+                        } else {
+                            let mut active = self.work.remove(&id).unwrap().into_active().unwrap();
+                            active.quota_settled();
+                            self.enqueue_quota(
+                                QuotaPurpose::Reset {
+                                    wait,
+                                    model: Some(active.model.clone()),
+                                    response: Some(active),
+                                },
+                                None,
+                            );
+                        }
+                    } else {
+                        self.finish(id, Err(Failure::at(error, now)), now, commands);
+                    }
+                }
             }
-            crate::runtime_driver::CommandError::Io(_) => Event::RuntimeFailure,
-            crate::runtime_driver::CommandError::Session(error) => match work {
-                Some(work) => Event::StartFailed(work, error),
-                None => Event::Runtime(RuntimeEvent::Failed(error.to_string())),
-            },
-        };
-        self.handle(event, now, wall)
+        } else if let Ok((session, _)) = result {
+            commands.push(Command::Forget(session));
+        }
     }
 
     pub(super) fn fail_request(

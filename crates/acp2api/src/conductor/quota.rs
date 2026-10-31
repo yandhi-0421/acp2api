@@ -1,6 +1,6 @@
 use super::{
-    Active, Command, Core, Event, Failure, QUOTA_FALLBACK, QuotaResult, SETTLE_DELAY, Work, WorkId,
-    quota,
+    Active, Command, Core, Event, Failure, QUOTA_FALLBACK, QuotaResult, SETTLE_DELAY, Session,
+    Work, WorkId, quota,
 };
 use crate::{
     Moment,
@@ -543,6 +543,50 @@ impl Core {
             self.last_refresh = Some(now);
             self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
         }
+    }
+
+    pub(super) fn start_quota_query(
+        &mut self,
+        id: WorkId,
+        query: QuotaQuery,
+        session: Option<String>,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) -> bool {
+        if let QuotaPurpose::Reset { wait, .. } = &query.purpose
+            && !self.can_query_quota_reset(wait)
+        {
+            let error = self.quota_wait.as_ref().unwrap().message(now);
+            self.complete_quota(query, session, Err(Failure::at(error, now)), now, commands);
+            return false;
+        }
+        let phase = if let Some(session) = session.or_else(|| self.sessions.take_startup()) {
+            commands.push(Command::Usage {
+                work: query.work.clone(),
+                session: session.clone(),
+            });
+            QuotaPhase::Prompt(session)
+        } else {
+            commands.push(Command::Prepare {
+                work: query.work.clone(),
+                settings: Session {
+                    tools: Vec::new(),
+                    system: None,
+                },
+                load: None,
+            });
+            QuotaPhase::Preparing
+        };
+        self.work.insert(
+            id,
+            Work::QuotaWorking {
+                query,
+                phase,
+                text: String::new(),
+                result: Ok(()),
+            },
+        );
+        true
     }
 }
 

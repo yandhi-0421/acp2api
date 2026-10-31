@@ -4,6 +4,7 @@ use super::{
 use crate::{
     Clock, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
+    messages::{Message, OwnerMessage},
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::Runtime,
 };
@@ -467,5 +468,45 @@ impl Core {
             );
         }
         self.catalog = None;
+    }
+
+    pub(super) fn build_change(
+        &mut self,
+        action: crate::runtime_builds::Action,
+        reply: BuildReply,
+    ) {
+        if let Some(evidence) = &self.lockout {
+            let result = if matches!(action, crate::runtime_builds::Action::Initial) {
+                Ok(None)
+            } else {
+                Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
+                    evidence,
+                    &self.panel_address,
+                    false,
+                ))))
+            };
+            let _ = reply.send(result);
+        } else {
+            self.changes.push_back((action, reply));
+        }
+    }
+
+    pub(super) fn sign_in_wait_ended(&mut self) {
+        self.sign_in_wait = None;
+        if matches!(self.runtime_state, RuntimeState::Serving) {
+            self.runtime_state = RuntimeState::Retiring {
+                sign_in_wait_ended: true,
+            };
+            self.replacement.get_or_insert(Replacement::SignIn);
+        }
+    }
+
+    pub(super) fn runtime_ready(&mut self, sign_in_required: bool, commands: &mut Vec<Command>) {
+        self.runtime_state = RuntimeState::Serving;
+        if sign_in_required {
+            self.require_sign_in(commands);
+        } else {
+            self.sign_in_required = false;
+        }
     }
 }

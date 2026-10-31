@@ -1,12 +1,12 @@
 use super::{
-    Accepted, Active, Command, Core, Event, Failure, PendingRequest, QUEUE_CAPACITY, QuotaPhase,
-    QuotaPurpose, ResponseChannel, ResponseMode, RuntimeState, Session, TurnWork, Work, WorkId,
-    keep_alive::KEEP_ALIVE_INTERVAL, records, request, retry, work::ModelRead,
+    Accepted, Active, Command, Core, Event, PendingRequest, QUEUE_CAPACITY, ResponseChannel,
+    ResponseMode, RuntimeState, Session, TurnWork, Work, WorkId, keep_alive::KEEP_ALIVE_INTERVAL,
+    records, request, retry, work::ModelRead,
 };
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest},
-    messages::{Message, OwnerMessage},
+    messages::OwnerMessage,
     runtime_builds::LaunchFailure,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -376,47 +376,9 @@ impl Core {
                     continue;
                 }
                 Work::QuotaQueued { query, session } => {
-                    if let QuotaPurpose::Reset { wait, .. } = &query.purpose
-                        && !self.can_query_quota_reset(wait)
-                    {
-                        let error = self.quota_wait.as_ref().unwrap().message(now);
-                        self.complete_quota(
-                            query,
-                            session,
-                            Err(Failure::at(error, now)),
-                            now,
-                            commands,
-                        );
-                        continue;
+                    if self.start_quota_query(id, query, session, now, commands) {
+                        places += 1;
                     }
-                    let phase =
-                        if let Some(session) = session.or_else(|| self.sessions.take_startup()) {
-                            commands.push(Command::Usage {
-                                work: query.work.clone(),
-                                session: session.clone(),
-                            });
-                            QuotaPhase::Prompt(session)
-                        } else {
-                            commands.push(Command::Prepare {
-                                work: query.work.clone(),
-                                settings: Session {
-                                    tools: Vec::new(),
-                                    system: None,
-                                },
-                                load: None,
-                            });
-                            QuotaPhase::Preparing
-                        };
-                    self.work.insert(
-                        id,
-                        Work::QuotaWorking {
-                            query,
-                            phase,
-                            text: String::new(),
-                            result: Ok(()),
-                        },
-                    );
-                    places += 1;
                     continue;
                 }
                 work => work.into_queued().unwrap(),
@@ -427,93 +389,6 @@ impl Core {
         }
     }
 
-    pub(super) fn runtime_prepared(
-        &mut self,
-        work_id: Option<WorkId>,
-        work: String,
-        result: Result<(String, crate::catalog::Catalog), Message>,
-        now: Moment,
-        wall: std::time::SystemTime,
-        commands: &mut Vec<Command>,
-    ) {
-        if let Some(id) = work_id {
-            match result {
-                Ok((session, catalog)) => {
-                    self.catalog = Some(catalog);
-                    self.sign_in_required = false;
-                    match self.work.get_mut(&id).unwrap() {
-                        Work::ModelsReading(_) => {
-                            commands.extend(self.sessions.models_ready(session));
-                            self.finish(id, Ok(()), now, commands);
-                        }
-                        Work::Checking(_) => {
-                            commands.push(Command::AdmitChecked { id, session });
-                        }
-                        Work::Retiring(outstanding) => {
-                            outstanding.prepared(session);
-                            self.finish(id, Ok(()), now, commands);
-                        }
-                        entry => {
-                            let active = entry.execution_mut().unwrap();
-                            if let Some(prompt) = active.prepared(session.clone(), now) {
-                                if let Some(message) = self.refusal(now) {
-                                    self.finish(id, Err(Failure::at(message, now)), now, commands);
-                                } else {
-                                    commands.push(Command::Prompt {
-                                        work,
-                                        session,
-                                        prompt,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(error) if matches!(self.work[&id], Work::ModelsReading(_)) => {
-                    let _ = self.quota_signal(&error, now, wall, commands);
-                    self.finish(id, Err(Failure::at(error, now)), now, commands);
-                }
-                Err(error) => {
-                    if let Some((wait, known)) = self.quota_signal(&error, now, wall, commands) {
-                        let pending_model = match &self.work[&id] {
-                            Work::Checking(request) => Some(request.turn.model.clone()),
-                            Work::Retiring(outstanding) => Some(outstanding.model().to_owned()),
-                            _ => None,
-                        };
-                        if known || pending_model.is_some() {
-                            self.finish(
-                                id,
-                                Err(Failure::at(
-                                    self.refusal(now).unwrap_or_else(|| wait.message(now)),
-                                    now,
-                                )),
-                                now,
-                                commands,
-                            );
-                            if !known {
-                                self.enqueue_reset_query(wait, pending_model);
-                            }
-                        } else {
-                            let mut active = self.work.remove(&id).unwrap().into_active().unwrap();
-                            active.quota_settled();
-                            self.enqueue_quota(
-                                QuotaPurpose::Reset {
-                                    wait,
-                                    model: Some(active.model.clone()),
-                                    response: Some(active),
-                                },
-                                None,
-                            );
-                        }
-                    } else {
-                        self.finish(id, Err(Failure::at(error, now)), now, commands);
-                    }
-                }
-            }
-        } else if let Ok((session, _)) = result {
-            commands.push(Command::Forget(session));
-        }
-    }
     pub(super) fn read_model_names(&mut self, reply: oneshot::Sender<Result<(), OwnerMessage>>) {
         if self.catalog.is_some() || !self.model_names.is_empty() {
             let _ = reply.send(Ok(()));

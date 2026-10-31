@@ -171,25 +171,4 @@ impl Core {
                 }),
         );
     }
-
-    pub(super) fn build_change(
-        &mut self,
-        action: crate::runtime_builds::Action,
-        reply: BuildReply,
-    ) {
-        if let Some(evidence) = &self.lockout {
-            let result = if matches!(action, crate::runtime_builds::Action::Initial) {
-                Ok(None)
-            } else {
-                Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
-                    evidence,
-                    &self.panel_address,
-                    false,
-                ))))
-            };
-            let _ = reply.send(result);
-        } else {
-            self.changes.push_back((action, reply));
-        }
-    }
 }

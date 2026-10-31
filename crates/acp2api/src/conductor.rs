@@ -417,15 +417,7 @@ impl Core {
                 self.sign_in_wait = Some(sign_in::Wait::new(now));
                 commands.push(Command::Authenticate);
             }
-            (None, Event::EndSignInWait) => {
-                self.sign_in_wait = None;
-                if matches!(self.runtime_state, RuntimeState::Serving) {
-                    self.runtime_state = RuntimeState::Retiring {
-                        sign_in_wait_ended: true,
-                    };
-                    self.replacement.get_or_insert(Replacement::SignIn);
-                }
-            }
+            (None, Event::EndSignInWait) => self.sign_in_wait_ended(),
             (None, Event::Runtime(RuntimeEvent::SignInAddress(address))) => {
                 if let Some(wait) = &mut self.sign_in_wait {
                     wait.address = Some(address);
@@ -438,12 +430,7 @@ impl Core {
                 }
             }
             (None, Event::RuntimeReady { sign_in_required }) => {
-                self.runtime_state = RuntimeState::Serving;
-                if sign_in_required {
-                    self.require_sign_in(&mut commands);
-                } else {
-                    self.sign_in_required = false;
-                }
+                self.runtime_ready(sign_in_required, &mut commands);
             }
             (Some(id), event) => {
                 self.quota_event(id, event, upstream_error, now, wall, &mut commands)

@@ -3,11 +3,11 @@ use super::{
     WorkId, lockout,
 };
 use crate::{
-    Clock, HoldKind,
+    Clock, HoldKind, Moment,
     conversation::{PromptRequest, TurnEvent},
     messages::OwnerMessage,
     runtime_builds::LaunchFailure,
-    runtime_driver::Runtime,
+    runtime_driver::{Runtime, RuntimeEvent},
 };
 use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 use tokio::sync::oneshot;
@@ -243,4 +243,31 @@ fn readable(
         .ok_or(crate::runtime_driver::CommandError::Session(
             crate::messages::Message::RuntimeNotAvailable,
         ))
+}
+
+impl Core {
+    pub(super) fn command_failed(
+        &mut self,
+        work: Option<String>,
+        error: crate::runtime_driver::CommandError,
+        now: Moment,
+        wall: std::time::SystemTime,
+    ) -> Vec<Command> {
+        if self.lockout.is_some() || matches!(self.runtime_state, RuntimeState::Restarting) {
+            return Vec::new();
+        }
+        let event = match error {
+            crate::runtime_driver::CommandError::Io(_)
+                if matches!(self.runtime_state, RuntimeState::Stopping) =>
+            {
+                Event::Stop
+            }
+            crate::runtime_driver::CommandError::Io(_) => Event::RuntimeFailure,
+            crate::runtime_driver::CommandError::Session(error) => match work {
+                Some(work) => Event::StartFailed(work, error),
+                None => Event::Runtime(RuntimeEvent::Failed(error.to_string())),
+            },
+        };
+        self.handle(event, now, wall)
+    }
 }
