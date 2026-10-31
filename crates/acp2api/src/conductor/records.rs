@@ -339,6 +339,15 @@ fn select<'a>(
 mod tests {
     use super::*;
     use crate::conversation::{Conversation, Part, Role};
+
+    fn chat_turn(body: serde_json::Value) -> crate::conversation::TurnRequest {
+        crate::dialect::CHAT
+            .parse(&serde_json::to_vec(&body).unwrap())
+            .ok()
+            .unwrap()
+            .turn
+    }
+
     #[test]
     fn longest_record_precedes_recency() {
         fn user(text: &str) -> Item {
@@ -405,14 +414,7 @@ mod tests {
 
     #[test]
     fn the_session_used_last_continues_among_records_of_the_same_length() {
-        let parse = |body| {
-            crate::dialect::CHAT
-                .parse(&serde_json::to_vec(&body).unwrap())
-                .ok()
-                .unwrap()
-                .turn
-        };
-        let first_turn = parse(serde_json::json!({
+        let first_turn = chat_turn(serde_json::json!({
             "model": "m",
             "messages": [{"role": "user", "content": "A"}]
         }));
@@ -428,7 +430,7 @@ mod tests {
             "used-first".into(),
             Some(used_first.record.with_reply("R", None)),
         );
-        let next_turn = parse(serde_json::json!({
+        let next_turn = chat_turn(serde_json::json!({
             "model": "m",
             "messages": [
                 {"role": "user", "content": "A"},
@@ -441,6 +443,57 @@ mod tests {
             selection.ready.map(|(session, _)| session).as_deref(),
             Some("used-last"),
             "ADR-0003 the ACP session used last wins among records of the same length"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_startup_session_is_not_used_again() {
+        for (forgotten, expected) in [("other", Some("startup")), ("startup", None)] {
+            let turn = chat_turn(
+                serde_json::json!({"model":"m","messages":[{"role":"user","content":"A"}]}),
+            );
+            let settings = Session::for_turn(&turn);
+            let mut sessions = AcpSessions::fixture(Vec::new(), Some("startup".into()), 0);
+            sessions.forget(forgotten.into());
+            let (selection, _) = sessions.select(&turn, &settings, None, 0);
+            assert_eq!(
+                selection.ready.map(|(session, _)| session).as_deref(),
+                expected,
+                "a forget of {forgotten}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_checked_session_is_forgotten_when_a_record_continues_the_request() {
+        let first_turn = chat_turn(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "A"}]
+        }));
+        let settings = Session::for_turn(&first_turn);
+        let mut sessions = AcpSessions::default();
+        let (selection, _) = sessions.select(&first_turn, &settings, None, 0);
+        sessions.keep(
+            "recorded".into(),
+            Some(selection.record.with_reply("R", None)),
+        );
+        let next_turn = chat_turn(serde_json::json!({
+            "model": "m",
+            "messages": [
+                {"role": "user", "content": "A"},
+                {"role": "assistant", "content": "R"},
+                {"role": "user", "content": "B"}
+            ]
+        }));
+        let (selection, commands) =
+            sessions.select(&next_turn, &settings, Some("checked".into()), 0);
+        assert_eq!(
+            selection.ready.map(|(session, _)| session).as_deref(),
+            Some("recorded")
+        );
+        assert!(
+            matches!(&commands[..], [Command::Forget(session)] if session == "checked"),
+            "the unused checked session is forgotten"
         );
     }
 }
