@@ -466,7 +466,12 @@ impl Core {
                 RuntimeState::Unavailable(reason) => reason.cause,
                 _ => None,
             };
-            commands.insert(0, Command::State(self.state(), cause));
+            let notice = if self.state() == State::Lockout {
+                self.lockout_notice()
+            } else {
+                None
+            };
+            commands.insert(0, Command::State(self.state(), cause, notice));
         }
         self.publish_view();
         commands
@@ -545,7 +550,12 @@ impl Conductor {
             };
             let mut read_open = false;
             core.publish_view();
-            journal.state(core.state().name(), None, clock.as_ref());
+            journal.state(
+                core.state().name(),
+                None,
+                core.lockout_notice(),
+                clock.as_ref(),
+            );
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {

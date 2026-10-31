@@ -600,7 +600,7 @@ fn lockout_records_state_and_cancels_and_persists_before_any_response_ends() {
     );
     let state = commands
         .iter()
-        .position(|command| matches!(command, Command::State(State::Lockout, _)))
+        .position(|command| matches!(command, Command::State(State::Lockout, ..)))
         .unwrap();
     let cancel = commands
         .iter()
@@ -616,7 +616,7 @@ fn lockout_records_state_and_cancels_and_persists_before_any_response_ends() {
         .unwrap();
     let state_notices = commands
         .iter()
-        .filter(|command| matches!(command, Command::State(State::Lockout, _)))
+        .filter(|command| matches!(command, Command::State(State::Lockout, ..)))
         .count();
     std::fs::remove_dir_all(folder).unwrap();
     assert_eq!(state_notices, 1);

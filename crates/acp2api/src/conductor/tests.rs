@@ -144,7 +144,7 @@ fn quota_expiry_on_an_owner_event_keeps_runtime_unavailable_and_reports_state_ch
     let states: Vec<_> = commands
         .into_iter()
         .filter_map(|command| match command {
-            Command::State(state, _) => Some(state),
+            Command::State(state, ..) => Some(state),
             _ => None,
         })
         .collect();

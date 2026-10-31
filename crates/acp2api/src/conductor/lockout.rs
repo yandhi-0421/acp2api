@@ -58,6 +58,12 @@ pub(super) fn persist(path: &Path, evidence: Lockout, journal: &Journal, clock: 
 }
 
 impl Core {
+    pub(super) fn lockout_notice(&self) -> Option<String> {
+        self.lockout
+            .as_ref()
+            .map(|evidence| Message::lockout(evidence, &self.panel_address, false).to_string())
+    }
+
     pub(super) fn upstream_error(
         &mut self,
         event: &mut Event,

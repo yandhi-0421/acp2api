@@ -390,6 +390,7 @@ impl Journal {
         &self,
         state: &str,
         cause: Option<io::ErrorKind>,
+        notice: Option<String>,
         clock: &dyn crate::Clock,
     ) {
         let result = timestamp(clock.wall()).and_then(|time| {
@@ -400,7 +401,10 @@ impl Journal {
                     record["cause"] = serde_json::json!(cause);
                     format!("{time} state {state}: {cause}")
                 }
-                None => format!("{time} state {state}"),
+                None => match notice {
+                    Some(notice) => format!("{time} state {state}: {notice}"),
+                    None => format!("{time} state {state}"),
+                },
             };
             self.emit_to_file_then_stdout_under_writer_lock(&record, terminal)
         });
