@@ -17,7 +17,7 @@ use agent_client_protocol_schema::v1::StopReason;
 use keep_alive::KEEP_ALIVE_INTERVAL;
 pub(crate) use keep_alive::NO_UPDATE_LIMIT;
 use records::{OutstandingWork, PendingCompletion};
-use request::{Active, Failure, Phase};
+use request::{Active, Failure};
 pub(crate) use retry::WAIT_SECONDS;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -1529,11 +1529,7 @@ impl Core {
                                 } else {
                                     let mut active =
                                         self.work.remove(&id).unwrap().into_active().unwrap();
-                                    active.phase = Phase::Settling {
-                                        at: now,
-                                        can_continue: false,
-                                        result: Ok(()),
-                                    };
+                                    active.hold_for_quota_query();
                                     self.enqueue_quota(
                                         QuotaPurpose::Reset {
                                             wait,
@@ -2357,8 +2353,7 @@ impl Core {
     }
     /// A request that leaves a quota wait without its usage check hands the reset query on.
     fn keep_quota_wait_reset_query(&mut self, active: &Active) {
-        if let Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } =
-            &active.phase
+        if let Some(wait) = active.quota_wait()
             && self.is_current_quota_wait(wait)
         {
             self.enqueue_reset_query(wait.clone(), Some(active.model.clone()));
@@ -2416,35 +2411,28 @@ impl Core {
             Work::Retiring(outstanding) => commands.extend(outstanding.finish()),
             work => {
                 let mut active = work.into_active().unwrap();
-                let result = match std::mem::replace(&mut active.phase, Phase::Completing) {
-                    Phase::QuotaSettling { wait, .. } if result.is_ok() => {
-                        if self.can_query_quota_reset(&wait) {
-                            let session = active.session.clone();
-                            active.phase = Phase::Settling {
-                                at: 0,
-                                can_continue: false,
-                                result: Ok(()),
-                            };
-                            self.enqueue_quota(
-                                QuotaPurpose::Reset {
-                                    wait,
-                                    model: Some(active.model.clone()),
-                                    response: Some(active),
-                                },
-                                session,
-                            );
-                            return;
-                        }
-                        Err(Failure::at(
-                            self.refusal(now).unwrap_or_else(|| wait.message(now)),
-                            now,
-                        ))
+                let mut result = result;
+                if result.is_ok()
+                    && let Some(wait) = active.take_quota_settlement()
+                {
+                    if self.can_query_quota_reset(&wait) {
+                        let session = active.session.clone();
+                        active.hold_for_quota_query();
+                        self.enqueue_quota(
+                            QuotaPurpose::Reset {
+                                wait,
+                                model: Some(active.model.clone()),
+                                response: Some(active),
+                            },
+                            session,
+                        );
+                        return;
                     }
-                    phase => {
-                        active.phase = phase;
-                        result
-                    }
-                };
+                    result = Err(Failure::at(
+                        self.refusal(now).unwrap_or_else(|| wait.message(now)),
+                        now,
+                    ));
+                }
                 if result.is_ok() && matches!(active.stop, crate::conversation::Stop::Refusal) {
                     let model = active.model.clone();
                     let session = active.session.clone();

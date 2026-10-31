@@ -388,4 +388,28 @@ impl Active {
             _ => None,
         }
     }
+    /// Takes the quota wait of a prompt turn that ended while its quota signal settles.
+    pub(super) fn take_quota_settlement(&mut self) -> Option<quota::Wait> {
+        match std::mem::replace(&mut self.phase, Phase::Completing) {
+            Phase::QuotaSettling { wait, .. } => Some(wait),
+            phase => {
+                self.phase = phase;
+                None
+            }
+        }
+    }
+    /// The request has no pending error while it waits for its quota query.
+    pub(super) fn hold_for_quota_query(&mut self) {
+        self.phase = Phase::Settling {
+            at: 0,
+            can_continue: false,
+            result: Ok(()),
+        };
+    }
+    pub(super) fn quota_wait(&self) -> Option<&quota::Wait> {
+        match &self.phase {
+            Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } => Some(wait),
+            _ => None,
+        }
+    }
 }
