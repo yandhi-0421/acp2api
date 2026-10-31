@@ -402,4 +402,45 @@ mod tests {
             "FR-041 the first cancel sets the 30 s deadline"
         );
     }
+
+    #[test]
+    fn the_session_used_last_continues_among_records_of_the_same_length() {
+        let parse = |body| {
+            crate::dialect::CHAT
+                .parse(&serde_json::to_vec(&body).unwrap())
+                .ok()
+                .unwrap()
+                .turn
+        };
+        let first_turn = parse(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "A"}]
+        }));
+        let settings = Session::for_turn(&first_turn);
+        let mut sessions = AcpSessions::default();
+        let (used_first, _) = sessions.select(&first_turn, &settings, None, 0);
+        let (used_last, _) = sessions.select(&first_turn, &settings, None, 0);
+        sessions.keep(
+            "used-last".into(),
+            Some(used_last.record.with_reply("R", None)),
+        );
+        sessions.keep(
+            "used-first".into(),
+            Some(used_first.record.with_reply("R", None)),
+        );
+        let next_turn = parse(serde_json::json!({
+            "model": "m",
+            "messages": [
+                {"role": "user", "content": "A"},
+                {"role": "assistant", "content": "R"},
+                {"role": "user", "content": "B"}
+            ]
+        }));
+        let (selection, _) = sessions.select(&next_turn, &settings, None, 0);
+        assert_eq!(
+            selection.ready.map(|(session, _)| session).as_deref(),
+            Some("used-last"),
+            "ADR-0003 the ACP session used last wins among records of the same length"
+        );
+    }
 }
