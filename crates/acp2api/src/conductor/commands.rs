@@ -20,6 +20,7 @@ pub(super) enum Command {
     },
     Authenticate,
     Lockout(crate::store::Lockout),
+    ClearLockout(oneshot::Sender<Result<(), OwnerMessage>>),
     RefuseBuildChange {
         reply: BuildReply,
         error: crate::messages::Message,
@@ -83,6 +84,10 @@ impl Conductor {
                     core.stop_runtime(runtime, read_open).await;
                     core.lifecycle.lockout_stopped();
                     core.publish_view();
+                }
+                Command::ClearLockout(reply) => {
+                    lockout::clear(&core.state_path, journal, clock.as_ref());
+                    let _ = reply.send(Ok(()));
                 }
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {

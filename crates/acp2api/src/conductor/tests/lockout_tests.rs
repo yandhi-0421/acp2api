@@ -807,3 +807,58 @@ async fn a_failed_check_reply_signals_lockout_without_persisting_private_text() 
         "acp2api: upstream error 503 UNAVAILABLE: Service unavailable",
     ).await;
 }
+
+#[test]
+fn the_end_of_a_lockout_restarts_the_runtime_and_clears_the_file() {
+    let folder = std::env::temp_dir().join(format!(
+        "acp2api-end-lockout-{}",
+        crate::random_hex::<12>().unwrap()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let state_path = folder.join(crate::store::STATE_FILE);
+    let clock = crate::Ports::production().clock;
+    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+
+    let hash = "a".repeat(64);
+    let saved = serde_json::json!({
+        "format": 1,
+        "lockout": {
+            "since": "2026-10-18T12:00:00Z",
+            "signal": "403",
+            "original_error_text": "Account suspended",
+        },
+        "checked_builds": [{
+            "version": "1.6.0",
+            "platform": "macos-arm64",
+            "agy_acp_server_sha256": hash,
+            "localharness_external_sha256": hash,
+            "checked_at": "2026-10-18T12:00:00Z",
+        }]
+    });
+    std::fs::write(&state_path, saved.to_string()).unwrap();
+
+    let evidence = lockout::load(&state_path, clock.as_ref(), &journal).unwrap();
+    let mut core = Core {
+        state_path: state_path.clone(),
+        lockout: Some(evidence),
+        lifecycle: Lifecycle::new(RuntimeState::Stopped),
+        ..Core::fixture(1)
+    };
+
+    let commands = core.handle(Event::EndLockout, 0, std::time::UNIX_EPOCH);
+    assert_eq!(core.state(), State::Running);
+    assert!(matches!(core.lifecycle.state(), RuntimeState::Restarting));
+    assert!(
+        commands
+            .iter()
+            .any(|command| matches!(command, Command::State(State::Running, ..)))
+    );
+
+    lockout::clear(&state_path, &journal, clock.as_ref());
+    let state = crate::store::StateFile::read(&state_path).unwrap();
+    assert!(state.lockout.is_none());
+    assert_eq!(state.checked_builds.len(), 1);
+    assert_eq!(state.checked_builds[0].build.version, "1.6.0");
+
+    std::fs::remove_dir_all(folder).unwrap();
+}

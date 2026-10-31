@@ -98,6 +98,10 @@ impl Lifecycle {
         self.state = RuntimeState::Stopped;
     }
 
+    pub(super) fn lockout_ended(&mut self) {
+        self.state = RuntimeState::Restarting;
+    }
+
     pub(super) fn refuse_build_changes(
         &mut self,
         message: &crate::messages::Message,

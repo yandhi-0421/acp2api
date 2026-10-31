@@ -88,6 +88,8 @@ impl Default for View {
     }
 }
 pub(crate) enum OwnerAction {
+    #[allow(dead_code)]
+    EndLockout,
     SignIn,
     CancelSignIn,
     RefreshQuota,
@@ -159,6 +161,7 @@ enum Event {
         error: crate::messages::Message,
         signalling_work: Option<WorkId>,
     },
+    EndLockout,
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -231,6 +234,15 @@ impl Core {
     ) -> Vec<Command> {
         let mut changed = (**settings.borrow()).clone();
         let change = match action {
+            OwnerAction::EndLockout => {
+                if self.lockout.is_none() {
+                    let _ = reply.send(Ok(()));
+                    return Vec::new();
+                }
+                let mut commands = self.handle(Event::EndLockout, clock.now(), clock.wall());
+                commands.push(Command::ClearLockout(reply));
+                return commands;
+            }
             OwnerAction::SignIn => {
                 if self.lockout.is_some()
                     || self.sign_in.wait().is_some()
@@ -343,6 +355,7 @@ impl Core {
             ) => {
                 self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
             }
+            (None, Event::EndLockout) => self.end_lockout(),
             (None, Event::CheckPending(request)) => {
                 self.work.add(Work::CheckQueued(*request));
             }
