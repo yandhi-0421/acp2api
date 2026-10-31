@@ -394,7 +394,7 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
             std::time::UNIX_EPOCH,
         );
         assert_eq!(
-            core.quota_wait.as_ref().unwrap().deadline,
+            core.quota.wait().unwrap().deadline,
             3_600_000,
             "FR-036 no reset time uses the 60-minute fallback"
         );

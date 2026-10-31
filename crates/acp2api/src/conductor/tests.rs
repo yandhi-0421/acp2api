@@ -14,10 +14,8 @@ impl Core {
     fn fixture(limit: u8) -> Self {
         Self {
             quota_result: watch::channel(Arc::new(None)).0,
-            last_refresh: None,
-            quota_wait: None,
+            quota: quota::QuotaState::default(),
             retry_waits: Vec::new(),
-            next_quota: quota::TimerId::default(),
             lifecycle: Lifecycle::new(RuntimeState::Serving),
             lockout: None,
             sign_in_required: false,
@@ -994,6 +992,6 @@ fn a_successful_sign_in_ends_only_its_own_condition() {
         State::RuntimeUnavailable,
         "sign-in cannot clear runtime unavailability"
     );
-    assert_eq!(core.quota_wait.as_ref().unwrap().deadline, 120_000);
+    assert_eq!(core.quota.wait().unwrap().deadline, 120_000);
     std::fs::remove_dir_all(folder).unwrap();
 }

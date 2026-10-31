@@ -28,8 +28,8 @@ impl Core {
         if self.sign_in_required {
             return Some(self.sign_in_message());
         }
-        self.quota_wait
-            .as_ref()
+        self.quota
+            .wait()
             .filter(|wait| wait.deadline > now)
             .map(|wait| wait.message(now))
     }
@@ -344,7 +344,9 @@ impl Core {
                 Work::ModelsQueued(_) => Some(*id),
                 Work::CheckQueued(_) => Some(*id),
                 Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
-                Work::AcceptedQueued(_) if !self.sign_in_required && self.quota_wait.is_none() => {
+                Work::AcceptedQueued(_)
+                    if !self.sign_in_required && self.quota.wait().is_none() =>
+                {
                     Some(*id)
                 }
                 _ => None,

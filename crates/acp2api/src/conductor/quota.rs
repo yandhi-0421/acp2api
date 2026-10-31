@@ -93,6 +93,23 @@ impl Wait {
     }
 }
 
+#[derive(Default)]
+pub(super) struct QuotaState {
+    wait: Option<Wait>,
+    last_refresh: Option<Moment>,
+    next_timer: TimerId,
+}
+impl QuotaState {
+    pub(super) fn wait(&self) -> Option<&Wait> {
+        self.wait.as_ref()
+    }
+    pub(super) fn expire(&mut self, now: Moment) {
+        if self.wait.as_ref().is_some_and(|wait| wait.deadline <= now) {
+            self.wait = None;
+        }
+    }
+}
+
 pub(super) fn reset_time(text: &str, wall: SystemTime) -> Option<SystemTime> {
     let (_, reset) = text.split_once("resets ")?;
     rfc3339(
@@ -274,12 +291,13 @@ impl Core {
         commands: &mut Vec<Command>,
     ) -> quota::Wait {
         let started = self
-            .quota_wait
+            .quota
+            .wait
             .as_ref()
             .is_none_or(|wait| wait.deadline <= now);
-        self.next_quota.0 += 1;
-        let wait = quota::Wait::new(until, now, wall, self.next_quota);
-        self.quota_wait = Some(wait.clone());
+        self.quota.next_timer.0 += 1;
+        let wait = quota::Wait::new(until, now, wall, self.quota.next_timer);
+        self.quota.wait = Some(wait.clone());
         if started {
             let message = self.refusal(now).unwrap_or_else(|| wait.message(now));
             self.refuse_queued(
@@ -436,7 +454,7 @@ impl Core {
                 {
                     *wait = quota::Wait::new(until, now, wall, wait.timer);
                     if self.is_current_quota_wait(wait) {
-                        self.quota_wait = Some(wait.clone());
+                        self.quota.wait = Some(wait.clone());
                     }
                 }
                 Err(self.refusal(now).unwrap_or_else(|| wait.message(now)))
@@ -500,12 +518,13 @@ impl Core {
         }
     }
     fn is_current_quota_wait(&self, wait: &quota::Wait) -> bool {
-        self.quota_wait
+        self.quota
+            .wait
             .as_ref()
             .is_some_and(|current| current.timer == wait.timer)
     }
     pub(super) fn can_query_quota_reset(&self, wait: &quota::Wait) -> bool {
-        self.quota_wait.is_none() || self.is_current_quota_wait(wait)
+        self.quota.wait.is_none() || self.is_current_quota_wait(wait)
     }
     /// A request that leaves a quota wait without its usage check hands the reset query on.
     pub(super) fn keep_quota_wait_reset_query(&mut self, active: &Active) {
@@ -527,6 +546,7 @@ impl Core {
                 if self.sign_in_required {
                     Some(OwnerMessage::Api(self.sign_in_message()))
                 } else if self
+                    .quota
                     .last_refresh
                     .is_some_and(|at| now.saturating_sub(at) < 60_000)
                 {
@@ -540,7 +560,7 @@ impl Core {
         if let Some(error) = error {
             let _ = reply.send(Err(error));
         } else {
-            self.last_refresh = Some(now);
+            self.quota.last_refresh = Some(now);
             self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
         }
     }
@@ -556,7 +576,7 @@ impl Core {
         if let QuotaPurpose::Reset { wait, .. } = &query.purpose
             && !self.can_query_quota_reset(wait)
         {
-            let error = self.quota_wait.as_ref().unwrap().message(now);
+            let error = self.quota.wait.as_ref().unwrap().message(now);
             self.complete_quota(query, session, Err(Failure::at(error, now)), now, commands);
             return false;
         }

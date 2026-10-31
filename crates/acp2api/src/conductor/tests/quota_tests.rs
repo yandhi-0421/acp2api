@@ -16,7 +16,7 @@ fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
         60_000,
         std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_000),
     );
-    assert_eq!(core.quota_wait.as_ref().unwrap().deadline, 3_660_000);
+    assert_eq!(core.quota.wait().unwrap().deadline, 3_660_000);
     let ended = core.handle(
         Event::Runtime(RuntimeEvent::UpstreamError {
             session: "running".into(),
@@ -29,7 +29,7 @@ fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
         60_001,
         std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_001),
     );
-    assert_eq!(core.quota_wait.as_ref().unwrap().deadline, 120_000);
+    assert_eq!(core.quota.wait().unwrap().deadline, 120_000);
     assert_eq!(
         ended
             .iter()
@@ -137,7 +137,7 @@ fn a_request_settling_after_its_quota_wait_was_replaced_ends_with_the_current_qu
         );
         let refusal = core.model_entries(60_200).err().unwrap();
         assert_eq!(crate::dialect::CHAT.refusal(&refusal).status(), 429);
-        assert_eq!(core.quota_wait.as_ref().unwrap().deadline, deadline);
+        assert_eq!(core.quota.wait().unwrap().deadline, deadline);
         core.handle(
             Event::Runtime(RuntimeEvent::Turn {
                 session: "other".into(),
@@ -634,7 +634,7 @@ fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
         60_000,
         std::time::UNIX_EPOCH,
     );
-    let timer = core.quota_wait.as_ref().unwrap().timer;
+    let timer = core.quota.wait().unwrap().timer;
     let cancelled = core.handle(Event::Deadline, 300_000, std::time::UNIX_EPOCH);
     assert!(
         cancelled
@@ -695,7 +695,7 @@ fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
         300_202,
         std::time::UNIX_EPOCH + std::time::Duration::from_millis(300_202),
     ));
-    let wait = core.quota_wait.as_ref().unwrap();
+    let wait = core.quota.wait().unwrap();
     assert!(
         wait.timer == timer,
         "the reset result belongs to the original quota wait"

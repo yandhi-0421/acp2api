@@ -157,10 +157,8 @@ struct Core {
     state_path: PathBuf,
     view: watch::Sender<Arc<View>>,
     quota_result: watch::Sender<Arc<Option<QuotaResult>>>,
-    last_refresh: Option<Moment>,
-    quota_wait: Option<quota::Wait>,
+    quota: quota::QuotaState,
     retry_waits: Vec<retry::Wait>,
-    next_quota: quota::TimerId,
     lifecycle: Lifecycle,
     catalog: Option<crate::catalog::Catalog>,
     model_names: Vec<String>,
@@ -211,7 +209,7 @@ impl Core {
             State::RuntimeUnavailable
         } else if self.sign_in_required {
             State::SignInRequired
-        } else if self.quota_wait.is_some() {
+        } else if self.quota.wait().is_some() {
             State::QuotaWait
         } else {
             State::Running
@@ -256,7 +254,7 @@ impl Core {
             .values()
             .filter_map(Work::deadline)
             .chain(self.sessions.next_deadline())
-            .chain(self.quota_wait.as_ref().map(|wait| wait.deadline))
+            .chain(self.quota.wait().map(|wait| wait.deadline))
             .chain(self.sign_in_wait.as_ref().map(|wait| wait.deadline))
             .chain(self.retry_waits.iter().map(|wait| wait.deadline))
             .min()
@@ -350,13 +348,7 @@ impl Core {
         let mut commands = Vec::new();
         let upstream_error = self.upstream_error(&mut event, now, &mut commands);
         self.retry_waits.retain(|wait| wait.deadline > now);
-        if self
-            .quota_wait
-            .as_ref()
-            .is_some_and(|wait| wait.deadline <= now)
-        {
-            self.quota_wait = None;
-        }
+        self.quota.expire(now);
         let work_id = match &event {
             Event::StartFailed(work, _) | Event::Runtime(RuntimeEvent::Prepared { work, .. }) => {
                 self.by_request(work)
@@ -611,10 +603,8 @@ impl Conductor {
             let mut runtime: Option<Runtime> = None;
             let mut core = Core {
                 quota_result,
-                last_refresh: None,
-                quota_wait: None,
+                quota: quota::QuotaState::default(),
                 retry_waits: Vec::new(),
-                next_quota: quota::TimerId::default(),
                 lifecycle: Lifecycle::new(if lockout.is_some() {
                     RuntimeState::Stopped
                 } else {
