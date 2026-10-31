@@ -299,4 +299,23 @@ impl Active {
         }
         cancel
     }
+
+    pub(super) fn quota_signal(&mut self, wait: quota::Wait) {
+        self.phase = match self.phase {
+            Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. } => {
+                Phase::QuotaSettling { at, wait }
+            }
+            _ => Phase::AwaitingQuotaEnd {
+                wait,
+                update_deadline: self.phase.update_deadline(),
+            },
+        };
+    }
+
+    pub(super) fn quota_failure(&mut self, wait: quota::Wait, now: Moment) {
+        self.phase = Phase::QuotaSettling {
+            at: now.saturating_add(SETTLE_DELAY),
+            wait,
+        };
+    }
 }

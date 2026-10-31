@@ -1592,16 +1592,7 @@ impl Core {
                                     &mut commands,
                                 );
                             } else {
-                                active.phase = match active.phase {
-                                    Phase::Settling { at, .. }
-                                    | Phase::QuotaSettling { at, .. } => {
-                                        Phase::QuotaSettling { at, wait }
-                                    }
-                                    _ => Phase::AwaitingQuotaEnd {
-                                        wait,
-                                        update_deadline: active.phase.update_deadline(),
-                                    },
-                                };
+                                active.quota_signal(wait);
                             }
                         } else if !known {
                             let Work::Retiring(outstanding) = &self.work[&id] else {
@@ -2195,10 +2186,7 @@ impl Core {
                     .unwrap()
                     .execution_mut()
                     .unwrap()
-                    .phase = Phase::QuotaSettling {
-                    at: now.saturating_add(SETTLE_DELAY),
-                    wait,
-                };
+                    .quota_failure(wait, now);
             }
             return;
         }
