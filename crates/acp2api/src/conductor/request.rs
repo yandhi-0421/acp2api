@@ -1,6 +1,7 @@
+use super::quota::{QuotaPhase, QuotaPurpose};
+use super::work::ResponseChannel;
 use super::{
-    Command, Core, NO_UPDATE_LIMIT, Notice, QuotaPhase, QuotaPurpose, ResponseChannel,
-    SETTLE_DELAY, StopReason, Work, WorkId, quota, records,
+    Command, Core, NO_UPDATE_LIMIT, Notice, SETTLE_DELAY, Work, WorkId, quota, records,
     records::{OutstandingWork, PendingCompletion},
     retry,
 };
@@ -10,6 +11,7 @@ use crate::{
     messages::{Message, OwnerMessage},
     runtime_driver::TurnUpdate,
 };
+use agent_client_protocol_schema::v1::StopReason;
 use std::sync::Arc;
 
 enum Phase {
@@ -68,7 +70,7 @@ pub(super) enum Start {
 }
 
 #[must_use]
-pub(super) enum UpdateRoute {
+enum UpdateRoute {
     Reply,
     QuotaSettlement,
 }
@@ -79,7 +81,7 @@ pub(super) enum PromptTurnAction {
     Cancel,
 }
 
-pub(super) enum PromptTurnEnd {
+enum PromptTurnEnd {
     Prompt(Option<StopReason>),
     Failed(crate::messages::Message),
 }
@@ -198,7 +200,7 @@ impl Active {
     }
 
     /// Resets the no-update deadline. A quota phase ignores the reply content of the update.
-    pub(super) fn update_received(&mut self, now: Moment) -> UpdateRoute {
+    fn update_received(&mut self, now: Moment) -> UpdateRoute {
         match &mut self.phase {
             Phase::Prompt { .. } => self.phase = Phase::prompt(now),
             Phase::AwaitingQuotaEnd {
@@ -233,11 +235,11 @@ impl Active {
         }
     }
 
-    pub(super) fn usage_received(&mut self, used: u64) {
+    fn usage_received(&mut self, used: u64) {
         self.input_tokens = used;
     }
 
-    pub(super) fn thought_dropped(&mut self) -> Option<Command> {
+    fn thought_dropped(&mut self) -> Option<Command> {
         if self.thought_dropped {
             return None;
         }
@@ -261,7 +263,7 @@ impl Active {
         }
     }
 
-    pub(super) fn prompt_turn_ended(&mut self, end: PromptTurnEnd, now: Moment) {
+    fn prompt_turn_ended(&mut self, end: PromptTurnEnd, now: Moment) {
         match &self.phase {
             Phase::AwaitingQuotaEnd { wait, .. } => {
                 self.phase = Phase::QuotaSettling {
@@ -294,7 +296,7 @@ impl Active {
         };
     }
 
-    pub(super) fn quota_failure(&mut self, wait: quota::Wait, now: Moment) {
+    fn quota_failure(&mut self, wait: quota::Wait, now: Moment) {
         self.phase = Phase::QuotaSettling {
             at: now.saturating_add(SETTLE_DELAY),
             wait,
@@ -757,7 +759,7 @@ impl Core {
         self.end_request(id, Failure::at(error, now), now, commands);
     }
 
-    pub(super) fn end_request(
+    fn end_request(
         &mut self,
         id: WorkId,
         error: Failure,

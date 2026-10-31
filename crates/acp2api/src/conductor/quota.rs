@@ -1,6 +1,6 @@
 use super::{
-    Active, Command, Core, Event, Failure, QUOTA_FALLBACK, QuotaResult, SETTLE_DELAY, Session,
-    Work, WorkId, quota,
+    Command, Core, Event, Failure, QuotaResult, SETTLE_DELAY, Work, WorkId, request::Active,
+    work::Session,
 };
 use crate::{
     Moment,
@@ -11,12 +11,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
-pub(super) fn has_quota(text: &str, model: &str) -> bool {
+const QUOTA_FALLBACK: Duration = Duration::from_secs(60 * 60);
+
+fn has_quota(text: &str, model: &str) -> bool {
     model_group(text, model)
         .is_some_and(|group| !limit_rows(group).any(|(remaining, _)| remaining == 0))
 }
 
-pub(super) fn usage_reset(text: &str, model: &str, wall: SystemTime) -> Option<SystemTime> {
+fn usage_reset(text: &str, model: &str, wall: SystemTime) -> Option<SystemTime> {
     limit_rows(model_group(text, model)?)
         .filter(|(remaining, _)| *remaining == 0)
         .filter_map(|(_, row)| reset_time(row, wall))
@@ -48,7 +50,7 @@ fn limit_rows(group: &str) -> impl Iterator<Item = (u8, &str)> {
     })
 }
 
-pub(super) fn error_text(message: &Message) -> Option<&str> {
+fn error_text(message: &Message) -> Option<&str> {
     if message.lockout_signal().is_some() || message.requires_sign_in() {
         return None;
     }
@@ -110,7 +112,7 @@ impl QuotaState {
     }
 }
 
-pub(super) fn reset_time(text: &str, wall: SystemTime) -> Option<SystemTime> {
+fn reset_time(text: &str, wall: SystemTime) -> Option<SystemTime> {
     let (_, reset) = text.split_once("resets ")?;
     rfc3339(
         reset
@@ -260,7 +262,7 @@ impl QuotaQuery {
 pub(super) enum QuotaPurpose {
     Refresh(oneshot::Sender<Result<(), OwnerMessage>>),
     Reset {
-        wait: quota::Wait,
+        wait: Wait,
         model: Option<String>,
         response: Option<Active>,
     },
@@ -289,14 +291,14 @@ impl Core {
         now: Moment,
         wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
-    ) -> quota::Wait {
+    ) -> Wait {
         let started = self
             .quota
             .wait
             .as_ref()
             .is_none_or(|wait| wait.deadline <= now);
         self.quota.next_timer.0 += 1;
-        let wait = quota::Wait::new(until, now, wall, self.quota.next_timer);
+        let wait = Wait::new(until, now, wall, self.quota.next_timer);
         self.quota.wait = Some(wait.clone());
         if started {
             let message = self.refusal(now).unwrap_or_else(|| wait.message(now));
@@ -314,8 +316,8 @@ impl Core {
         now: Moment,
         wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
-    ) -> Option<(quota::Wait, bool)> {
-        let reset = quota::reset_time(quota::error_text(error)?, wall);
+    ) -> Option<(Wait, bool)> {
+        let reset = reset_time(error_text(error)?, wall);
         let known = reset.is_some();
         let wait = self.start_quota(reset.unwrap_or(wall + QUOTA_FALLBACK), now, wall, commands);
         Some((wait, known))
@@ -357,7 +359,7 @@ impl Core {
             _ => unreachable!(),
         }
     }
-    pub(super) fn enqueue_reset_query(&mut self, wait: quota::Wait, model: Option<String>) {
+    pub(super) fn enqueue_reset_query(&mut self, wait: Wait, model: Option<String>) {
         self.enqueue_quota(
             QuotaPurpose::Reset {
                 wait,
@@ -449,9 +451,9 @@ impl Core {
                 if result.is_ok()
                     && let Some(until) = model
                         .as_deref()
-                        .and_then(|model| quota::usage_reset(&text, model, wall))
+                        .and_then(|model| usage_reset(&text, model, wall))
                 {
-                    *wait = quota::Wait::new(until, now, wall, wait.timer);
+                    *wait = Wait::new(until, now, wall, wait.timer);
                     if self.is_current_quota_wait(wait) {
                         self.quota.wait = Some(wait.clone());
                     }
@@ -459,11 +461,11 @@ impl Core {
                 Err(self.refusal(now).unwrap_or_else(|| wait.message(now)))
             }
             QuotaPurpose::Refusal { model, .. } => {
-                if result.is_ok() && quota::has_quota(&text, model) {
+                if result.is_ok() && has_quota(&text, model) {
                     Ok(())
                 } else {
                     let until = if result.is_ok() {
-                        quota::usage_reset(&text, model, wall)
+                        usage_reset(&text, model, wall)
                     } else {
                         None
                     };
@@ -516,13 +518,13 @@ impl Core {
             commands.extend(session.map(Command::Forget));
         }
     }
-    fn is_current_quota_wait(&self, wait: &quota::Wait) -> bool {
+    fn is_current_quota_wait(&self, wait: &Wait) -> bool {
         self.quota
             .wait
             .as_ref()
             .is_some_and(|current| current.timer == wait.timer)
     }
-    pub(super) fn can_query_quota_reset(&self, wait: &quota::Wait) -> bool {
+    pub(super) fn can_query_quota_reset(&self, wait: &Wait) -> bool {
         self.quota.wait.is_none() || self.is_current_quota_wait(wait)
     }
     /// A request that leaves a quota wait without its usage check hands the reset query on.

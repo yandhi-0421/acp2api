@@ -13,28 +13,25 @@ mod work;
 use crate::runtime_builds::SelectedBuild;
 use crate::{
     Clock, Hold, HoldKind, Moment,
-    conversation::{Ticket, TurnEvent, TurnRequest},
+    conversation::{Ticket, TurnRequest},
     messages::OwnerMessage,
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
-use agent_client_protocol_schema::v1::StopReason;
 use commands::Command;
 pub(crate) use keep_alive::NO_UPDATE_LIMIT;
-use quota::{QuotaPhase, QuotaPurpose, QuotaQuery};
-use records::OutstandingWork;
-use request::{Active, Failure};
+use request::Failure;
 pub(crate) use retry::WAIT_SECONDS;
 #[cfg(test)]
 use runtime_lifecycle::Replacement;
 use runtime_lifecycle::{
-    BuildSelection, CompatibilityCheck, Lifecycle, RuntimeState, UnavailableReason,
+    BuildReply, BuildSelection, CompatibilityCheck, Lifecycle, RuntimeState, UnavailableReason,
 };
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, oneshot, watch};
-use work::{Accepted, PendingRequest, ResponseChannel, Session, Work, WorkId, WorkTable};
+use work::{Accepted, PendingRequest, Work, WorkId, WorkTable};
 #[derive(Clone)]
 pub(crate) struct Conductor {
     journal: crate::journal::Journal,
@@ -143,12 +140,7 @@ pub(crate) enum ResponseMode {
 }
 pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
-const MAX_RUNTIME_FAILURES: usize = 3;
-
-const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
-type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
-type BuildReply = oneshot::Sender<Result<Option<OwnerMessage>, LaunchFailure>>;
 struct Core {
     lockout: Option<crate::store::Lockout>,
     sign_in: sign_in::SignIn,

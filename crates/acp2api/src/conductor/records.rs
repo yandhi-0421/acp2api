@@ -1,5 +1,6 @@
-use super::request::Exit;
-use super::{Active, Command, PendingRequest, Session};
+use super::request::{Active, Exit};
+use super::work::Session;
+use super::{Command, PendingRequest};
 use crate::Moment;
 use crate::conversation::{self, Item, Prompt, RecordHashes, ToolSetHash};
 use std::collections::BTreeMap;

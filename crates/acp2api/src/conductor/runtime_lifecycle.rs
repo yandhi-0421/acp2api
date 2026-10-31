@@ -1,6 +1,4 @@
-use super::{
-    BuildReply, Command, Core, Event, Failure, MAX_RUNTIME_FAILURES, RuntimeProcess, Work,
-};
+use super::{Command, Core, Event, Failure, RuntimeProcess, Work};
 use crate::{
     Clock, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
@@ -9,7 +7,9 @@ use crate::{
     runtime_driver::Runtime,
 };
 use std::{collections::VecDeque, path::PathBuf, sync::Arc};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
+
+pub(super) type BuildReply = oneshot::Sender<Result<Option<OwnerMessage>, LaunchFailure>>;
 
 pub(super) enum Replacement {
     SignIn,
@@ -152,6 +152,7 @@ impl Lifecycle {
     }
 }
 
+const MAX_RUNTIME_FAILURES: usize = 3;
 const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 
 impl Core {

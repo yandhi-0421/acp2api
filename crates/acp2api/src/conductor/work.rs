@@ -1,7 +1,12 @@
-use super::{Active, Output, OutstandingWork, QuotaPhase, QuotaPurpose, QuotaQuery, ResponseMode};
+use super::{
+    ResponseMode,
+    quota::{QuotaPhase, QuotaPurpose, QuotaQuery},
+    records::OutstandingWork,
+    request::Active,
+};
 use crate::{
-    Moment,
-    conversation::{Ticket, TurnRequest},
+    Hold, Moment,
+    conversation::{Ticket, TurnEvent, TurnRequest},
     messages::OwnerMessage,
 };
 use std::collections::BTreeMap;
@@ -21,6 +26,8 @@ pub(super) struct Accepted {
     pub(super) request: crate::journal::Request,
     pub(super) reply: ResponseChannel,
 }
+
+pub(super) type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 
 pub(super) struct ResponseChannel {
     pub(super) output: Output,
