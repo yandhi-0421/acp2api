@@ -1,4 +1,4 @@
-use super::{Command, Core, ResponseChannel};
+use super::{Command, Core, work::ResponseChannel};
 use crate::{Moment, conversation::TurnEvent, messages::Message};
 
 pub(super) const KEEP_ALIVE_INTERVAL: Moment = 15_000;

@@ -1,4 +1,5 @@
-use super::{Active, Failure};
+use super::Failure;
+use super::request::Active;
 use crate::{
     Moment,
     catalog::Catalog,

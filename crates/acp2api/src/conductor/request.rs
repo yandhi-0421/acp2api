@@ -1,10 +1,18 @@
+use super::quota::{QuotaPhase, QuotaPurpose};
+use super::work::ResponseChannel;
 use super::{
-    Command, NO_UPDATE_LIMIT, ResponseChannel, SETTLE_DELAY, StopReason, quota, records, retry,
+    Command, Core, Event, NO_UPDATE_LIMIT, Notice, SETTLE_DELAY, Work, WorkId, quota, records,
+    records::{OutstandingWork, PendingCompletion},
+    retry,
 };
 use crate::{
     Moment,
     conversation::{EffortAsk, PromptRequest, TurnEvent, Usage},
+    messages::{Message, OwnerMessage},
+    runtime_driver::TurnUpdate,
 };
+use agent_client_protocol_schema::v1::StopReason;
+use std::sync::Arc;
 
 enum Phase {
     QuotaSettled,
@@ -62,7 +70,7 @@ pub(super) enum Start {
 }
 
 #[must_use]
-pub(super) enum UpdateRoute {
+enum UpdateRoute {
     Reply,
     QuotaSettlement,
 }
@@ -73,7 +81,7 @@ pub(super) enum PromptTurnAction {
     Cancel,
 }
 
-pub(super) enum PromptTurnEnd {
+enum PromptTurnEnd {
     Prompt(Option<StopReason>),
     Failed(crate::messages::Message),
 }
@@ -192,7 +200,7 @@ impl Active {
     }
 
     /// Resets the no-update deadline. A quota phase ignores the reply content of the update.
-    pub(super) fn update_received(&mut self, now: Moment) -> UpdateRoute {
+    fn update_received(&mut self, now: Moment) -> UpdateRoute {
         match &mut self.phase {
             Phase::Prompt { .. } => self.phase = Phase::prompt(now),
             Phase::AwaitingQuotaEnd {
@@ -227,11 +235,11 @@ impl Active {
         }
     }
 
-    pub(super) fn usage_received(&mut self, used: u64) {
+    fn usage_received(&mut self, used: u64) {
         self.input_tokens = used;
     }
 
-    pub(super) fn thought_dropped(&mut self) -> Option<Command> {
+    fn thought_dropped(&mut self) -> Option<Command> {
         if self.thought_dropped {
             return None;
         }
@@ -255,7 +263,7 @@ impl Active {
         }
     }
 
-    pub(super) fn prompt_turn_ended(&mut self, end: PromptTurnEnd, now: Moment) {
+    fn prompt_turn_ended(&mut self, end: PromptTurnEnd, now: Moment) {
         match &self.phase {
             Phase::AwaitingQuotaEnd { wait, .. } => {
                 self.phase = Phase::QuotaSettling {
@@ -263,7 +271,6 @@ impl Active {
                     wait: wait.clone(),
                 };
             }
-            Phase::QuotaSettling { .. } => {}
             _ => match end {
                 PromptTurnEnd::Prompt(stop_reason) => self.prompt_stopped(stop_reason, now),
                 PromptTurnEnd::Failed(error) => {
@@ -289,7 +296,7 @@ impl Active {
         };
     }
 
-    pub(super) fn quota_failure(&mut self, wait: quota::Wait, now: Moment) {
+    fn quota_failure(&mut self, wait: quota::Wait, now: Moment) {
         self.phase = Phase::QuotaSettling {
             at: now.saturating_add(SETTLE_DELAY),
             wait,
@@ -527,5 +534,495 @@ impl Active {
             return !complete;
         }
         false
+    }
+}
+
+impl Core {
+    pub(super) fn update(
+        &mut self,
+        id: WorkId,
+        session: String,
+        update: TurnUpdate,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        if let TurnUpdate::Usage { size, .. } = &update {
+            let model = match &self.work[&id] {
+                Work::Retiring(outstanding) => outstanding.model(),
+                work => &work.execution().unwrap().model,
+            };
+            self.context_sizes.insert(model.to_owned(), *size);
+        }
+        if matches!(self.work[&id], Work::Retiring(_)) {
+            match update {
+                TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
+                    self.finish(id, Ok(()), now, commands);
+                }
+                TurnUpdate::Permission { request, .. }
+                | TurnUpdate::RefusedPermission { request, .. } => {
+                    commands.push(Command::Permission(request));
+                }
+                TurnUpdate::Activity
+                | TurnUpdate::Text(_)
+                | TurnUpdate::Usage { .. }
+                | TurnUpdate::ThoughtDropped
+                | TurnUpdate::UnpermittedTool(_) => {}
+            }
+            return;
+        }
+        if let TurnUpdate::Failed(error) = &update
+            && let Some((wait, known)) = self.quota_signal(error, now, wall, commands)
+        {
+            if known {
+                self.finish(id, Err(Failure::at(wait.message(now), now)), now, commands);
+            } else {
+                self.work
+                    .get_mut(&id)
+                    .unwrap()
+                    .execution_mut()
+                    .unwrap()
+                    .quota_failure(wait, now);
+            }
+            return;
+        }
+        let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
+        let route = active.update_received(now);
+        let quota_settlement = matches!(route, UpdateRoute::QuotaSettlement);
+        match update {
+            TurnUpdate::PromptEnded { stop_reason } => {
+                active.prompt_turn_ended(PromptTurnEnd::Prompt(stop_reason), now);
+            }
+            TurnUpdate::Failed(error) => {
+                active.prompt_turn_ended(PromptTurnEnd::Failed(error), now)
+            }
+            TurnUpdate::Permission { request, .. }
+            | TurnUpdate::RefusedPermission { request, .. }
+                if quota_settlement =>
+            {
+                commands.push(Command::Permission(request));
+            }
+            _ if quota_settlement => {}
+            TurnUpdate::Activity => {}
+            TurnUpdate::Text(text) => {
+                if matches!(
+                    active.text_received(text, now, commands),
+                    PromptTurnAction::Cancel
+                ) {
+                    let session = active.session().unwrap().to_owned();
+                    commands.push(self.sessions.cancel(session, now));
+                }
+            }
+            TurnUpdate::Usage { used, .. } => active.usage_received(used),
+            TurnUpdate::ThoughtDropped => commands.extend(active.thought_dropped()),
+            TurnUpdate::UnpermittedTool(name) => {
+                let notice = Notice {
+                    id: active.request.id.clone(),
+                    name: name.clone(),
+                };
+                self.notices
+                    .send_modify(|notices| Arc::make_mut(notices).push(notice));
+                commands.push(Command::Safety(crate::journal::SafetyReport {
+                    request: active.request.clone(),
+                    session: session.clone(),
+                    kind: crate::journal::SafetyKind::BuiltInToolRan,
+                    tool: name.clone(),
+                }));
+                self.fail_request(
+                    id,
+                    session,
+                    crate::messages::Message::BuiltInToolRan(name),
+                    now,
+                    commands,
+                );
+            }
+            TurnUpdate::RefusedPermission { request, name } => {
+                commands.push(Command::Safety(crate::journal::SafetyReport {
+                    request: active.request.clone(),
+                    session,
+                    kind: crate::journal::SafetyKind::PermissionRefused,
+                    tool: name,
+                }));
+                commands.push(Command::Permission(request));
+            }
+            TurnUpdate::Permission { request, call } => {
+                if matches!(active.client_tool_called(call), PromptTurnAction::Cancel) {
+                    commands.push(self.sessions.cancel(session, now));
+                }
+                commands.push(Command::Permission(request));
+            }
+        }
+    }
+
+    pub(super) fn runtime_prepared(
+        &mut self,
+        work_id: Option<WorkId>,
+        work: String,
+        result: Result<(String, crate::catalog::Catalog), Message>,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        if let Some(id) = work_id {
+            match result {
+                Ok((session, catalog)) => {
+                    self.catalog = Some(catalog);
+                    self.sign_in.clear_required();
+                    match self.work.get_mut(&id).unwrap() {
+                        Work::ModelsReading(_) => {
+                            commands.extend(self.sessions.models_ready(session));
+                            self.finish(id, Ok(()), now, commands);
+                        }
+                        Work::Checking(_) => {
+                            commands.push(Command::AdmitChecked { id, session });
+                        }
+                        Work::Retiring(outstanding) => {
+                            outstanding.prepared(session);
+                            self.finish(id, Ok(()), now, commands);
+                        }
+                        entry => {
+                            let active = entry.execution_mut().unwrap();
+                            if let Some(prompt) = active.prepared(session.clone(), now) {
+                                if let Some(message) = self.refusal(now) {
+                                    self.finish(id, Err(Failure::at(message, now)), now, commands);
+                                } else {
+                                    commands.push(Command::Prompt {
+                                        work,
+                                        session,
+                                        prompt,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(error) if matches!(self.work[&id], Work::ModelsReading(_)) => {
+                    let _ = self.quota_signal(&error, now, wall, commands);
+                    self.finish(id, Err(Failure::at(error, now)), now, commands);
+                }
+                Err(error) => {
+                    if let Some((wait, known)) = self.quota_signal(&error, now, wall, commands) {
+                        let pending_model = match &self.work[&id] {
+                            Work::Checking(request) => Some(request.turn.model.clone()),
+                            Work::Retiring(outstanding) => Some(outstanding.model().to_owned()),
+                            _ => None,
+                        };
+                        if known || pending_model.is_some() {
+                            self.finish(
+                                id,
+                                Err(Failure::at(
+                                    self.refusal(now).unwrap_or_else(|| wait.message(now)),
+                                    now,
+                                )),
+                                now,
+                                commands,
+                            );
+                            if !known {
+                                self.enqueue_reset_query(wait, pending_model);
+                            }
+                        } else {
+                            let mut active = self.work.remove(&id).unwrap().into_active().unwrap();
+                            active.quota_settled();
+                            self.enqueue_quota(
+                                QuotaPurpose::Reset {
+                                    wait,
+                                    model: Some(active.model.clone()),
+                                    response: Some(active),
+                                },
+                                None,
+                            );
+                        }
+                    } else {
+                        self.finish(id, Err(Failure::at(error, now)), now, commands);
+                    }
+                }
+            }
+        } else if let Ok((session, _)) = result {
+            commands.push(Command::Forget(session));
+        }
+    }
+
+    pub(super) fn fail_request(
+        &mut self,
+        id: WorkId,
+        session: String,
+        error: crate::messages::Message,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        if self.work[&id]
+            .execution()
+            .is_some_and(|active| matches!(active.exit(), Exit::CancelAndRetire))
+        {
+            commands.push(self.sessions.cancel(session, now));
+        }
+        self.end_request(id, Failure::at(error, now), now, commands);
+    }
+
+    fn end_request(
+        &mut self,
+        id: WorkId,
+        error: Failure,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        let active = self.work.remove(&id).unwrap().into_active().unwrap();
+        let outstanding = (!matches!(active.exit(), Exit::Settled))
+            .then(|| OutstandingWork::from_active(&active, PendingCompletion::AlreadyCompleted));
+        let (forget, completion) = self.complete_request(active, Err(error), now);
+        commands.extend(completion);
+        if let Some(outstanding) = outstanding {
+            self.work.restore(id, Work::Retiring(outstanding));
+        } else {
+            commands.extend(forget.map(Command::Forget));
+        }
+    }
+
+    pub(super) fn finish(
+        &mut self,
+        id: WorkId,
+        result: Result<(), Failure>,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        match self.work.remove(&id).unwrap() {
+            Work::ModelsQueued(read) | Work::ModelsReading(read) => {
+                let result = result.map_err(|failure| OwnerMessage::Api(failure.message));
+                commands.extend(read.replies.into_iter().map(|reply| Command::ModelsRead {
+                    reply,
+                    result: result.clone(),
+                }));
+            }
+            Work::CheckQueued(request) | Work::Checking(request) => {
+                commands.push(Command::RefusePending {
+                    request: Box::new(request),
+                    error: result.err().unwrap().message,
+                });
+            }
+            Work::QuotaQueued { query, session } => {
+                self.complete_quota(query, session, result, now, commands)
+            }
+            Work::QuotaWorking { query, phase, .. } => self.complete_quota(
+                query,
+                phase.session().map(str::to_owned),
+                result,
+                now,
+                commands,
+            ),
+            Work::Retiring(outstanding) => commands.extend(outstanding.finish()),
+            work => {
+                let mut active = work.into_active().unwrap();
+                let can_query_reset = active
+                    .quota_wait()
+                    .is_some_and(|wait| self.can_query_quota_reset(wait));
+                match active.end(result, can_query_reset, self.refusal(now), now) {
+                    Ending::Complete(result) => {
+                        let (forget, completion) = self.complete_request(active, result, now);
+                        commands.extend(completion);
+                        commands.extend(forget.map(Command::Forget));
+                    }
+                    Ending::QueryQuotaReset(wait) => {
+                        let session = active.session().map(str::to_owned);
+                        self.enqueue_quota(
+                            QuotaPurpose::Reset {
+                                wait,
+                                model: Some(active.model.clone()),
+                                response: Some(active),
+                            },
+                            session,
+                        );
+                    }
+                    Ending::QueryRefusal => {
+                        let model = active.model.clone();
+                        let session = active.session().map(str::to_owned);
+                        self.enqueue_quota(
+                            QuotaPurpose::Refusal {
+                                model,
+                                response: Some(active),
+                            },
+                            session,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn complete_request(
+        &mut self,
+        active: Active,
+        result: Result<(), Failure>,
+        now: Moment,
+    ) -> (Option<String>, Vec<Command>) {
+        self.keep_quota_wait_reset_query(&active);
+        let session = active.session().map(str::to_owned);
+        let (commands, retry, record) = active.finish(result, now, self.catalog.as_ref());
+        self.retry_waits.extend(retry);
+        let forget = session.and_then(|session| self.sessions.keep(session, record));
+        (forget, commands)
+    }
+
+    pub(super) fn end_all_work(
+        &mut self,
+        refusal: &'static str,
+        message: impl Fn(WorkId) -> crate::messages::Message,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        self.sessions.clear_cancels();
+        for work in self.work.values() {
+            if let Work::QuotaWorking {
+                phase: QuotaPhase::Prompt(session),
+                ..
+            } = work
+            {
+                commands.push(Command::Cancel(session.clone()));
+            }
+            if let Some(active) = work.execution()
+                && matches!(active.exit(), Exit::CancelAndRetire)
+                && let Some(session) = active.session()
+            {
+                commands.push(Command::Cancel(session.to_owned()));
+            }
+        }
+        while let Some(id) = self.work.keys().next().copied() {
+            let error = message(id);
+            if matches!(self.work[&id], Work::AcceptedQueued(_)) {
+                let request = self.work.remove(&id).unwrap().into_queued().unwrap();
+                Self::refuse_request(
+                    request,
+                    crate::journal::Outcome::Refused(refusal),
+                    error,
+                    commands,
+                );
+            } else {
+                self.finish(id, Err(Failure::at(error, now)), now, commands);
+            }
+        }
+    }
+
+    pub(super) fn client_disconnected(
+        &mut self,
+        request_id: &str,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        let id = self.work.by_request(request_id).unwrap();
+        if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
+            self.work.get_mut(&id).unwrap()
+        {
+            query.disconnect(commands);
+        } else {
+            match self.work.remove(&id).unwrap() {
+                Work::CheckQueued(request) => {
+                    commands.push(Command::Complete(crate::journal::Completion {
+                        request: request.request,
+                        session: None,
+                        session_use: None,
+                        outcome: crate::journal::Outcome::Disconnected,
+                    }))
+                }
+                Work::Checking(request) => {
+                    self.work.restore(
+                        id,
+                        Work::Retiring(OutstandingWork::disconnected_check(request)),
+                    );
+                }
+                Work::AcceptedQueued(request) => Self::drop_queued(request, commands),
+                Work::AcceptedWorking(active) => {
+                    self.keep_quota_wait_reset_query(&active);
+                    let (outstanding, disconnected) = self.sessions.disconnect(active, now);
+                    commands.extend(disconnected);
+                    if let Some(outstanding) = outstanding {
+                        self.work.restore(id, Work::Retiring(outstanding));
+                    }
+                }
+                Work::Retiring(_)
+                | Work::ModelsQueued(_)
+                | Work::ModelsReading(_)
+                | Work::QuotaQueued { .. }
+                | Work::QuotaWorking { .. } => unreachable!(),
+            }
+        }
+    }
+
+    pub(super) fn upstream_error_reported(
+        &mut self,
+        id: Option<WorkId>,
+        session: String,
+        message: crate::messages::Message,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        if let Some((wait, known)) = self.quota_signal(&message, now, wall, commands) {
+            if let Some(id) = id {
+                if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
+                    if known {
+                        self.end_request(id, Failure::at(wait.message(now), now), now, commands);
+                    } else {
+                        active.quota_signal(wait);
+                    }
+                } else if !known {
+                    let Work::Retiring(outstanding) = &self.work[&id] else {
+                        unreachable!()
+                    };
+                    let model = Some(outstanding.model().to_owned());
+                    self.enqueue_reset_query(wait, model);
+                }
+            } else {
+                commands.push(self.sessions.forget(session));
+                if !known {
+                    self.enqueue_reset_query(wait, None);
+                }
+            }
+        } else if let Some(id) = id {
+            if !matches!(self.work[&id], Work::Retiring(_)) {
+                self.fail_request(id, session, message, now, commands);
+            }
+        } else {
+            commands.push(self.sessions.forget(session));
+        }
+    }
+
+    pub(super) fn end_occupying_work(
+        &mut self,
+        message: crate::messages::Message,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        while let Some(id) = self
+            .work
+            .iter()
+            .find_map(|(id, work)| work.occupies_place().then_some(*id))
+        {
+            self.finish(id, Err(Failure::at(message.clone(), now)), now, commands);
+        }
+    }
+
+    pub(super) fn deadline_reached(
+        &mut self,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        self.retire_idle(now, commands);
+        let due: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| {
+                work.completion_deadline()
+                    .filter(|at| *at <= now)
+                    .map(|_| *id)
+            })
+            .collect();
+        for id in due {
+            match &self.work[&id] {
+                Work::QuotaWorking { .. } => {
+                    self.quota_event(id, Event::Deadline, None, now, wall, commands)
+                }
+                _ => self.finish(id, Ok(()), now, commands),
+            }
+        }
     }
 }

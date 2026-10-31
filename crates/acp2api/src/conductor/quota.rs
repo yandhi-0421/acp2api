@@ -1,12 +1,24 @@
-use crate::{Moment, messages::Message};
+use super::{
+    Command, Core, Event, Failure, QuotaResult, SETTLE_DELAY, Work, WorkId, request::Active,
+    work::SessionSettings,
+};
+use crate::{
+    Moment,
+    messages::{Message, OwnerMessage},
+    runtime_driver::{RuntimeEvent, TurnUpdate},
+};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::oneshot;
 
-pub(super) fn has_quota(text: &str, model: &str) -> bool {
+const QUOTA_FALLBACK: Duration = Duration::from_secs(60 * 60);
+
+fn has_quota(text: &str, model: &str) -> bool {
     model_group(text, model)
         .is_some_and(|group| !limit_rows(group).any(|(remaining, _)| remaining == 0))
 }
 
-pub(super) fn usage_reset(text: &str, model: &str, wall: SystemTime) -> Option<SystemTime> {
+fn usage_reset(text: &str, model: &str, wall: SystemTime) -> Option<SystemTime> {
     limit_rows(model_group(text, model)?)
         .filter(|(remaining, _)| *remaining == 0)
         .filter_map(|(_, row)| reset_time(row, wall))
@@ -38,7 +50,7 @@ fn limit_rows(group: &str) -> impl Iterator<Item = (u8, &str)> {
     })
 }
 
-pub(super) fn error_text(message: &Message) -> Option<&str> {
+fn error_text(message: &Message) -> Option<&str> {
     if message.lockout_signal().is_some() || message.requires_sign_in() {
         return None;
     }
@@ -83,7 +95,24 @@ impl Wait {
     }
 }
 
-pub(super) fn reset_time(text: &str, wall: SystemTime) -> Option<SystemTime> {
+#[derive(Default)]
+pub(super) struct QuotaState {
+    wait: Option<Wait>,
+    last_refresh: Option<Moment>,
+    next_timer: TimerId,
+}
+impl QuotaState {
+    pub(super) fn wait(&self) -> Option<&Wait> {
+        self.wait.as_ref()
+    }
+    pub(super) fn expire(&mut self, now: Moment) {
+        if self.wait.as_ref().is_some_and(|wait| wait.deadline <= now) {
+            self.wait = None;
+        }
+    }
+}
+
+fn reset_time(text: &str, wall: SystemTime) -> Option<SystemTime> {
     let (_, reset) = text.split_once("resets ")?;
     rfc3339(
         reset
@@ -212,6 +241,375 @@ fn calendar(date: [u32; 3], time: [u32; 3], nanos: u32, offset: i64) -> Option<S
         + i64::from(months[..(month - 1) as usize].iter().sum::<u32>() + day - 1);
     let seconds = days * 86400 + i64::from(hour * 3600 + minute * 60 + second) - offset;
     UNIX_EPOCH.checked_add(Duration::new(u64::try_from(seconds).ok()?, nanos))
+}
+
+pub(super) struct QuotaQuery {
+    pub(super) work: String,
+    pub(super) purpose: QuotaPurpose,
+}
+impl QuotaQuery {
+    pub(super) fn disconnect(&mut self, commands: &mut Vec<Command>) {
+        let response = match &mut self.purpose {
+            QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                response
+            }
+            QuotaPurpose::Refresh(_) => unreachable!(),
+        };
+        let active = response.take().unwrap();
+        commands.push(active.disconnected());
+    }
+}
+pub(super) enum QuotaPurpose {
+    Refresh(oneshot::Sender<Result<(), OwnerMessage>>),
+    Reset {
+        wait: Wait,
+        model: Option<String>,
+        response: Option<Active>,
+    },
+    Refusal {
+        model: String,
+        response: Option<Active>,
+    },
+}
+pub(super) enum QuotaPhase {
+    Preparing,
+    Prompt(String),
+    Settling { session: String, at: Moment },
+}
+impl QuotaPhase {
+    pub(super) fn session(&self) -> Option<&str> {
+        match self {
+            Self::Preparing => None,
+            Self::Prompt(session) | Self::Settling { session, .. } => Some(session),
+        }
+    }
+}
+impl Core {
+    pub(super) fn start_quota(
+        &mut self,
+        until: std::time::SystemTime,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) -> Wait {
+        let started = self
+            .quota
+            .wait
+            .as_ref()
+            .is_none_or(|wait| wait.deadline <= now);
+        self.quota.next_timer.0 += 1;
+        let wait = Wait::new(until, now, wall, self.quota.next_timer);
+        self.quota.wait = Some(wait.clone());
+        if started {
+            let message = self.refusal(now).unwrap_or_else(|| wait.message(now));
+            self.refuse_queued(
+                crate::journal::Outcome::Refused("quota_wait"),
+                message,
+                commands,
+            );
+        }
+        wait
+    }
+    pub(super) fn quota_signal(
+        &mut self,
+        error: &crate::messages::Message,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) -> Option<(Wait, bool)> {
+        let reset = reset_time(error_text(error)?, wall);
+        let known = reset.is_some();
+        let wait = self.start_quota(reset.unwrap_or(wall + QUOTA_FALLBACK), now, wall, commands);
+        Some((wait, known))
+    }
+    pub(super) fn quota_event(
+        &mut self,
+        id: WorkId,
+        event: Event,
+        upstream_error: Option<crate::messages::Message>,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        match event {
+            Event::StartFailed(_, error) => self.finish_quota(id, Err(error), now, wall, commands),
+            Event::Runtime(RuntimeEvent::Prepared { work, result }) => match result {
+                Ok((session, catalog)) => {
+                    self.catalog = Some(catalog);
+                    let Work::QuotaWorking { phase, .. } = self.work.get_mut(&id).unwrap() else {
+                        unreachable!()
+                    };
+                    *phase = QuotaPhase::Prompt(session.clone());
+                    commands.push(Command::Usage { work, session });
+                }
+                Err(error) => self.finish_quota(id, Err(error), now, wall, commands),
+            },
+            Event::Runtime(RuntimeEvent::Turn { session, update }) => {
+                self.update_quota(id, session, update, now, commands)
+            }
+            Event::Runtime(RuntimeEvent::UpstreamError { .. }) => {
+                let message = upstream_error.unwrap();
+                let _ = self.quota_signal(&message, now, wall, commands);
+                let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() else {
+                    unreachable!()
+                };
+                *result = Err(message);
+            }
+            Event::Deadline => self.finish_quota(id, Ok(()), now, wall, commands),
+            _ => unreachable!(),
+        }
+    }
+    pub(super) fn enqueue_reset_query(&mut self, wait: Wait, model: Option<String>) {
+        self.enqueue_quota(
+            QuotaPurpose::Reset {
+                wait,
+                model,
+                response: None,
+            },
+            None,
+        );
+    }
+    pub(super) fn enqueue_quota(&mut self, purpose: QuotaPurpose, session: Option<String>) {
+        self.work.add_with(|id| {
+            let query = QuotaQuery {
+                work: format!("quota-{id}"),
+                purpose,
+            };
+            Work::QuotaQueued { query, session }
+        });
+    }
+    fn update_quota(
+        &mut self,
+        id: WorkId,
+        session: String,
+        update: TurnUpdate,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        let Work::QuotaWorking {
+            phase,
+            text,
+            result,
+            ..
+        } = self.work.get_mut(&id).unwrap()
+        else {
+            unreachable!()
+        };
+        match update {
+            TurnUpdate::Text(chunk) => text.push_str(&chunk),
+            TurnUpdate::PromptEnded { .. } => {
+                *phase = QuotaPhase::Settling {
+                    session,
+                    at: now.saturating_add(SETTLE_DELAY),
+                }
+            }
+            TurnUpdate::Failed(error) => {
+                *result = Err(error);
+                *phase = QuotaPhase::Settling {
+                    session,
+                    at: now.saturating_add(SETTLE_DELAY),
+                };
+            }
+            TurnUpdate::Permission { request, .. }
+            | TurnUpdate::RefusedPermission { request, .. } => {
+                commands.push(Command::Permission(request))
+            }
+            TurnUpdate::UnpermittedTool(name) => {
+                *result = Err(crate::messages::Message::BuiltInToolRan(name));
+                commands.push(self.sessions.cancel(session, now));
+            }
+            TurnUpdate::Activity | TurnUpdate::Usage { .. } | TurnUpdate::ThoughtDropped => {}
+        }
+    }
+    fn finish_quota(
+        &mut self,
+        id: WorkId,
+        result: Result<(), crate::messages::Message>,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        let Work::QuotaWorking {
+            mut query,
+            phase,
+            text,
+            result: recorded,
+        } = self.work.remove(&id).unwrap()
+        else {
+            unreachable!()
+        };
+        let result = result.and(recorded);
+        self.quota_result.send_replace(Arc::new(Some(QuotaResult {
+            text: match &result {
+                Ok(()) => Ok(text.clone()),
+                Err(error) => Err(error.clone()),
+            },
+            time: crate::journal::timestamp(wall).expect("quota result time in UTC"),
+        })));
+        let end = match &mut query.purpose {
+            QuotaPurpose::Refresh(_) => result,
+            QuotaPurpose::Reset { wait, model, .. } => {
+                if result.is_ok()
+                    && let Some(until) = model
+                        .as_deref()
+                        .and_then(|model| usage_reset(&text, model, wall))
+                {
+                    *wait = Wait::new(until, now, wall, wait.timer);
+                    if self.is_current_quota_wait(wait) {
+                        self.quota.wait = Some(wait.clone());
+                    }
+                }
+                Err(self.refusal(now).unwrap_or_else(|| wait.message(now)))
+            }
+            QuotaPurpose::Refusal { model, .. } => {
+                if result.is_ok() && has_quota(&text, model) {
+                    Ok(())
+                } else {
+                    let until = if result.is_ok() {
+                        usage_reset(&text, model, wall)
+                    } else {
+                        None
+                    };
+                    let wait = self.start_quota(
+                        until.unwrap_or(wall + QUOTA_FALLBACK),
+                        now,
+                        wall,
+                        commands,
+                    );
+                    Err(self.refusal(now).unwrap_or_else(|| wait.message(now)))
+                }
+            }
+        };
+        self.complete_quota(
+            query,
+            phase.session().map(str::to_owned),
+            end.map_err(|message| Failure::at(message, now)),
+            now,
+            commands,
+        );
+    }
+    pub(super) fn complete_quota(
+        &mut self,
+        query: QuotaQuery,
+        session: Option<String>,
+        result: Result<(), Failure>,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        let response = match query.purpose {
+            QuotaPurpose::Refresh(reply) => {
+                let _ = reply.send(result.map_err(|failure| OwnerMessage::Api(failure.message)));
+                commands.extend(session.map(Command::Forget));
+                return;
+            }
+            QuotaPurpose::Reset { response, .. } | QuotaPurpose::Refusal { response, .. } => {
+                response
+            }
+        };
+        if let Some(active) = response {
+            let (forget, completion) = self.complete_request(active, result, now);
+            commands.extend(completion);
+            commands.extend(
+                session
+                    .filter(|session| Some(session) != forget.as_ref())
+                    .map(Command::Forget),
+            );
+            commands.extend(forget.map(Command::Forget));
+        } else {
+            commands.extend(session.map(Command::Forget));
+        }
+    }
+    fn is_current_quota_wait(&self, wait: &Wait) -> bool {
+        self.quota
+            .wait
+            .as_ref()
+            .is_some_and(|current| current.timer == wait.timer)
+    }
+    pub(super) fn can_query_quota_reset(&self, wait: &Wait) -> bool {
+        self.quota.wait.is_none() || self.is_current_quota_wait(wait)
+    }
+    /// A request that leaves a quota wait without its usage check hands the reset query on.
+    pub(super) fn keep_quota_wait_reset_query(&mut self, active: &Active) {
+        if let Some(wait) = active.quota_wait()
+            && self.is_current_quota_wait(wait)
+        {
+            self.enqueue_reset_query(wait.clone(), Some(active.model.clone()));
+        }
+    }
+    pub(super) fn refresh_quota(
+        &mut self,
+        reply: oneshot::Sender<Result<(), OwnerMessage>>,
+        now: Moment,
+    ) {
+        let error = self
+            .owner_work_refusal()
+            .map(OwnerMessage::Api)
+            .or_else(|| {
+                if self.sign_in.required() {
+                    Some(OwnerMessage::Api(self.sign_in_message()))
+                } else if self
+                    .quota
+                    .last_refresh
+                    .is_some_and(|at| now.saturating_sub(at) < 60_000)
+                {
+                    Some(OwnerMessage::QuotaRefreshTooSoon)
+                } else if self.queue_full() {
+                    Some(OwnerMessage::Api(crate::messages::Message::QueueFull))
+                } else {
+                    None
+                }
+            });
+        if let Some(error) = error {
+            let _ = reply.send(Err(error));
+        } else {
+            self.quota.last_refresh = Some(now);
+            self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
+        }
+    }
+
+    pub(super) fn start_quota_query(
+        &mut self,
+        id: WorkId,
+        query: QuotaQuery,
+        session: Option<String>,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) -> bool {
+        if let QuotaPurpose::Reset { wait, .. } = &query.purpose
+            && !self.can_query_quota_reset(wait)
+        {
+            let error = self.quota.wait.as_ref().unwrap().message(now);
+            self.complete_quota(query, session, Err(Failure::at(error, now)), now, commands);
+            return false;
+        }
+        let phase = if let Some(session) = session.or_else(|| self.sessions.take_startup()) {
+            commands.push(Command::Usage {
+                work: query.work.clone(),
+                session: session.clone(),
+            });
+            QuotaPhase::Prompt(session)
+        } else {
+            commands.push(Command::Prepare {
+                work: query.work.clone(),
+                settings: SessionSettings {
+                    tools: Vec::new(),
+                    system: None,
+                },
+                load: None,
+            });
+            QuotaPhase::Preparing
+        };
+        self.work.restore(
+            id,
+            Work::QuotaWorking {
+                query,
+                phase,
+                text: String::new(),
+                result: Ok(()),
+            },
+        );
+        true
+    }
 }
 
 #[cfg(test)]
