@@ -60,6 +60,11 @@ impl Failure {
     }
 }
 
+pub(super) enum Start {
+    Prompt(Moment),
+    Prepare(PromptRequest),
+}
+
 pub(super) struct Active {
     pub(super) reply: ResponseChannel,
     pub(super) request: crate::journal::Request,
@@ -82,6 +87,39 @@ pub(super) struct Active {
 }
 
 impl Active {
+    pub(super) fn new(
+        request: super::Accepted,
+        session: Option<String>,
+        start: Start,
+        record: records::RequestRecord,
+        kind: crate::journal::SessionUse,
+    ) -> Self {
+        let phase = match start {
+            Start::Prompt(now) => Phase::prompt(now),
+            Start::Prepare(prompt) => Phase::Preparing(prompt),
+        };
+        Self {
+            reply: request.reply,
+            request: request.request,
+            session,
+            record,
+            client_tools_hash: crate::conversation::tool_set_hash(&request.turn.tools),
+            kind,
+            held: None,
+            text: String::new(),
+            thought_dropped: false,
+            input_tokens: request.turn.input_tokens,
+            model: request.model.model,
+            model_name: request.turn.model,
+            effort: request.turn.effort,
+            phase,
+            tool_call: None,
+            stop: crate::conversation::Stop::EndTurn,
+            stops: request.turn.stop,
+            stop_prefix: String::new(),
+        }
+    }
+
     pub(super) fn finish(
         mut self,
         result: Result<(), Failure>,
@@ -317,5 +355,20 @@ impl Active {
             at: now.saturating_add(SETTLE_DELAY),
             wait,
         };
+    }
+
+    pub(super) fn prepared(&mut self, session: String, now: Moment) -> Option<PromptRequest> {
+        self.session = Some(session);
+        if let Phase::AwaitingQuotaEnd { wait, .. } = &self.phase {
+            self.phase = Phase::QuotaSettling {
+                at: now,
+                wait: wait.clone(),
+            };
+            return None;
+        }
+        match std::mem::replace(&mut self.phase, Phase::prompt(now)) {
+            Phase::Preparing(prompt) => Some(prompt),
+            _ => None,
+        }
     }
 }

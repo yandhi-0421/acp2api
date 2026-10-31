@@ -1482,15 +1482,7 @@ impl Core {
                                 }
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
-                                    active.session = Some(session.clone());
-                                    if let Phase::AwaitingQuotaEnd { wait, .. } = &active.phase {
-                                        active.phase = Phase::QuotaSettling {
-                                            at: now,
-                                            wait: wait.clone(),
-                                        };
-                                    } else if let Phase::Preparing(prompt) =
-                                        std::mem::replace(&mut active.phase, Phase::prompt(now))
-                                    {
+                                    if let Some(prompt) = active.prepared(session.clone(), now) {
                                         if let Some(message) = self.refusal(now) {
                                             self.finish(
                                                 id,
@@ -1888,19 +1880,18 @@ impl Core {
         } = selection;
         let prompt = PromptRequest {
             blocks: prompt,
-            model: request.model.model,
+            model: request.model.model.clone(),
             level: request.model.level,
         };
-        let model = prompt.model.clone();
         let work = request.request.id.clone();
-        let (session, phase) = match ready {
+        let (session, start) = match ready {
             Some((id, records::Location::Loaded)) => {
                 commands.push(Command::Prompt {
                     work: work.clone(),
                     session: id.clone(),
                     prompt,
                 });
-                (Some(id), Phase::prompt(now))
+                (Some(id), request::Start::Prompt(now))
             }
             Some((session, records::Location::Unloaded(cwd))) => {
                 commands.push(Command::Prepare {
@@ -1908,7 +1899,7 @@ impl Core {
                     settings: settings.clone(),
                     load: Some((session.clone(), cwd)),
                 });
-                (Some(session), Phase::Preparing(prompt))
+                (Some(session), request::Start::Prepare(prompt))
             }
             None => {
                 commands.push(Command::Prepare {
@@ -1916,31 +1907,12 @@ impl Core {
                     settings: settings.clone(),
                     load: None,
                 });
-                (None, Phase::Preparing(prompt))
+                (None, request::Start::Prepare(prompt))
             }
         };
         self.work.insert(
             id,
-            Work::AcceptedWorking(Active {
-                reply: request.reply,
-                request: request.request,
-                session,
-                record,
-                client_tools_hash: crate::conversation::tool_set_hash(&request.turn.tools),
-                kind,
-                held: None,
-                text: String::new(),
-                thought_dropped: false,
-                input_tokens: request.turn.input_tokens,
-                model,
-                model_name: request.turn.model,
-                effort: request.turn.effort,
-                phase,
-                tool_call: None,
-                stop: crate::conversation::Stop::EndTurn,
-                stops: request.turn.stop,
-                stop_prefix: String::new(),
-            }),
+            Work::AcceptedWorking(Active::new(request, session, start, record, kind)),
         );
         true
     }
@@ -7439,45 +7411,41 @@ mod tests {
                 .unwrap()
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
+            let record = records::RequestRecord::fixture(
+                crate::conversation::record_hashes(&turn.conversation),
+                crate::conversation::tool_set_hash(&turn.tools),
+                1,
+                100_000,
+            );
+            let accepted = Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "gemini-3.8-flash".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 0),
+                reply: ResponseChannel {
+                    output: output.clone(),
+                    keep_alive: None,
+                },
+            };
+            let mut active = Active::new(
+                accepted,
+                Some("existing".into()),
+                request::Start::Prompt(0),
+                record,
+                crate::journal::SessionUse::New,
+            );
+            active.held = Some("Before".into());
+            assert!(active.permission_cancels(crate::conversation::ToolCall {
+                name: "read".into(),
+                arguments: "{}".into(),
+                kind: crate::conversation::ToolKind::Function,
+                namespace: None,
+            }));
             let mut core = Core {
-                work: BTreeMap::from([(
-                    0,
-                    Work::AcceptedWorking(Active {
-                        reply: ResponseChannel {
-                            output: output.clone(),
-                            keep_alive: None,
-                        },
-                        request: journal.begin(crate::journal::Api::Chat, 0),
-                        session: Some("existing".into()),
-                        record: records::RequestRecord::fixture(
-                            crate::conversation::record_hashes(&turn.conversation),
-                            crate::conversation::tool_set_hash(&turn.tools),
-                            1,
-                            100_000,
-                        ),
-                        client_tools_hash: crate::conversation::tool_set_hash(&turn.tools),
-                        kind: crate::journal::SessionUse::New,
-                        held: Some("Before".into()),
-                        text: String::new(),
-                        thought_dropped: false,
-                        input_tokens: turn.input_tokens,
-                        model: "gemini-3.8-flash".into(),
-                        model_name: "gemini-3.8-flash".into(),
-                        effort: EffortAsk::Absent,
-                        phase: Phase::Prompt {
-                            update_deadline: NO_UPDATE_LIMIT,
-                        },
-                        tool_call: Some(crate::conversation::ToolCall {
-                            name: "read".into(),
-                            arguments: "{}".into(),
-                            kind: crate::conversation::ToolKind::Function,
-                            namespace: None,
-                        }),
-                        stop: crate::conversation::Stop::EndTurn,
-                        stops: Vec::new(),
-                        stop_prefix: String::new(),
-                    }),
-                )]),
+                work: BTreeMap::from([(0, Work::AcceptedWorking(active))]),
                 next_work: 1,
                 sessions: records::AcpSessions::fixture(Vec::new(), None, 1),
                 ..Core::fixture(1)
