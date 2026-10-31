@@ -7,7 +7,7 @@ use crate::{
 };
 
 enum Phase {
-    AwaitingQuotaQuery,
+    QuotaSettled,
     Preparing(PromptRequest),
     Prompt {
         update_deadline: Moment,
@@ -68,12 +68,12 @@ pub(super) enum UpdateRoute {
 }
 
 #[must_use]
-pub(super) enum TurnAction {
+pub(super) enum PromptTurnAction {
     Continue,
     Cancel,
 }
 
-pub(super) enum TurnEnd {
+pub(super) enum PromptTurnEnd {
     Prompt(Option<StopReason>),
     Failed(crate::messages::Message),
 }
@@ -219,11 +219,11 @@ impl Active {
         text: String,
         now: Moment,
         commands: &mut Vec<Command>,
-    ) -> TurnAction {
+    ) -> PromptTurnAction {
         if self.tool_call.is_none() && self.release_or_cut_reply(Some(text), now, commands) {
-            TurnAction::Cancel
+            PromptTurnAction::Cancel
         } else {
-            TurnAction::Continue
+            PromptTurnAction::Continue
         }
     }
 
@@ -242,17 +242,20 @@ impl Active {
         ))
     }
 
-    pub(super) fn client_tool_called(&mut self, call: crate::conversation::ToolCall) -> TurnAction {
+    pub(super) fn client_tool_called(
+        &mut self,
+        call: crate::conversation::ToolCall,
+    ) -> PromptTurnAction {
         let cancel = matches!(self.phase, Phase::Prompt { .. }) && self.tool_call.is_none();
         if cancel {
             self.tool_call = Some(call);
-            TurnAction::Cancel
+            PromptTurnAction::Cancel
         } else {
-            TurnAction::Continue
+            PromptTurnAction::Continue
         }
     }
 
-    pub(super) fn turn_ended(&mut self, end: TurnEnd, now: Moment) {
+    pub(super) fn prompt_turn_ended(&mut self, end: PromptTurnEnd, now: Moment) {
         match &self.phase {
             Phase::AwaitingQuotaEnd { wait, .. } => {
                 self.phase = Phase::QuotaSettling {
@@ -262,8 +265,8 @@ impl Active {
             }
             Phase::QuotaSettling { .. } => {}
             _ => match end {
-                TurnEnd::Prompt(stop_reason) => self.prompt_ended(stop_reason, now),
-                TurnEnd::Failed(error) => {
+                PromptTurnEnd::Prompt(stop_reason) => self.prompt_stopped(stop_reason, now),
+                PromptTurnEnd::Failed(error) => {
                     self.phase = Phase::Settling {
                         at: now.saturating_add(SETTLE_DELAY),
                         can_continue: false,
@@ -316,32 +319,27 @@ impl Active {
         refusal: Option<crate::messages::Message>,
         now: Moment,
     ) -> Ending {
-        let result = match (
-            result,
-            std::mem::replace(&mut self.phase, Phase::AwaitingQuotaQuery),
-        ) {
-            (Ok(()), Phase::QuotaSettling { wait, .. }) => {
-                if can_query_reset {
-                    return Ending::QueryQuotaReset(wait);
-                }
-                Err(Failure::at(
-                    refusal.unwrap_or_else(|| wait.message(now)),
-                    now,
-                ))
+        if result.is_ok()
+            && let Phase::QuotaSettling { wait, .. } = &self.phase
+        {
+            let wait = wait.clone();
+            self.phase = Phase::QuotaSettled;
+            if can_query_reset {
+                return Ending::QueryQuotaReset(wait);
             }
-            (result, phase) => {
-                self.phase = phase;
-                result
-            }
-        };
+            return Ending::Complete(Err(Failure::at(
+                refusal.unwrap_or_else(|| wait.message(now)),
+                now,
+            )));
+        }
         if result.is_ok() && matches!(self.stop, crate::conversation::Stop::Refusal) {
             return Ending::QueryRefusal;
         }
         Ending::Complete(result)
     }
 
-    pub(super) fn hold_for_quota_query(&mut self) {
-        self.phase = Phase::AwaitingQuotaQuery;
+    pub(super) fn quota_settled(&mut self) {
+        self.phase = Phase::QuotaSettled;
     }
 
     pub(super) fn disconnected(self) -> Command {
@@ -373,7 +371,11 @@ impl Active {
                 *can_continue,
                 result.and(std::mem::replace(pending, Ok(()))),
             ),
-            _ => (false, result),
+            Phase::Preparing(_)
+            | Phase::Prompt { .. }
+            | Phase::AwaitingQuotaEnd { .. }
+            | Phase::QuotaSettling { .. }
+            | Phase::QuotaSettled => (false, result),
         };
         let tool_hash = self
             .tool_call
@@ -441,7 +443,7 @@ impl Active {
         (commands, retry, record)
     }
 
-    fn prompt_ended(&mut self, stop_reason: Option<StopReason>, now: Moment) {
+    fn prompt_stopped(&mut self, stop_reason: Option<StopReason>, now: Moment) {
         if stop_reason == Some(StopReason::Refusal) {
             self.stop = crate::conversation::Stop::Refusal;
         }

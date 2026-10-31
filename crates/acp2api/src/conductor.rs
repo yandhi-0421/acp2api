@@ -1524,7 +1524,7 @@ impl Core {
                                 } else {
                                     let mut active =
                                         self.work.remove(&id).unwrap().into_active().unwrap();
-                                    active.hold_for_quota_query();
+                                    active.quota_settled();
                                     self.enqueue_quota(
                                         QuotaPurpose::Reset {
                                             wait,
@@ -2155,9 +2155,11 @@ impl Core {
         let quota_settlement = matches!(route, request::UpdateRoute::QuotaSettlement);
         match update {
             TurnUpdate::PromptEnded { stop_reason } => {
-                active.turn_ended(request::TurnEnd::Prompt(stop_reason), now);
+                active.prompt_turn_ended(request::PromptTurnEnd::Prompt(stop_reason), now);
             }
-            TurnUpdate::Failed(error) => active.turn_ended(request::TurnEnd::Failed(error), now),
+            TurnUpdate::Failed(error) => {
+                active.prompt_turn_ended(request::PromptTurnEnd::Failed(error), now)
+            }
             TurnUpdate::Permission { request, .. }
             | TurnUpdate::RefusedPermission { request, .. }
                 if quota_settlement =>
@@ -2169,7 +2171,7 @@ impl Core {
             TurnUpdate::Text(text) => {
                 if matches!(
                     active.text_received(text, now, commands),
-                    request::TurnAction::Cancel
+                    request::PromptTurnAction::Cancel
                 ) {
                     let session = active.session().unwrap().to_owned();
                     commands.push(self.sessions.cancel(session, now));
@@ -2208,7 +2210,10 @@ impl Core {
                 commands.push(Command::Permission(request));
             }
             TurnUpdate::Permission { request, call } => {
-                if matches!(active.client_tool_called(call), request::TurnAction::Cancel) {
+                if matches!(
+                    active.client_tool_called(call),
+                    request::PromptTurnAction::Cancel
+                ) {
                     commands.push(self.sessions.cancel(session, now));
                 }
                 commands.push(Command::Permission(request));
@@ -7404,7 +7409,7 @@ mod tests {
             );
             assert!(matches!(
                 active.text_received("Before".into(), 0, &mut Vec::new()),
-                request::TurnAction::Continue
+                request::PromptTurnAction::Continue
             ));
             assert!(matches!(
                 active.client_tool_called(crate::conversation::ToolCall {
@@ -7413,7 +7418,7 @@ mod tests {
                     kind: crate::conversation::ToolKind::Function,
                     namespace: None,
                 }),
-                request::TurnAction::Cancel
+                request::PromptTurnAction::Cancel
             ));
             let mut core = Core {
                 work: BTreeMap::from([(0, Work::AcceptedWorking(active))]),
