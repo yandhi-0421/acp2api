@@ -65,6 +65,21 @@ pub(super) enum Start {
     Prepare(PromptRequest),
 }
 
+#[must_use]
+pub(super) enum UpdateRoute {
+    Reply,
+    QuotaSettlement,
+}
+#[must_use]
+pub(super) enum TurnAction {
+    Continue,
+    Cancel,
+}
+pub(super) enum TurnEnd {
+    Prompt(Option<StopReason>),
+    Failed(crate::messages::Message),
+}
+
 pub(super) struct Active {
     pub(super) reply: ResponseChannel,
     pub(super) request: crate::journal::Request,
@@ -292,8 +307,8 @@ impl Active {
         false
     }
 
-    /// Returns true when the phase is awaiting quota end or quota settling.
-    pub(super) fn update_received(&mut self, now: Moment) -> bool {
+    /// Resets the no-update deadline. A quota phase ignores the reply content of the update.
+    pub(super) fn update_received(&mut self, now: Moment) -> UpdateRoute {
         match &mut self.phase {
             Phase::Prompt { .. } => self.phase = Phase::prompt(now),
             Phase::AwaitingQuotaEnd {
@@ -304,35 +319,56 @@ impl Active {
             }
             _ => {}
         }
-        matches!(
+        if matches!(
             self.phase,
             Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
-        )
+        ) {
+            UpdateRoute::QuotaSettlement
+        } else {
+            UpdateRoute::Reply
+        }
     }
 
-    /// Returns true when the text ends the reply at a stop sequence.
+    /// Cancels the prompt turn when the text ends the reply at a stop sequence.
     pub(super) fn text_received(
         &mut self,
         text: String,
         now: Moment,
         commands: &mut Vec<Command>,
-    ) -> bool {
-        self.tool_call.is_none() && self.release_or_cut_reply(Some(text), now, commands)
+    ) -> TurnAction {
+        if self.tool_call.is_none() && self.release_or_cut_reply(Some(text), now, commands) {
+            TurnAction::Cancel
+        } else {
+            TurnAction::Continue
+        }
     }
     pub(super) fn refused(&self) -> bool {
         matches!(self.stop, crate::conversation::Stop::Refusal)
     }
 
-    pub(super) fn quota_turn_ended(&mut self, now: Moment) {
-        if let Phase::AwaitingQuotaEnd { wait, .. } = &self.phase {
-            self.phase = Phase::QuotaSettling {
-                at: now.saturating_add(SETTLE_DELAY),
-                wait: wait.clone(),
-            };
+    pub(super) fn turn_ended(&mut self, end: TurnEnd, now: Moment) {
+        match &self.phase {
+            Phase::AwaitingQuotaEnd { wait, .. } => {
+                self.phase = Phase::QuotaSettling {
+                    at: now.saturating_add(SETTLE_DELAY),
+                    wait: wait.clone(),
+                };
+            }
+            Phase::QuotaSettling { .. } => {}
+            _ => match end {
+                TurnEnd::Prompt(stop_reason) => self.prompt_ended(stop_reason, now),
+                TurnEnd::Failed(error) => {
+                    self.phase = Phase::Settling {
+                        at: now.saturating_add(SETTLE_DELAY),
+                        can_continue: false,
+                        result: Err(Failure::at(error, now)),
+                    };
+                }
+            },
         }
     }
 
-    pub(super) fn prompt_ended(&mut self, stop_reason: Option<StopReason>, now: Moment) {
+    fn prompt_ended(&mut self, stop_reason: Option<StopReason>, now: Moment) {
         if stop_reason == Some(StopReason::Refusal) {
             self.stop = crate::conversation::Stop::Refusal;
         }
@@ -352,20 +388,14 @@ impl Active {
         };
     }
 
-    pub(super) fn turn_failed(&mut self, error: crate::messages::Message, now: Moment) {
-        self.phase = Phase::Settling {
-            at: now.saturating_add(SETTLE_DELAY),
-            can_continue: false,
-            result: Err(Failure::at(error, now)),
-        };
-    }
-
-    pub(super) fn permission_cancels(&mut self, call: crate::conversation::ToolCall) -> bool {
+    pub(super) fn client_tool_called(&mut self, call: crate::conversation::ToolCall) -> TurnAction {
         let cancel = matches!(self.phase, Phase::Prompt { .. }) && self.tool_call.is_none();
         if cancel {
             self.tool_call = Some(call);
+            TurnAction::Cancel
+        } else {
+            TurnAction::Continue
         }
-        cancel
     }
 
     pub(super) fn quota_signal(&mut self, wait: quota::Wait) {

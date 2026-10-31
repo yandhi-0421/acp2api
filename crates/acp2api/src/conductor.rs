@@ -2156,23 +2156,26 @@ impl Core {
             return;
         }
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
-        if active.update_received(now) {
-            match update {
-                TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
-                    active.quota_turn_ended(now);
-                }
-                TurnUpdate::Permission { request, .. }
-                | TurnUpdate::RefusedPermission { request, .. } => {
-                    commands.push(Command::Permission(request))
-                }
-                _ => {}
-            }
-            return;
-        }
+        let route = active.update_received(now);
+        let quota_settlement = matches!(route, request::UpdateRoute::QuotaSettlement);
         match update {
+            TurnUpdate::PromptEnded { stop_reason } => {
+                active.turn_ended(request::TurnEnd::Prompt(stop_reason), now);
+            }
+            TurnUpdate::Failed(error) => active.turn_ended(request::TurnEnd::Failed(error), now),
+            TurnUpdate::Permission { request, .. }
+            | TurnUpdate::RefusedPermission { request, .. }
+                if quota_settlement =>
+            {
+                commands.push(Command::Permission(request));
+            }
+            _ if quota_settlement => {}
             TurnUpdate::Activity => {}
             TurnUpdate::Text(text) => {
-                if active.text_received(text, now, commands) {
+                if matches!(
+                    active.text_received(text, now, commands),
+                    request::TurnAction::Cancel
+                ) {
                     let session = active.session.as_ref().unwrap().clone();
                     commands.push(self.sessions.cancel(session, now));
                 }
@@ -2186,12 +2189,6 @@ impl Core {
                         crate::journal::Diagnostic::DroppedThoughtText,
                     ));
                 }
-            }
-            TurnUpdate::PromptEnded { stop_reason } => {
-                active.prompt_ended(stop_reason, now);
-            }
-            TurnUpdate::Failed(error) => {
-                active.turn_failed(error, now);
             }
             TurnUpdate::UnpermittedTool(name) => {
                 let notice = Notice {
@@ -2224,7 +2221,7 @@ impl Core {
                 commands.push(Command::Permission(request));
             }
             TurnUpdate::Permission { request, call } => {
-                if active.permission_cancels(call) {
+                if matches!(active.client_tool_called(call), request::TurnAction::Cancel) {
                     commands.push(self.sessions.cancel(session, now));
                 }
                 commands.push(Command::Permission(request));
@@ -7421,12 +7418,15 @@ mod tests {
                 crate::journal::SessionUse::New,
             );
             active.held = Some("Before".into());
-            assert!(active.permission_cancels(crate::conversation::ToolCall {
-                name: "read".into(),
-                arguments: "{}".into(),
-                kind: crate::conversation::ToolKind::Function,
-                namespace: None,
-            }));
+            assert!(matches!(
+                active.client_tool_called(crate::conversation::ToolCall {
+                    name: "read".into(),
+                    arguments: "{}".into(),
+                    kind: crate::conversation::ToolKind::Function,
+                    namespace: None,
+                }),
+                request::TurnAction::Cancel
+            ));
             let mut core = Core {
                 work: BTreeMap::from([(0, Work::AcceptedWorking(active))]),
                 next_work: 1,
