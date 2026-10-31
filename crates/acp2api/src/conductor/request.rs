@@ -263,7 +263,6 @@ impl Active {
                     wait: wait.clone(),
                 };
             }
-            Phase::QuotaSettling { .. } => {}
             _ => match end {
                 PromptTurnEnd::Prompt(stop_reason) => self.prompt_stopped(stop_reason, now),
                 PromptTurnEnd::Failed(error) => {
