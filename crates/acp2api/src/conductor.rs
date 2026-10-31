@@ -25,7 +25,9 @@ use quota::{QuotaPhase, QuotaPurpose, QuotaQuery};
 use records::OutstandingWork;
 use request::{Active, Failure};
 pub(crate) use retry::WAIT_SECONDS;
-use runtime_lifecycle::{CompatibilityCheck, Replacement, RuntimeState, UnavailableReason};
+use runtime_lifecycle::{
+    BuildSelection, CompatibilityCheck, Replacement, RuntimeState, UnavailableReason,
+};
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
@@ -679,74 +681,25 @@ impl Conductor {
                     }
                 }
                 if core.replacement.is_none() && checking.is_none() {
-                    while let Some((action, reply)) = core.changes.pop_front() {
-                        let initial = matches!(action, crate::runtime_builds::Action::Initial);
-                        let mut changed = (**publish.borrow()).clone();
-                        match actor_builds
-                            .select(action, &mut changed, &configuration)
-                            .await
-                        {
-                            Err(error) => {
-                                let _ = reply.send(Err(error));
-                            }
-                            Ok(selection) => {
-                                publish.send_replace(Arc::new(changed));
-                                match selection {
-                                    crate::runtime_builds::Selection::Keep => {
-                                        if matches!(
-                                            core.runtime_state,
-                                            RuntimeState::Unavailable(_)
-                                        ) {
-                                            core.replacement = Some(Replacement::Build {
-                                                reply,
-                                                source: None,
-                                                initial,
-                                            });
-                                            break;
-                                        }
-                                        let _ = reply.send(Ok(None));
-                                    }
-                                    crate::runtime_builds::Selection::Notice(notice) => {
-                                        let _ = reply.send(Ok(Some(notice)));
-                                    }
-                                    crate::runtime_builds::Selection::Check {
-                                        folder,
-                                        identity,
-                                    } => {
-                                        core.apply(
-                                            Event::RetireRuntime,
-                                            &mut runtime,
-                                            &mut read_open,
-                                            &clock,
-                                            &journal,
-                                        )
-                                        .await;
-                                        core.replacement = Some(Replacement::Check {
-                                            reply,
-                                            folder,
-                                            identity,
-                                        });
-                                        break;
-                                    }
-                                    crate::runtime_builds::Selection::Start(source) => {
-                                        core.apply(
-                                            Event::RetireRuntime,
-                                            &mut runtime,
-                                            &mut read_open,
-                                            &clock,
-                                            &journal,
-                                        )
-                                        .await;
-                                        core.replacement = Some(Replacement::Build {
-                                            reply,
-                                            source,
-                                            initial,
-                                        });
-                                        break;
-                                    }
-                                }
-                            }
+                    match core
+                        .next_build_change(&actor_builds, &publish, &configuration)
+                        .await
+                    {
+                        Some(BuildSelection::Retire(replacement)) => {
+                            core.apply(
+                                Event::RetireRuntime,
+                                &mut runtime,
+                                &mut read_open,
+                                &clock,
+                                &journal,
+                            )
+                            .await;
+                            core.replacement = Some(replacement);
                         }
+                        Some(BuildSelection::Ready(replacement)) => {
+                            core.replacement = Some(replacement)
+                        }
+                        None => {}
                     }
                     if core.replacement.is_some() && core.replacement_ready() {
                         continue;

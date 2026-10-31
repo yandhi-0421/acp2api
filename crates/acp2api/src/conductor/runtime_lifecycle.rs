@@ -25,6 +25,11 @@ pub(super) enum Replacement {
     },
 }
 
+pub(super) enum BuildSelection {
+    Retire(Replacement),
+    Ready(Replacement),
+}
+
 pub(super) type CompatibilityCheck = crate::BoxFuture<'static, CompletedCheck>;
 
 pub(super) struct CompletedCheck {
@@ -489,6 +494,56 @@ impl Core {
         } else {
             self.changes.push_back((action, reply));
         }
+    }
+
+    pub(super) async fn next_build_change(
+        &mut self,
+        builds: &crate::runtime_builds::Builds,
+        publish: &watch::Sender<Arc<crate::store::Settings>>,
+        configuration: &std::path::Path,
+    ) -> Option<BuildSelection> {
+        while let Some((action, reply)) = self.changes.pop_front() {
+            let initial = matches!(action, crate::runtime_builds::Action::Initial);
+            let mut changed = (**publish.borrow()).clone();
+            match builds.select(action, &mut changed, configuration).await {
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+                Ok(selection) => {
+                    publish.send_replace(Arc::new(changed));
+                    match selection {
+                        crate::runtime_builds::Selection::Keep => {
+                            if matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+                                return Some(BuildSelection::Ready(Replacement::Build {
+                                    reply,
+                                    source: None,
+                                    initial,
+                                }));
+                            }
+                            let _ = reply.send(Ok(None));
+                        }
+                        crate::runtime_builds::Selection::Notice(notice) => {
+                            let _ = reply.send(Ok(Some(notice)));
+                        }
+                        crate::runtime_builds::Selection::Check { folder, identity } => {
+                            return Some(BuildSelection::Retire(Replacement::Check {
+                                reply,
+                                folder,
+                                identity,
+                            }));
+                        }
+                        crate::runtime_builds::Selection::Start(source) => {
+                            return Some(BuildSelection::Retire(Replacement::Build {
+                                reply,
+                                source,
+                                initial,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub(super) fn sign_in_wait_ended(&mut self) {
