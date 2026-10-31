@@ -32,9 +32,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{mpsc, oneshot, watch};
-use work::{
-    Accepted, ModelRead, PendingRequest, ResponseChannel, Session, Work, WorkId, WorkTable,
-};
+use work::{Accepted, PendingRequest, ResponseChannel, Session, Work, WorkId, WorkTable};
 #[derive(Clone)]
 pub(crate) struct Conductor {
     journal: crate::journal::Journal,
@@ -144,7 +142,6 @@ pub(crate) enum ResponseMode {
 pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const MAX_RUNTIME_FAILURES: usize = 3;
-const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 
 const QUOTA_FALLBACK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const SETTLE_DELAY: Moment = 200;
@@ -451,116 +448,14 @@ impl Core {
             (Some(id), event) => {
                 self.quota_event(id, event, upstream_error, now, wall, &mut commands)
             }
-            (None, Event::RefreshQuota(reply)) => {
-                let error = self
-                    .owner_work_refusal()
-                    .map(OwnerMessage::Api)
-                    .or_else(|| {
-                        if self.sign_in_required {
-                            Some(OwnerMessage::Api(self.sign_in_message()))
-                        } else if self
-                            .last_refresh
-                            .is_some_and(|at| now.saturating_sub(at) < 60_000)
-                        {
-                            Some(OwnerMessage::QuotaRefreshTooSoon)
-                        } else if self.queue_full() {
-                            Some(OwnerMessage::Api(crate::messages::Message::QueueFull))
-                        } else {
-                            None
-                        }
-                    });
-                if let Some(error) = error {
-                    let _ = reply.send(Err(error));
-                } else {
-                    self.last_refresh = Some(now);
-                    self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
-                }
-            }
-            (None, Event::ReadModelNames(reply)) => {
-                if self.catalog.is_some() || !self.model_names.is_empty() {
-                    let _ = reply.send(Ok(()));
-                } else if let Some(read) = self.work.values_mut().find_map(|work| match work {
-                    Work::ModelsQueued(read) | Work::ModelsReading(read) => Some(read),
-                    _ => None,
-                }) {
-                    read.replies.push(reply);
-                } else {
-                    let error = self.owner_work_refusal().or_else(|| {
-                        self.queue_full()
-                            .then_some(crate::messages::Message::QueueFull)
-                    });
-                    if let Some(error) = error {
-                        let _ = reply.send(Err(OwnerMessage::Api(error)));
-                    } else {
-                        let id = self.next_work;
-                        self.next_work += 1;
-                        self.work.insert(
-                            id,
-                            Work::ModelsQueued(ModelRead {
-                                work: format!("models-{id}"),
-                                replies: vec![reply],
-                            }),
-                        );
-                    }
-                }
-            }
-            (None, Event::Stop) => {
-                self.sign_in_wait = None;
-                self.runtime_state = RuntimeState::Stopping;
-                self.end_all_work(
-                    "stopped",
-                    |_| crate::messages::Message::Stopped,
-                    now,
-                    &mut commands,
-                );
-            }
+            (None, Event::RefreshQuota(reply)) => self.refresh_quota(reply, now),
+            (None, Event::ReadModelNames(reply)) => self.read_model_names(reply),
+            (None, Event::Stop) => self.stopping(now, &mut commands),
             (None, Event::RuntimeUnavailable(reason)) => {
-                self.sign_in_wait = None;
-                if matches!(self.replacement, Some(Replacement::SignIn)) {
-                    self.replacement = None;
-                }
-                let error = crate::messages::Message::RuntimeUnavailable(reason.message.clone());
-                self.runtime_state = RuntimeState::Unavailable(reason);
-                self.refuse_queued(
-                    crate::journal::Outcome::Refused("runtime_unavailable"),
-                    error.clone(),
-                    &mut commands,
-                );
-                let queries: Vec<_> = self
-                    .work
-                    .iter()
-                    .filter_map(|(id, work)| {
-                        matches!(work, Work::QuotaQueued { .. }).then_some(*id)
-                    })
-                    .collect();
-                for id in queries {
-                    self.finish(id, Err(Failure::at(error.clone(), now)), now, &mut commands);
-                }
+                self.runtime_unavailable(reason, now, &mut commands)
             }
-            (None, Event::RetireRuntime) => {
-                let sign_in_wait_ended = self.sign_in_wait.take().is_some()
-                    || matches!(
-                        self.runtime_state,
-                        RuntimeState::Retiring {
-                            sign_in_wait_ended: true
-                        }
-                    );
-                if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
-                    self.runtime_state = RuntimeState::Retiring { sign_in_wait_ended };
-                }
-            }
-            (None, Event::ResumeRuntime) => {
-                if matches!(
-                    self.runtime_state,
-                    RuntimeState::Retiring {
-                        sign_in_wait_ended: true
-                    }
-                ) {
-                    self.replacement.get_or_insert(Replacement::SignIn);
-                } else {
-                    self.runtime_state = RuntimeState::Serving;
-                }
-            }
+            (None, Event::RetireRuntime) => self.retire_runtime(),
+            (None, Event::ResumeRuntime) => self.resume_runtime(),
             (None, Event::Accepted(request)) => {
                 self.work
                     .insert(self.next_work, Work::AcceptedQueued(*request));
@@ -639,28 +534,7 @@ impl Core {
                 None,
                 Event::Runtime(RuntimeEvent::Closed | RuntimeEvent::WriteFailed(_))
                 | Event::RuntimeFailure,
-            ) => {
-                self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, &mut commands);
-                self.sign_in_wait = None;
-                self.runtime_state = RuntimeState::Restarting;
-                self.sessions.runtime_failed();
-                self.failures
-                    .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
-                self.failures.push_back(now);
-                while let Some(id) = self
-                    .work
-                    .iter()
-                    .find_map(|(id, work)| work.occupies_place().then_some(*id))
-                {
-                    self.finish(
-                        id,
-                        Err(Failure::at(crate::messages::Message::RuntimeFailed, now)),
-                        now,
-                        &mut commands,
-                    );
-                }
-                self.catalog = None;
-            }
+            ) => self.runtime_failed(now, &mut commands),
             (None, Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other)) => {}
             (None, Event::Deadline) => {
                 self.retire_idle(now, &mut commands);

@@ -515,6 +515,35 @@ impl Core {
             self.enqueue_reset_query(wait.clone(), Some(active.model.clone()));
         }
     }
+    pub(super) fn refresh_quota(
+        &mut self,
+        reply: oneshot::Sender<Result<(), OwnerMessage>>,
+        now: Moment,
+    ) {
+        let error = self
+            .owner_work_refusal()
+            .map(OwnerMessage::Api)
+            .or_else(|| {
+                if self.sign_in_required {
+                    Some(OwnerMessage::Api(self.sign_in_message()))
+                } else if self
+                    .last_refresh
+                    .is_some_and(|at| now.saturating_sub(at) < 60_000)
+                {
+                    Some(OwnerMessage::QuotaRefreshTooSoon)
+                } else if self.queue_full() {
+                    Some(OwnerMessage::Api(crate::messages::Message::QueueFull))
+                } else {
+                    None
+                }
+            });
+        if let Some(error) = error {
+            let _ = reply.send(Err(error));
+        } else {
+            self.last_refresh = Some(now);
+            self.enqueue_quota(QuotaPurpose::Refresh(reply), None);
+        }
+    }
 }
 
 #[cfg(test)]

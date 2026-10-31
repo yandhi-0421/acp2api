@@ -1,6 +1,8 @@
-use super::{BuildReply, Core, Event, MAX_RUNTIME_FAILURES, RuntimeProcess, Work};
+use super::{
+    BuildReply, Command, Core, Event, Failure, MAX_RUNTIME_FAILURES, RuntimeProcess, Work,
+};
 use crate::{
-    Clock, HoldKind,
+    Clock, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::Runtime,
@@ -54,6 +56,8 @@ impl RuntimeState {
         }
     }
 }
+
+const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 
 impl Core {
     pub(super) async fn replace(
@@ -376,5 +380,92 @@ impl Core {
     ) {
         self.sessions.replaced(session);
         self.catalog = catalog;
+    }
+
+    pub(super) fn stopping(&mut self, now: Moment, commands: &mut Vec<Command>) {
+        self.sign_in_wait = None;
+        self.runtime_state = RuntimeState::Stopping;
+        self.end_all_work(
+            "stopped",
+            |_| crate::messages::Message::Stopped,
+            now,
+            commands,
+        );
+    }
+
+    pub(super) fn runtime_unavailable(
+        &mut self,
+        reason: UnavailableReason,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) {
+        self.sign_in_wait = None;
+        if matches!(self.replacement, Some(Replacement::SignIn)) {
+            self.replacement = None;
+        }
+        let error = crate::messages::Message::RuntimeUnavailable(reason.message.clone());
+        self.runtime_state = RuntimeState::Unavailable(reason);
+        self.refuse_queued(
+            crate::journal::Outcome::Refused("runtime_unavailable"),
+            error.clone(),
+            commands,
+        );
+        let queries: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| matches!(work, Work::QuotaQueued { .. }).then_some(*id))
+            .collect();
+        for id in queries {
+            self.finish(id, Err(Failure::at(error.clone(), now)), now, commands);
+        }
+    }
+
+    pub(super) fn retire_runtime(&mut self) {
+        let sign_in_wait_ended = self.sign_in_wait.take().is_some()
+            || matches!(
+                self.runtime_state,
+                RuntimeState::Retiring {
+                    sign_in_wait_ended: true
+                }
+            );
+        if !matches!(self.runtime_state, RuntimeState::Unavailable(_)) {
+            self.runtime_state = RuntimeState::Retiring { sign_in_wait_ended };
+        }
+    }
+
+    pub(super) fn resume_runtime(&mut self) {
+        if matches!(
+            self.runtime_state,
+            RuntimeState::Retiring {
+                sign_in_wait_ended: true
+            }
+        ) {
+            self.replacement.get_or_insert(Replacement::SignIn);
+        } else {
+            self.runtime_state = RuntimeState::Serving;
+        }
+    }
+
+    pub(super) fn runtime_failed(&mut self, now: Moment, commands: &mut Vec<Command>) {
+        self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, commands);
+        self.sign_in_wait = None;
+        self.runtime_state = RuntimeState::Restarting;
+        self.sessions.runtime_failed();
+        self.failures
+            .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
+        self.failures.push_back(now);
+        while let Some(id) = self
+            .work
+            .iter()
+            .find_map(|(id, work)| work.occupies_place().then_some(*id))
+        {
+            self.finish(
+                id,
+                Err(Failure::at(crate::messages::Message::RuntimeFailed, now)),
+                now,
+                commands,
+            );
+        }
+        self.catalog = None;
     }
 }

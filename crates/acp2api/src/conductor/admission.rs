@@ -1,7 +1,7 @@
 use super::{
     Accepted, Active, Command, Core, Event, Failure, PendingRequest, QUEUE_CAPACITY, QuotaPhase,
     QuotaPurpose, ResponseChannel, ResponseMode, RuntimeState, Session, TurnWork, Work, WorkId,
-    keep_alive::KEEP_ALIVE_INTERVAL, records, request, retry,
+    keep_alive::KEEP_ALIVE_INTERVAL, records, request, retry, work::ModelRead,
 };
 use crate::{
     Clock, Hold, HoldKind, Moment,
@@ -9,7 +9,7 @@ use crate::{
     messages::{Message, OwnerMessage},
     runtime_builds::LaunchFailure,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 impl Core {
     pub(super) fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
@@ -512,6 +512,34 @@ impl Core {
             }
         } else if let Ok((session, _)) = result {
             commands.push(Command::Forget(session));
+        }
+    }
+    pub(super) fn read_model_names(&mut self, reply: oneshot::Sender<Result<(), OwnerMessage>>) {
+        if self.catalog.is_some() || !self.model_names.is_empty() {
+            let _ = reply.send(Ok(()));
+        } else if let Some(read) = self.work.values_mut().find_map(|work| match work {
+            Work::ModelsQueued(read) | Work::ModelsReading(read) => Some(read),
+            _ => None,
+        }) {
+            read.replies.push(reply);
+        } else {
+            let error = self.owner_work_refusal().or_else(|| {
+                self.queue_full()
+                    .then_some(crate::messages::Message::QueueFull)
+            });
+            if let Some(error) = error {
+                let _ = reply.send(Err(OwnerMessage::Api(error)));
+            } else {
+                let id = self.next_work;
+                self.next_work += 1;
+                self.work.insert(
+                    id,
+                    Work::ModelsQueued(ModelRead {
+                        work: format!("models-{id}"),
+                        replies: vec![reply],
+                    }),
+                );
+            }
         }
     }
 }
