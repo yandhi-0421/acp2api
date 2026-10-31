@@ -1,3 +1,4 @@
+use super::request::Exit;
 use super::{Active, Command, PendingRequest, Session};
 use crate::Moment;
 use crate::conversation::{self, Item, Prompt, RecordHashes, ToolSetHash};
@@ -267,15 +268,15 @@ impl AcpSessions {
         now: Moment,
     ) -> (Option<OutstandingWork>, Vec<Command>) {
         let mut commands = Vec::new();
-        let ended = active.settled();
-        if active.prompt_running() {
+        let exit = active.exit();
+        if matches!(exit, Exit::CancelAndRetire) {
             commands.push(self.cancel(active.session.as_ref().unwrap().clone(), now));
         }
         let outstanding = OutstandingWork::from_active(
             &active,
             PendingCompletion::Disconnected(Some(active.kind)),
         );
-        if ended {
+        if matches!(exit, Exit::Settled) {
             commands.extend(outstanding.finish());
             (None, commands)
         } else {

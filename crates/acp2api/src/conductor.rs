@@ -1816,7 +1816,7 @@ impl Core {
                 commands.push(Command::Cancel(session.clone()));
             }
             if let Some(active) = work.execution()
-                && active.prompt_running()
+                && matches!(active.exit(), request::Exit::CancelAndRetire)
                 && let Some(session) = &active.session
             {
                 commands.push(Command::Cancel(session.clone()));
@@ -2333,7 +2333,10 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        if self.work[&id].update_deadline().is_some() {
+        if self.work[&id]
+            .execution()
+            .is_some_and(|active| matches!(active.exit(), request::Exit::CancelAndRetire))
+        {
             commands.push(self.sessions.cancel(session, now));
         }
         self.end_request(id, Failure::at(error, now), now, commands);
@@ -2362,7 +2365,7 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
-        let outstanding = (!active.settled())
+        let outstanding = (!matches!(active.exit(), request::Exit::Settled))
             .then(|| OutstandingWork::from_active(&active, PendingCompletion::AlreadyCompleted));
         let (forget, completion) = self.complete_request(active, Err(error), now);
         commands.extend(completion);

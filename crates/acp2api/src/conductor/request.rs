@@ -34,10 +34,6 @@ impl Phase {
         }
     }
 
-    fn settled(&self) -> bool {
-        matches!(self, Self::Settling { .. } | Self::QuotaSettling { .. })
-    }
-
     fn update_deadline(&self) -> Option<Moment> {
         match self {
             Self::Prompt { update_deadline } => Some(*update_deadline),
@@ -84,6 +80,13 @@ pub(super) enum Ending {
     Complete(Result<(), Failure>),
     QueryQuotaReset(quota::Wait),
     QueryRefusal,
+}
+
+/// What a request needs when it leaves before its prompt turn settles.
+pub(super) enum Exit {
+    Settled,
+    Retire,
+    CancelAndRetire,
 }
 
 pub(super) struct Active {
@@ -150,12 +153,17 @@ impl Active {
             _ => None,
         }
     }
-    /// The prompt turn still runs, so that an end of the request must cancel it.
-    pub(super) fn prompt_running(&self) -> bool {
-        self.phase.update_deadline().is_some()
-    }
-    pub(super) fn settled(&self) -> bool {
-        self.phase.settled()
+    pub(super) fn exit(&self) -> Exit {
+        if matches!(
+            self.phase,
+            Phase::Settling { .. } | Phase::QuotaSettling { .. }
+        ) {
+            Exit::Settled
+        } else if self.phase.update_deadline().is_some() {
+            Exit::CancelAndRetire
+        } else {
+            Exit::Retire
+        }
     }
 
     pub(super) fn finish(
