@@ -585,93 +585,7 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Prepared { work, result })) => {
-                if let Some(id) = work_id {
-                    match result {
-                        Ok((session, catalog)) => {
-                            self.catalog = Some(catalog);
-                            self.sign_in_required = false;
-                            match self.work.get_mut(&id).unwrap() {
-                                Work::ModelsReading(_) => {
-                                    commands.extend(self.sessions.models_ready(session));
-                                    self.finish(id, Ok(()), now, &mut commands);
-                                }
-                                Work::Checking(_) => {
-                                    commands.push(Command::AdmitChecked { id, session });
-                                }
-                                Work::Retiring(outstanding) => {
-                                    outstanding.prepared(session);
-                                    self.finish(id, Ok(()), now, &mut commands);
-                                }
-                                entry => {
-                                    let active = entry.execution_mut().unwrap();
-                                    if let Some(prompt) = active.prepared(session.clone(), now) {
-                                        if let Some(message) = self.refusal(now) {
-                                            self.finish(
-                                                id,
-                                                Err(Failure::at(message, now)),
-                                                now,
-                                                &mut commands,
-                                            );
-                                        } else {
-                                            commands.push(Command::Prompt {
-                                                work,
-                                                session,
-                                                prompt,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) if matches!(self.work[&id], Work::ModelsReading(_)) => {
-                            let _ = self.quota_signal(&error, now, wall, &mut commands);
-                            self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
-                        }
-                        Err(error) => {
-                            if let Some((wait, known)) =
-                                self.quota_signal(&error, now, wall, &mut commands)
-                            {
-                                let pending_model = match &self.work[&id] {
-                                    Work::Checking(request) => Some(request.turn.model.clone()),
-                                    Work::Retiring(outstanding) => {
-                                        Some(outstanding.model().to_owned())
-                                    }
-                                    _ => None,
-                                };
-                                if known || pending_model.is_some() {
-                                    self.finish(
-                                        id,
-                                        Err(Failure::at(
-                                            self.refusal(now).unwrap_or_else(|| wait.message(now)),
-                                            now,
-                                        )),
-                                        now,
-                                        &mut commands,
-                                    );
-                                    if !known {
-                                        self.enqueue_reset_query(wait, pending_model);
-                                    }
-                                } else {
-                                    let mut active =
-                                        self.work.remove(&id).unwrap().into_active().unwrap();
-                                    active.quota_settled();
-                                    self.enqueue_quota(
-                                        QuotaPurpose::Reset {
-                                            wait,
-                                            model: Some(active.model.clone()),
-                                            response: Some(active),
-                                        },
-                                        None,
-                                    );
-                                }
-                            } else {
-                                self.finish(id, Err(Failure::at(error, now)), now, &mut commands);
-                            }
-                        }
-                    }
-                } else if let Ok((session, _)) = result {
-                    commands.push(Command::Forget(session));
-                }
+                self.runtime_prepared(work_id, work, result, now, wall, &mut commands);
             }
             (None, Event::Runtime(RuntimeEvent::Retired { session })) => {
                 self.sessions.cancel_ended(&session);
@@ -689,41 +603,14 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::UpstreamError { session, .. })) => {
-                let id = work_id;
-                let message = upstream_error.unwrap();
-                if let Some((wait, known)) = self.quota_signal(&message, now, wall, &mut commands) {
-                    if let Some(id) = id {
-                        if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
-                            if known {
-                                self.end_request(
-                                    id,
-                                    Failure::at(wait.message(now), now),
-                                    now,
-                                    &mut commands,
-                                );
-                            } else {
-                                active.quota_signal(wait);
-                            }
-                        } else if !known {
-                            let Work::Retiring(outstanding) = &self.work[&id] else {
-                                unreachable!()
-                            };
-                            let model = Some(outstanding.model().to_owned());
-                            self.enqueue_reset_query(wait, model);
-                        }
-                    } else {
-                        commands.push(self.sessions.forget(session));
-                        if !known {
-                            self.enqueue_reset_query(wait, None);
-                        }
-                    }
-                } else if let Some(id) = id {
-                    if !matches!(self.work[&id], Work::Retiring(_)) {
-                        self.fail_request(id, session, message, now, &mut commands);
-                    }
-                } else {
-                    commands.push(self.sessions.forget(session));
-                }
+                self.upstream_error_reported(
+                    work_id,
+                    session,
+                    upstream_error.unwrap(),
+                    now,
+                    wall,
+                    &mut commands,
+                );
             }
             (None, Event::Runtime(RuntimeEvent::Failed(error))) => {
                 commands.extend(self.sessions.forget_idle());

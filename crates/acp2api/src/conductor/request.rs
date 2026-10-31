@@ -880,4 +880,43 @@ impl Core {
             }
         }
     }
+
+    pub(super) fn upstream_error_reported(
+        &mut self,
+        id: Option<WorkId>,
+        session: String,
+        message: crate::messages::Message,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        if let Some((wait, known)) = self.quota_signal(&message, now, wall, commands) {
+            if let Some(id) = id {
+                if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
+                    if known {
+                        self.end_request(id, Failure::at(wait.message(now), now), now, commands);
+                    } else {
+                        active.quota_signal(wait);
+                    }
+                } else if !known {
+                    let Work::Retiring(outstanding) = &self.work[&id] else {
+                        unreachable!()
+                    };
+                    let model = Some(outstanding.model().to_owned());
+                    self.enqueue_reset_query(wait, model);
+                }
+            } else {
+                commands.push(self.sessions.forget(session));
+                if !known {
+                    self.enqueue_reset_query(wait, None);
+                }
+            }
+        } else if let Some(id) = id {
+            if !matches!(self.work[&id], Work::Retiring(_)) {
+                self.fail_request(id, session, message, now, commands);
+            }
+        } else {
+            commands.push(self.sessions.forget(session));
+        }
+    }
 }
