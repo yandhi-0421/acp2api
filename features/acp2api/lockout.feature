@@ -92,20 +92,20 @@ Feature: Lockout
     And the message holds no text "Original error:"
     And the official runtime gets no request
 
-  @FR-035 @issue-73 @wip
+  @FR-035 @issue-73
   Scenario: acp2api shows a lockout in the terminal and in the dark first tile of the management panel
     When a lockout signal starts a lockout
     Then the terminal shows one line with the lockout notice
     And the first tile of the management panel is dark and shows the state "Lockout"
 
-  @FR-035 @issue-73 @wip
+  @FR-035 @issue-73
   Scenario: During a lockout acp2api starts no runtime process and sends no quota query
     Given acp2api is in lockout since a lockout signal
     When the owner restarts acp2api and asks for a refresh of the quota in the management panel
     Then no runtime process runs
     And the official runtime gets no "/usage"
 
-  @FR-035 @FR-039 @issue-73 @wip
+  @FR-035 @FR-039 @issue-73
   Scenario: The management panel has no sign-in entry during a lockout
     Given acp2api is in lockout since a lockout signal
     When the owner opens the management panel
@@ -136,7 +136,7 @@ Feature: Lockout
     When 30 days pass
     Then acp2api is in the state "lockout"
 
-  @FR-035 @issue-73 @wip
+  @FR-035 @issue-73
   Scenario: The owner ends a lockout with the management password
     Given acp2api is in lockout since a lockout signal
     And the management panel shows the evidence of the lockout
@@ -144,20 +144,20 @@ Feature: Lockout
     Then acp2api is in the normal state at once
     And the next request runs
 
-  @FR-009 @FR-035 @issue-73 @wip
+  @FR-009 @FR-035 @issue-73
   Scenario: An open panel session does not end a lockout without the management password
     Given acp2api is in lockout since a lockout signal
     And the owner has a panel session
     When the owner asks for the end of the lockout with no management password
     Then acp2api is in the state "lockout"
 
-  @FR-035 @issue-73 @wip
+  @FR-035 @issue-73
   Scenario: acp2api sends no test request after the end of a lockout
     Given the owner ended a lockout
     When no API request comes for 10 minutes
     Then the official runtime gets no prompt
 
-  @FR-035 @issue-73 @wip
+  @FR-035 @issue-73
   Scenario: The next lockout signal after the end starts a new lockout
     Given the owner ended a lockout
     When a prompt turn ends with the stderr error line 403 "PERMISSION_DENIED"
