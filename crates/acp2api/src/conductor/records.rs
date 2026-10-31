@@ -1,3 +1,4 @@
+use super::request::Exit;
 use super::{Active, Command, PendingRequest, Session};
 use crate::Moment;
 use crate::conversation::{self, Item, Prompt, RecordHashes, ToolSetHash};
@@ -26,7 +27,7 @@ impl OutstandingWork {
         Self {
             model: active.model.clone(),
             request: active.request.clone(),
-            session: active.session.clone(),
+            session: active.session().map(str::to_owned),
             completion,
         }
     }
@@ -267,15 +268,15 @@ impl AcpSessions {
         now: Moment,
     ) -> (Option<OutstandingWork>, Vec<Command>) {
         let mut commands = Vec::new();
-        let ended = active.phase.settled();
-        if active.phase.update_deadline().is_some() {
-            commands.push(self.cancel(active.session.as_ref().unwrap().clone(), now));
+        let exit = active.exit();
+        if matches!(exit, Exit::CancelAndRetire) {
+            commands.push(self.cancel(active.session().unwrap().to_owned(), now));
         }
         let outstanding = OutstandingWork::from_active(
             &active,
             PendingCompletion::Disconnected(Some(active.kind)),
         );
-        if ended {
+        if matches!(exit, Exit::Settled) {
             commands.extend(outstanding.finish());
             (None, commands)
         } else {
@@ -339,6 +340,33 @@ fn select<'a>(
 mod tests {
     use super::*;
     use crate::conversation::{Conversation, Part, Role};
+
+    fn chat_turn(body: serde_json::Value) -> crate::conversation::TurnRequest {
+        crate::dialect::CHAT
+            .parse(&serde_json::to_vec(&body).unwrap())
+            .ok()
+            .unwrap()
+            .turn
+    }
+
+    fn turn_a() -> crate::conversation::TurnRequest {
+        chat_turn(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "A"}]
+        }))
+    }
+
+    fn turn_a_r_b() -> crate::conversation::TurnRequest {
+        chat_turn(serde_json::json!({
+            "model": "m",
+            "messages": [
+                {"role": "user", "content": "A"},
+                {"role": "assistant", "content": "R"},
+                {"role": "user", "content": "B"}
+            ]
+        }))
+    }
+
     #[test]
     fn longest_record_precedes_recency() {
         fn user(text: &str) -> Item {
@@ -388,6 +416,99 @@ mod tests {
             select(&records, &hashes, tools, &items).map(|(index, _)| index),
             Some(1),
             "ADR-0003 longest eligible record wins before recency"
+        );
+    }
+
+    #[test]
+    fn a_later_cancel_keeps_the_first_cancellation_deadline() {
+        let mut sessions = AcpSessions::default();
+        sessions.cancel("running".into(), 1_000);
+        sessions.cancel("running".into(), 20_000);
+        assert!(!sessions.cancellation_due(30_999));
+        assert!(
+            sessions.cancellation_due(31_000),
+            "FR-041 the first cancel sets the 30 s deadline"
+        );
+    }
+
+    #[test]
+    fn the_session_used_last_continues_among_records_of_the_same_length() {
+        let first_turn = turn_a();
+        let settings = Session::for_turn(&first_turn);
+        let mut sessions = AcpSessions::default();
+        let (used_first, _) = sessions.select(&first_turn, &settings, None, 0);
+        let (used_last, _) = sessions.select(&first_turn, &settings, None, 0);
+        sessions.keep(
+            "used-last".into(),
+            Some(used_last.record.with_reply("R", None)),
+        );
+        sessions.keep(
+            "used-first".into(),
+            Some(used_first.record.with_reply("R", None)),
+        );
+        let next_turn = turn_a_r_b();
+        let (selection, _) = sessions.select(&next_turn, &settings, None, 0);
+        assert_eq!(
+            selection.ready.map(|(session, _)| session).as_deref(),
+            Some("used-last"),
+            "ADR-0003 the ACP session used last wins among records of the same length"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_startup_session_is_not_used_again() {
+        for (forgotten, expected) in [("other", Some("startup")), ("startup", None)] {
+            let turn = turn_a();
+            let settings = Session::for_turn(&turn);
+            let mut sessions = AcpSessions::fixture(Vec::new(), Some("startup".into()), 0);
+            sessions.forget(forgotten.into());
+            let (selection, _) = sessions.select(&turn, &settings, None, 0);
+            assert_eq!(
+                selection.ready.map(|(session, _)| session).as_deref(),
+                expected,
+                "a forget of {forgotten}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_runtime_failure_drops_the_startup_session() {
+        for (failed, expected) in [(false, Some("startup")), (true, None)] {
+            let turn = turn_a();
+            let settings = Session::for_turn(&turn);
+            let mut sessions = AcpSessions::fixture(Vec::new(), Some("startup".into()), 0);
+            if failed {
+                sessions.runtime_failed();
+            }
+            let (selection, _) = sessions.select(&turn, &settings, None, 0);
+            assert_eq!(
+                selection.ready.map(|(session, _)| session).as_deref(),
+                expected,
+                "failed={failed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_checked_session_is_forgotten_when_a_record_continues_the_request() {
+        let first_turn = turn_a();
+        let settings = Session::for_turn(&first_turn);
+        let mut sessions = AcpSessions::default();
+        let (selection, _) = sessions.select(&first_turn, &settings, None, 0);
+        sessions.keep(
+            "recorded".into(),
+            Some(selection.record.with_reply("R", None)),
+        );
+        let next_turn = turn_a_r_b();
+        let (selection, commands) =
+            sessions.select(&next_turn, &settings, Some("checked".into()), 0);
+        assert_eq!(
+            selection.ready.map(|(session, _)| session).as_deref(),
+            Some("recorded")
+        );
+        assert!(
+            matches!(&commands[..], [Command::Forget(session)] if session == "checked"),
+            "the unused checked session is forgotten"
         );
     }
 }

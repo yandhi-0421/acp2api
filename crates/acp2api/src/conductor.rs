@@ -2,12 +2,13 @@ mod keep_alive;
 mod lockout;
 mod quota;
 mod records;
+mod request;
 mod retry;
 pub(crate) mod sign_in;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
-    conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
+    conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest},
     messages::OwnerMessage,
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
@@ -16,6 +17,7 @@ use agent_client_protocol_schema::v1::StopReason;
 use keep_alive::KEEP_ALIVE_INTERVAL;
 pub(crate) use keep_alive::NO_UPDATE_LIMIT;
 use records::{OutstandingWork, PendingCompletion};
+use request::{Active, Failure};
 pub(crate) use retry::WAIT_SECONDS;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -212,12 +214,7 @@ impl QuotaQuery {
             QuotaPurpose::Refresh(_) => unreachable!(),
         };
         let active = response.take().unwrap();
-        commands.push(Command::Complete(crate::journal::Completion {
-            request: active.request,
-            session: active.session,
-            session_use: Some(active.kind),
-            outcome: crate::journal::Outcome::Disconnected,
-        }));
+        commands.push(active.disconnected());
     }
 }
 enum QuotaPurpose {
@@ -367,7 +364,7 @@ impl Work {
     }
     fn update_deadline(&self) -> Option<Moment> {
         match self {
-            Self::AcceptedWorking(Active { phase, .. }) => phase.update_deadline(),
+            Self::AcceptedWorking(active) => active.update_deadline(),
             _ => None,
         }
     }
@@ -380,11 +377,8 @@ impl Work {
     }
     fn completion_deadline(&self) -> Option<Moment> {
         match self {
-            Self::AcceptedWorking(Active {
-                phase: Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. },
-                ..
-            })
-            | Self::QuotaWorking {
+            Self::AcceptedWorking(active) => active.completion_deadline(),
+            Self::QuotaWorking {
                 phase: QuotaPhase::Settling { at, .. },
                 ..
             } => Some(*at),
@@ -406,228 +400,6 @@ impl Session {
                 crate::conversation::ToolChoice::Auto => turn.tools.clone(),
             },
         }
-    }
-}
-enum Phase {
-    Completing,
-    Preparing(PromptRequest),
-    Prompt {
-        update_deadline: Moment,
-    },
-    AwaitingQuotaEnd {
-        wait: quota::Wait,
-        update_deadline: Option<Moment>,
-    },
-    QuotaSettling {
-        at: Moment,
-        wait: quota::Wait,
-    },
-    Settling {
-        at: Moment,
-        can_continue: bool,
-        result: Result<(), Failure>,
-    },
-}
-impl Phase {
-    fn prompt(now: Moment) -> Self {
-        Self::Prompt {
-            update_deadline: now + NO_UPDATE_LIMIT,
-        }
-    }
-    fn settled(&self) -> bool {
-        matches!(self, Self::Settling { .. } | Self::QuotaSettling { .. })
-    }
-    fn update_deadline(&self) -> Option<Moment> {
-        match self {
-            Self::Prompt { update_deadline } => Some(*update_deadline),
-            Self::AwaitingQuotaEnd {
-                update_deadline, ..
-            } => *update_deadline,
-            _ => None,
-        }
-    }
-}
-struct Failure {
-    message: crate::messages::Message,
-    at: Moment,
-}
-impl Failure {
-    fn at(message: crate::messages::Message, at: Moment) -> Self {
-        Self { message, at }
-    }
-}
-struct Active {
-    reply: ResponseChannel,
-    request: crate::journal::Request,
-    session: Option<String>,
-    record: records::RequestRecord,
-    client_tools_hash: crate::conversation::ToolSetHash,
-    kind: crate::journal::SessionUse,
-    held: Option<String>,
-    text: String,
-    thought_dropped: bool,
-    input_tokens: u64,
-    model: String,
-    model_name: String,
-    effort: EffortAsk,
-    phase: Phase,
-    tool_call: Option<crate::conversation::ToolCall>,
-    stop: crate::conversation::Stop,
-    stops: Vec<String>,
-    stop_prefix: String,
-}
-impl Active {
-    fn finish(
-        mut self,
-        result: Result<(), Failure>,
-        now: Moment,
-        catalog: Option<&crate::catalog::Catalog>,
-    ) -> (
-        Vec<Command>,
-        Option<retry::Wait>,
-        Option<records::RequestRecord>,
-    ) {
-        let mut commands = Vec::new();
-        let (can_continue, result) = match std::mem::replace(&mut self.phase, Phase::Completing) {
-            Phase::Settling {
-                can_continue,
-                result: pending,
-                ..
-            } => (can_continue, result.and(pending)),
-            Phase::Completing
-            | Phase::Preparing(_)
-            | Phase::Prompt { .. }
-            | Phase::AwaitingQuotaEnd { .. }
-            | Phase::QuotaSettling { .. } => (false, result),
-        };
-        let tool_hash = self
-            .tool_call
-            .as_ref()
-            .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
-        let retry = result
-            .as_ref()
-            .err()
-            .and_then(|failure| retry::Wait::after(&self, failure, catalog));
-        if result.as_ref().is_err_and(|failure| {
-            !matches!(
-                failure.message,
-                crate::messages::Message::MaxTurnRequests | crate::messages::Message::NoUpdate
-            )
-        }) {
-            self.held = None;
-        }
-        self.release_or_cut_reply(None, now, &mut commands);
-        let can_continue = can_continue && self.stop.sequence().is_none();
-        let end = result.map_err(|failure| failure.message).map(|()| {
-            let mut output = self.text.clone();
-            if let Some(call) = self.tool_call.take() {
-                output.push_str(&call.arguments);
-                commands.push(Command::Emit(
-                    self.reply.output.clone(),
-                    TurnEvent::ToolCall(call),
-                ));
-            }
-            Usage {
-                input_tokens: self.input_tokens,
-                output_tokens: crate::conversation::estimate_tokens(&output),
-            }
-        });
-        let record = if self.session.is_some() && end.is_ok() && can_continue {
-            Some(self.record.with_reply(&self.text, tool_hash))
-        } else {
-            None
-        };
-        let outcome = match &end {
-            Ok(usage) => crate::journal::Outcome::Success {
-                input: usage.input_tokens,
-                output: usage.output_tokens,
-            },
-            Err(crate::messages::Message::BuiltInToolRan(_)) => {
-                crate::journal::Outcome::BuiltInToolRan
-            }
-            Err(crate::messages::Message::MaxTurnRequests) => {
-                crate::journal::Outcome::MaxTurnRequests
-            }
-            Err(_) => crate::journal::Outcome::Failed,
-        };
-        commands.push(Command::Complete(crate::journal::Completion {
-            request: self.request,
-            session: self.session,
-            session_use: Some(self.kind),
-            outcome,
-        }));
-        if end.is_ok() {
-            commands.push(Command::Emit(
-                self.reply.output.clone(),
-                TurnEvent::Stop(self.stop),
-            ));
-        }
-        commands.push(Command::Emit(self.reply.output, TurnEvent::End(end)));
-        (commands, retry, record)
-    }
-    fn earliest_stop(&self, text: &str) -> Option<(usize, String)> {
-        self.stops
-            .iter()
-            .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
-            .min_by_key(|(at, _)| *at)
-    }
-    fn release_or_cut_reply(
-        &mut self,
-        next: Option<String>,
-        now: Moment,
-        commands: &mut Vec<Command>,
-    ) -> bool {
-        let complete = next.is_none();
-        if !complete && self.stop.sequence().is_some() {
-            return false;
-        }
-        let mut text = std::mem::take(&mut self.stop_prefix);
-        if let Some(held) = self.held.take() {
-            text.push_str(&held);
-        }
-        let previous = text.len();
-        if let Some(next) = next {
-            self.held = Some(next);
-        }
-        let matched = self.earliest_stop(&text);
-        let end = if let Some((at, _)) = &matched {
-            *at
-        } else if complete {
-            text.len()
-        } else {
-            let partial = self
-                .stops
-                .iter()
-                .flat_map(|stop| {
-                    stop.char_indices()
-                        .skip(1)
-                        .map(move |(end, _)| &stop[..end])
-                })
-                .filter(|prefix| text.ends_with(prefix))
-                .map(str::len)
-                .max()
-                .unwrap_or(0);
-            previous - partial
-        };
-        let remaining = text.split_off(end);
-        if !text.is_empty() {
-            self.text.push_str(&text);
-            self.reply.emit(TurnEvent::Text(text), now, commands);
-        }
-        if !complete {
-            self.stop_prefix = remaining;
-        }
-        let matched = matched.or_else(|| {
-            let combined = format!("{}{}", self.stop_prefix, self.held.as_deref().unwrap_or(""));
-            self.earliest_stop(&combined)
-        });
-        if let Some((_, stop)) = matched
-            && self.stop.sequence().is_none()
-        {
-            self.stop = crate::conversation::Stop::Sequence(stop);
-            return !complete;
-        }
-        false
     }
 }
 struct UnavailableReason {
@@ -1096,7 +868,7 @@ impl Core {
                 | Work::QuotaQueued { .. }
                 | Work::ModelsQueued(_)
                 | Work::ModelsReading(_) => None,
-                Work::AcceptedWorking(active) => active.session.as_deref(),
+                Work::AcceptedWorking(active) => active.session(),
                 Work::Retiring(outstanding) => outstanding.session(),
                 Work::QuotaWorking { phase, .. } => phase.session(),
             };
@@ -1702,15 +1474,7 @@ impl Core {
                                 }
                                 entry => {
                                     let active = entry.execution_mut().unwrap();
-                                    active.session = Some(session.clone());
-                                    if let Phase::AwaitingQuotaEnd { wait, .. } = &active.phase {
-                                        active.phase = Phase::QuotaSettling {
-                                            at: now,
-                                            wait: wait.clone(),
-                                        };
-                                    } else if let Phase::Preparing(prompt) =
-                                        std::mem::replace(&mut active.phase, Phase::prompt(now))
-                                    {
+                                    if let Some(prompt) = active.prepared(session.clone(), now) {
                                         if let Some(message) = self.refusal(now) {
                                             self.finish(
                                                 id,
@@ -1760,11 +1524,7 @@ impl Core {
                                 } else {
                                     let mut active =
                                         self.work.remove(&id).unwrap().into_active().unwrap();
-                                    active.phase = Phase::Settling {
-                                        at: now,
-                                        can_continue: false,
-                                        result: Ok(()),
-                                    };
+                                    active.quota_settled();
                                     self.enqueue_quota(
                                         QuotaPurpose::Reset {
                                             wait,
@@ -1812,16 +1572,7 @@ impl Core {
                                     &mut commands,
                                 );
                             } else {
-                                active.phase = match active.phase {
-                                    Phase::Settling { at, .. }
-                                    | Phase::QuotaSettling { at, .. } => {
-                                        Phase::QuotaSettling { at, wait }
-                                    }
-                                    _ => Phase::AwaitingQuotaEnd {
-                                        wait,
-                                        update_deadline: active.phase.update_deadline(),
-                                    },
-                                };
+                                active.quota_signal(wait);
                             }
                         } else if !known {
                             let Work::Retiring(outstanding) = &self.work[&id] else {
@@ -2060,10 +1811,10 @@ impl Core {
                 commands.push(Command::Cancel(session.clone()));
             }
             if let Some(active) = work.execution()
-                && active.phase.update_deadline().is_some()
-                && let Some(session) = &active.session
+                && matches!(active.exit(), request::Exit::CancelAndRetire)
+                && let Some(session) = active.session()
             {
-                commands.push(Command::Cancel(session.clone()));
+                commands.push(Command::Cancel(session.to_owned()));
             }
         }
         while let Some(id) = self.work.keys().next().copied() {
@@ -2117,19 +1868,18 @@ impl Core {
         } = selection;
         let prompt = PromptRequest {
             blocks: prompt,
-            model: request.model.model,
+            model: request.model.model.clone(),
             level: request.model.level,
         };
-        let model = prompt.model.clone();
         let work = request.request.id.clone();
-        let (session, phase) = match ready {
+        let (session, start) = match ready {
             Some((id, records::Location::Loaded)) => {
                 commands.push(Command::Prompt {
                     work: work.clone(),
                     session: id.clone(),
                     prompt,
                 });
-                (Some(id), Phase::prompt(now))
+                (Some(id), request::Start::Prompt(now))
             }
             Some((session, records::Location::Unloaded(cwd))) => {
                 commands.push(Command::Prepare {
@@ -2137,7 +1887,7 @@ impl Core {
                     settings: settings.clone(),
                     load: Some((session.clone(), cwd)),
                 });
-                (Some(session), Phase::Preparing(prompt))
+                (Some(session), request::Start::Prepare(prompt))
             }
             None => {
                 commands.push(Command::Prepare {
@@ -2145,31 +1895,12 @@ impl Core {
                     settings: settings.clone(),
                     load: None,
                 });
-                (None, Phase::Preparing(prompt))
+                (None, request::Start::Prepare(prompt))
             }
         };
         self.work.insert(
             id,
-            Work::AcceptedWorking(Active {
-                reply: request.reply,
-                request: request.request,
-                session,
-                record,
-                client_tools_hash: crate::conversation::tool_set_hash(&request.turn.tools),
-                kind,
-                held: None,
-                text: String::new(),
-                thought_dropped: false,
-                input_tokens: request.turn.input_tokens,
-                model,
-                model_name: request.turn.model,
-                effort: request.turn.effort,
-                phase,
-                tool_call: None,
-                stop: crate::conversation::Stop::EndTurn,
-                stops: request.turn.stop,
-                stop_prefix: String::new(),
-            }),
+            Work::AcceptedWorking(Active::new(request, session, start, record, kind)),
         );
         true
     }
@@ -2415,93 +2146,39 @@ impl Core {
                     .unwrap()
                     .execution_mut()
                     .unwrap()
-                    .phase = Phase::QuotaSettling {
-                    at: now.saturating_add(SETTLE_DELAY),
-                    wait,
-                };
+                    .quota_failure(wait, now);
             }
             return;
         }
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
-        match &mut active.phase {
-            Phase::Prompt { .. } => active.phase = Phase::prompt(now),
-            Phase::AwaitingQuotaEnd {
-                update_deadline: Some(update_deadline),
-                ..
-            } => {
-                *update_deadline = now + NO_UPDATE_LIMIT;
-            }
-            _ => {}
-        }
-        if matches!(
-            self.work[&id].execution().unwrap().phase,
-            Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
-        ) {
-            let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
-            match update {
-                TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
-                    if let Phase::AwaitingQuotaEnd { wait, .. } = &active.phase {
-                        active.phase = Phase::QuotaSettling {
-                            at: now.saturating_add(SETTLE_DELAY),
-                            wait: wait.clone(),
-                        };
-                    }
-                }
-                TurnUpdate::Permission { request, .. }
-                | TurnUpdate::RefusedPermission { request, .. } => {
-                    commands.push(Command::Permission(request))
-                }
-                _ => {}
-            }
-            return;
-        }
-        let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
+        let route = active.update_received(now);
+        let quota_settlement = matches!(route, request::UpdateRoute::QuotaSettlement);
         match update {
+            TurnUpdate::PromptEnded { stop_reason } => {
+                active.prompt_turn_ended(request::PromptTurnEnd::Prompt(stop_reason), now);
+            }
+            TurnUpdate::Failed(error) => {
+                active.prompt_turn_ended(request::PromptTurnEnd::Failed(error), now)
+            }
+            TurnUpdate::Permission { request, .. }
+            | TurnUpdate::RefusedPermission { request, .. }
+                if quota_settlement =>
+            {
+                commands.push(Command::Permission(request));
+            }
+            _ if quota_settlement => {}
             TurnUpdate::Activity => {}
             TurnUpdate::Text(text) => {
-                if active.tool_call.is_none()
-                    && active.release_or_cut_reply(Some(text), now, commands)
-                {
-                    let session = active.session.as_ref().unwrap().clone();
+                if matches!(
+                    active.text_received(text, now, commands),
+                    request::PromptTurnAction::Cancel
+                ) {
+                    let session = active.session().unwrap().to_owned();
                     commands.push(self.sessions.cancel(session, now));
                 }
             }
-            TurnUpdate::Usage { used, .. } => active.input_tokens = used,
-            TurnUpdate::ThoughtDropped => {
-                if !active.thought_dropped {
-                    active.thought_dropped = true;
-                    commands.push(Command::Diagnostic(
-                        active.request.clone(),
-                        crate::journal::Diagnostic::DroppedThoughtText,
-                    ));
-                }
-            }
-            TurnUpdate::PromptEnded { stop_reason } => {
-                if stop_reason == Some(StopReason::Refusal) {
-                    active.stop = crate::conversation::Stop::Refusal;
-                }
-                if stop_reason == Some(StopReason::MaxTokens) && active.stop.sequence().is_none() {
-                    active.stop = crate::conversation::Stop::MaxTokens;
-                }
-                active.phase = Phase::Settling {
-                    at: now.saturating_add(SETTLE_DELAY),
-                    result: if stop_reason == Some(StopReason::MaxTurnRequests) {
-                        Err(Failure::at(crate::messages::Message::MaxTurnRequests, now))
-                    } else {
-                        Ok(())
-                    },
-                    can_continue: stop_reason == Some(StopReason::EndTurn)
-                        || stop_reason == Some(StopReason::MaxTokens)
-                        || stop_reason == Some(StopReason::Cancelled) && active.tool_call.is_some(),
-                };
-            }
-            TurnUpdate::Failed(error) => {
-                active.phase = Phase::Settling {
-                    at: now.saturating_add(SETTLE_DELAY),
-                    can_continue: false,
-                    result: Err(Failure::at(error, now)),
-                }
-            }
+            TurnUpdate::Usage { used, .. } => active.usage_received(used),
+            TurnUpdate::ThoughtDropped => commands.extend(active.thought_dropped()),
             TurnUpdate::UnpermittedTool(name) => {
                 let notice = Notice {
                     id: active.request.id.clone(),
@@ -2533,10 +2210,10 @@ impl Core {
                 commands.push(Command::Permission(request));
             }
             TurnUpdate::Permission { request, call } => {
-                let cancel =
-                    matches!(active.phase, Phase::Prompt { .. }) && active.tool_call.is_none();
-                if cancel {
-                    active.tool_call = Some(call);
+                if matches!(
+                    active.client_tool_called(call),
+                    request::PromptTurnAction::Cancel
+                ) {
                     commands.push(self.sessions.cancel(session, now));
                 }
                 commands.push(Command::Permission(request));
@@ -2648,7 +2325,10 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        if self.work[&id].update_deadline().is_some() {
+        if self.work[&id]
+            .execution()
+            .is_some_and(|active| matches!(active.exit(), request::Exit::CancelAndRetire))
+        {
             commands.push(self.sessions.cancel(session, now));
         }
         self.end_request(id, Failure::at(error, now), now, commands);
@@ -2663,8 +2343,7 @@ impl Core {
     }
     /// A request that leaves a quota wait without its usage check hands the reset query on.
     fn keep_quota_wait_reset_query(&mut self, active: &Active) {
-        if let Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } =
-            &active.phase
+        if let Some(wait) = active.quota_wait()
             && self.is_current_quota_wait(wait)
         {
             self.enqueue_reset_query(wait.clone(), Some(active.model.clone()));
@@ -2678,7 +2357,7 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
-        let outstanding = (!active.phase.settled())
+        let outstanding = (!matches!(active.exit(), request::Exit::Settled))
             .then(|| OutstandingWork::from_active(&active, PendingCompletion::AlreadyCompleted));
         let (forget, completion) = self.complete_request(active, Err(error), now);
         commands.extend(completion);
@@ -2722,50 +2401,38 @@ impl Core {
             Work::Retiring(outstanding) => commands.extend(outstanding.finish()),
             work => {
                 let mut active = work.into_active().unwrap();
-                let result = match std::mem::replace(&mut active.phase, Phase::Completing) {
-                    Phase::QuotaSettling { wait, .. } if result.is_ok() => {
-                        if self.can_query_quota_reset(&wait) {
-                            let session = active.session.clone();
-                            active.phase = Phase::Settling {
-                                at: 0,
-                                can_continue: false,
-                                result: Ok(()),
-                            };
-                            self.enqueue_quota(
-                                QuotaPurpose::Reset {
-                                    wait,
-                                    model: Some(active.model.clone()),
-                                    response: Some(active),
-                                },
-                                session,
-                            );
-                            return;
-                        }
-                        Err(Failure::at(
-                            self.refusal(now).unwrap_or_else(|| wait.message(now)),
-                            now,
-                        ))
+                let can_query_reset = active
+                    .quota_wait()
+                    .is_some_and(|wait| self.can_query_quota_reset(wait));
+                match active.end(result, can_query_reset, self.refusal(now), now) {
+                    request::Ending::Complete(result) => {
+                        let (forget, completion) = self.complete_request(active, result, now);
+                        commands.extend(completion);
+                        commands.extend(forget.map(Command::Forget));
                     }
-                    phase => {
-                        active.phase = phase;
-                        result
+                    request::Ending::QueryQuotaReset(wait) => {
+                        let session = active.session().map(str::to_owned);
+                        self.enqueue_quota(
+                            QuotaPurpose::Reset {
+                                wait,
+                                model: Some(active.model.clone()),
+                                response: Some(active),
+                            },
+                            session,
+                        );
                     }
-                };
-                if result.is_ok() && matches!(active.stop, crate::conversation::Stop::Refusal) {
-                    let model = active.model.clone();
-                    let session = active.session.clone();
-                    self.enqueue_quota(
-                        QuotaPurpose::Refusal {
-                            model,
-                            response: Some(active),
-                        },
-                        session,
-                    );
-                    return;
+                    request::Ending::QueryRefusal => {
+                        let model = active.model.clone();
+                        let session = active.session().map(str::to_owned);
+                        self.enqueue_quota(
+                            QuotaPurpose::Refusal {
+                                model,
+                                response: Some(active),
+                            },
+                            session,
+                        );
+                    }
                 }
-                let (forget, completion) = self.complete_request(active, result, now);
-                commands.extend(completion);
-                commands.extend(forget.map(Command::Forget));
             }
         }
     }
@@ -2776,7 +2443,7 @@ impl Core {
         now: Moment,
     ) -> (Option<String>, Vec<Command>) {
         self.keep_quota_wait_reset_query(&active);
-        let session = active.session.clone();
+        let session = active.session().map(str::to_owned);
         let (commands, retry, record) = active.finish(result, now, self.catalog.as_ref());
         self.retry_waits.extend(retry);
         let forget = session.and_then(|session| self.sessions.keep(session, record));
@@ -5202,6 +4869,67 @@ mod tests {
         });
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(actual, Some((Some(25), "acp2api: a request of this conversation failed less than 30 s ago. Send the request again in 25 s. The error was: the official runtime sent no update for 5 minutes, so acp2api cancelled the prompt turn.".into())), "FR-029: M-19 uses the existing 503-row retry wait");
+    }
+
+    #[test]
+    fn a_checked_session_is_forgotten_only_when_its_request_does_not_start() {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-checked-session-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+        for (content, closed, forgotten) in [
+            ("First", true, true),
+            ("First", false, true),
+            ("Other", false, false),
+        ] {
+            let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+            core.handle(Event::Deadline, 300_000, std::time::UNIX_EPOCH);
+            let body =
+                serde_json::json!({"model":"m","messages":[{"role":"user","content":content}]});
+            let turn = crate::dialect::CHAT
+                .parse(&serde_json::to_vec(&body).unwrap())
+                .ok()
+                .unwrap()
+                .turn;
+            let (output, ticket) = mpsc::unbounded_channel();
+            let _ticket = if closed {
+                drop(ticket);
+                None
+            } else {
+                Some(ticket)
+            };
+            let accepted = Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 0),
+                reply: ResponseChannel {
+                    output,
+                    keep_alive: None,
+                },
+            };
+            let commands = core.handle(
+                Event::Checked {
+                    id: 99,
+                    accepted: Some(Box::new(accepted)),
+                    session: "checked".into(),
+                },
+                305_000,
+                std::time::UNIX_EPOCH,
+            );
+            assert_eq!(
+                commands.iter().any(
+                    |command| matches!(command, Command::Forget(session) if session == "checked")
+                ),
+                forgotten,
+                "row {content} closed={closed}"
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
@@ -7653,45 +7381,47 @@ mod tests {
                 .unwrap()
                 .turn;
             let (output, _ticket) = mpsc::unbounded_channel();
+            let record = records::RequestRecord::fixture(
+                crate::conversation::record_hashes(&turn.conversation),
+                crate::conversation::tool_set_hash(&turn.tools),
+                1,
+                100_000,
+            );
+            let accepted = Accepted {
+                turn,
+                model: crate::catalog::SelectedModel {
+                    model: "gemini-3.8-flash".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: journal.begin(crate::journal::Api::Chat, 0),
+                reply: ResponseChannel {
+                    output: output.clone(),
+                    keep_alive: None,
+                },
+            };
+            let mut active = Active::new(
+                accepted,
+                Some("existing".into()),
+                request::Start::Prompt(0),
+                record,
+                crate::journal::SessionUse::New,
+            );
+            assert!(matches!(
+                active.text_received("Before".into(), 0, &mut Vec::new()),
+                request::PromptTurnAction::Continue
+            ));
+            assert!(matches!(
+                active.client_tool_called(crate::conversation::ToolCall {
+                    name: "read".into(),
+                    arguments: "{}".into(),
+                    kind: crate::conversation::ToolKind::Function,
+                    namespace: None,
+                }),
+                request::PromptTurnAction::Cancel
+            ));
             let mut core = Core {
-                work: BTreeMap::from([(
-                    0,
-                    Work::AcceptedWorking(Active {
-                        reply: ResponseChannel {
-                            output: output.clone(),
-                            keep_alive: None,
-                        },
-                        request: journal.begin(crate::journal::Api::Chat, 0),
-                        session: Some("existing".into()),
-                        record: records::RequestRecord::fixture(
-                            crate::conversation::record_hashes(&turn.conversation),
-                            crate::conversation::tool_set_hash(&turn.tools),
-                            1,
-                            100_000,
-                        ),
-                        client_tools_hash: crate::conversation::tool_set_hash(&turn.tools),
-                        kind: crate::journal::SessionUse::New,
-                        held: Some("Before".into()),
-                        text: String::new(),
-                        thought_dropped: false,
-                        input_tokens: turn.input_tokens,
-                        model: "gemini-3.8-flash".into(),
-                        model_name: "gemini-3.8-flash".into(),
-                        effort: EffortAsk::Absent,
-                        phase: Phase::Prompt {
-                            update_deadline: NO_UPDATE_LIMIT,
-                        },
-                        tool_call: Some(crate::conversation::ToolCall {
-                            name: "read".into(),
-                            arguments: "{}".into(),
-                            kind: crate::conversation::ToolKind::Function,
-                            namespace: None,
-                        }),
-                        stop: crate::conversation::Stop::EndTurn,
-                        stops: Vec::new(),
-                        stop_prefix: String::new(),
-                    }),
-                )]),
+                work: BTreeMap::from([(0, Work::AcceptedWorking(active))]),
                 next_work: 1,
                 sessions: records::AcpSessions::fixture(Vec::new(), None, 1),
                 ..Core::fixture(1)
