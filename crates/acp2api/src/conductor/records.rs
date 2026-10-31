@@ -267,8 +267,8 @@ impl AcpSessions {
         now: Moment,
     ) -> (Option<OutstandingWork>, Vec<Command>) {
         let mut commands = Vec::new();
-        let ended = active.phase.settled();
-        if active.phase.update_deadline().is_some() {
+        let ended = active.settled();
+        if active.prompt_running() {
             commands.push(self.cancel(active.session.as_ref().unwrap().clone(), now));
         }
         let outstanding = OutstandingWork::from_active(

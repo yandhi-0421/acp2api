@@ -369,7 +369,7 @@ impl Work {
     }
     fn update_deadline(&self) -> Option<Moment> {
         match self {
-            Self::AcceptedWorking(Active { phase, .. }) => phase.update_deadline(),
+            Self::AcceptedWorking(active) => active.update_deadline(),
             _ => None,
         }
     }
@@ -382,11 +382,8 @@ impl Work {
     }
     fn completion_deadline(&self) -> Option<Moment> {
         match self {
-            Self::AcceptedWorking(Active {
-                phase: Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. },
-                ..
-            })
-            | Self::QuotaWorking {
+            Self::AcceptedWorking(active) => active.completion_deadline(),
+            Self::QuotaWorking {
                 phase: QuotaPhase::Settling { at, .. },
                 ..
             } => Some(*at),
@@ -1823,7 +1820,7 @@ impl Core {
                 commands.push(Command::Cancel(session.clone()));
             }
             if let Some(active) = work.execution()
-                && active.phase.update_deadline().is_some()
+                && active.prompt_running()
                 && let Some(session) = &active.session
             {
                 commands.push(Command::Cancel(session.clone()));
@@ -2375,7 +2372,7 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         let active = self.work.remove(&id).unwrap().into_active().unwrap();
-        let outstanding = (!active.phase.settled())
+        let outstanding = (!active.settled())
             .then(|| OutstandingWork::from_active(&active, PendingCompletion::AlreadyCompleted));
         let (forget, completion) = self.complete_request(active, Err(error), now);
         commands.extend(completion);

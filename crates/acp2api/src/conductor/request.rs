@@ -120,6 +120,23 @@ impl Active {
         }
     }
 
+    pub(super) fn update_deadline(&self) -> Option<Moment> {
+        self.phase.update_deadline()
+    }
+    pub(super) fn completion_deadline(&self) -> Option<Moment> {
+        match self.phase {
+            Phase::Settling { at, .. } | Phase::QuotaSettling { at, .. } => Some(at),
+            _ => None,
+        }
+    }
+    /// The prompt turn still runs, so that an end of the request must cancel it.
+    pub(super) fn prompt_running(&self) -> bool {
+        self.phase.update_deadline().is_some()
+    }
+    pub(super) fn settled(&self) -> bool {
+        self.phase.settled()
+    }
+
     pub(super) fn finish(
         mut self,
         result: Result<(), Failure>,
