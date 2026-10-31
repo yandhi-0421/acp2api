@@ -465,6 +465,26 @@ mod tests {
     }
 
     #[test]
+    fn a_runtime_failure_drops_the_startup_session() {
+        for (failed, expected) in [(false, Some("startup")), (true, None)] {
+            let turn = chat_turn(
+                serde_json::json!({"model":"m","messages":[{"role":"user","content":"A"}]}),
+            );
+            let settings = Session::for_turn(&turn);
+            let mut sessions = AcpSessions::fixture(Vec::new(), Some("startup".into()), 0);
+            if failed {
+                sessions.runtime_failed();
+            }
+            let (selection, _) = sessions.select(&turn, &settings, None, 0);
+            assert_eq!(
+                selection.ready.map(|(session, _)| session).as_deref(),
+                expected,
+                "failed={failed}"
+            );
+        }
+    }
+
+    #[test]
     fn a_checked_session_is_forgotten_when_a_record_continues_the_request() {
         let first_turn = chat_turn(serde_json::json!({
             "model": "m",
