@@ -481,7 +481,7 @@ impl Core {
     }
 
     pub(super) fn stopping(&mut self, now: Moment, commands: &mut Vec<Command>) {
-        self.sign_in_wait = None;
+        self.sign_in.end_wait();
         self.lifecycle.state = RuntimeState::Stopping;
         self.end_all_work(
             "stopped",
@@ -497,7 +497,7 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        self.sign_in_wait = None;
+        self.sign_in.end_wait();
         if matches!(self.lifecycle.replacement, Some(Replacement::SignIn)) {
             self.lifecycle.replacement = None;
         }
@@ -519,7 +519,7 @@ impl Core {
     }
 
     pub(super) fn retire_runtime(&mut self) {
-        let sign_in_wait_ended = self.sign_in_wait.take().is_some()
+        let sign_in_wait_ended = self.sign_in.end_wait()
             || matches!(
                 self.lifecycle.state,
                 RuntimeState::Retiring {
@@ -548,7 +548,7 @@ impl Core {
 
     pub(super) fn runtime_failed(&mut self, now: Moment, commands: &mut Vec<Command>) {
         self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, commands);
-        self.sign_in_wait = None;
+        self.sign_in.end_wait();
         self.lifecycle.state = RuntimeState::Restarting;
         self.sessions.runtime_failed();
         self.lifecycle
@@ -642,7 +642,7 @@ impl Core {
     }
 
     pub(super) fn sign_in_wait_ended(&mut self) {
-        self.sign_in_wait = None;
+        self.sign_in.end_wait();
         if matches!(self.lifecycle.state, RuntimeState::Serving) {
             self.lifecycle.state = RuntimeState::Retiring {
                 sign_in_wait_ended: true,
@@ -658,7 +658,7 @@ impl Core {
         if sign_in_required {
             self.require_sign_in(commands);
         } else {
-            self.sign_in_required = false;
+            self.sign_in.clear_required();
         }
     }
 }

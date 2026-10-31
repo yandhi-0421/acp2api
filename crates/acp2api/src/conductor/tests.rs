@@ -18,8 +18,7 @@ impl Core {
             retry_waits: Vec::new(),
             lifecycle: Lifecycle::new(RuntimeState::Serving),
             lockout: None,
-            sign_in_required: false,
-            sign_in_wait: None,
+            sign_in: sign_in::SignIn::default(),
             panel_address: "http://127.0.0.1:8329/".into(),
             state_path: PathBuf::new(),
             view: watch::channel(Arc::new(View::default())).0,
@@ -961,7 +960,7 @@ fn a_successful_sign_in_ends_only_its_own_condition() {
         State::QuotaWait,
         "FR-038 a successful check clears sign-in required during the owner's wait"
     );
-    assert_eq!(core.sign_in_wait.as_ref().unwrap().deadline, 600_000);
+    assert_eq!(core.sign_in.wait().unwrap().deadline, 600_000);
     core.handle(
         Event::Runtime(RuntimeEvent::Authenticated(Ok(()))),
         30_000,

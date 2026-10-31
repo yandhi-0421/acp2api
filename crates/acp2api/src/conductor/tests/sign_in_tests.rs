@@ -9,7 +9,7 @@ fn a_disconnected_sign_in_check_keeps_its_place_until_its_acp_reply() {
     let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
     let (mut core, _, _tickets) = prompting_with_waiter(&journal);
     core.work.clear();
-    core.sign_in_required = true;
+    core.sign_in.set_required();
     core.limit = 1;
     let mut replies = Vec::new();
     let mut leases = Vec::new();
@@ -130,7 +130,7 @@ fn retirement_and_unavailability_end_the_sign_in_wait_in_either_order() {
                 let end = |core: &mut Core| {
                     if deadline {
                         core.handle(Event::Deadline, 600_000, std::time::UNIX_EPOCH);
-                    } else if core.sign_in_wait.is_some() {
+                    } else if core.sign_in.wait().is_some() {
                         core.handle(Event::EndSignInWait, 1, std::time::UNIX_EPOCH);
                     }
                 };
@@ -158,7 +158,7 @@ fn retirement_and_unavailability_end_the_sign_in_wait_in_either_order() {
                     end(&mut core);
                 }
                 assert!(
-                    core.sign_in_wait.is_none(),
+                    core.sign_in.wait().is_none(),
                     "retirement or unavailability ends the sign-in wait"
                 );
                 if unavailable {
@@ -245,7 +245,7 @@ fn aborting_retirement_replaces_a_runtime_with_an_ended_sign_in_wait() {
     core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
     core.handle(Event::RetireRuntime, 1, std::time::UNIX_EPOCH);
     assert!(
-        core.sign_in_wait.is_none(),
+        core.sign_in.wait().is_none(),
         "retirement ends the owner's wait"
     );
     core.handle(Event::ResumeRuntime, 2, std::time::UNIX_EPOCH);
@@ -277,7 +277,7 @@ fn an_elapsed_quota_reset_completes_a_pending_sign_in_check() {
         ("1970-01-01T00:00:01.000500Z", 0),
     ] {
         let mut core = Core::fixture(2);
-        core.sign_in_required = true;
+        core.sign_in.set_required();
         let mut checks = Vec::new();
         for _ in 0..2 {
             let turn = crate::dialect::CHAT
@@ -312,7 +312,7 @@ fn an_elapsed_quota_reset_completes_a_pending_sign_in_check() {
             wall,
         );
         assert!(
-            !core.sign_in_required,
+            !core.sign_in.required(),
             "the other check cleared sign-in required"
         );
         let error = crate::messages::AcpError {
@@ -356,7 +356,7 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
     for disconnected in [false, true] {
         let (mut core, _, _tickets) = prompting_with_waiter(&journal);
         core.work.clear();
-        core.sign_in_required = true;
+        core.sign_in.set_required();
         let turn = crate::dialect::CHAT
             .parse(br#"{"model":"m","messages":[{"role":"user","content":"Check"}]}"#)
             .ok()
@@ -464,7 +464,7 @@ fn a_successful_request_check_allows_admission_during_the_owners_wait() {
     let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
     let (mut core, _, _tickets) = prompting_with_waiter(&journal);
     core.work.clear();
-    core.sign_in_required = true;
+    core.sign_in.set_required();
     core.handle(Event::StartSignIn, 0, std::time::UNIX_EPOCH);
     let turn = crate::dialect::CHAT
         .parse(br#"{"model":"m","messages":[{"role":"user","content":"Check"}]}"#)
@@ -501,7 +501,7 @@ fn a_successful_request_check_allows_admission_during_the_owners_wait() {
         "FR-038 the successful request check clears sign-in required"
     );
     assert!(
-        core.sign_in_wait.is_some(),
+        core.sign_in.wait().is_some(),
         "the owner still has its independent wait"
     );
     assert!(
@@ -533,7 +533,7 @@ fn the_owners_wait_shows_the_latest_sign_in_address() {
         );
     }
     assert_eq!(
-        core.sign_in_wait.as_ref().unwrap().address.as_deref(),
+        core.sign_in.wait().unwrap().address.as_deref(),
         Some("https://accounts.example.com/latest")
     );
     std::fs::remove_dir_all(folder).unwrap();
@@ -561,7 +561,7 @@ fn a_sign_in_error_from_authenticate_starts_the_required_condition() {
             std::time::UNIX_EPOCH,
         );
         assert_eq!(
-            core.sign_in_required,
+            core.sign_in.required(),
             code == 401,
             "FR-038 the authentication error selects sign-in required"
         );

@@ -130,7 +130,7 @@ impl Core {
         let message = Message::lockout(&evidence, &self.panel_address, false);
         let first_message = Message::lockout(&evidence, &self.panel_address, true);
         self.lockout = Some(evidence.clone());
-        self.sign_in_wait = None;
+        self.sign_in.end_wait();
         let before = commands.len();
         self.end_all_work(
             "lockout",

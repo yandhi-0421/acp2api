@@ -17,13 +17,47 @@ impl Wait {
         }
     }
 }
+#[derive(Default)]
+pub(super) struct SignIn {
+    required: bool,
+    wait: Option<Wait>,
+}
+impl SignIn {
+    pub(super) fn required(&self) -> bool {
+        self.required
+    }
+    pub(super) fn clear_required(&mut self) {
+        self.required = false;
+    }
+    pub(super) fn wait(&self) -> Option<&Wait> {
+        self.wait.as_ref()
+    }
+    pub(super) fn start_wait(&mut self, now: Moment) {
+        self.wait = Some(Wait::new(now));
+    }
+    pub(super) fn record_address(&mut self, address: String) {
+        if let Some(wait) = &mut self.wait {
+            wait.address = Some(address);
+        }
+    }
+    /// Returns true when a wait was running.
+    pub(super) fn end_wait(&mut self) -> bool {
+        self.wait.take().is_some()
+    }
+}
+#[cfg(test)]
+impl SignIn {
+    pub(super) fn set_required(&mut self) {
+        self.required = true;
+    }
+}
 impl Core {
     pub(super) fn sign_in_message(&self) -> Message {
         Message::SignInRequired(format!("{}#{}", self.panel_address, ENTRY_ID))
     }
     pub(super) fn require_sign_in(&mut self, commands: &mut Vec<Command>) {
-        if !self.sign_in_required {
-            self.sign_in_required = true;
+        if !self.sign_in.required {
+            self.sign_in.required = true;
             self.refuse_queued(
                 Outcome::Refused("sign_in_required"),
                 self.sign_in_message(),

@@ -151,8 +151,7 @@ type Output = mpsc::UnboundedSender<(TurnEvent, Hold)>;
 type BuildReply = oneshot::Sender<Result<Option<OwnerMessage>, LaunchFailure>>;
 struct Core {
     lockout: Option<crate::store::Lockout>,
-    sign_in_required: bool,
-    sign_in_wait: Option<sign_in::Wait>,
+    sign_in: sign_in::SignIn,
     panel_address: String,
     state_path: PathBuf,
     view: watch::Sender<Arc<View>>,
@@ -207,7 +206,7 @@ impl Core {
             State::Lockout
         } else if matches!(self.lifecycle.state(), RuntimeState::Unavailable(_)) {
             State::RuntimeUnavailable
-        } else if self.sign_in_required {
+        } else if self.sign_in.required() {
             State::SignInRequired
         } else if self.quota.wait().is_some() {
             State::QuotaWait
@@ -255,7 +254,7 @@ impl Core {
             .filter_map(Work::deadline)
             .chain(self.sessions.next_deadline())
             .chain(self.quota.wait().map(|wait| wait.deadline))
-            .chain(self.sign_in_wait.as_ref().map(|wait| wait.deadline))
+            .chain(self.sign_in.wait().map(|wait| wait.deadline))
             .chain(self.retry_waits.iter().map(|wait| wait.deadline))
             .min()
     }
@@ -271,7 +270,7 @@ impl Core {
         let change = match action {
             OwnerAction::SignIn => {
                 if self.lockout.is_some()
-                    || self.sign_in_wait.is_some()
+                    || self.sign_in.wait().is_some()
                     || !matches!(self.lifecycle.state(), RuntimeState::Serving)
                 {
                     let _ = reply.send(Err(OwnerMessage::SignInCannotStart));
@@ -282,7 +281,7 @@ impl Core {
                 return commands;
             }
             OwnerAction::CancelSignIn => {
-                let commands = if self.sign_in_wait.is_some() {
+                let commands = if self.sign_in.wait().is_some() {
                     self.handle(Event::EndSignInWait, clock.now(), clock.wall())
                 } else {
                     Vec::new()
@@ -337,10 +336,7 @@ impl Core {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
         if matches!(event, Event::Deadline)
-            && self
-                .sign_in_wait
-                .as_ref()
-                .is_some_and(|wait| wait.deadline <= now)
+            && self.sign_in.wait().is_some_and(|wait| wait.deadline <= now)
         {
             return self.handle(Event::EndSignInWait, now, wall);
         }
@@ -404,19 +400,17 @@ impl Core {
                 }
             }
             (None, Event::StartSignIn) => {
-                self.sign_in_wait = Some(sign_in::Wait::new(now));
+                self.sign_in.start_wait(now);
                 commands.push(Command::Authenticate);
             }
             (None, Event::EndSignInWait) => self.sign_in_wait_ended(),
             (None, Event::Runtime(RuntimeEvent::SignInAddress(address))) => {
-                if let Some(wait) = &mut self.sign_in_wait {
-                    wait.address = Some(address);
-                }
+                self.sign_in.record_address(address);
             }
             (None, Event::Runtime(RuntimeEvent::Authenticated(result))) => {
-                self.sign_in_wait = None;
+                self.sign_in.end_wait();
                 if result.is_ok() {
-                    self.sign_in_required = false;
+                    self.sign_in.clear_required();
                 }
             }
             (None, Event::RuntimeReady { sign_in_required }) => {
@@ -554,7 +548,7 @@ impl Core {
         self.view.send_replace(Arc::new(View {
             model_names: self.model_names.clone(),
             context_sizes: self.context_sizes.clone(),
-            sign_in_wait: self.sign_in_wait.clone(),
+            sign_in_wait: self.sign_in.wait().cloned(),
             lockout_evidence: self
                 .lockout
                 .as_ref()
@@ -611,8 +605,7 @@ impl Conductor {
                     RuntimeState::Serving
                 }),
                 lockout,
-                sign_in_required: false,
-                sign_in_wait: None,
+                sign_in: sign_in::SignIn::default(),
                 panel_address,
                 state_path,
                 view,

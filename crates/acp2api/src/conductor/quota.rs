@@ -543,7 +543,7 @@ impl Core {
             .owner_work_refusal()
             .map(OwnerMessage::Api)
             .or_else(|| {
-                if self.sign_in_required {
+                if self.sign_in.required() {
                     Some(OwnerMessage::Api(self.sign_in_message()))
                 } else if self
                     .quota

@@ -665,7 +665,7 @@ impl Core {
             match result {
                 Ok((session, catalog)) => {
                     self.catalog = Some(catalog);
-                    self.sign_in_required = false;
+                    self.sign_in.clear_required();
                     match self.work.get_mut(&id).unwrap() {
                         Work::ModelsReading(_) => {
                             commands.extend(self.sessions.models_ready(session));

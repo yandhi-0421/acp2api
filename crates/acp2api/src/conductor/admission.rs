@@ -25,7 +25,7 @@ impl Core {
                 reason.message.clone(),
             ));
         }
-        if self.sign_in_required {
+        if self.sign_in.required() {
             return Some(self.sign_in_message());
         }
         self.quota
@@ -106,7 +106,7 @@ impl Core {
         clock: &dyn Clock,
     ) -> Option<(Event, Hold)> {
         let TurnWork { pending, hold } = work;
-        if self.sign_in_required
+        if self.sign_in.required()
             && self.lockout.is_none()
             && !matches!(self.lifecycle.state(), RuntimeState::Unavailable(_))
         {
@@ -343,9 +343,9 @@ impl Core {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
                 Work::ModelsQueued(_) => Some(*id),
                 Work::CheckQueued(_) => Some(*id),
-                Work::QuotaQueued { .. } if !self.sign_in_required => Some(*id),
+                Work::QuotaQueued { .. } if !self.sign_in.required() => Some(*id),
                 Work::AcceptedQueued(_)
-                    if !self.sign_in_required && self.quota.wait().is_none() =>
+                    if !self.sign_in.required() && self.quota.wait().is_none() =>
                 {
                     Some(*id)
                 }
