@@ -88,7 +88,6 @@ impl Default for View {
     }
 }
 pub(crate) enum OwnerAction {
-    #[allow(dead_code)]
     EndLockout,
     SignIn,
     CancelSignIn,
