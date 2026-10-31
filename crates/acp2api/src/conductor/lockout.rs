@@ -69,6 +69,7 @@ impl Core {
         };
         let failed_reply = match runtime_event {
             RuntimeEvent::UpstreamError { session, .. } => self
+                .work
                 .by_session(session)
                 .and_then(|id| self.work[&id].execution())
                 .map(|active| active.reply_text())
@@ -82,9 +83,9 @@ impl Core {
             && self.lockout.is_none()
         {
             let signalling_work = match runtime_event {
-                RuntimeEvent::Prepared { work, .. } => self.by_request(work),
+                RuntimeEvent::Prepared { work, .. } => self.work.by_request(work),
                 RuntimeEvent::Turn { session, .. }
-                | RuntimeEvent::UpstreamError { session, .. } => self.by_session(session),
+                | RuntimeEvent::UpstreamError { session, .. } => self.work.by_session(session),
                 _ => None,
             };
             *event = Event::Lockout {

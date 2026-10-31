@@ -25,8 +25,7 @@ impl Core {
             catalog: None,
             model_names: Vec::new(),
             context_sizes: BTreeMap::new(),
-            work: BTreeMap::new(),
-            next_work: 0,
+            work: WorkTable::default(),
             sessions: records::AcpSessions::default(),
             limit,
             notices: watch::channel(Arc::new(Vec::new())).0,
@@ -860,7 +859,7 @@ fn a_build_change_finishes_a_before_preparing_b_on_the_new_runtime() {
     ));
     let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
     let (mut core, queued, tickets) = prompting_with_waiter(&journal);
-    let id = core.by_request(&queued).unwrap();
+    let id = core.work.by_request(&queued).unwrap();
     let mut b = core.work.remove(&id).unwrap().into_queued().unwrap();
     b.turn = crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({
         "model":"m", "messages":[{"role":"system","content":"B's instructions"},{"role":"user","content":"B"}]

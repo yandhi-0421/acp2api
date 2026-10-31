@@ -97,7 +97,7 @@ impl Core {
             .unwrap_or_default())
     }
     pub(super) fn queue_full(&self) -> bool {
-        self.work.values().filter(|work| work.is_queued()).count() == QUEUE_CAPACITY
+        self.work.queued() == QUEUE_CAPACITY
     }
     pub(super) fn admit(
         &self,
@@ -331,11 +331,7 @@ impl Core {
         }));
     }
     pub(super) fn start_queued_work(&mut self, now: Moment, commands: &mut Vec<Command>) {
-        let mut places = self
-            .work
-            .values()
-            .filter(|work| work.occupies_place())
-            .count();
+        let mut places = self.work.places();
         while self.lockout.is_none()
             && matches!(self.lifecycle.state(), RuntimeState::Serving)
             && places < usize::from(self.limit)
@@ -407,15 +403,11 @@ impl Core {
             if let Some(error) = error {
                 let _ = reply.send(Err(OwnerMessage::Api(error)));
             } else {
-                let id = self.next_work;
-                self.next_work += 1;
-                self.work.insert(
-                    id,
-                    Work::ModelsQueued(ModelRead {
-                        work: format!("models-{id}"),
-                        replies: vec![reply],
-                    }),
-                );
+                let id = self.work.next_id();
+                self.work.add(Work::ModelsQueued(ModelRead {
+                    work: format!("models-{id}"),
+                    replies: vec![reply],
+                }));
             }
         }
     }

@@ -163,7 +163,6 @@ struct Core {
     model_names: Vec<String>,
     context_sizes: BTreeMap<String, u64>,
     work: WorkTable,
-    next_work: WorkId,
     sessions: records::AcpSessions,
     limit: u8,
     notices: watch::Sender<Arc<Vec<Notice>>>,
@@ -224,28 +223,6 @@ impl Core {
     ) {
         let mut commands = self.handle(event, clock.now(), clock.wall()).into();
         Conductor::commands(self, runtime, read_open, clock, journal, &mut commands).await;
-    }
-
-    fn by_session(&self, session: &str) -> Option<WorkId> {
-        self.work.iter().find_map(|(id, work)| {
-            let current = match work {
-                Work::CheckQueued(_)
-                | Work::Checking(_)
-                | Work::AcceptedQueued(_)
-                | Work::QuotaQueued { .. }
-                | Work::ModelsQueued(_)
-                | Work::ModelsReading(_) => None,
-                Work::AcceptedWorking(active) => active.session(),
-                Work::Retiring(outstanding) => outstanding.session(),
-                Work::QuotaWorking { phase, .. } => phase.session(),
-            };
-            (current == Some(session)).then_some(*id)
-        })
-    }
-    fn by_request(&self, request: &str) -> Option<WorkId> {
-        self.work
-            .iter()
-            .find_map(|(id, work)| (work.key() == request).then_some(*id))
     }
 
     fn next_deadline(&self) -> Option<Moment> {
@@ -347,11 +324,11 @@ impl Core {
         self.quota.expire(now);
         let work_id = match &event {
             Event::StartFailed(work, _) | Event::Runtime(RuntimeEvent::Prepared { work, .. }) => {
-                self.by_request(work)
+                self.work.by_request(work)
             }
             Event::Runtime(
                 RuntimeEvent::Turn { session, .. } | RuntimeEvent::UpstreamError { session, .. },
-            ) => self.by_session(session),
+            ) => self.work.by_session(session),
             _ => None,
         };
         if let Event::Runtime(RuntimeEvent::UpstreamError { session, error }) = &event {
@@ -381,9 +358,7 @@ impl Core {
                 self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
             }
             (None, Event::CheckPending(request)) => {
-                self.work
-                    .insert(self.next_work, Work::CheckQueued(*request));
-                self.next_work += 1;
+                self.work.add(Work::CheckQueued(*request));
             }
             (
                 None,
@@ -428,9 +403,7 @@ impl Core {
             (None, Event::RetireRuntime) => self.retire_runtime(),
             (None, Event::ResumeRuntime) => self.resume_runtime(),
             (None, Event::Accepted(request)) => {
-                self.work
-                    .insert(self.next_work, Work::AcceptedQueued(*request));
-                self.next_work += 1;
+                self.work.add(Work::AcceptedQueued(*request));
             }
             (None, Event::DismissNotice(id)) => {
                 self.notices.send_if_modified(|notices| {
@@ -455,7 +428,7 @@ impl Core {
             }
             (None, Event::Runtime(RuntimeEvent::Retired { session })) => {
                 self.sessions.cancel_ended(&session);
-                if let Some(id) = self.by_session(&session) {
+                if let Some(id) = self.work.by_session(&session) {
                     self.finish(id, Ok(()), now, &mut commands);
                 }
             }
@@ -555,12 +528,8 @@ impl Core {
                 .map(|evidence| evidence.original_error_text.clone()),
             state: self.state(),
             runtime_process: self.lifecycle.state().runtime_process(),
-            places: self
-                .work
-                .values()
-                .filter(|work| work.occupies_place())
-                .count(),
-            queued: self.work.values().filter(|work| work.is_queued()).count(),
+            places: self.work.places(),
+            queued: self.work.queued(),
         }));
     }
 }
@@ -614,8 +583,7 @@ impl Conductor {
                 context_sizes: BTreeMap::new(),
                 sessions: records::AcpSessions::default(),
                 limit,
-                work: BTreeMap::new(),
-                next_work: 0,
+                work: WorkTable::default(),
                 notices,
             };
             let mut read_open = false;

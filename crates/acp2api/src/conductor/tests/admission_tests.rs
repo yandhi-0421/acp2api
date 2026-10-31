@@ -424,7 +424,7 @@ fn a_retired_configuration_call_dispatches_the_next_request() {
         std::env::temp_dir().join(format!("acp2api-config-retirement-{}", std::process::id()));
     let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
     let (mut core, queued, _tickets) = prompting_with_waiter(&journal);
-    let request = core.work[&core.by_session("running").unwrap()]
+    let request = core.work[&core.work.by_session("running").unwrap()]
         .key()
         .to_owned();
     let disconnected = core.handle(Event::Disconnected(request), 1, std::time::UNIX_EPOCH);

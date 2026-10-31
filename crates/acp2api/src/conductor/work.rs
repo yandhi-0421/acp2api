@@ -28,7 +28,65 @@ pub(super) struct ResponseChannel {
 }
 
 pub(super) type WorkId = u64;
-pub(super) type WorkTable = BTreeMap<WorkId, Work>;
+
+#[derive(Default)]
+pub(super) struct WorkTable {
+    items: BTreeMap<WorkId, Work>,
+    next: WorkId,
+}
+impl WorkTable {
+    /// Adds work at the end of the queue.
+    pub(super) fn add(&mut self, work: Work) -> WorkId {
+        let id = self.next;
+        self.next += 1;
+        self.items.insert(id, work);
+        id
+    }
+    pub(super) fn next_id(&self) -> WorkId {
+        self.next
+    }
+    pub(super) fn places(&self) -> usize {
+        self.items
+            .values()
+            .filter(|work| work.occupies_place())
+            .count()
+    }
+    pub(super) fn queued(&self) -> usize {
+        self.items.values().filter(|work| work.is_queued()).count()
+    }
+    pub(super) fn by_session(&self, session: &str) -> Option<WorkId> {
+        self.items.iter().find_map(|(id, work)| {
+            let current = match work {
+                Work::CheckQueued(_)
+                | Work::Checking(_)
+                | Work::AcceptedQueued(_)
+                | Work::QuotaQueued { .. }
+                | Work::ModelsQueued(_)
+                | Work::ModelsReading(_) => None,
+                Work::AcceptedWorking(active) => active.session(),
+                Work::Retiring(outstanding) => outstanding.session(),
+                Work::QuotaWorking { phase, .. } => phase.session(),
+            };
+            (current == Some(session)).then_some(*id)
+        })
+    }
+    pub(super) fn by_request(&self, request: &str) -> Option<WorkId> {
+        self.items
+            .iter()
+            .find_map(|(id, work)| (work.key() == request).then_some(*id))
+    }
+}
+impl std::ops::Deref for WorkTable {
+    type Target = BTreeMap<WorkId, Work>;
+    fn deref(&self) -> &Self::Target {
+        &self.items
+    }
+}
+impl std::ops::DerefMut for WorkTable {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.items
+    }
+}
 
 pub(super) enum Work {
     ModelsQueued(ModelRead),

@@ -255,7 +255,7 @@ fn disconnect_during_session_load_does_not_fail_another_prompt_after_30_seconds(
     );
     core.handle(Event::Deadline, 202, std::time::UNIX_EPOCH);
     core.sessions.unload(|_| folder.join("saved-cwd"));
-    let id = core.by_request(&loading).unwrap();
+    let id = core.work.by_request(&loading).unwrap();
     core.work.get_mut(&id).and_then(|work| match work {
         Work::AcceptedQueued(request) => Some(request),
         _ => None,
@@ -427,7 +427,7 @@ fn disconnect_during_session_creation_retires_without_a_prompt() {
         "the completed ACP call dispatches the next queued request"
     );
     assert!(
-        core.by_request(&work).is_none(),
+        core.work.by_request(&work).is_none(),
         "the completed ACP call releases its entry"
     );
     assert!(

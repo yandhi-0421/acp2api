@@ -905,7 +905,7 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        let id = self.by_request(request_id).unwrap();
+        let id = self.work.by_request(request_id).unwrap();
         if let Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } =
             self.work.get_mut(&id).unwrap()
         {

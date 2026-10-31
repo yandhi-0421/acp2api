@@ -368,13 +368,12 @@ impl Core {
         );
     }
     pub(super) fn enqueue_quota(&mut self, purpose: QuotaPurpose, session: Option<String>) {
-        let id = self.next_work;
-        self.next_work += 1;
+        let id = self.work.next_id();
         let query = QuotaQuery {
             work: format!("quota-{id}"),
             purpose,
         };
-        self.work.insert(id, Work::QuotaQueued { query, session });
+        self.work.add(Work::QuotaQueued { query, session });
     }
     fn update_quota(
         &mut self,

@@ -145,9 +145,10 @@ fn a_tool_call_does_not_make_a_refused_turn_reusable() {
             }),
             request::PromptTurnAction::Cancel
         ));
+        let mut work = WorkTable::default();
+        work.add(Work::AcceptedWorking(active));
         let mut core = Core {
-            work: BTreeMap::from([(0, Work::AcceptedWorking(active))]),
-            next_work: 1,
+            work,
             sessions: records::AcpSessions::fixture(Vec::new(), None, 1),
             ..Core::fixture(1)
         };

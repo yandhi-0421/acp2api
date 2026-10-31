@@ -47,13 +47,14 @@ fn a_disconnected_sign_in_check_keeps_its_place_until_its_acp_reply() {
     );
     assert!(
         matches!(
-            core.work[&core.by_request(&ids[1]).unwrap()],
+            core.work[&core.work.by_request(&ids[1]).unwrap()],
             Work::CheckQueued(_)
         ),
         "FR-049 the next check waits for the disconnected call reply"
     );
     assert!(
-        core.by_request(&ids[0])
+        core.work
+            .by_request(&ids[0])
             .is_some_and(|id| matches!(core.work[&id], Work::Retiring(_))),
         "the disconnected check retains its occupied entry"
     );
@@ -339,7 +340,7 @@ fn an_elapsed_quota_reset_completes_a_pending_sign_in_check() {
             "FR-036 reset {reset} completes the failed request with 429 (past reset uses the fallback)"
         );
         assert!(
-            core.by_request(&checks[1]).is_none(),
+            core.work.by_request(&checks[1]).is_none(),
             "the failed check releases its place"
         );
     }
@@ -405,7 +406,7 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
             "FR-036 the reset query uses the shared queue"
         );
         assert!(
-            core.by_request(&work).is_none(),
+            core.work.by_request(&work).is_none(),
             "the completed check releases its place"
         );
         if disconnected {
@@ -441,7 +442,7 @@ fn starting_a_sign_in_wait_keeps_the_normal_state_and_queue() {
         "FR-039 the wait alone does not require sign-in"
     );
     assert!(
-        core.by_request(&queued).is_some(),
+        core.work.by_request(&queued).is_some(),
         "FR-037 starting a wait does not flush the queue"
     );
     assert!(!commands.iter().any(|c| matches!(
@@ -566,7 +567,7 @@ fn a_sign_in_error_from_authenticate_starts_the_required_condition() {
             "FR-038 the authentication error selects sign-in required"
         );
         assert_eq!(
-            core.by_request(&queued).is_some(),
+            core.work.by_request(&queued).is_some(),
             code != 401,
             "FR-037 the queue ends only when a condition starts"
         );
