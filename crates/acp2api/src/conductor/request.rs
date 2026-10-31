@@ -1,4 +1,6 @@
-use super::{Command, NO_UPDATE_LIMIT, ResponseChannel, quota, records, retry};
+use super::{
+    Command, NO_UPDATE_LIMIT, ResponseChannel, SETTLE_DELAY, StopReason, quota, records, retry,
+};
 use crate::{
     Moment,
     conversation::{EffortAsk, PromptRequest, TurnEvent, Usage},
@@ -233,5 +235,68 @@ impl Active {
             return !complete;
         }
         false
+    }
+
+    /// Returns true when the phase is awaiting quota end or quota settling.
+    pub(super) fn update_received(&mut self, now: Moment) -> bool {
+        match &mut self.phase {
+            Phase::Prompt { .. } => self.phase = Phase::prompt(now),
+            Phase::AwaitingQuotaEnd {
+                update_deadline: Some(update_deadline),
+                ..
+            } => {
+                *update_deadline = now + NO_UPDATE_LIMIT;
+            }
+            _ => {}
+        }
+        matches!(
+            self.phase,
+            Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
+        )
+    }
+
+    pub(super) fn quota_turn_ended(&mut self, now: Moment) {
+        if let Phase::AwaitingQuotaEnd { wait, .. } = &self.phase {
+            self.phase = Phase::QuotaSettling {
+                at: now.saturating_add(SETTLE_DELAY),
+                wait: wait.clone(),
+            };
+        }
+    }
+
+    pub(super) fn prompt_ended(&mut self, stop_reason: Option<StopReason>, now: Moment) {
+        if stop_reason == Some(StopReason::Refusal) {
+            self.stop = crate::conversation::Stop::Refusal;
+        }
+        if stop_reason == Some(StopReason::MaxTokens) && self.stop.sequence().is_none() {
+            self.stop = crate::conversation::Stop::MaxTokens;
+        }
+        self.phase = Phase::Settling {
+            at: now.saturating_add(SETTLE_DELAY),
+            result: if stop_reason == Some(StopReason::MaxTurnRequests) {
+                Err(Failure::at(crate::messages::Message::MaxTurnRequests, now))
+            } else {
+                Ok(())
+            },
+            can_continue: stop_reason == Some(StopReason::EndTurn)
+                || stop_reason == Some(StopReason::MaxTokens)
+                || stop_reason == Some(StopReason::Cancelled) && self.tool_call.is_some(),
+        };
+    }
+
+    pub(super) fn turn_failed(&mut self, error: crate::messages::Message, now: Moment) {
+        self.phase = Phase::Settling {
+            at: now.saturating_add(SETTLE_DELAY),
+            can_continue: false,
+            result: Err(Failure::at(error, now)),
+        };
+    }
+
+    pub(super) fn permission_cancels(&mut self, call: crate::conversation::ToolCall) -> bool {
+        let cancel = matches!(self.phase, Phase::Prompt { .. }) && self.tool_call.is_none();
+        if cancel {
+            self.tool_call = Some(call);
+        }
+        cancel
     }
 }

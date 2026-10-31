@@ -8,7 +8,7 @@ pub(crate) mod sign_in;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
-    conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest, Usage},
+    conversation::{EffortAsk, PromptRequest, Ticket, TurnEvent, TurnRequest},
     messages::OwnerMessage,
     runtime_builds::{BuildIdentity, LaunchFailure, SelectedBuild},
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
@@ -2203,29 +2203,10 @@ impl Core {
             return;
         }
         let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
-        match &mut active.phase {
-            Phase::Prompt { .. } => active.phase = Phase::prompt(now),
-            Phase::AwaitingQuotaEnd {
-                update_deadline: Some(update_deadline),
-                ..
-            } => {
-                *update_deadline = now + NO_UPDATE_LIMIT;
-            }
-            _ => {}
-        }
-        if matches!(
-            self.work[&id].execution().unwrap().phase,
-            Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
-        ) {
-            let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
+        if active.update_received(now) {
             match update {
                 TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_) => {
-                    if let Phase::AwaitingQuotaEnd { wait, .. } = &active.phase {
-                        active.phase = Phase::QuotaSettling {
-                            at: now.saturating_add(SETTLE_DELAY),
-                            wait: wait.clone(),
-                        };
-                    }
+                    active.quota_turn_ended(now);
                 }
                 TurnUpdate::Permission { request, .. }
                 | TurnUpdate::RefusedPermission { request, .. } => {
@@ -2235,7 +2216,6 @@ impl Core {
             }
             return;
         }
-        let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
         match update {
             TurnUpdate::Activity => {}
             TurnUpdate::Text(text) => {
@@ -2257,30 +2237,10 @@ impl Core {
                 }
             }
             TurnUpdate::PromptEnded { stop_reason } => {
-                if stop_reason == Some(StopReason::Refusal) {
-                    active.stop = crate::conversation::Stop::Refusal;
-                }
-                if stop_reason == Some(StopReason::MaxTokens) && active.stop.sequence().is_none() {
-                    active.stop = crate::conversation::Stop::MaxTokens;
-                }
-                active.phase = Phase::Settling {
-                    at: now.saturating_add(SETTLE_DELAY),
-                    result: if stop_reason == Some(StopReason::MaxTurnRequests) {
-                        Err(Failure::at(crate::messages::Message::MaxTurnRequests, now))
-                    } else {
-                        Ok(())
-                    },
-                    can_continue: stop_reason == Some(StopReason::EndTurn)
-                        || stop_reason == Some(StopReason::MaxTokens)
-                        || stop_reason == Some(StopReason::Cancelled) && active.tool_call.is_some(),
-                };
+                active.prompt_ended(stop_reason, now);
             }
             TurnUpdate::Failed(error) => {
-                active.phase = Phase::Settling {
-                    at: now.saturating_add(SETTLE_DELAY),
-                    can_continue: false,
-                    result: Err(Failure::at(error, now)),
-                }
+                active.turn_failed(error, now);
             }
             TurnUpdate::UnpermittedTool(name) => {
                 let notice = Notice {
@@ -2313,10 +2273,7 @@ impl Core {
                 commands.push(Command::Permission(request));
             }
             TurnUpdate::Permission { request, call } => {
-                let cancel =
-                    matches!(active.phase, Phase::Prompt { .. }) && active.tool_call.is_none();
-                if cancel {
-                    active.tool_call = Some(call);
+                if active.permission_cancels(call) {
                     commands.push(self.sessions.cancel(session, now));
                 }
                 commands.push(Command::Permission(request));
