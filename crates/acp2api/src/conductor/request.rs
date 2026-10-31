@@ -6,7 +6,7 @@ use crate::{
     conversation::{EffortAsk, PromptRequest, TurnEvent, Usage},
 };
 
-pub(super) enum Phase {
+enum Phase {
     Completing,
     Preparing(PromptRequest),
     Prompt {
@@ -28,17 +28,17 @@ pub(super) enum Phase {
 }
 
 impl Phase {
-    pub(super) fn prompt(now: Moment) -> Self {
+    fn prompt(now: Moment) -> Self {
         Self::Prompt {
             update_deadline: now + NO_UPDATE_LIMIT,
         }
     }
 
-    pub(super) fn settled(&self) -> bool {
+    fn settled(&self) -> bool {
         matches!(self, Self::Settling { .. } | Self::QuotaSettling { .. })
     }
 
-    pub(super) fn update_deadline(&self) -> Option<Moment> {
+    fn update_deadline(&self) -> Option<Moment> {
         match self {
             Self::Prompt { update_deadline } => Some(*update_deadline),
             Self::AwaitingQuotaEnd {
@@ -79,10 +79,10 @@ pub(super) struct Active {
     pub(super) model: String,
     pub(super) model_name: String,
     pub(super) effort: EffortAsk,
-    pub(super) phase: Phase,
-    pub(super) tool_call: Option<crate::conversation::ToolCall>,
-    pub(super) stop: crate::conversation::Stop,
-    pub(super) stops: Vec<String>,
+    phase: Phase,
+    tool_call: Option<crate::conversation::ToolCall>,
+    stop: crate::conversation::Stop,
+    stops: Vec<String>,
     pub(super) stop_prefix: String,
 }
 
@@ -226,14 +226,14 @@ impl Active {
         (commands, retry, record)
     }
 
-    pub(super) fn earliest_stop(&self, text: &str) -> Option<(usize, String)> {
+    fn earliest_stop(&self, text: &str) -> Option<(usize, String)> {
         self.stops
             .iter()
             .filter_map(|stop| text.find(stop).map(|at| (at, stop.clone())))
             .min_by_key(|(at, _)| *at)
     }
 
-    pub(super) fn release_or_cut_reply(
+    fn release_or_cut_reply(
         &mut self,
         next: Option<String>,
         now: Moment,
@@ -308,6 +308,19 @@ impl Active {
             self.phase,
             Phase::AwaitingQuotaEnd { .. } | Phase::QuotaSettling { .. }
         )
+    }
+
+    /// Returns true when the text ends the reply at a stop sequence.
+    pub(super) fn text_received(
+        &mut self,
+        text: String,
+        now: Moment,
+        commands: &mut Vec<Command>,
+    ) -> bool {
+        self.tool_call.is_none() && self.release_or_cut_reply(Some(text), now, commands)
+    }
+    pub(super) fn refused(&self) -> bool {
+        matches!(self.stop, crate::conversation::Stop::Refusal)
     }
 
     pub(super) fn quota_turn_ended(&mut self, now: Moment) {

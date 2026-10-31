@@ -2172,9 +2172,7 @@ impl Core {
         match update {
             TurnUpdate::Activity => {}
             TurnUpdate::Text(text) => {
-                if active.tool_call.is_none()
-                    && active.release_or_cut_reply(Some(text), now, commands)
-                {
+                if active.text_received(text, now, commands) {
                     let session = active.session.as_ref().unwrap().clone();
                     commands.push(self.sessions.cancel(session, now));
                 }
@@ -2433,7 +2431,7 @@ impl Core {
                         now,
                     ));
                 }
-                if result.is_ok() && matches!(active.stop, crate::conversation::Stop::Refusal) {
+                if result.is_ok() && active.refused() {
                     let model = active.model.clone();
                     let session = active.session.clone();
                     self.enqueue_quota(
