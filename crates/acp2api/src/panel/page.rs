@@ -1,6 +1,5 @@
 use super::texts::{Labels, Language};
 use crate::conductor::{RuntimeProcess, State};
-use crate::messages::Message;
 
 pub(super) const COUNTDOWN: &str = r#"const timer = document.getElementById('sign-in-time');
 const seconds = Number(timer.dataset.seconds);
@@ -538,18 +537,18 @@ fn first_tile(
     let shade = state_shade(view.state);
     let dot = dot(state_tone(view.state));
     let state = language.state(view.state);
-    let mut evidence = view
+    let mut paragraphs = view
         .lockout_evidence
         .as_ref()
         .map(|text| format!("<p>{}</p>", escape(text)))
         .unwrap_or_default();
     if view.lockout_unsaved {
         let text = lockout_unsaved(language);
-        evidence.push_str(&format!(r#"<p role="status">{text}</p>"#));
+        paragraphs.push_str(&format!(r#"<p role="status">{text}</p>"#));
     }
-    if let Some(message) = &view.runtime_unavailable {
-        let text = escape(&language.api_message(&Message::RuntimeUnavailable(message.clone())));
-        evidence.push_str(&format!(r#"<p role="status">{text}</p>"#));
+    if let Some(unavailable) = &view.runtime_unavailable {
+        let text = escape(&language.runtime_fault(&unavailable.fault));
+        paragraphs.push_str(&format!(r#"<p role="status">{text}</p>"#));
     }
     let action = if view.state == State::Lockout {
         end_lockout(language)
@@ -566,7 +565,7 @@ fn first_tile(
     let queued = figure(labels.requests_in_the_queue, view.queued);
     let build = figure(labels.build_in_use, build.unwrap_or("—"));
     format!(
-        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{evidence}{action}<div class="figures">{places}{queued}{build}</div></section>"#,
+        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{paragraphs}{action}<div class="figures">{places}{queued}{build}</div></section>"#,
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )
 }
@@ -1411,44 +1410,71 @@ mod tests {
 
     #[test]
     fn the_first_tile_renders_the_runtime_unavailable_reason_in_both_languages() {
-        let unavailable = crate::messages::Unavailable::no_executable();
-        let view_with_reason = crate::conductor::View {
-            state: State::RuntimeUnavailable,
-            runtime_unavailable: Some(unavailable.clone()),
-            ..Default::default()
-        };
-        let view_without_reason = crate::conductor::View {
-            state: State::RuntimeUnavailable,
+        use crate::messages::{RuntimeFault, Unavailable};
+        let cases = [
+            (
+                RuntimeFault::NoExecutable,
+                "acp2api found no official runtime, so it started no runtime process.",
+                "没有找到官方运行时，所以 acp2api 没有启动运行时进程。",
+            ),
+            (
+                RuntimeFault::NotAccepted,
+                "No build that acp2api found is an accepted version, so it started no runtime process.",
+                "找到的构建不是已接受版本，所以 acp2api 没有启动运行时进程。",
+            ),
+            (
+                RuntimeFault::RepeatedFailures,
+                "The runtime process failed 3 times in 10 minutes, so acp2api does not start it again by itself.",
+                "运行时进程在 10 分钟内失败了 3 次，所以 acp2api 不再自动启动它。",
+            ),
+            (
+                RuntimeFault::CopyFailed {
+                    version: "1<4".into(),
+                },
+                "The copy of the accepted build 1&lt;4 failed, so acp2api started no runtime process.",
+                "已接受构建 1&lt;4 的复制失败了，所以 acp2api 没有启动运行时进程。",
+            ),
+            (
+                RuntimeFault::StateFileNotWritable,
+                "acp2api cannot write its state file state.json, so it started no runtime process.",
+                "acp2api 无法写入状态文件 state.json，所以没有启动运行时进程。",
+            ),
+        ];
+        for (fault, english, chinese) in cases {
+            let view = crate::conductor::View {
+                state: State::RuntimeUnavailable,
+                runtime_unavailable: Some(Unavailable {
+                    fault,
+                    versions: "1.4.0".into(),
+                    port: 8329,
+                }),
+                ..Default::default()
+            };
+            for (language, sentence, m14_pointer) in [
+                (Language::English, english, "See "),
+                (Language::Chinese, chinese, "详见"),
+            ] {
+                let tile = first_tile(language, &view, 0, None);
+                assert!(
+                    tile.contains(&format!(r#"<p role="status">{sentence}</p>"#)),
+                    "FR-054 the first tile shows the PRD sentence {sentence:?}: {tile}"
+                );
+                assert!(
+                    !tile.contains(m14_pointer),
+                    "FR-054 the first tile shows no M-14 text: {tile}"
+                );
+            }
+        }
+        let running = crate::conductor::View {
+            state: State::Running,
             runtime_unavailable: None,
             ..Default::default()
         };
-
-        let en_reason = escape(
-            &Language::English.api_message(&Message::RuntimeUnavailable(unavailable.clone())),
-        );
-        let zh_reason =
-            escape(&Language::Chinese.api_message(&Message::RuntimeUnavailable(unavailable)));
-
-        let en_tile = first_tile(Language::English, &view_with_reason, 0, None);
-        let zh_tile = first_tile(Language::Chinese, &view_with_reason, 0, None);
-        let none_en_tile = first_tile(Language::English, &view_without_reason, 0, None);
-        let none_zh_tile = first_tile(Language::Chinese, &view_without_reason, 0, None);
-
-        assert!(
-            en_tile.contains(&format!(r#"<p role="status">{en_reason}</p>"#)),
-            "FR-035 English panel renders the runtime unavailable reason"
-        );
-        assert!(
-            zh_tile.contains(&format!(r#"<p role="status">{zh_reason}</p>"#)),
-            "FR-035 Chinese panel renders the runtime unavailable reason"
-        );
-        assert!(
-            !none_en_tile.contains(r#"<p role="status">"#),
-            "FR-035 English panel with None renders no status paragraph"
-        );
-        assert!(
-            !none_zh_tile.contains(r#"<p role="status">"#),
-            "FR-035 Chinese panel with None renders no status paragraph"
-        );
+        for language in [Language::English, Language::Chinese] {
+            assert!(
+                !first_tile(language, &running, 0, None).contains(r#"<p role="status">"#),
+                "FR-054 the state Running has no sentence of a runtime unavailable reason"
+            );
+        }
     }
 }

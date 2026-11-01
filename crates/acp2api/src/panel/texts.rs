@@ -147,6 +147,12 @@ impl Language {
             ),
         }
     }
+    pub(super) fn runtime_fault(self, fault: &RuntimeFault) -> String {
+        match self {
+            Self::English => english_fault(fault),
+            Self::Chinese => chinese_fault(fault),
+        }
+    }
     pub(super) fn api_message(self, message: &Message) -> String {
         match self {
             Self::English => message.to_string(),
@@ -167,6 +173,29 @@ impl Language {
     }
 }
 
+fn english_fault(fault: &RuntimeFault) -> String {
+    match fault {
+        RuntimeFault::NoExecutable => {
+            "acp2api found no official runtime, so it started no runtime process.".into()
+        }
+        RuntimeFault::NotAccepted => {
+            "No build that acp2api found is an accepted version, so it started no runtime process."
+                .into()
+        }
+        RuntimeFault::RepeatedFailures => {
+            "The runtime process failed 3 times in 10 minutes, so acp2api does not start it again by itself."
+                .into()
+        }
+        RuntimeFault::CopyFailed { version } => {
+            format!("The copy of the accepted build {version} failed, so acp2api started no runtime process.")
+        }
+        RuntimeFault::StateFileNotWritable => {
+            "acp2api cannot write its state file state.json, so it started no runtime process."
+                .into()
+        }
+    }
+}
+
 fn chinese_fault(fault: &RuntimeFault) -> String {
     match fault {
         RuntimeFault::NoExecutable => {
@@ -181,7 +210,9 @@ fn chinese_fault(fault: &RuntimeFault) -> String {
         RuntimeFault::CopyFailed { version } => {
             format!("已接受构建 {version} 的复制失败了，所以 acp2api 没有启动运行时进程。")
         }
-        RuntimeFault::StateFileNotWritable => "acp2api 无法写入状态文件 state.json".into(),
+        RuntimeFault::StateFileNotWritable => {
+            "acp2api 无法写入状态文件 state.json，所以没有启动运行时进程。".into()
+        }
     }
 }
 
