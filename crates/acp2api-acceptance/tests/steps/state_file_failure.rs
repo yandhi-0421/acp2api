@@ -110,6 +110,17 @@ fn can_make_state_file(w: &mut World) {
     w.lockout.restore();
 }
 
+#[when("the data folder then holds a damaged state file")]
+fn damaged_state_file(w: &mut World) {
+    fs::write(lockout_support::state_path(w), "{ damaged state").unwrap();
+}
+
+#[when("the owner asks for a retry, and the retry finds the damaged state file")]
+async fn retry_finds_damaged_state_file(w: &mut World) {
+    let answer = unavailable_support::action(w, "/manage/retry", json!({})).await;
+    w.panel.answer = Some(answer);
+}
+
 #[then("the management panel names the state file state.json")]
 async fn panel_names_state_file(w: &mut World) {
     let html = end_lockout_support::page(w).await;

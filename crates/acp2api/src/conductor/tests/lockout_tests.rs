@@ -110,12 +110,12 @@ fn assert_state_file_diagnostic(folder: &std::path::Path, expected: &str) {
     let path = folder.join(crate::store::STATE_FILE);
     let clock = crate::Ports::production().clock;
     let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
-    let evidence = match lockout::load(&path, clock.as_ref(), &journal) {
-        lockout::Loaded::Lockout(evidence) => evidence,
+    let (evidence, cause) = match lockout::load(&path, clock.as_ref(), &journal) {
+        lockout::Loaded::Lockout(evidence, cause) => (evidence, cause),
         _ => panic!("expected lockout"),
     };
     let core = Core {
-        lockout: Some(lockout::HeldLockout::saved(evidence.clone())),
+        lockout: Some(lockout::HeldLockout::saved(evidence.clone(), cause)),
         ..Core::fixture(1)
     };
     let response = core.refusal(0).unwrap().to_string();
@@ -843,13 +843,13 @@ fn the_end_of_a_lockout_restarts_the_runtime_and_clears_the_file() {
     });
     std::fs::write(&state_path, saved.to_string()).unwrap();
 
-    let evidence = match lockout::load(&state_path, clock.as_ref(), &journal) {
-        lockout::Loaded::Lockout(evidence) => evidence,
+    let (evidence, cause) = match lockout::load(&state_path, clock.as_ref(), &journal) {
+        lockout::Loaded::Lockout(evidence, cause) => (evidence, cause),
         _ => panic!("expected lockout"),
     };
     let mut core = Core {
         state_path: state_path.clone(),
-        lockout: Some(lockout::HeldLockout::saved(evidence)),
+        lockout: Some(lockout::HeldLockout::saved(evidence, cause)),
         lifecycle: Lifecycle::new(RuntimeState::Stopped),
         ..Core::fixture(1)
     };
@@ -884,7 +884,10 @@ fn old_runtime_failures_do_not_stop_the_start_after_a_lockout() {
     core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
     core.handle(Event::RuntimeFailure, 1, std::time::UNIX_EPOCH);
     core.handle(Event::RuntimeFailure, 2, std::time::UNIX_EPOCH);
-    core.lockout = Some(lockout::HeldLockout::saved(evidence.clone()));
+    core.lockout = Some(lockout::HeldLockout::saved(
+        evidence.clone(),
+        LockoutCause::Signal,
+    ));
     core.handle(
         Event::EndLockout,
         RUNTIME_FAILURE_WINDOW + 3,
@@ -900,7 +903,7 @@ fn old_runtime_failures_do_not_stop_the_start_after_a_lockout() {
         RUNTIME_FAILURE_WINDOW + 1,
         std::time::UNIX_EPOCH,
     );
-    core.lockout = Some(lockout::HeldLockout::saved(evidence));
+    core.lockout = Some(lockout::HeldLockout::saved(evidence, LockoutCause::Signal));
     core.handle(
         Event::EndLockout,
         RUNTIME_FAILURE_WINDOW + 3,
@@ -930,7 +933,10 @@ async fn a_lockout_stays_when_its_end_cannot_be_written() {
     std::fs::create_dir_all(&folder_path).unwrap();
     let mut core = Core {
         state_path: folder_path,
-        lockout: Some(lockout::HeldLockout::saved(evidence.clone())),
+        lockout: Some(lockout::HeldLockout::saved(
+            evidence.clone(),
+            LockoutCause::Signal,
+        )),
         ..Core::fixture(1)
     };
     let (reply, answer) = oneshot::channel();
@@ -949,7 +955,7 @@ async fn a_lockout_stays_when_its_end_cannot_be_written() {
     let file_path = folder.join(crate::store::STATE_FILE);
     let mut core = Core {
         state_path: file_path,
-        lockout: Some(lockout::HeldLockout::saved(evidence)),
+        lockout: Some(lockout::HeldLockout::saved(evidence, LockoutCause::Signal)),
         ..Core::fixture(1)
     };
     let (reply, answer) = oneshot::channel();
@@ -1201,6 +1207,129 @@ fn a_retry_leaves_a_state_file_with_other_content_byte_for_byte_unchanged() {
 }
 
 #[tokio::test]
+async fn a_state_file_lockout_stays_unsaved_after_the_file_is_repaired() {
+    let (folder, state_path, clock, journal) = test_environment("state-file-cause-unsaved");
+    std::fs::write(&state_path, b"damaged state file").unwrap();
+    let mut core = Core {
+        state_path: state_path.clone(),
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+    let (reply, _rx) = oneshot::channel();
+    core.build_input(
+        crate::runtime_builds::Action::Search,
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+    let repaired = std::fs::read(&state_path).unwrap();
+    core.retry_lockout_save();
+    let view = core.view.borrow().clone();
+    let unchanged = std::fs::read(&state_path).unwrap() == repaired;
+    std::fs::remove_dir_all(folder).unwrap();
+    assert_eq!(
+        (
+            view.state,
+            view.lockout_cause,
+            view.lockout_unsaved,
+            unchanged
+        ),
+        (State::Lockout, Some(LockoutCause::StateFile), false, true),
+        "#195: a state-file lockout stays in memory and never overwrites the repaired file"
+    );
+}
+
+#[tokio::test]
+async fn a_runtime_signal_publishes_the_ordinary_cause_after_absence_or_an_owner_end() {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        for after_state_file in [false, true] {
+            let (folder, state_path, clock, journal) = test_environment("signal-cause");
+            let mut core = Core {
+                state_path: state_path.clone(),
+                lifecycle: unavailable_state_file_lifecycle(),
+                ..Core::fixture(1)
+            };
+            let initial = core.view.borrow().lockout_cause;
+            let mut previous = None;
+            if after_state_file {
+                std::fs::write(&state_path, b"damaged state file").unwrap();
+                let (reply, _rx) = oneshot::channel();
+                core.build_input(crate::runtime_builds::Action::Search, reply, clock.as_ref(), &journal);
+                previous = core.view.borrow().lockout_cause;
+                let (reply, answer) = oneshot::channel();
+                Conductor::commands(&mut core, &mut None, &mut false, &clock, &journal, &mut VecDeque::from([Command::ClearLockout(reply)])).await;
+                answer.await.unwrap().unwrap();
+            }
+            let before_signal = core.view.borrow().lockout_cause;
+            core.apply(
+                Event::Runtime(RuntimeEvent::UpstreamError {
+                    session: "synthetic-session".into(),
+                    error: crate::messages::HttpError {
+                        code: Some(403),
+                        status: "PERMISSION_DENIED".into(),
+                        message: "Synthetic account suspension".into(),
+                    },
+                }),
+                &mut None, &mut false, &clock, &journal,
+            ).await;
+            let view = core.view.borrow().clone();
+            let saved = crate::store::StateFile::read(&state_path).unwrap().lockout.is_some();
+            std::fs::remove_dir_all(folder).unwrap();
+            assert_eq!(
+                (initial, previous, before_signal, view.state, view.lockout_cause, saved),
+                (None, after_state_file.then_some(LockoutCause::StateFile), None, State::Lockout, Some(LockoutCause::Signal), true),
+                "#195: an owner end clears the cause, and a later runtime signal publishes the ordinary cause"
+            );
+        }
+    }).await.expect("signal cause cap: five seconds, two runtime events, no child processes or requests, existing journal caps");
+}
+
+#[tokio::test]
+async fn a_retry_that_finds_a_damaged_state_file_publishes_the_lockout_cause() {
+    let (folder, state_path, clock, journal) = test_environment("retry-state-file-cause");
+    std::fs::write(&state_path, b"damaged state file").unwrap();
+    let mut core = Core {
+        state_path: state_path.clone(),
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+    let (reply, rx) = oneshot::channel();
+    core.build_input(
+        crate::runtime_builds::Action::Search,
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+    let refused = matches!(
+        rx.await.unwrap(),
+        Err(LaunchFailure::Owner(OwnerMessage::Api(
+            crate::messages::Message::Lockout(_)
+        )))
+    );
+    let view = core.view.borrow().clone();
+    let bytes = std::fs::read(&state_path).unwrap();
+    std::fs::remove_dir_all(folder).unwrap();
+    assert_eq!(
+        (
+            view.state,
+            view.lockout_cause,
+            view.lockout_unsaved,
+            refused,
+            bytes
+        ),
+        (
+            State::Lockout,
+            Some(LockoutCause::StateFile),
+            false,
+            true,
+            b"damaged state file".to_vec()
+        ),
+        "#195: the retry publishes the state-file cause and preserves the damaged file"
+    );
+}
+
+#[tokio::test]
 async fn a_retry_that_finds_a_stored_lockout_gives_state_lockout_and_queues_initial_on_end() {
     let (folder, state_path, clock, journal) = test_environment("retry-lockout");
 
@@ -1231,8 +1360,8 @@ async fn a_retry_that_finds_a_stored_lockout_gives_state_lockout_and_queues_init
     );
 
     assert_eq!(
-        core.state(),
-        State::Lockout,
+        (core.state(), core.view.borrow().lockout_cause),
+        (State::Lockout, Some(LockoutCause::Signal)),
         "FR-035: a retry that finds a stored lockout gives State::Lockout"
     );
     let error = rx.await.unwrap().unwrap_err();

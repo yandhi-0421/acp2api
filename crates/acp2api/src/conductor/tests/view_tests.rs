@@ -1,5 +1,60 @@
 use super::*;
 
+async fn assert_state_file_lockout_cause(unreadable: bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let folder = std::env::temp_dir().join(format!(
+            "acp2api-state-file-cause-{}",
+            crate::random_hex::<12>().unwrap()
+        ));
+        let clock: Arc<dyn Clock> = Arc::new(crate::os::SystemClock::default());
+        let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+        let path = folder.join(crate::store::STATE_FILE);
+        if unreadable {
+            std::fs::create_dir(&path).unwrap();
+        } else {
+            std::fs::write(&path, b"damaged state file").unwrap();
+        }
+        let mut observed = Vec::new();
+        for _ in 0..2 {
+            let (conductor, task) = start_without_runtime(&clock, &journal, &folder);
+            conductor
+                .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+                .await
+                .unwrap();
+            let view = conductor.view();
+            observed.push((view.state, view.lockout_cause, view.lockout_unsaved));
+            drop(conductor);
+            task.await.unwrap();
+        }
+        let unchanged = if unreadable {
+            path.is_dir() && std::fs::read_dir(&path).unwrap().next().is_none()
+        } else {
+            std::fs::read(&path).unwrap() == b"damaged state file"
+        };
+        std::fs::remove_dir_all(folder).unwrap();
+        assert_eq!(
+            (observed, unchanged),
+            (
+                vec![(State::Lockout, Some(LockoutCause::StateFile), false); 2],
+                true
+            ),
+            "#195: each start publishes the state-file cause without saving the lockout"
+        );
+    })
+    .await
+    .expect("state-file cause cap: five seconds, no runtime launches or requests, existing journal caps");
+}
+
+#[tokio::test]
+async fn a_damaged_state_file_publishes_its_lockout_cause_on_each_start() {
+    assert_state_file_lockout_cause(false).await;
+}
+
+#[tokio::test]
+async fn an_unreadable_state_file_publishes_its_lockout_cause_on_each_start() {
+    assert_state_file_lockout_cause(true).await;
+}
+
 #[test]
 fn the_panel_receives_the_effective_quota_reset_until_the_wait_expires() {
     let mut core = Core::fixture(2);
@@ -67,12 +122,18 @@ fn the_panel_receives_the_time_signal_and_original_text_of_a_lockout() {
         std::time::UNIX_EPOCH + std::time::Duration::from_secs(123),
     );
     assert_eq!(
-        serde_json::to_value(&core.view.borrow().lockout_evidence).unwrap(),
-        serde_json::json!({
-            "since": "1970-01-01T00:02:03Z",
-            "signal": "403 PERMISSION_DENIED",
-            "original_error_text": "acp2api: upstream error 403 PERMISSION_DENIED: Synthetic account suspension 75 b7ed23c745e147d4",
-        }),
+        (
+            core.view.borrow().lockout_cause,
+            serde_json::to_value(&core.view.borrow().lockout_evidence).unwrap()
+        ),
+        (
+            Some(LockoutCause::Signal),
+            serde_json::json!({
+                "since": "1970-01-01T00:02:03Z",
+                "signal": "403 PERMISSION_DENIED",
+                "original_error_text": "acp2api: upstream error 403 PERMISSION_DENIED: Synthetic account suspension 75 b7ed23c745e147d4",
+            })
+        ),
         "FR-054 publishes all lockout evidence to the panel"
     );
 }
@@ -207,7 +268,7 @@ async fn a_stored_lockout_starts_with_the_runtime_process_stopped() {
         let mut state = crate::store::StateFile::read(&path).unwrap();
         state.lockout = Some(crate::store::Lockout {
             since: "2026-10-18T12:00:00Z".into(),
-            signal: "403 PERMISSION_DENIED".into(),
+            signal: "damaged state file: InvalidData".into(),
             original_error_text: "Synthetic account suspension".into(),
         });
         state.save(&path).unwrap();
@@ -221,9 +282,9 @@ async fn a_stored_lockout_starts_with_the_runtime_process_stopped() {
         task.await.unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         assert_eq!(
-            (view.state, view.runtime_process),
-            (State::Lockout, RuntimeProcess::Stopped),
-            "FR-035 and FR-054 publish no running process at a start in stored lockout"
+            (view.state, view.runtime_process, view.lockout_cause, view.lockout_evidence.as_ref().unwrap().signal.as_str()),
+            (State::Lockout, RuntimeProcess::Stopped, Some(LockoutCause::Signal), "damaged state file: InvalidData"),
+            "#195: a stored lockout has the ordinary cause regardless of its signal text"
         );
     })
     .await
