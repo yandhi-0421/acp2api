@@ -724,3 +724,7 @@ mod lifecycle_tests {
         .expect("startup lifecycle cap: 5 seconds; one HTTP request, 64 KiB response cap");
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod panel_links_tests;
