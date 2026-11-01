@@ -52,6 +52,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
     Router::new()
         .route("/", get(index))
         .route("/manage/login", post(login))
+        .route("/manage/exit", post(exit))
         .route("/manage/language", post(set_language))
         .route("/manage/key", post(new_key))
         .route("/manage/password", post(password))
@@ -290,6 +291,18 @@ async fn login(
     response.headers_mut().insert(
         header::SET_COOKIE,
         cookie.parse().expect("generated cookie"),
+    );
+    response
+}
+async fn exit(State(panel): State<Panel>, headers: HeaderMap) -> Response {
+    let token = cookie(&headers, COOKIE).expect("the guard requires a panel session cookie");
+    panel.sessions.lock().unwrap().remove(token);
+    let mut response = Redirect::to("/").into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        format!("{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+            .parse()
+            .expect("generated cookie"),
     );
     response
 }
@@ -582,6 +595,283 @@ async fn build(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn session_panel<F, Fut>(test: F)
+    where
+        F: FnOnce(u16) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        use futures_util::FutureExt;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let folder = std::env::temp_dir().join(format!(
+                "acp2api-exit-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let clock = crate::Ports::production().clock;
+            let journal =
+                crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+            let mut builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+            let (stopped, stop) = tokio::sync::watch::channel(false);
+            builds.start.stopped = stop;
+            let settings = crate::store::Settings {
+                port: 8329,
+                concurrency_limit: 1,
+                local_api_key: "acp2api-test".into(),
+                management_password_hash: crate::store::hash_password("panel-exit-test").unwrap(),
+                agy_acp_server_path: None,
+            };
+            let (conductor, task) = Conductor::start(
+                builds,
+                clock.clone(),
+                journal,
+                settings,
+                folder.join("config.toml"),
+                1,
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let requests = Arc::new(AtomicUsize::new(0));
+            let app = router(conductor, clock, port).layer(axum::middleware::from_fn(
+                move |request: axum::extract::Request, next: axum::middleware::Next| {
+                    let requests = requests.clone();
+                    async move {
+                        assert!(
+                            requests.fetch_add(1, Ordering::SeqCst) < 16,
+                            "session request cap"
+                        );
+                        next.run(request).await
+                    }
+                },
+            ));
+            let (shutdown, shutdown_requested) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async { shutdown_requested.await.unwrap() })
+                    .await
+                    .unwrap();
+            });
+            let result = std::panic::AssertUnwindSafe(test(port))
+                .catch_unwind()
+                .await;
+            stopped.send(true).unwrap();
+            shutdown.send(()).unwrap();
+            server.await.unwrap();
+            task.await.unwrap();
+            std::fs::remove_dir_all(folder).unwrap();
+            if let Err(panic) = result {
+                std::panic::resume_unwind(panic);
+            }
+        })
+        .await
+        .expect("session test cap: ten seconds, sixteen requests, 64 KiB per response");
+    }
+
+    async fn session_http(
+        port: u16,
+        method: &str,
+        path: &str,
+        headers: &str,
+        body: &str,
+    ) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n{headers}\r\n{body}",
+            body.len(),
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        stream
+            .take(64 * 1024 + 1)
+            .read_to_end(&mut answer)
+            .await
+            .unwrap();
+        assert!(answer.len() <= 64 * 1024, "session response size cap");
+        String::from_utf8(answer).unwrap()
+    }
+
+    fn session_cookie(answer: &str) -> String {
+        assert!(
+            answer.starts_with("HTTP/1.1 303"),
+            "the password creates a session"
+        );
+        answer
+            .split_once("\r\n\r\n")
+            .unwrap()
+            .0
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
+            .map(|(_, value)| value.trim().split(';').next().unwrap())
+            .find(|value| value.starts_with("acp2api_session="))
+            .unwrap()
+            .to_owned()
+    }
+
+    #[tokio::test]
+    async fn the_exit_ends_the_browser_session_and_clears_its_cookie() {
+        session_panel(|port| async move {
+            let login = session_http(
+                port,
+                "POST",
+                "/manage/login",
+                "",
+                "password=panel-exit-test",
+            )
+            .await;
+            let cookie = session_cookie(&login);
+            let headers = format!("Cookie: {cookie}\r\nOrigin: http://127.0.0.1:{port}\r\n");
+            let before = session_http(port, "GET", "/", &headers, "").await;
+            assert!(
+                before.contains("id=\"local-api-key\""),
+                "the cookie grants access before exit"
+            );
+            let exit = session_http(port, "POST", "/manage/exit", &headers, "").await;
+            assert!(
+                exit.starts_with("HTTP/1.1 303"),
+                "the exit redirects to the password page"
+            );
+            let response_headers = exit.split_once("\r\n\r\n").unwrap().0.to_ascii_lowercase();
+            assert!(response_headers.contains("\r\nlocation: /\r\n"));
+            assert!(response_headers.contains(
+                "\r\nset-cookie: acp2api_session=; path=/; httponly; samesite=strict; max-age=0\r\n"
+            ));
+            for browser_headers in ["", &headers] {
+                let after = session_http(port, "GET", "/", browser_headers, "").await;
+                assert!(after.starts_with("HTTP/1.1 200"));
+                assert!(after.contains("autocomplete=\"current-password\""));
+                assert!(
+                    !after.contains("id=\"local-api-key\""),
+                    "even replaying the old cookie cannot open the panel"
+                );
+            }
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_exit_keeps_another_browser_session() {
+        session_panel(|port| async move {
+            let first = session_http(
+                port,
+                "POST",
+                "/manage/login",
+                "",
+                "password=panel-exit-test",
+            )
+            .await;
+            let second = session_http(
+                port,
+                "POST",
+                "/manage/login",
+                "",
+                "password=panel-exit-test",
+            )
+            .await;
+            let first = session_cookie(&first);
+            let second = session_cookie(&second);
+            assert!(first != second, "the browsers have distinct sessions");
+            let first = format!("Cookie: {first}\r\n");
+            let second = format!("Cookie: {second}\r\n");
+            for headers in [&first, &second] {
+                let before = session_http(port, "GET", "/", headers, "").await;
+                assert!(before.contains("id=\"local-api-key\""));
+            }
+            let exit = session_http(port, "POST", "/manage/exit", &first, "").await;
+            assert!(exit.starts_with("HTTP/1.1 303"));
+            let ended = session_http(port, "GET", "/", &first, "").await;
+            assert!(ended.contains("autocomplete=\"current-password\""));
+            assert!(!ended.contains("id=\"local-api-key\""));
+            let remaining = session_http(port, "GET", "/", &second, "").await;
+            assert!(
+                remaining.contains("id=\"local-api-key\""),
+                "the other browser keeps panel access"
+            );
+            let action =
+                session_http(port, "POST", "/manage/language", &second, "language=en").await;
+            assert!(
+                action.starts_with("HTTP/1.1 303"),
+                "the other browser can still act as owner"
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_exit_requires_a_valid_session() {
+        session_panel(|port| async move {
+            let login = session_http(
+                port,
+                "POST",
+                "/manage/login",
+                "",
+                "password=panel-exit-test",
+            )
+            .await;
+            let cookie = session_cookie(&login);
+            let headers = format!("Cookie: {cookie}\r\n");
+            let exit = session_http(port, "POST", "/manage/exit", &headers, "").await;
+            assert!(
+                exit.starts_with("HTTP/1.1 303"),
+                "a valid session reaches the exit"
+            );
+            for invalid in ["Cookie: acp2api_session=unknown\r\n", "", &headers] {
+                for endpoint in ["/manage/exit", "/manage/language"] {
+                    let denied = session_http(port, "POST", endpoint, invalid, "language=en").await;
+                    assert!(
+                        denied.starts_with("HTTP/1.1 401"),
+                        "each owner endpoint refuses an invalid session"
+                    );
+                    assert!(denied.contains("autocomplete=\"current-password\""));
+                    assert!(!denied.to_ascii_lowercase().contains("set-cookie:"));
+                }
+            }
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn the_exit_keeps_the_owner_form_origin_rule() {
+        session_panel(|port| async move {
+            let login = session_http(
+                port,
+                "POST",
+                "/manage/login",
+                "",
+                "password=panel-exit-test",
+            )
+            .await;
+            let cookie = session_cookie(&login);
+            for origin in [
+                "https://example.com".to_owned(),
+                "null".to_owned(),
+                format!("https://127.0.0.1:{port}"),
+            ] {
+                let headers = format!("Cookie: {cookie}\r\nOrigin: {origin}\r\n");
+                let denied = session_http(port, "POST", "/manage/exit", &headers, "").await;
+                assert!(
+                    denied.starts_with("HTTP/1.1 400"),
+                    "a foreign origin cannot end the session"
+                );
+                assert!(!denied.to_ascii_lowercase().contains("set-cookie:"));
+            }
+            let headers = format!("Cookie: {cookie}\r\n");
+            let retained = session_http(port, "GET", "/", &headers, "").await;
+            assert!(
+                retained.contains("id=\"local-api-key\""),
+                "refused requests keep the session"
+            );
+            let headers = format!("Cookie: {cookie}\r\nOrigin: http://127.0.0.1:{port}\r\n");
+            let exit = session_http(port, "POST", "/manage/exit", &headers, "").await;
+            assert!(
+                exit.starts_with("HTTP/1.1 303"),
+                "the panel origin can end its session"
+            );
+        })
+        .await;
+    }
 
     async fn assert_state_file_panel_diagnostic(folder: &std::path::Path, expected: &str) {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
