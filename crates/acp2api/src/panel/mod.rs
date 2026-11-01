@@ -285,26 +285,26 @@ async fn login(
             password_hash: hash,
         },
     );
-    let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
     let mut response =
         Redirect::to(&format!("/#{}", crate::conductor::sign_in::ENTRY_ID)).into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        cookie.parse().expect("generated cookie"),
-    );
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, session_cookie(&token, LIFETIME / 1000));
     response
 }
 async fn exit(State(panel): State<Panel>, headers: HeaderMap) -> Response {
     let token = cookie(&headers, COOKIE).expect("the guard requires a panel session cookie");
     panel.sessions.lock().unwrap().remove(token);
     let mut response = Redirect::to("/").into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        format!("{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
-            .parse()
-            .expect("generated cookie"),
-    );
     response
+        .headers_mut()
+        .insert(header::SET_COOKIE, session_cookie("", 0));
+    response
+}
+fn session_cookie(token: &str, max_age: u64) -> axum::http::HeaderValue {
+    format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}")
+        .parse()
+        .expect("generated cookie")
 }
 async fn new_key(State(panel): State<Panel>, Extension(language): Extension<Language>) -> Response {
     match panel.act(language, OwnerAction::NewLocalApiKey).await {
@@ -692,7 +692,15 @@ mod tests {
         String::from_utf8(answer).unwrap()
     }
 
-    fn session_cookie(answer: &str) -> String {
+    async fn session_login(port: u16) -> String {
+        let answer = session_http(
+            port,
+            "POST",
+            "/manage/login",
+            "",
+            "password=panel-exit-test",
+        )
+        .await;
         assert!(
             answer.starts_with("HTTP/1.1 303"),
             "the password creates a session"
@@ -713,15 +721,7 @@ mod tests {
     #[tokio::test]
     async fn the_exit_ends_the_browser_session_and_clears_its_cookie() {
         session_panel(|port| async move {
-            let login = session_http(
-                port,
-                "POST",
-                "/manage/login",
-                "",
-                "password=panel-exit-test",
-            )
-            .await;
-            let cookie = session_cookie(&login);
+            let cookie = session_login(port).await;
             let headers = format!("Cookie: {cookie}\r\nOrigin: http://127.0.0.1:{port}\r\n");
             let before = session_http(port, "GET", "/", &headers, "").await;
             assert!(
@@ -754,24 +754,8 @@ mod tests {
     #[tokio::test]
     async fn the_exit_keeps_another_browser_session() {
         session_panel(|port| async move {
-            let first = session_http(
-                port,
-                "POST",
-                "/manage/login",
-                "",
-                "password=panel-exit-test",
-            )
-            .await;
-            let second = session_http(
-                port,
-                "POST",
-                "/manage/login",
-                "",
-                "password=panel-exit-test",
-            )
-            .await;
-            let first = session_cookie(&first);
-            let second = session_cookie(&second);
+            let first = session_login(port).await;
+            let second = session_login(port).await;
             assert!(first != second, "the browsers have distinct sessions");
             let first = format!("Cookie: {first}\r\n");
             let second = format!("Cookie: {second}\r\n");
@@ -802,15 +786,7 @@ mod tests {
     #[tokio::test]
     async fn the_exit_requires_a_valid_session() {
         session_panel(|port| async move {
-            let login = session_http(
-                port,
-                "POST",
-                "/manage/login",
-                "",
-                "password=panel-exit-test",
-            )
-            .await;
-            let cookie = session_cookie(&login);
+            let cookie = session_login(port).await;
             let headers = format!("Cookie: {cookie}\r\n");
             let exit = session_http(port, "POST", "/manage/exit", &headers, "").await;
             assert!(
@@ -835,15 +811,7 @@ mod tests {
     #[tokio::test]
     async fn the_exit_keeps_the_owner_form_origin_rule() {
         session_panel(|port| async move {
-            let login = session_http(
-                port,
-                "POST",
-                "/manage/login",
-                "",
-                "password=panel-exit-test",
-            )
-            .await;
-            let cookie = session_cookie(&login);
+            let cookie = session_login(port).await;
             for origin in [
                 "https://example.com".to_owned(),
                 "null".to_owned(),
@@ -871,6 +839,32 @@ mod tests {
             );
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_wrong_host_cannot_open_an_authenticated_panel() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        session_panel(|port| async move {
+            let cookie = session_login(port).await;
+            let headers = format!("Cookie: {cookie}\r\n");
+            let before = session_http(port, "GET", "/", &headers, "").await;
+            assert!(before.starts_with("HTTP/1.1 200"));
+            assert!(before.contains("id=\"local-api-key\""));
+            let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let request = format!(
+                "GET / HTTP/1.1\r\nHost: example.com\r\nCookie: {cookie}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut answer = Vec::new();
+            stream.take(64 * 1024 + 1).read_to_end(&mut answer).await.unwrap();
+            assert!(answer.len() <= 64 * 1024, "panel response size cap");
+            let answer = String::from_utf8(answer).unwrap();
+            assert!(answer.starts_with("HTTP/1.1 400"), "FR-008 a foreign Host cannot open the panel");
+            assert!(!answer.contains("id=\"local-api-key\""));
+            let after = session_http(port, "GET", "/", &headers, "").await;
+            assert!(after.starts_with("HTTP/1.1 200"));
+            assert!(after.contains("id=\"local-api-key\""), "the same session still opens the local panel");
+        }).await;
     }
 
     async fn assert_state_file_panel_diagnostic(folder: &std::path::Path, expected: &str) {
