@@ -15,6 +15,7 @@ mod records_tests;
 mod request_tests;
 mod retry_tests;
 mod runtime_lifecycle_tests;
+mod session_limit_tests;
 mod sign_in_tests;
 mod view_tests;
 impl Core {
