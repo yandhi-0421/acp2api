@@ -281,6 +281,14 @@ impl Encoding {
         named(kind, value)
     }
 }
+pub(crate) fn call_identifier(api: crate::journal::Api) -> Result<String, String> {
+    identifier(match api {
+        crate::journal::Api::Messages => "toolu_",
+        crate::journal::Api::Chat
+        | crate::journal::Api::Responses
+        | crate::journal::Api::Models => "call_",
+    })
+}
 fn identifier(prefix: &str) -> Result<String, String> {
     let random = crate::random_hex::<16>().map_err(|e| e.to_string())?;
     Ok(format!("{prefix}{random}"))

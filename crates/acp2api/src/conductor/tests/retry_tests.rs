@@ -211,3 +211,85 @@ fn retry_wait_keeps_the_client_tool_set_when_tool_calls_are_disabled() {
     );
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn a_call_id_failure_starts_a_502_retry_wait_before_completion() {
+    let folder = std::env::temp_dir().join(format!(
+        "acp2api-call-id-retry-{}",
+        crate::random_hex::<12>().unwrap()
+    ));
+    let journal = crate::journal::Journal::open(&folder, std::time::UNIX_EPOCH).unwrap();
+    let turn = crate::dialect::CHAT
+        .parse(br#"{"model":"m","messages":[{"role":"user","content":"First"}]}"#)
+        .ok()
+        .unwrap()
+        .turn;
+    let mut actual = Vec::new();
+    for fail in [false, true] {
+        let (mut core, _, _tickets) = prompting_with_waiter(&journal);
+        let Work::AcceptedWorking(active) = core.work.get_mut(&0).unwrap() else {
+            panic!("the first request has an active prompt")
+        };
+        assert!(matches!(
+            active.client_tool_called(crate::conversation::ToolCall {
+                name: "read".into(),
+                arguments: "{}".into(),
+                kind: crate::conversation::ToolKind::Function,
+                namespace: None,
+            }),
+            request::PromptTurnAction::Cancel
+        ));
+        core.handle(
+            Event::Runtime(RuntimeEvent::Turn {
+                session: "running".into(),
+                update: TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::EndTurn),
+                },
+            }),
+            0,
+            std::time::UNIX_EPOCH,
+        );
+        let Work::AcceptedWorking(active) = core.work.remove(&0).unwrap() else {
+            panic!("the completed prompt awaits finalization")
+        };
+        let (commands, wait, record) = active.finish(Ok(()), 200, None, |_| {
+            if fail {
+                Err("random-source failure".into())
+            } else {
+                Ok("call-id".into())
+            }
+        });
+        let waits: Vec<_> = wait.into_iter().collect();
+        let seconds = match retry::refusal(&waits, &turn, 5_200) {
+            Some(crate::messages::Message::RetryWait { seconds, error })
+                if matches!(error.row(), crate::messages::Row::Other502) =>
+            {
+                Some(seconds)
+            }
+            Some(_) => panic!("the random-source error must retain its 502 row"),
+            None => None,
+        };
+        let tool_calls = commands
+            .iter()
+            .filter(|command| matches!(command, Command::Emit(_, TurnEvent::ToolCall { .. })))
+            .count();
+        let error = commands.iter().find_map(|command| match command {
+            Command::Emit(_, TurnEvent::End(Err(error))) => Some(error.to_string()),
+            _ => None,
+        });
+        actual.push((seconds, record.is_some(), tool_calls, error));
+        assert!(
+            retry::refusal(&waits, &turn, 30_200).is_none(),
+            "the wait expires after 30 s"
+        );
+    }
+    std::fs::remove_dir_all(folder).unwrap();
+    assert_eq!(
+        actual,
+        [
+            (None, true, 1, None),
+            (Some(25), false, 0, Some("random-source failure".into())),
+        ],
+        "FR-029 includes a 502 failure while making the call ID"
+    );
+}
