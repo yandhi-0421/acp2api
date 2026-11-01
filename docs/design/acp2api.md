@@ -1481,6 +1481,103 @@ With the runtime prefix `mcp_client-tools_`, each member name has at most 64 cha
 The runtime driver keeps the tools of its session, and maps the title of a permission request back to one of them with these MCP names.
 This correction adds no port, external dependency, or stored format.
 
+## Outbound connection observer (issue #138)
+
+The acceptance scenario observes the test host that calls the same `acp2api::run` as the release executable (ADR-0008).
+It exercises API requests, sign-in, and a new search with a fake ACP agent.
+The scenario runs in the default acceptance suite on macOS and Windows.
+The harness adds no product socket hook, port, or configuration option.
+
+### macOS
+
+The kernel kills the test host at its first forbidden outbound attempt, including a short or failed attempt.
+`Observer::command` applies this profile through `sandbox-exec`:
+
+```text
+(version 1)(allow default)
+(deny network-outbound (with send-signal SIGKILL) (remote ip "*:*"))
+(allow network-outbound (remote ip "localhost:*"))
+```
+
+The evidence is the host's real exit status. No log supplies evidence for this check.
+The macOS log loses sandbox denials without a loss event or dropped-message notice.
+Visible controls on both sides of a missing denial cannot prove a complete record.
+The [native measurements](../research/2026-11-01-macos-sandbox-deny-evidence.md) give the reason for the signal rule.
+
+`sandbox-exec` does not nest. Native macOS checks must run outside another sandbox.
+
+A successful loopback control must live. Short and failed TEST-NET controls must die by SIGKILL under the same profile.
+A short control precedes the host, and a failed control follows its exit.
+The native controls also require a connection to `127.0.0.2` to fail the destination check.
+These exit checks prove that the profile is active without a log-delivery dependency.
+
+The profile permits `::1`. This accepted gap is local loopback traffic; it sends no traffic outside the machine.
+Windows compares literal addresses for the same product code and detects an attempt to `::1`.
+The profile also applies to child processes, but a child's death is not evidence that the host opened a forbidden connection.
+For example, SIGKILL of the fake ACP agent does not fail this destination check when the host itself exits normally.
+Other scenario assertions can still fail if that child cannot serve a request.
+
+### Host lifecycle
+
+The observed launch captures stdout and stderr under the existing terminal cap.
+The harness checks that the host stays alive through readiness and the scenario actions.
+If an action panics, the step reads the host status before it propagates the original panic.
+A premature host exit fails with the `FR-046 outbound attempt outside 127.0.0.1` prefix and its actual status.
+
+The observed shutdown first checks that the host is still alive, then requests a graceful stop through the hub.
+It returns the real exit status. SIGKILL and other unsuccessful exits fail the destination check.
+It polls the process without a virtual-time barrier, which a killed host cannot complete.
+If the shutdown deadline requires a harness kill, that path returns an FR-046 error even if the kill races with another exit.
+Other scenarios use `Scenario::stop` for shutdown.
+
+### Windows
+
+The observer serializes audit-policy changes with an OS file lock and enables the available test-process `SeSecurityPrivilege`.
+It saves the Filtering Platform Connection policy and enables success and failure audits through `auditpol`.
+The subcategory GUID is `{0CCE9226-69AE-11D9-BED3-505054503030}`.
+The test needs an elevated Windows account; hosted CI provides that account.
+
+The capture saves a Security-log record and timestamp after setup.
+A structured event query selects connection events 5156 and 5157 for the host and both control PIDs within that window.
+It accepts decimal and hexadecimal PID fields. Unrelated processes do not consume the connection-record cap.
+A separate selector retains audit-gap events 1100, 1101, 1102, 1104, 1108, 4612, and 4719 regardless of PID.
+Event [4612](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4612) reports discarded audits after an audit-queue overflow.
+The selectors share one capped reader. The [Windows event-query contract](https://learn.microsoft.com/en-us/windows/win32/wes/consuming-events) defines this query form.
+
+The parser reads named XML fields and selects outbound records only.
+Only the host PID contributes to the final destination assertion; the fake ACP agent and other children do not contribute.
+If Windows attributes a host record to PID 0 or 4, the selector excludes it and can miss the attempt.
+A destination other than the literal IPv4 address `127.0.0.1` fails FR-046, including `::1`.
+The host must have at least one outbound audit record.
+Both control PIDs must have forbidden outbound records within a ten-second delivery wait.
+A cleared or overwritten cursor, policy change, malformed selected record, audit-gap event, or cap violation fails the check.
+
+A temporary firewall rule blocks `192.0.2.1` for the control executable alone, without constraining the product executable.
+Normal completion restores the audit policy, verifies it, and removes the rule.
+A saved audit value of zero is restored as `0x4`; zero and `0x4` compare as equivalent no-auditing states.
+The [audit-policy flags](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-audit_policy_information) distinguish unchanged (`0`) from no auditing (`0x4`).
+The cleanup guard also runs on setup errors and panic. A native test checks restoration and rule removal after a failed run.
+A kill of the test process can bypass cleanup; recovery on a retained machine needs a separate follow-up.
+
+### Limits and checks
+
+Each control makes one connection attempt and has a two-second body limit.
+The short control polls a tokio connection once; the failed control uses a 200 ms std timeout.
+Bounded observer commands have an eight-second limit and a 1 MiB cap for each output stream.
+Windows evidence has a 4096-record cap, and the observation window has a 90-second limit.
+The scenario sends at most nine HTTP requests and retains the existing terminal, hub, and journal caps.
+
+Unit tests check exit classification, premature exit, forced shutdown, audit normalization, PID isolation, event direction, gaps, and caps.
+The parser tests require the exact error for each invalid record.
+A fixture test exercises the real product and graceful observed shutdown without OS enforcement.
+Native controls run in separate CI steps so each command determines its own result.
+The default workspace test run includes the FR-046 scenario.
+
+A separate native CI step starts the real test host through `Scenario::start_network_observed` with `ACP2API_TEST_OUTBOUND_DIAL` set.
+Only the test host reads this variable. Before `acp2api::run`, the host makes one connection attempt to `192.0.2.1:9` with a 200 ms timeout.
+The test requires the FR-046 failure text from observed startup, shutdown, or the destination assertion.
+It has a 60-second cap and uses the same request and log caps as the fixture.
+
 ## Open questions
 
 1. **A first start that never publishes its panel address.**

@@ -3,7 +3,7 @@ Feature: Safety toward Google and the official runtime
   acp2api reaches Google only through the official runtime, in a runtime home of its own.
   The official runtime acts as a pure model: no built-in tool runs, and each client tool call goes back to the API client.
 
-  @FR-046 @issue-138 @wip
+  @FR-046 @issue-138
   Scenario: With a fake ACP agent, acp2api opens network connections only on 127.0.0.1
     Given acp2api runs with a fake ACP agent in place of the official runtime
     When an API client sends requests, the owner signs in, and the owner starts a new search
