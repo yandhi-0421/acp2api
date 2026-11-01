@@ -209,7 +209,9 @@ pub(crate) async fn run(
                     match event {
                         RuntimeEvent::Prepared { result, .. } => {
                             result.map_err(|error| {
-                                Failure::Incompatible(Incompatibility::Refused(error))
+                                Failure::Incompatible(Incompatibility::Refused(
+                                    error.into_message(),
+                                ))
                             })?;
                             break;
                         }

@@ -219,11 +219,11 @@ impl Core {
                 *upstream = error.clone();
             }
             match runtime_event {
-                RuntimeEvent::Authenticated(Err(target))
-                | RuntimeEvent::Prepared {
+                RuntimeEvent::Prepared {
                     result: Err(target),
                     ..
-                }
+                } => *target.message_mut() = error,
+                RuntimeEvent::Authenticated(Err(target))
                 | RuntimeEvent::Turn {
                     update: TurnUpdate::Failed(target),
                     ..

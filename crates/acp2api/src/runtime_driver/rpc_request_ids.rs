@@ -290,7 +290,7 @@ async fn a_rejected_session_removes_only_its_empty_folder() {
             else {
                 panic!("session/new rejection must fail its pending work");
             };
-            let error = error.to_string();
+            let error = error.message().to_string();
             assert_eq!(
                 (work.as_str(), error.as_str(), folder.is_dir(), accepted_folder.is_dir()),
                 (

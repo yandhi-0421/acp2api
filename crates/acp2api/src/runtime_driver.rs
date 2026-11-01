@@ -22,6 +22,29 @@ pub(crate) enum CommandError {
     Io(Message),
     Session(Message),
 }
+
+#[derive(Debug)]
+pub(crate) enum PreparationError {
+    Rejected(Message),
+    Created(Message),
+}
+impl PreparationError {
+    pub(crate) fn message(&self) -> &Message {
+        match self {
+            Self::Rejected(error) | Self::Created(error) => error,
+        }
+    }
+    pub(crate) fn message_mut(&mut self) -> &mut Message {
+        match self {
+            Self::Rejected(error) | Self::Created(error) => error,
+        }
+    }
+    pub(crate) fn into_message(self) -> Message {
+        match self {
+            Self::Rejected(error) | Self::Created(error) => error,
+        }
+    }
+}
 impl From<String> for CommandError {
     fn from(error: String) -> Self {
         Self::Session(Message::Upstream(error))
@@ -1006,20 +1029,23 @@ impl Runtime {
         &self,
         value: &Value,
         loaded: Option<String>,
-    ) -> Result<(String, crate::catalog::Catalog), Message> {
+    ) -> Result<(String, crate::catalog::Catalog), PreparationError> {
         let response = value
             .get("result")
-            .ok_or_else(|| acp_error(&value["error"]))?;
-        let session = match loaded {
-            Some(id) => id,
-            None => response["sessionId"]
-                .as_str()
-                .ok_or(Message::MissingSessionId)?
-                .to_owned(),
-        };
-        let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())
-            .map_err(Message::Upstream)?;
-        Ok((session, catalog))
+            .ok_or_else(|| PreparationError::Rejected(acp_error(&value["error"])))?;
+        (|| {
+            let session = match loaded {
+                Some(id) => id,
+                None => response["sessionId"]
+                    .as_str()
+                    .ok_or(Message::MissingSessionId)?
+                    .to_owned(),
+            };
+            let catalog = crate::catalog::Catalog::decode(response, self.clock.wall())
+                .map_err(Message::Upstream)?;
+            Ok((session, catalog))
+        })()
+        .map_err(PreparationError::Created)
     }
     fn client_tool_call(
         &self,
@@ -1150,7 +1176,7 @@ pub(crate) enum RuntimeEvent {
     },
     Prepared {
         work: String,
-        result: Result<(String, crate::catalog::Catalog), Message>,
+        result: Result<(String, crate::catalog::Catalog), PreparationError>,
     },
     Retired {
         session: String,
@@ -1194,10 +1220,10 @@ impl RuntimeEvent {
         failed_reply: &str,
     ) -> Option<(Message, Option<&'static str>)> {
         let error = match self {
-            Self::Authenticated(Err(error))
-            | Self::Prepared {
+            Self::Prepared {
                 result: Err(error), ..
-            }
+            } => error.message().clone(),
+            Self::Authenticated(Err(error))
             | Self::Turn {
                 update: TurnUpdate::Failed(error),
                 ..
