@@ -2,7 +2,7 @@ use crate::{World, panel_document as document, places_support as queue};
 use acp2api_acceptance::{TurnPlan, endpoint_check};
 
 pub const MARKER: &str = "panel-state-request-75-6b46cf1e2be548f8";
-pub const ERROR: &str = "Synthetic account suspension panel-evidence-75-84de23c7bb244013";
+pub const ERROR: &str = "Synthetic account suspension panel-evidence-75-84de23c7bb24";
 
 pub fn first_tile(html: &str) -> &str {
     document::elements(html, "section")

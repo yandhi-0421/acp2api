@@ -298,7 +298,7 @@ async fn parts(w: &mut World, step: &cucumber::gherkin::Step) {
     }
     let headings: Vec<_> = document::elements(&html, "section")
         .skip(1)
-        .flat_map(|s| document::elements(s.content, "h2"))
+        .filter_map(|s| document::elements(s.content, "h2").next())
         .map(|h| document::visible(h.content).to_ascii_lowercase())
         .collect();
     let expected: Vec<_> = step
