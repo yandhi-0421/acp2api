@@ -83,6 +83,10 @@ mod runtime_support;
 #[path = "steps/runtime_unavailable.rs"]
 mod runtime_unavailable;
 mod selection;
+#[path = "steps/session_limit.rs"]
+mod session_limit;
+#[path = "support/session_limit.rs"]
+mod session_limit_support;
 #[path = "steps/setup_logs.rs"]
 mod setup_logs;
 #[path = "support/setup_logs.rs"]
@@ -132,6 +136,7 @@ struct World {
     quota: quota_support::QuotaState,
     queries: query_support::QueryState,
     process: runtime_support::ProcessState,
+    limit: session_limit_support::LimitState,
     reload: runtime_continuation::ReloadState,
     account: acp2api_acceptance::account_check::AccountState,
     builds: build_support::BuildState,
@@ -274,6 +279,7 @@ async fn run() {
                     world.lockout.restore();
                     runtime_continuation::cleanup(world);
                     runtime_support::cleanup(world).await;
+                    session_limit_support::cleanup(world).await;
                     places_support::cleanup(world).await;
                     world
                         .scenario
