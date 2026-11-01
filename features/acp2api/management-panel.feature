@@ -17,7 +17,6 @@ Feature: Management panel
       | the owner started the sign-in                                     | Cancel the sign-in                            |
       | acp2api is in the normal state                                    | Search again                                  |
       | acp2api is in the normal state                                    | Set the path of agy_acp_server                |
-      | acp2api found the build 1.6.0, which is not an accepted version   | Run the compatibility check for 1.6.0         |
       | acp2api is in the state "runtime unavailable"                     | Retry                                         |
       | acp2api is in lockout                                             | End the lockout with the management password  |
       | acp2api is in the normal state                                    | Make a new key                                |
@@ -25,6 +24,13 @@ Feature: Management panel
       | acp2api is in the normal state                                    | Refresh the quota                             |
       | acp2api has not read the model names                              | Read the model names now                      |
       | the management panel has a notice                                 | Dismiss                                       |
+
+  @FR-053 @issue-194 @wip
+  Scenario: The management panel offers the compatibility check of a found build
+    Given the browser language is "en-US"
+    And acp2api found the build 1.6.0, which is not an accepted version
+    When the owner opens the management panel with a panel session
+    Then the management panel has the entry "Run the compatibility check for 1.6.0"
 
   @FR-053 @issue-75 @wip
   Scenario Outline: No CLI command does an action of the owner
