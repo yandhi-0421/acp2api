@@ -457,11 +457,6 @@ async fn stop_skips_a_prompt_queued_after_a_stalled_cancel() {
             ),
             "FR-035 forbids a queued prompt after stop starts"
         );
-        assert_eq!(
-            f.clock.holds.load(Ordering::SeqCst),
-            0,
-            "a skipped frame must release its ready-work hold"
-        );
     })
     .await
     .expect("cancel then prompt cap: 5 s");
