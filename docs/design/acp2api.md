@@ -1513,12 +1513,22 @@ The same product code runs on Windows, where the audit compares literal addresse
 The native macOS controls still require a successful `127.0.0.1` connection and denials for short and failed TEST-NET attempts.
 A direct socket route still reaches the kernel rule. The design does not depend on replacement libc symbols.
 
-The capture records its start time before the first control.
-After the host exits, `log show` reads the bounded window in JSON, with info, debug, and loss events enabled.
-Its end bound includes the current second in full.
-The query uses the single predicate `eventMessage CONTAINS[c] 'network-outbound'`.
-The orchestrator measured that this predicate returns a real denial, but any additional `OR` clause returns none on this Mac.
-Both control PIDs must appear, so a query that misses their events fails the run.
+The capture starts `log stream --style ndjson --info --debug --timeout 2m` before the first control.
+It waits at most eight seconds for the `Filtering the log data using "..."` header before it returns.
+The orchestrator found that `log show` returns a kernel sandbox denial only on its first read, even with the same window and predicate.
+Repeated queries therefore cannot support the poll in `Observer::collect`.
+The earlier claim that `OR` clauses remove the denials was incorrect.
+
+The stream uses the full predicate below. It does not pass `--ignore-dropped`.
+
+```text
+eventMessage CONTAINS[c] 'network-outbound' OR eventType == 'lossEvent' OR (eventMessage BEGINSWITH 'Sandbox:' AND eventMessage CONTAINS[c] 'suppressed') OR (process == 'logd' AND (eventMessage CONTAINS[c] 'dropped' OR eventMessage CONTAINS[c] 'lost'))
+```
+
+Reader threads retain complete stdout records and report stderr output, read errors, early exit, and cap violations as capture errors.
+Each read parses all retained records, so an earlier read cannot consume a denial.
+Both control PIDs must appear within the existing ten-second wait, so a missing control fails the run.
+`Capture::drop` stops and reaps the stream child and joins its readers on normal completion, an error, and a panic.
 
 The parser reads the target PID from the sandbox message, not the kernel process ID of the log record.
 It accepts only messages that start with `Sandbox:` and contain ` deny(` and `network-outbound`.
@@ -1532,9 +1542,11 @@ The orchestrator recorded this compact line:
 kernel[0:3f9eba] (Sandbox) Sandbox: Python(72753) deny(1) network-outbound remote:*:9
 ```
 
-The local `log(1)` man page defines JSON output as an array of dictionaries.
-The parser reads `eventMessage` from each dictionary and extracts `72753` from the message above.
+After the header, the parser accepts one JSON object per complete line and skips a partial last line.
+It reads `eventMessage` from each object and extracts `72753` from the message above.
 It rejects a returned `lossEvent` and checks for dropped, suppressed, or lost records only in Sandbox messages.
+The local man page documents dropped-message notices but does not give their format.
+No notice-specific parser assumes a format. A complete non-JSON line after the header fails NDJSON decoding.
 
 ### Windows
 
@@ -1580,8 +1592,10 @@ The evidence promise rests on the OS rule, the native controls, and explicit fai
 Each control has one attempt and a two-second body limit. A parent caps its process run.
 The short control polls a tokio connection once and drops it immediately.
 The failed control uses a 200 ms std connection timeout.
-Each observer command has an eight-second limit and a 1 MiB cap for each output stream.
-Each capture has a 4096-record cap. The observation window has a 90-second limit.
+Short observer commands have an eight-second limit and a 1 MiB cap for each output stream.
+The live stream has a two-minute process timeout and an eight-second header wait.
+Its stdout cap is 1 MiB, including the header, and its record cap is 4096.
+Any stderr output fails the capture. The observation window retains its 90-second limit.
 The scenario fixture sends at most nine HTTP requests and keeps the existing terminal, hub, and journal caps.
 
 ### Verification gates

@@ -9,13 +9,16 @@ pub(super) fn macos(bytes: &[u8]) -> Result<Vec<Attempt>, String> {
     if bytes.len() as u64 > LOG_CAP {
         return Err("unified log exceeds 1 MiB".into());
     }
-    let events: Vec<serde_json::Value> =
-        serde_json::from_slice(bytes).map_err(|e| format!("unified log JSON: {e}"))?;
-    if events.len() > RECORD_CAP {
-        return Err("unified log exceeds 4096 records".into());
-    }
     let mut attempts = Vec::new();
-    for event in events {
+    for (index, line) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
+        if !line.ends_with(b"\n") {
+            break;
+        }
+        if index == RECORD_CAP {
+            return Err("unified log exceeds 4096 records".into());
+        }
+        let event: serde_json::Value =
+            serde_json::from_slice(line).map_err(|e| format!("unified log NDJSON: {e}"))?;
         let kind = event["eventType"]
             .as_str()
             .ok_or("unified log lacks eventType")?;
@@ -136,8 +139,12 @@ mod tests {
     // Kernel deny text recorded by the orchestrator outside Codex, 2026-11-01.
     const DENY: &str = "Sandbox: Python(72753) deny(1) network-outbound remote:*:9";
     fn mac(message: &str) -> Vec<u8> {
-        serde_json::to_vec(&json!([{"eventType":"logEvent","processID":0,"eventMessage":message}]))
-            .unwrap()
+        let mut line = serde_json::to_vec(
+            &json!({"eventType":"logEvent","processID":0,"eventMessage":message}),
+        )
+        .unwrap();
+        line.push(b'\n');
+        line
     }
     // Field names and values follow Microsoft's recorded 5156/5157 XML examples.
     fn event(record: u64, id: u16, pid: &str, address: &str) -> Value {
@@ -167,13 +174,23 @@ mod tests {
         );
     }
     #[test]
+    fn ndjson_ignores_only_the_partial_last_record() {
+        let capture = b"{\"eventType\":\"logEvent\",\"eventMessage\":\"Sandbox: Python(72753) deny(1) network-outbound remote:*:9\"}\n{\"eventType\":";
+        assert_eq!(
+            macos(capture).expect("the complete denial remains observable"),
+            vec![Attempt {
+                pid: 72753,
+                destination: Destination::SandboxDeny
+            }]
+        );
+    }
+    #[test]
     fn log_query_diagnostics_do_not_hide_sandbox_denials() {
         // Recorded message excerpts from the orchestrator's native log query.
-        let capture = br#"[
-            {"eventType":"logEvent","processID":0,"eventMessage":"Sandbox: Python(72753) deny(1) network-outbound remote:*:9"},
-            {"eventType":"logEvent","eventMessage":"log run noninteractively, ... args: ... eventMessage CONTAINS[c] 'network-outbound'"},
+        let capture = br#"{"eventType":"logEvent","processID":0,"eventMessage":"Sandbox: Python(72753) deny(1) network-outbound remote:*:9"}
+            {"eventType":"logEvent","eventMessage":"log run noninteractively, ... args: ... eventMessage CONTAINS[c] 'network-outbound'"}
             {"eventType":"logEvent","eventMessage":"log run noninteractively, ... args: ... eventMessage CONTAINS[c] 'network-outbound' OR eventType == 'lossEvent' OR (eventMessage BEGINSWITH 'Sandbox:' AND eventMessage CONTAINS[c] 'suppressed') OR (process == 'logd' AND (eventMessage CONTAINS[c] 'dropped' OR eventMessage CONTAINS[c] 'lost'))"}
-        ]"#;
+"#;
         assert_eq!(
             macos(capture).expect("log diagnostics must not invalidate sandbox evidence"),
             vec![Attempt {
@@ -236,12 +253,14 @@ mod tests {
     #[test]
     fn loss_and_suppression_in_unified_logs_fail_closed() {
         for value in [
-            json!([{"eventType":"lossEvent"}]),
-            json!([{"eventType":"logEvent","eventMessage":"Sandbox: 12 messages suppressed"}]),
-            json!([{"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages dropped"}]),
-            json!([{"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages lost"}]),
+            json!({"eventType":"lossEvent"}),
+            json!({"eventType":"logEvent","eventMessage":"Sandbox: 12 messages suppressed"}),
+            json!({"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages dropped"}),
+            json!({"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages lost"}),
         ] {
-            assert!(macos(&serde_json::to_vec(&value).unwrap()).is_err());
+            let mut line = serde_json::to_vec(&value).unwrap();
+            line.push(b'\n');
+            assert!(macos(&line).is_err());
         }
     }
     #[test]
@@ -253,7 +272,7 @@ mod tests {
         ] {
             assert!(macos(&mac(message)).is_err(), "{message}");
         }
-        for bytes in [b"".as_slice(), b"[", b"[{}]"] {
+        for bytes in [b"\n".as_slice(), b"[\n", b"{}\n"] {
             assert!(macos(bytes).is_err());
         }
     }
@@ -313,7 +332,6 @@ mod tests {
         assert!(windows(&oversized, 10).is_err());
         let events = vec![event(11, 5156, "4556", "127.0.0.1"); RECORD_CAP + 1];
         assert!(parse(&win(events)).is_err());
-        let events = vec![json!({"eventType":"logEvent","eventMessage":DENY}); RECORD_CAP + 1];
-        assert!(macos(&serde_json::to_vec(&events).unwrap()).is_err());
+        assert!(macos(&mac(DENY).repeat(RECORD_CAP + 1)).is_err());
     }
 }
