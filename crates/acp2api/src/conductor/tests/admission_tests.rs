@@ -375,11 +375,12 @@ fn an_upstream_error_keeps_its_place_until_the_prompt_fails() {
         "FR-049 an upstream error does not end the outstanding prompt"
     );
     assert!(
-        commands
-            .iter()
-            .any(|command| matches!(command, Command::Cancel(session) if session == "running"))
+        !commands.iter().any(|command| matches!(
+            command,
+            Command::Cancel(_) | Command::Emit(_, _) | Command::Complete(_)
+        )),
+        "FR-028 the response waits for stdout before cancellation or completion"
     );
-    assert!(commands.iter().any(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error)))) if error.code == Some(503) && error.message == "HTTP failure")));
     assert!(
         !commands
             .iter()
@@ -387,20 +388,31 @@ fn an_upstream_error_keeps_its_place_until_the_prompt_fails() {
     );
     drop(commands);
     assert!(
-        tickets[0].is_closed(),
-        "the ended request retains no reply route"
+        !tickets[0].is_closed(),
+        "the request retains its reply route during the stdout wait"
     );
     let repeated = core.handle(error(), 2, std::time::UNIX_EPOCH);
     assert!(
         matches!(&repeated[..], [Command::UpstreamLog { .. }]),
         "a repeated error keeps the occupied entry and sends no second end"
     );
+    let expired = core.handle(Event::Deadline, 201, std::time::UNIX_EPOCH);
+    assert!(expired.iter().any(|command| matches!(command,
+        Command::Cancel(session) if session == "running")));
+    assert!(expired.iter().any(|command| matches!(command,
+        Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error))))
+            if error.code == Some(503) && error.message == "HTTP failure")));
+    drop(expired);
+    assert!(
+        tickets[0].is_closed(),
+        "the ended request retains no reply route"
+    );
     let ended = core.handle(
         Event::Runtime(RuntimeEvent::Turn {
             session: "running".into(),
             update: TurnUpdate::Failed(crate::messages::Message::Upstream("RPC failure".into())),
         }),
-        3,
+        202,
         std::time::UNIX_EPOCH,
     );
     assert!(

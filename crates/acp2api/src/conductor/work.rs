@@ -85,6 +85,7 @@ impl WorkTable {
                 | Work::ModelsReading(_) => None,
                 Work::AcceptedWorking(active) => active.session(),
                 Work::Retiring(outstanding) => outstanding.session(),
+                Work::QuotaRetiring { session, .. } => Some(session.as_str()),
                 Work::QuotaWorking { phase, .. } => phase.session(),
             };
             (current == Some(session)).then_some(*id)
@@ -117,11 +118,17 @@ pub(super) enum Work {
     AcceptedQueued(Accepted),
     AcceptedWorking(Active),
     Retiring(OutstandingWork),
+    QuotaRetiring {
+        work: String,
+        session: String,
+        failed_reply: Option<super::lockout::FailedReply>,
+    },
     QuotaQueued {
         query: QuotaQuery,
         session: Option<String>,
     },
     QuotaWorking {
+        failed_reply: Option<super::lockout::FailedReply>,
         query: QuotaQuery,
         phase: QuotaPhase,
         text: String,
@@ -135,6 +142,33 @@ pub(super) struct ModelRead {
 }
 
 impl Work {
+    pub(super) fn failed_reply_mut(&mut self) -> Option<&mut Option<super::lockout::FailedReply>> {
+        match self {
+            Self::AcceptedWorking(active) => Some(&mut active.failed_reply),
+            Self::Retiring(outstanding) => Some(&mut outstanding.failed_reply),
+            Self::QuotaWorking { failed_reply, .. } => Some(failed_reply),
+            Self::QuotaRetiring { failed_reply, .. } => Some(failed_reply),
+            _ => None,
+        }
+    }
+
+    pub(super) fn reply_text(&self) -> String {
+        match self {
+            Self::AcceptedWorking(active) => active.reply_text(),
+            Self::Retiring(outstanding) => outstanding
+                .failed_reply
+                .as_ref()
+                .map(|failed| failed.text().to_owned())
+                .unwrap_or_default(),
+            Self::QuotaWorking { text, .. } => text.clone(),
+            Self::QuotaRetiring { failed_reply, .. } => failed_reply
+                .as_ref()
+                .map(|failed| failed.text().to_owned())
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
     pub(super) fn key(&self) -> &str {
         match self {
             Self::ModelsQueued(read) | Self::ModelsReading(read) => &read.work,
@@ -142,6 +176,7 @@ impl Work {
             Self::AcceptedQueued(request) => &request.request.id,
             Self::AcceptedWorking(active) => &active.request.id,
             Self::Retiring(outstanding) => outstanding.request_id(),
+            Self::QuotaRetiring { work, .. } => work,
             Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => &query.work,
         }
     }
@@ -152,6 +187,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -165,6 +201,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -178,6 +215,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -191,6 +229,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -212,6 +251,7 @@ impl Work {
             Self::Checking(_)
                 | Self::AcceptedWorking(_)
                 | Self::Retiring(_)
+                | Self::QuotaRetiring { .. }
                 | Self::QuotaWorking { .. }
                 | Self::ModelsReading(_)
         )
@@ -231,6 +271,7 @@ impl Work {
             Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::ModelsQueued(_)
             | Self::ModelsReading(_) => None,
         }
@@ -250,6 +291,7 @@ impl Work {
             Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::ModelsQueued(_)
             | Self::ModelsReading(_) => None,
         }
@@ -271,7 +313,7 @@ impl Work {
         match self {
             Self::AcceptedWorking(active) => active.completion_deadline(),
             Self::QuotaWorking {
-                phase: QuotaPhase::Settling { at, .. },
+                phase: QuotaPhase::Settling { at, .. } | QuotaPhase::FailedPrompt { at, .. },
                 ..
             } => Some(*at),
             _ => None,

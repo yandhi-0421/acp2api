@@ -14,6 +14,7 @@ pub(super) struct Record {
     pub record: RequestRecord,
 }
 pub(super) struct OutstandingWork {
+    pub(super) failed_reply: Option<super::lockout::FailedReply>,
     model: String,
     request: crate::journal::Request,
     session: Option<String>,
@@ -26,6 +27,7 @@ pub(super) enum PendingCompletion {
 impl OutstandingWork {
     pub(super) fn from_active(active: &Active, completion: PendingCompletion) -> Self {
         Self {
+            failed_reply: active.failed_reply.clone(),
             model: active.model.clone(),
             request: active.request.clone(),
             session: active.session().map(str::to_owned),
@@ -34,6 +36,7 @@ impl OutstandingWork {
     }
     pub(super) fn disconnected_check(request: PendingRequest) -> Self {
         Self {
+            failed_reply: None,
             model: request.turn.model,
             request: request.request,
             session: None,

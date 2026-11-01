@@ -6,6 +6,39 @@ use crate::{
 };
 use std::{path::Path, time::SystemTime};
 
+#[derive(Clone)]
+pub(super) struct FailedReply {
+    error: Box<Message>,
+    tail: String,
+}
+
+impl FailedReply {
+    fn new(error: Message, text: &str) -> Self {
+        let mut failed = Self {
+            error: Box::new(error),
+            tail: String::new(),
+        };
+        let _ = failed.observe(text);
+        failed
+    }
+
+    fn observe(&mut self, text: &str) -> Option<&'static str> {
+        self.tail.push_str(text);
+        let signal = crate::messages::lockout_signal(None, &self.tail, None);
+        // PERMISSION_DENIED is the longest lockout signal that can cross chunks.
+        let mut start = self.tail.len().saturating_sub("PERMISSION_DENIED".len());
+        while !self.tail.is_char_boundary(start) {
+            start += 1;
+        }
+        self.tail.drain(..start);
+        signal
+    }
+
+    pub(super) fn text(&self) -> &str {
+        &self.tail
+    }
+}
+
 pub(super) enum Loaded {
     Normal,
     Lockout(Lockout),
@@ -173,16 +206,30 @@ impl Core {
         let Event::Runtime(runtime_event) = event else {
             return None;
         };
-        let failed_reply = match runtime_event {
-            RuntimeEvent::UpstreamError { session, .. } => self
-                .work
-                .by_session(session)
-                .and_then(|id| self.work[&id].execution())
-                .map(|active| active.reply_text())
-                .unwrap_or_default(),
-            _ => String::new(),
+        let (error, signal) = match runtime_event {
+            RuntimeEvent::UpstreamError { session, .. } => {
+                let id = self.work.by_session(session);
+                let text = id.map(|id| self.work[&id].reply_text()).unwrap_or_default();
+                let result = runtime_event.upstream_error(&text)?;
+                if let Some(slot) = id
+                    .and_then(|id| self.work.get_mut(&id))
+                    .and_then(Work::failed_reply_mut)
+                {
+                    *slot = Some(FailedReply::new(result.0.clone(), &text));
+                }
+                result
+            }
+            RuntimeEvent::Turn {
+                session,
+                update: TurnUpdate::Text(text),
+            } => {
+                let id = self.work.by_session(session)?;
+                let failed = self.work.get_mut(&id)?.failed_reply_mut()?.as_mut()?;
+                let signal = failed.observe(text)?;
+                (failed.error.as_ref().clone(), Some(signal))
+            }
+            _ => runtime_event.upstream_error("")?,
         };
-        let (error, signal) = runtime_event.upstream_error(&failed_reply)?;
         let mut upstream_error =
             matches!(runtime_event, RuntimeEvent::UpstreamError { .. }).then(|| error.clone());
         if let Some(signal) = signal
