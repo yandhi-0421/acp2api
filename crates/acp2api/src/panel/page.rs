@@ -128,11 +128,11 @@ p {
     margin:0;
     padding:6px 16px;
     font-size:14px;
-    white-space:nowrap;
 }
 .state-link {
     border:1px solid var(--action);
     border-radius:999px;
+    text-align:center;
     text-decoration:none;
 }
 .section-bar>form,.state-link {
@@ -669,7 +669,8 @@ fn bar_action(language: Language, view: &crate::conductor::View) -> String {
         ),
         (State::SignInRequired, None) => sign_in_entry(language),
         (State::RuntimeUnavailable, None) => retry_entry(language),
-        _ => String::new(),
+        (State::Running | State::QuotaWait, _)
+        | (State::SignInRequired | State::RuntimeUnavailable, Some(_)) => String::new(),
     }
 }
 fn first_tile(
