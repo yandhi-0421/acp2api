@@ -186,13 +186,27 @@ fn a_tool_call_does_not_make_a_refused_turn_reusable() {
             std::time::UNIX_EPOCH,
         );
         let commands = core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH);
+        let call_id = commands
+            .iter()
+            .find_map(|command| match command {
+                Command::Emit(_, crate::conversation::TurnEvent::ToolCall { id, .. }) => {
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| "unreturned-call".into());
         answer_quota(&mut core, commands, 200);
-        let next = crate::dialect::CHAT.parse(br#"{"model":"gemini-3.8-flash","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[
+        let body = r#"{"model":"gemini-3.8-flash","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[
                 {"role":"user","content":"First"},
                 {"role":"assistant","content":"Before","tool_calls":[{"id":"call-id","function":{"name":"read","arguments":"{}"}}]},
                 {"role":"tool","tool_call_id":"call-id","content":"Done"},
                 {"role":"user","content":"Next"}
-        ]}"#).ok().unwrap().turn;
+        ]}"#.replace("call-id", &call_id);
+        let next = crate::dialect::CHAT
+            .parse(body.as_bytes())
+            .ok()
+            .unwrap()
+            .turn;
         selected.extend(
             core.handle(
                 Event::Accepted(Box::new(Accepted {

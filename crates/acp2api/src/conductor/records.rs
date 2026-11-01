@@ -73,23 +73,57 @@ impl OutstandingWork {
 }
 pub(super) struct RequestRecord {
     hashes: RecordHashes,
+    last_reply: LastReply,
     tools: ToolSetHash,
     used: u64,
     expires: Moment,
 }
+#[derive(Default)]
+struct LastReply {
+    text: Option<conversation::ItemHash>,
+    tool_call: Option<(String, String)>,
+}
+impl LastReply {
+    fn len(&self) -> usize {
+        usize::from(self.text.is_some()) + usize::from(self.tool_call.is_some())
+    }
+    fn matches(&self, mut items: &[&Item]) -> bool {
+        if let Some(hash) = self.text {
+            match items {
+                [
+                    Item::Message {
+                        role: conversation::Role::Assistant,
+                        name: None,
+                        parts,
+                    },
+                    rest @ ..,
+                ] if matches!(&parts[..], [conversation::Part::Text(text)]
+                    if conversation::clean_reply_hash(text) == hash) =>
+                {
+                    items = rest
+                }
+                _ => return false,
+            }
+        }
+        match &self.tool_call {
+            Some((id, name)) => matches!(items.first(),
+                Some(Item::ToolCall { id: call_id, name: call_name, .. })
+                    if call_id == id && call_name == name),
+            None => true,
+        }
+    }
+}
 impl RequestRecord {
-    pub(super) fn with_reply(
-        mut self,
-        text: &str,
-        tool_hash: Option<crate::conversation::ItemHash>,
-    ) -> Self {
-        if tool_hash.is_none() || !text.is_empty() {
-            self.hashes.messages.push(conversation::reply_hash(text));
-        }
-        if let Some(hash) = tool_hash {
-            self.hashes.messages.push(hash);
-        }
+    pub(super) fn with_reply(mut self, text: &str, tool_call: Option<(String, String)>) -> Self {
+        self.last_reply = LastReply {
+            text: (tool_call.is_none() || !text.is_empty())
+                .then(|| conversation::clean_reply_hash(text)),
+            tool_call,
+        };
         self
+    }
+    fn len(&self) -> usize {
+        self.hashes.messages.len() + self.last_reply.len()
     }
     pub(super) fn hashes(&self) -> &RecordHashes {
         &self.hashes
@@ -107,6 +141,7 @@ impl RequestRecord {
     ) -> Self {
         Self {
             hashes,
+            last_reply: LastReply::default(),
             tools,
             used,
             expires,
@@ -294,10 +329,7 @@ impl AcpSessions {
             checked_session.is_some(),
         );
         let matched = match source {
-            Source::Record(index) => Some((
-                index,
-                &items[self.records[index].record.hashes.messages.len()..],
-            )),
+            Source::Record(index) => Some((index, &items[self.records[index].record.len()..])),
             _ => None,
         };
         let prompt = match matched {
@@ -327,6 +359,7 @@ impl AcpSessions {
         self.use_sequence += 1;
         let record = RequestRecord {
             hashes,
+            last_reply: LastReply::default(),
             tools: tools_hash,
             used: self.use_sequence,
             expires: now.saturating_add(24 * 60 * 60 * 1000),
@@ -451,10 +484,14 @@ fn select<'a>(
         .filter(|(_, record)| {
             record.record.tools == tools
                 && record.record.hashes.is_continued_by(hashes)
-                && conversation::continues_after(items, record.record.hashes.messages.len())
+                && record
+                    .record
+                    .last_reply
+                    .matches(&items[record.record.hashes.messages.len()..])
+                && conversation::continues_after(items, record.record.len())
         })
-        .max_by_key(|(_, record)| (record.record.hashes.messages.len(), record.record.used))
-        .map(|(index, record)| (index, &items[record.record.hashes.messages.len()..]))
+        .max_by_key(|(_, record)| (record.record.len(), record.record.used))
+        .map(|(index, record)| (index, &items[record.record.len()..]))
 }
 
 #[cfg(test)]
@@ -492,7 +529,7 @@ mod tests {
                 Some(
                     selection
                         .record
-                        .with_reply("", Some(conversation::tool_call_hash("Bash", r#"{"command":"cd /work && make"}"#))),
+                        .with_reply("", Some(("call-id".into(), "Bash".into()))),
                 ),
             );
             let next = chat_turn(serde_json::json!({"model":"m", "messages":[
@@ -691,6 +728,7 @@ mod tests {
                 location: Location::Loaded,
                 session: "short-recent".into(),
                 record: RequestRecord {
+                    last_reply: LastReply::default(),
                     hashes: RecordHashes {
                         system: hashes.system,
                         messages: hashes.messages[..1].into(),
@@ -704,6 +742,7 @@ mod tests {
                 location: Location::Loaded,
                 session: "long-older".into(),
                 record: RequestRecord {
+                    last_reply: LastReply::default(),
                     hashes: RecordHashes {
                         system: hashes.system,
                         messages: hashes.messages[..2].into(),

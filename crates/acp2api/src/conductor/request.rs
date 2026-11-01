@@ -453,10 +453,6 @@ impl Active {
             | Phase::QuotaSettling { .. }
             | Phase::QuotaSettled => (false, result),
         };
-        let tool_hash = self
-            .tool_call
-            .as_ref()
-            .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
         let retry = result
             .as_ref()
             .err()
@@ -471,22 +467,33 @@ impl Active {
         }
         self.release_or_cut_reply(None, now, &mut commands);
         let can_continue = can_continue && self.stop.sequence().is_none();
-        let end = result.map_err(|failure| failure.message).map(|()| {
+        let mut last_call = None;
+        let end = result.map_err(|failure| failure.message).and_then(|()| {
             let mut output = self.text.clone();
             if let Some(call) = self.tool_call.take() {
+                let prefix = match self.request.api {
+                    crate::journal::Api::Messages => "toolu_",
+                    crate::journal::Api::Chat
+                    | crate::journal::Api::Responses
+                    | crate::journal::Api::Models => "call_",
+                };
+                let random = crate::random_hex::<16>()
+                    .map_err(|error| Message::Upstream(error.to_string()))?;
+                let id = format!("{prefix}{random}");
+                last_call = Some((id.clone(), call.name.clone()));
                 output.push_str(&call.arguments);
                 commands.push(Command::Emit(
                     self.reply.output.clone(),
-                    TurnEvent::ToolCall(call),
+                    TurnEvent::ToolCall { id, call },
                 ));
             }
-            Usage {
+            Ok(Usage {
                 input_tokens: self.input_tokens,
                 output_tokens: crate::conversation::estimate_tokens(&output),
-            }
+            })
         });
         let record = if self.session.is_some() && end.is_ok() && can_continue {
-            Some(self.record.with_reply(&self.text, tool_hash))
+            Some(self.record.with_reply(&self.text, last_call))
         } else {
             None
         };

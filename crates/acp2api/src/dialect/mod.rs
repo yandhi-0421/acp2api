@@ -64,9 +64,6 @@ trait WireDialect: Sync {
         vec![data(self.refusal_body(refusal))]
     }
     fn prefix(&self) -> &'static str;
-    fn call_prefix(&self) -> &'static str {
-        "call_"
-    }
     fn body(&self, wire: &Encoding, usage: &Usage) -> Value;
     fn start(&self, wire: &mut Encoding) -> Vec<Event>;
     fn keep_alive(&self, wire: &mut Encoding) -> Event;
@@ -121,13 +118,12 @@ impl<T: WireDialect + 'static> Dialect for T {
         Box::pin(async move {
             let Ticket { mut events, hold } = ticket;
             let stream = form.stream;
-            let mut wire =
-                match Encoding::new(self.prefix(), self.call_prefix(), form, clock.wall()) {
-                    Ok(wire) => wire,
-                    Err(error) => {
-                        return self.refusal(&Message::Upstream(error).into());
-                    }
-                };
+            let mut wire = match Encoding::new(self.prefix(), form, clock.wall()) {
+                Ok(wire) => wire,
+                Err(error) => {
+                    return self.refusal(&Message::Upstream(error).into());
+                }
+            };
             if stream {
                 let initial = self.start(&mut wire).into();
                 let output_hold = Arc::new(Mutex::new(None));
@@ -162,7 +158,10 @@ impl<T: WireDialect + 'static> Dialect for T {
                             TurnEvent::Text(text) => {
                                 state.pending.extend(self.text(&mut state.wire, &text))
                             }
-                            TurnEvent::ToolCall(call) => state.wire.tool_call = Some(call),
+                            TurnEvent::ToolCall { id, call } => {
+                                state.wire.call_id = id;
+                                state.wire.tool_call = Some(call);
+                            }
                             TurnEvent::End(Ok(usage)) => {
                                 state.pending.extend(self.end(&mut state.wire, &usage));
                                 state.ended = true;
@@ -188,7 +187,10 @@ impl<T: WireDialect + 'static> Dialect for T {
                         TurnEvent::KeepAlive => {}
                         TurnEvent::Stop(stop) => wire.stop = stop,
                         TurnEvent::Text(chunk) => wire.text.push_str(&chunk),
-                        TurnEvent::ToolCall(call) => wire.tool_call = Some(call),
+                        TurnEvent::ToolCall { id, call } => {
+                            wire.call_id = id;
+                            wire.tool_call = Some(call);
+                        }
                         TurnEvent::End(Ok(usage)) => {
                             return Json(self.body(&wire, &usage)).into_response();
                         }
@@ -251,12 +253,7 @@ struct Encoding {
     call_item_id: String,
 }
 impl Encoding {
-    fn new(
-        prefix: &str,
-        call_prefix: &str,
-        form: ReplyForm,
-        wall: std::time::SystemTime,
-    ) -> Result<Self, String> {
+    fn new(prefix: &str, form: ReplyForm, wall: std::time::SystemTime) -> Result<Self, String> {
         Ok(Self {
             stop: Stop::EndTurn,
             id: identifier(prefix)?,
@@ -273,7 +270,7 @@ impl Encoding {
             sequence: 0,
             text: String::new(),
             tool_call: None,
-            call_id: identifier(call_prefix)?,
+            call_id: String::new(),
             call_item_id: identifier("fc_")?,
         })
     }

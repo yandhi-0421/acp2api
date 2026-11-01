@@ -50,9 +50,6 @@ impl WireDialect for Messages {
     fn prefix(&self) -> &'static str {
         "msg_"
     }
-    fn call_prefix(&self) -> &'static str {
-        "toolu_"
-    }
     fn body(&self, w: &Encoding, u: &Usage) -> Value {
         let mut content = Vec::new();
         if !w.text.is_empty() || w.tool_call.is_none() {
