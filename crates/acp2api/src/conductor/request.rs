@@ -226,10 +226,13 @@ impl Active {
 
     fn stored_error(&self, now: Moment) -> Option<Failure> {
         match &self.phase {
-            Phase::FailedPrompt { error, .. } => Some(error.clone()),
-            Phase::AwaitingQuotaPreparation { wait } | Phase::AwaitingQuotaEnd { wait, .. } => {
-                Some(Failure::at(wait.message(now), now))
-            }
+            Phase::FailedPrompt { error, .. }
+            | Phase::Settling {
+                result: Err(error), ..
+            } => Some(error.clone()),
+            Phase::AwaitingQuotaPreparation { wait }
+            | Phase::AwaitingQuotaEnd { wait, .. }
+            | Phase::QuotaSettling { wait, .. } => Some(Failure::at(wait.message(now), now)),
             _ => None,
         }
     }
@@ -1056,7 +1059,20 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         if id.is_none() && self.work.has_queued_session(&session) {
-            let _ = self.quota_signal(&message, now, wall, commands);
+            if let Some((wait, false)) = self.quota_signal(&message, now, wall, commands) {
+                for work in self.work.values_mut() {
+                    if let Work::QuotaQueued {
+                        query,
+                        session: Some(queued),
+                    } = work
+                        && *queued == session
+                        && let QuotaPurpose::Reset { wait: pending, .. } = &mut query.purpose
+                    {
+                        *pending = wait;
+                        break;
+                    }
+                }
+            }
             return;
         }
         if let Some((wait, known)) = self.quota_signal(&message, now, wall, commands) {
@@ -1098,6 +1114,12 @@ impl Core {
         }
     }
 
+    fn waiting_error(&self, id: WorkId, now: Moment) -> Option<Failure> {
+        self.refusal(now)
+            .map(|message| Failure::at(message, now))
+            .or_else(|| self.work[&id].execution()?.stored_error(now))
+    }
+
     pub(super) fn end_occupying_work(
         &mut self,
         message: crate::messages::Message,
@@ -1120,9 +1142,8 @@ impl Core {
             .iter()
             .find_map(|(id, work)| work.occupies_place().then_some(*id))
         {
-            let failure = self.work[&id]
-                .execution()
-                .and_then(|active| active.stored_error(now))
+            let failure = self
+                .waiting_error(id, now)
                 .unwrap_or_else(|| Failure::at(message.clone(), now));
             self.finish(id, Err(failure), now, commands);
         }
@@ -1145,17 +1166,16 @@ impl Core {
             })
             .collect();
         for id in due {
-            let error = self.work[&id]
-                .execution()
-                .and_then(|active| match &active.phase {
-                    Phase::AwaitingQuotaEnd { wait, .. } => Some(Failure::at(
-                        self.refusal(now).unwrap_or_else(|| wait.message(now)),
-                        now,
-                    )),
-                    Phase::FailedPrompt { error, .. } => Some(error.clone()),
-                    _ => None,
-                });
+            let error = self.work[&id].execution().and_then(|active| {
+                (active.waiting_for_stdout()
+                    || matches!(active.phase, Phase::Settling { result: Err(_), .. }))
+                .then(|| self.waiting_error(id, now).unwrap())
+            });
             if let Some(error) = error {
+                if !self.work[&id].execution().unwrap().waiting_for_stdout() {
+                    self.finish(id, Err(error), now, commands);
+                    continue;
+                }
                 let session = self.work[&id]
                     .execution()
                     .unwrap()

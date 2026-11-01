@@ -388,6 +388,7 @@ impl Core {
             return;
         }
         let pending = self.work.values_mut().find_map(|work| match work {
+            Work::QuotaWorking { result: Err(_), .. } => None,
             Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => {
                 match &mut query.purpose {
                     QuotaPurpose::Reset {

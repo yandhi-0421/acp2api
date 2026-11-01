@@ -21,9 +21,7 @@ impl ReplySignals {
     }
 
     fn observe(&mut self, text: &str, ended: bool) -> Option<&'static str> {
-        use crate::messages::{
-            LOCKOUT_SIGNALS, PERMISSION_DENIED, STATUS_403, TERMS_OF_SERVICE, lockout_token_char,
-        };
+        use crate::messages::{LOCKOUT_SIGNALS, STATUS_403, lockout_token_char};
         self.tail.push_str(text);
         let begin = if self.head_cut {
             self.tail
@@ -47,9 +45,10 @@ impl ReplySignals {
         let signal = if crate::messages::lockout_signal(None, token, None) == Some(STATUS_403) {
             Some(STATUS_403)
         } else {
-            [PERMISSION_DENIED, TERMS_OF_SERVICE]
+            LOCKOUT_SIGNALS
                 .iter()
                 .copied()
+                .filter(|signal| *signal != STATUS_403)
                 .find(|signal| self.tail.contains(signal))
         };
         let bound = LOCKOUT_SIGNALS
