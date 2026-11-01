@@ -487,6 +487,7 @@ impl Core {
                 self.end_occupying_work(
                     crate::messages::Message::Upstream(error.clone()),
                     now,
+                    wall,
                     &mut commands,
                 );
             }
@@ -499,7 +500,7 @@ impl Core {
                 None,
                 Event::Runtime(RuntimeEvent::Closed | RuntimeEvent::WriteFailed(_))
                 | Event::RuntimeFailure,
-            ) => self.runtime_failed(now, &mut commands),
+            ) => self.runtime_failed(now, wall, &mut commands),
             (None, Event::Runtime(RuntimeEvent::Stderr | RuntimeEvent::Other)) => {}
             (None, Event::Deadline) => self.deadline_reached(now, wall, &mut commands),
         }

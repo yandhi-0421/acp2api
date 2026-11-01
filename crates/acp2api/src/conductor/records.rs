@@ -14,6 +14,7 @@ pub(super) struct Record {
     pub record: RequestRecord,
 }
 pub(super) struct OutstandingWork {
+    pub(super) reply_signals: super::lockout::ReplySignals,
     model: String,
     request: crate::journal::Request,
     session: Option<String>,
@@ -26,6 +27,7 @@ pub(super) enum PendingCompletion {
 impl OutstandingWork {
     pub(super) fn from_active(active: &Active, completion: PendingCompletion) -> Self {
         Self {
+            reply_signals: active.reply_signals.clone(),
             model: active.model.clone(),
             request: active.request.clone(),
             session: active.session().map(str::to_owned),
@@ -34,6 +36,7 @@ impl OutstandingWork {
     }
     pub(super) fn disconnected_check(request: PendingRequest) -> Self {
         Self {
+            reply_signals: super::lockout::ReplySignals::default(),
             model: request.turn.model,
             request: request.request,
             session: None,
@@ -135,8 +138,27 @@ pub(super) struct AcpSessions {
     startup: Option<String>,
     use_sequence: u64,
     cancels: BTreeMap<String, Moment>,
+    settled_replies: BTreeMap<String, (super::lockout::ReplySignals, Moment)>,
 }
 impl AcpSessions {
+    pub(super) fn remember_reply(
+        &mut self,
+        session: String,
+        reply: super::lockout::ReplySignals,
+        until: Moment,
+    ) {
+        self.settled_replies.insert(session, (reply, until));
+    }
+    pub(super) fn reply_signals_mut(
+        &mut self,
+        session: &str,
+        now: Moment,
+    ) -> Option<&mut super::lockout::ReplySignals> {
+        self.settled_replies
+            .get_mut(session)
+            .filter(|(_, until)| *until >= now)
+            .map(|(reply, _)| reply)
+    }
     #[cfg(test)]
     pub(super) fn records(&self) -> &[Record] {
         &self.records
@@ -158,6 +180,7 @@ impl AcpSessions {
         }
     }
     pub(super) fn replaced(&mut self, startup: Option<String>) {
+        self.settled_replies.clear();
         self.held = usize::from(startup.is_some());
         self.startup = startup;
     }
@@ -240,6 +263,7 @@ impl AcpSessions {
             .collect()
     }
     pub(super) fn expire(&mut self, now: crate::Moment) -> Vec<Command> {
+        self.settled_replies.retain(|_, (_, until)| *until >= now);
         let mut commands = Vec::new();
         self.records.retain(|record| {
             if record.record.expires <= now {
@@ -340,6 +364,7 @@ impl AcpSessions {
         self.cancels.clear();
     }
     pub(super) fn runtime_failed(&mut self) {
+        self.settled_replies.clear();
         self.clear_cancels();
         self.startup = None;
     }
@@ -350,6 +375,15 @@ impl AcpSessions {
     ) -> (Option<OutstandingWork>, Vec<Command>) {
         let mut commands = Vec::new();
         let exit = active.exit();
+        if matches!(exit, Exit::Settled)
+            && let Some(session) = active.session()
+        {
+            self.remember_reply(
+                session.to_owned(),
+                active.reply_signals.clone(),
+                active.completion_deadline().unwrap(),
+            );
+        }
         if matches!(exit, Exit::CancelAndRetire) {
             commands.push(self.cancel(active.session().unwrap().to_owned(), now));
         }
@@ -397,6 +431,7 @@ impl AcpSessions {
             startup,
             use_sequence,
             cancels: BTreeMap::new(),
+            settled_replies: BTreeMap::new(),
         }
     }
     #[cfg(test)]
@@ -426,6 +461,21 @@ fn select<'a>(
 mod tests {
     use super::*;
     use crate::conversation::{Conversation, Part, Role};
+
+    #[test]
+    fn expired_reply_summaries_are_removed_at_the_next_input() {
+        let mut sessions = AcpSessions::default();
+        for i in 0..1000 {
+            sessions.remember_reply(format!("s{i}"), Default::default(), 100);
+        }
+        sessions.expire(100);
+        assert_eq!(sessions.settled_replies.len(), 1000);
+        sessions.expire(101);
+        assert!(
+            sessions.settled_replies.is_empty(),
+            "expired summaries must not accumulate"
+        );
+    }
 
     fn chat_turn(body: serde_json::Value) -> crate::conversation::TurnRequest {
         crate::dialect::CHAT

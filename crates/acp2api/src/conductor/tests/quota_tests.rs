@@ -36,7 +36,7 @@ fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
         std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_000),
     );
     assert_eq!(core.quota.wait().unwrap().deadline, 3_660_000);
-    let ended = core.handle(
+    let mut ended = core.handle(
         Event::Runtime(RuntimeEvent::UpstreamError {
             session: "running".into(),
             error: crate::messages::HttpError {
@@ -49,6 +49,21 @@ fn a_known_reset_replaces_a_quota_wait_without_another_reset_query() {
         std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_001),
     );
     assert_eq!(core.quota.wait().unwrap().deadline, 120_000);
+    assert!(
+        !ended
+            .iter()
+            .any(|command| matches!(command, Command::Emit(_, TurnEvent::End(_))))
+    );
+    ended.extend(core.handle(
+        Event::Runtime(RuntimeEvent::Turn {
+            session: "running".into(),
+            update: TurnUpdate::PromptEnded {
+                stop_reason: Some(StopReason::EndTurn),
+            },
+        }),
+        60_002,
+        std::time::UNIX_EPOCH,
+    ));
     assert_eq!(
         ended
             .iter()
@@ -157,7 +172,7 @@ fn a_request_settling_after_its_quota_wait_was_replaced_ends_with_the_current_qu
         let refusal = core.model_entries(60_200).err().unwrap();
         assert_eq!(crate::dialect::CHAT.refusal(&refusal).status(), 429);
         assert_eq!(core.quota.wait().unwrap().deadline, deadline);
-        core.handle(
+        let mut current = core.handle(
             Event::Runtime(RuntimeEvent::Turn {
                 session: "other".into(),
                 update: TurnUpdate::PromptEnded {
@@ -167,11 +182,11 @@ fn a_request_settling_after_its_quota_wait_was_replaced_ends_with_the_current_qu
             60_201,
             std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_201),
         );
-        let current = core.handle(
+        current.extend(core.handle(
             Event::Deadline,
             60_401,
             std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_401),
-        );
+        ));
         assert_eq!(
             current
                 .iter()
@@ -201,7 +216,7 @@ fn a_request_queries_its_reset_time_after_the_replacing_quota_wait_expires() {
             crate::messages::HttpError {
                 code: Some(429),
                 status: "RESOURCE_EXHAUSTED".into(),
-                message: "resets 1970-01-01T00:01:01Z".into(),
+                message: "resets 1970-01-01T00:01:00.100Z".into(),
             },
             60_001,
         ),
@@ -217,24 +232,24 @@ fn a_request_queries_its_reset_time_after_the_replacing_quota_wait_expires() {
     }
     core.handle(
         Event::Deadline,
-        61_000,
-        std::time::UNIX_EPOCH + std::time::Duration::from_millis(61_000),
+        60_100,
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_100),
     );
-    core.handle(
+    let mut querying = core.handle(
         Event::Runtime(RuntimeEvent::Turn {
             session: "running".into(),
             update: TurnUpdate::PromptEnded {
                 stop_reason: Some(StopReason::EndTurn),
             },
         }),
-        61_001,
-        std::time::UNIX_EPOCH + std::time::Duration::from_millis(61_001),
+        60_101,
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_101),
     );
-    let querying = core.handle(
+    querying.extend(core.handle(
         Event::Deadline,
-        61_201,
-        std::time::UNIX_EPOCH + std::time::Duration::from_millis(61_201),
-    );
+        60_301,
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_301),
+    ));
     assert_eq!(
         querying
             .iter()
@@ -257,22 +272,22 @@ fn a_request_queries_its_reset_time_after_the_replacing_quota_wait_expires() {
     ] {
         core.handle(
             Event::Runtime(RuntimeEvent::Turn { session: "running".into(), update }),
-            61_202,
-            std::time::UNIX_EPOCH + std::time::Duration::from_millis(61_202),
+            60_302,
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_302),
         );
     }
     let ended = core.handle(
         Event::Deadline,
-        61_402,
-        std::time::UNIX_EPOCH + std::time::Duration::from_millis(61_402),
+        60_502,
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_502),
     );
     assert_eq!(ended.iter().filter(|command| matches!(command,
-        Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::QuotaWait { until, retry_after: 59 })))
+        Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::QuotaWait { until, retry_after: 60 })))
             if until == "1970-01-01T00:02:00Z"
     )).count(), 1, "the running request ends with the queried reset time");
     assert_eq!(core.view.borrow().state, State::Running);
     assert!(
-        core.model_entries(61_402).is_ok(),
+        core.model_entries(60_502).is_ok(),
         "the query does not restart an expired quota wait"
     );
     std::fs::remove_dir_all(folder).unwrap();
@@ -290,6 +305,7 @@ fn a_queued_reset_query_runs_only_without_another_current_quota_wait() {
         (120_001, 1, 0, State::Running),
     ] {
         let (mut core, second, _tickets) = prompting_with_waiter(&journal);
+        let initial_output = core.work[&0].execution().unwrap().reply.output.clone();
         core.handle(Event::Limit(2), 0, std::time::UNIX_EPOCH);
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
@@ -336,6 +352,9 @@ fn a_queued_reset_query_runs_only_without_another_current_quota_wait() {
             60_201,
             std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_201),
         );
+        if release > 60_401 {
+            core.handle(Event::Deadline, 60_401, std::time::UNIX_EPOCH);
+        }
         let dispatched = core.handle(
             Event::Runtime(RuntimeEvent::Turn {
                 session: "other".into(),
@@ -357,8 +376,8 @@ fn a_queued_reset_query_runs_only_without_another_current_quota_wait() {
             "FR-036/FR-052 skip the queued reset query only while another quota wait is current"
         );
         assert_eq!(dispatched.iter().filter(|command| matches!(command,
-            Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::QuotaWait { until, retry_after: 60 })))
-                if until == "1970-01-01T00:02:00Z"
+            Command::Emit(output, TurnEvent::End(Err(crate::messages::Message::QuotaWait { until, retry_after: 60 })))
+                if output.same_channel(&initial_output) && until == "1970-01-01T00:02:00Z"
         )).count(), responses, "a skipped query ends its response with the current quota wait");
         assert_eq!(core.view.borrow().state, state);
     }
@@ -583,13 +602,19 @@ fn a_runtime_failure_while_awaiting_quota_end_keeps_the_reset_query() {
     assert_eq!(
         ended
             .iter()
-            .filter(|command| matches!(command,
-                Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::Upstream(error))))
-                    if error == "runtime failed"
+            .filter(|command| matches!(
+                command,
+                Command::Emit(
+                    _,
+                    TurnEvent::End(Err(crate::messages::Message::QuotaWait {
+                        retry_after: 3600,
+                        ..
+                    }))
+                )
             ))
             .count(),
         1,
-        "the runtime failure still ends the API request once"
+        "FR-028 keeps the stored quota error when the runtime process ends"
     );
     assert_eq!(core.work.values().filter(|work| matches!(work,
         Work::QuotaWorking { query: QuotaQuery { purpose: QuotaPurpose::Reset { wait, model: Some(model), response: None }, .. }, phase: QuotaPhase::Preparing, .. }
@@ -614,7 +639,7 @@ fn a_non_quota_error_cancels_a_prompt_awaiting_quota_end() {
         60_000,
         std::time::UNIX_EPOCH,
     );
-    let commands = core.handle(
+    let mut commands = core.handle(
         Event::Runtime(RuntimeEvent::UpstreamError {
             session: "running".into(),
             error: crate::messages::HttpError {
@@ -626,6 +651,12 @@ fn a_non_quota_error_cancels_a_prompt_awaiting_quota_end() {
         60_001,
         std::time::UNIX_EPOCH,
     );
+    assert!(
+        !commands
+            .iter()
+            .any(|command| matches!(command, Command::Cancel(_)))
+    );
+    commands.extend(core.handle(Event::Deadline, 60_200, std::time::UNIX_EPOCH));
     assert_eq!(
         commands
             .iter()
@@ -638,7 +669,7 @@ fn a_non_quota_error_cancels_a_prompt_awaiting_quota_end() {
 }
 
 #[test]
-fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
+fn a_stderr_deadline_cancel_keeps_the_pending_quota_reset_query() {
     let folder = std::env::temp_dir().join(format!(
         "acp2api-idle-quota-reset-{}",
         crate::random_hex::<12>().unwrap()
@@ -654,7 +685,7 @@ fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
         std::time::UNIX_EPOCH,
     );
     let timer = core.quota.wait().unwrap().timer;
-    let cancelled = core.handle(Event::Deadline, 300_000, std::time::UNIX_EPOCH);
+    let cancelled = core.handle(Event::Deadline, 60_200, std::time::UNIX_EPOCH);
     assert!(
         cancelled
             .iter()
@@ -663,7 +694,7 @@ fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
     assert_eq!(core.work.values().filter(|work| matches!(work,
         Work::QuotaQueued { query: QuotaQuery { purpose: QuotaPurpose::Reset { wait, model: Some(model), response: None }, .. }, session: None }
         if model == "m" && wait.deadline == 3_660_000
-    )).count(), 1, "FR-036/FR-052 keep exactly one reset query after the FR-051 cancel");
+    )).count(), 1, "FR-036/FR-052 keep exactly one reset query after the stderr deadline cancel");
     assert!(
         !cancelled
             .iter()
@@ -677,21 +708,24 @@ fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
                 stop_reason: Some(StopReason::Cancelled),
             },
         }),
-        300_001,
+        60_201,
         std::time::UNIX_EPOCH,
     );
-    let prepared = prepare_quota_queries(&mut core, &ended, 300_001);
+    let prepared = prepare_quota_queries(&mut core, &ended, 60_201);
     assert_eq!(prepared.iter().filter(|command| matches!(command, Command::Usage { session, .. } if session == "quota-query")).count(), 1, "the preserved reset query reaches /usage");
     assert_eq!(
         cancelled
             .iter()
             .filter(|command| matches!(
                 command,
-                Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::NoUpdate)))
+                Command::Emit(
+                    _,
+                    TurnEvent::End(Err(crate::messages::Message::QuotaWait { .. }))
+                )
             ))
             .count(),
         1,
-        "the API request ends once with M-19"
+        "the API request ends once with the quota error"
     );
     assert!(
         !ended
@@ -707,12 +741,12 @@ fn a_no_update_cancel_keeps_the_pending_quota_reset_query() {
     ] {
         query_end.extend(core.handle(Event::Runtime(RuntimeEvent::Turn {
             session: "quota-query".into(), update,
-        }), 300_002, std::time::UNIX_EPOCH + std::time::Duration::from_millis(300_002)));
+        }), 60_202, std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_202)));
     }
     query_end.extend(core.handle(
         Event::Deadline,
-        300_202,
-        std::time::UNIX_EPOCH + std::time::Duration::from_millis(300_202),
+        60_402,
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(60_402),
     ));
     let wait = core.quota.wait().unwrap();
     assert!(

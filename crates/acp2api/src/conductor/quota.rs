@@ -274,13 +274,16 @@ pub(super) enum QuotaPurpose {
 pub(super) enum QuotaPhase {
     Preparing,
     Prompt(String),
+    FailedPrompt { session: String, at: Moment },
     Settling { session: String, at: Moment },
 }
 impl QuotaPhase {
     pub(super) fn session(&self) -> Option<&str> {
         match self {
             Self::Preparing => None,
-            Self::Prompt(session) | Self::Settling { session, .. } => Some(session),
+            Self::Prompt(session)
+            | Self::FailedPrompt { session, .. }
+            | Self::Settling { session, .. } => Some(session),
         }
     }
 }
@@ -345,21 +348,63 @@ impl Core {
                 Err(error) => self.finish_quota(id, Err(error.into_message()), now, wall, commands),
             },
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
-                self.update_quota(id, session, update, now, commands)
+                self.update_quota(id, session, update, now, commands);
+                if matches!(&self.work[&id], Work::QuotaWorking {
+                    phase: QuotaPhase::Settling { at, .. }, ..
+                } if *at <= now)
+                {
+                    self.finish_quota(id, Ok(()), now, wall, commands);
+                }
             }
             Event::Runtime(RuntimeEvent::UpstreamError { .. }) => {
                 let message = upstream_error.unwrap();
                 let _ = self.quota_signal(&message, now, wall, commands);
-                let Work::QuotaWorking { result, .. } = self.work.get_mut(&id).unwrap() else {
+                let Work::QuotaWorking { result, phase, .. } = self.work.get_mut(&id).unwrap()
+                else {
                     unreachable!()
                 };
-                *result = Err(message);
+                if !matches!(phase, QuotaPhase::FailedPrompt { .. }) {
+                    *result = Err(message);
+                }
+                match phase {
+                    QuotaPhase::Prompt(session) => {
+                        *phase = QuotaPhase::FailedPrompt {
+                            session: session.clone(),
+                            at: now.saturating_add(SETTLE_DELAY),
+                        };
+                    }
+                    QuotaPhase::Settling { .. } => {
+                        self.finish_quota(id, Ok(()), now, wall, commands);
+                    }
+                    QuotaPhase::Preparing | QuotaPhase::FailedPrompt { .. } => {}
+                }
             }
             Event::Deadline => self.finish_quota(id, Ok(()), now, wall, commands),
             _ => unreachable!(),
         }
     }
     pub(super) fn enqueue_reset_query(&mut self, wait: Wait, model: Option<String>) {
+        if self.lockout.is_some() {
+            return;
+        }
+        let pending = self.work.values_mut().find_map(|work| match work {
+            Work::QuotaWorking { result: Err(_), .. } => None,
+            Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => {
+                match &mut query.purpose {
+                    QuotaPurpose::Reset {
+                        wait,
+                        model: current,
+                        response: None,
+                    } if *current == model => Some(wait),
+                    _ => None,
+                }
+            }
+            _ => None,
+        });
+        if let Some(pending) = pending {
+            *pending = wait;
+            return;
+        }
         self.enqueue_quota(
             QuotaPurpose::Reset {
                 wait,
@@ -395,20 +440,20 @@ impl Core {
         else {
             unreachable!()
         };
+        let failed = matches!(phase, QuotaPhase::FailedPrompt { .. });
+        let at = if failed {
+            now
+        } else {
+            now.saturating_add(SETTLE_DELAY)
+        };
         match update {
             TurnUpdate::Text(chunk) => text.push_str(&chunk),
-            TurnUpdate::PromptEnded { .. } => {
-                *phase = QuotaPhase::Settling {
-                    session,
-                    at: now.saturating_add(SETTLE_DELAY),
-                }
-            }
+            TurnUpdate::PromptEnded { .. } => *phase = QuotaPhase::Settling { session, at },
             TurnUpdate::Failed(error) => {
-                *result = Err(error);
-                *phase = QuotaPhase::Settling {
-                    session,
-                    at: now.saturating_add(SETTLE_DELAY),
-                };
+                if !failed {
+                    *result = Err(error);
+                }
+                *phase = QuotaPhase::Settling { session, at };
             }
             TurnUpdate::Permission { request, .. }
             | TurnUpdate::RefusedPermission { request, .. } => {
@@ -434,10 +479,24 @@ impl Core {
             phase,
             text,
             result: recorded,
+            reply_signals,
         } = self.work.remove(&id).unwrap()
         else {
             unreachable!()
         };
+        let unfinished = matches!(phase, QuotaPhase::FailedPrompt { .. });
+        if unfinished {
+            let session = phase.session().unwrap().to_owned();
+            commands.push(self.sessions.cancel(session.clone(), now));
+            self.work.restore(
+                id,
+                Work::QuotaRetiring {
+                    work: query.work.clone(),
+                    session,
+                    reply_signals,
+                },
+            );
+        }
         let result = result.and(recorded);
         self.quota_result.send_replace(Arc::new(Some(QuotaResult {
             text: match &result {
@@ -482,7 +541,11 @@ impl Core {
         };
         self.complete_quota(
             query,
-            phase.session().map(str::to_owned),
+            if unfinished {
+                None
+            } else {
+                phase.session().map(str::to_owned)
+            },
             end.map_err(|message| Failure::at(message, now)),
             now,
             commands,
@@ -508,6 +571,12 @@ impl Core {
         };
         if let Some(active) = response {
             let (forget, completion) = self.complete_request(active, result, now);
+            let forget = forget.filter(|session| {
+                !self
+                    .work
+                    .by_session(session)
+                    .is_some_and(|id| matches!(self.work[&id], Work::QuotaRetiring { .. }))
+            });
             commands.extend(completion);
             commands.extend(
                 session
@@ -602,6 +671,7 @@ impl Core {
         self.work.restore(
             id,
             Work::QuotaWorking {
+                reply_signals: super::lockout::ReplySignals::default(),
                 query,
                 phase,
                 text: String::new(),

@@ -85,6 +85,7 @@ impl WorkTable {
                 | Work::ModelsReading(_) => None,
                 Work::AcceptedWorking(active) => active.session(),
                 Work::Retiring(outstanding) => outstanding.session(),
+                Work::QuotaRetiring { session, .. } => Some(session.as_str()),
                 Work::QuotaWorking { phase, .. } => phase.session(),
             };
             (current == Some(session)).then_some(*id)
@@ -94,6 +95,13 @@ impl WorkTable {
         self.items
             .iter()
             .find_map(|(id, work)| (work.key() == request).then_some(*id))
+    }
+    pub(super) fn has_queued_session(&self, session: &str) -> bool {
+        self.items.values().any(|work| {
+            matches!(work,
+                Work::QuotaQueued { session: Some(current), .. } if current == session
+            )
+        })
     }
 }
 impl std::ops::Deref for WorkTable {
@@ -117,11 +125,17 @@ pub(super) enum Work {
     AcceptedQueued(Accepted),
     AcceptedWorking(Active),
     Retiring(OutstandingWork),
+    QuotaRetiring {
+        work: String,
+        session: String,
+        reply_signals: super::lockout::ReplySignals,
+    },
     QuotaQueued {
         query: QuotaQuery,
         session: Option<String>,
     },
     QuotaWorking {
+        reply_signals: super::lockout::ReplySignals,
         query: QuotaQuery,
         phase: QuotaPhase,
         text: String,
@@ -135,6 +149,16 @@ pub(super) struct ModelRead {
 }
 
 impl Work {
+    pub(super) fn reply_signals_mut(&mut self) -> Option<&mut super::lockout::ReplySignals> {
+        match self {
+            Self::AcceptedWorking(active) => Some(&mut active.reply_signals),
+            Self::Retiring(outstanding) => Some(&mut outstanding.reply_signals),
+            Self::QuotaWorking { reply_signals, .. } => Some(reply_signals),
+            Self::QuotaRetiring { reply_signals, .. } => Some(reply_signals),
+            _ => None,
+        }
+    }
+
     pub(super) fn key(&self) -> &str {
         match self {
             Self::ModelsQueued(read) | Self::ModelsReading(read) => &read.work,
@@ -142,6 +166,7 @@ impl Work {
             Self::AcceptedQueued(request) => &request.request.id,
             Self::AcceptedWorking(active) => &active.request.id,
             Self::Retiring(outstanding) => outstanding.request_id(),
+            Self::QuotaRetiring { work, .. } => work,
             Self::QuotaQueued { query, .. } | Self::QuotaWorking { query, .. } => &query.work,
         }
     }
@@ -152,6 +177,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -165,6 +191,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -178,6 +205,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -191,6 +219,7 @@ impl Work {
             | Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::QuotaQueued { .. }
             | Self::QuotaWorking { .. }
             | Self::ModelsQueued(_)
@@ -212,6 +241,7 @@ impl Work {
             Self::Checking(_)
                 | Self::AcceptedWorking(_)
                 | Self::Retiring(_)
+                | Self::QuotaRetiring { .. }
                 | Self::QuotaWorking { .. }
                 | Self::ModelsReading(_)
         )
@@ -231,6 +261,7 @@ impl Work {
             Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::ModelsQueued(_)
             | Self::ModelsReading(_) => None,
         }
@@ -250,6 +281,7 @@ impl Work {
             Self::CheckQueued(_)
             | Self::Checking(_)
             | Self::Retiring(_)
+            | Self::QuotaRetiring { .. }
             | Self::ModelsQueued(_)
             | Self::ModelsReading(_) => None,
         }
@@ -271,7 +303,7 @@ impl Work {
         match self {
             Self::AcceptedWorking(active) => active.completion_deadline(),
             Self::QuotaWorking {
-                phase: QuotaPhase::Settling { at, .. },
+                phase: QuotaPhase::Settling { at, .. } | QuotaPhase::FailedPrompt { at, .. },
                 ..
             } => Some(*at),
             _ => None,
