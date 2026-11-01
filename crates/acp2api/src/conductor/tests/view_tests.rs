@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn the_panel_receives_the_effective_quota_reset_until_the_wait_expires() {
+    let mut core = Core::fixture(2);
+    assert!(core.view.borrow().quota_reset.is_none());
+    for (now, seconds, message) in [
+        (10_000, 120, "resets 1970-01-01T00:02:00Z"),
+        (11_000, 180, "resets 1970-01-01T00:03:00Z"),
+    ] {
+        core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "quota-view-75-4ad26e71a7034b7b".into(),
+                error: crate::messages::HttpError {
+                    code: Some(429),
+                    status: "RESOURCE_EXHAUSTED".into(),
+                    message: message.into(),
+                },
+            }),
+            now,
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(now),
+        );
+        let view = core.view.borrow();
+        assert_eq!(
+            (view.state, view.quota_reset),
+            (
+                State::QuotaWait,
+                Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+            ),
+            "FR-054 publishes the current reset time after each quota signal"
+        );
+    }
+    core.handle(
+        Event::Deadline,
+        180_000,
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(180),
+    );
+    assert_eq!(
+        (core.view.borrow().state, core.view.borrow().quota_reset),
+        (State::Running, None),
+        "FR-054 clears the reset time when the quota wait ends"
+    );
+}
+
+#[test]
+fn the_panel_receives_the_time_signal_and_original_text_of_a_lockout() {
+    let mut core = Core::fixture(2);
+    core.handle(
+        Event::Lockout {
+            signal: "403 PERMISSION_DENIED",
+            error: crate::messages::Message::UpstreamHttp(crate::messages::HttpError {
+                code: Some(403),
+                status: "PERMISSION_DENIED".into(),
+                message: "Synthetic account suspension 75 b7ed23c745e147d4".into(),
+            }),
+            signalling_work: None,
+        },
+        17,
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(123),
+    );
+    assert_eq!(
+        serde_json::to_value(&core.view.borrow().lockout_evidence).unwrap(),
+        serde_json::json!({
+            "since": "1970-01-01T00:02:03Z",
+            "signal": "403 PERMISSION_DENIED",
+            "original_error_text": "acp2api: upstream error 403 PERMISSION_DENIED: Synthetic account suspension 75 b7ed23c745e147d4",
+        }),
+        "FR-054 publishes all lockout evidence to the panel"
+    );
+}
+
+#[test]
 fn the_panel_process_word_changes_when_retirement_starts() {
     let mut core = Core::fixture(2);
     core.handle(

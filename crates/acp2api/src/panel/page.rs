@@ -540,7 +540,7 @@ fn first_tile(
     let mut paragraphs = view
         .lockout_evidence
         .as_ref()
-        .map(|text| format!("<p>{}</p>", escape(text)))
+        .map(|evidence| format!("<p>{}</p>", escape(&evidence.original_error_text)))
         .unwrap_or_default();
     if view.lockout_unsaved {
         let text = lockout_unsaved(language);

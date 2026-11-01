@@ -74,7 +74,7 @@ fn error_text(message: &Message) -> Option<&str> {
 pub(super) struct Wait {
     pub timer: TimerId,
     pub deadline: Moment,
-    until: SystemTime,
+    pub(super) until: SystemTime,
 }
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct TimerId(pub u64);
