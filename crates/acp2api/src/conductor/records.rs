@@ -462,6 +462,173 @@ mod tests {
     use super::*;
     use crate::conversation::{Conversation, Part, Role};
 
+    fn session_use(selection: &Selection) -> &'static str {
+        match selection.kind {
+            crate::journal::SessionUse::Continue => "continue",
+            crate::journal::SessionUse::Rebuild => "rebuild",
+            crate::journal::SessionUse::New => "new",
+        }
+    }
+
+    #[test]
+    fn issue218_last_tool_call_compares_id_and_name_without_arguments() {
+        for (id, name, arguments, expected) in [
+            ("call-id", "Bash", r#"{"command":"make"}"#, "continue"),
+            (
+                "call-id",
+                "Bash",
+                r#"{"command":"cd /work && make"}"#,
+                "continue",
+            ),
+            ("other", "Bash", r#"{"command":"make"}"#, "rebuild"),
+            ("call-id", "Read", r#"{"command":"make"}"#, "rebuild"),
+        ] {
+            let first = turn_a();
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(
+                    selection
+                        .record
+                        .with_reply("", Some(conversation::tool_call_hash("Bash", r#"{"command":"cd /work && make"}"#))),
+                ),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                {"role":"assistant","tool_calls":[{"id":id,"type":"function","function":{"name":name,"arguments":arguments}}]},
+                {"role":"tool","tool_call_id":id,"content":"Done."}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            assert_eq!(
+                session_use(&selection),
+                expected,
+                "last call {id} {name} {arguments}"
+            );
+            if expected == "continue" {
+                assert!(
+                    matches!(&selection.prompt[..], [conversation::PromptBlock::Text(text)]
+                    if text == &format!("Result of your tool call {name} {arguments}:\nDone.")),
+                    "FR-023 sends one result with the request's arguments"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn issue218_only_last_reply_text_uses_clean_form() {
+        for (reply, returned, expected) in [
+            (
+                "\n  if a:\r\n    return  \t\n\n",
+                "if a:\n    return",
+                "continue",
+            ),
+            ("one\rcarriage", "onecarriage", "continue"),
+            ("one\u{2003}\ntwo\u{a0}", "one\ntwo", "continue"),
+            ("if a:\n    return", "if a:\n  return", "rebuild"),
+            ("name =  value", "name = value", "rebuild"),
+            (" \n\t", "", "continue"),
+        ] {
+            let first = turn_a();
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply(reply, None)),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                {"role":"assistant","content":returned},
+                {"role":"user","content":"Next"}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            assert_eq!(
+                session_use(&selection),
+                expected,
+                "last reply {reply:?} -> {returned:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn issue218_a_match_keeps_the_client_form_for_later_exact_comparisons() {
+        for (later, expected) in [("one\ntwo", "continue"), ("one \ntwo", "rebuild")] {
+            let first = turn_a();
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply("one  \ntwo", None)),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                {"role":"assistant","content":"one\ntwo"},
+                {"role":"user","content":"Next"}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            assert_eq!(
+                session_use(&selection),
+                "continue",
+                "first client form matches"
+            );
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply("Fine.", None)),
+            );
+            let later = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                {"role":"assistant","content":later},
+                {"role":"user","content":"Next"},
+                {"role":"assistant","content":"Fine."},
+                {"role":"user","content":"Again"}
+            ]}));
+            let (selection, _) = sessions.select(&later, &settings, None, 2);
+            assert_eq!(
+                session_use(&selection),
+                expected,
+                "accepted client form is exact later"
+            );
+        }
+    }
+
+    #[test]
+    fn issue218_earlier_items_keep_exact_white_space() {
+        for (sent, returned, expected) in [
+            ("if a:\n    return", "if a:\n  return", "rebuild"),
+            ("one  \ntwo", "one\ntwo", "rebuild"),
+            ("same  text", "same  text", "continue"),
+        ] {
+            let first = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":sent}
+            ]}));
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply("R", None)),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":returned},
+                {"role":"assistant","content":"R"},
+                {"role":"user","content":"Next"}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            let actual = match selection.kind {
+                crate::journal::SessionUse::Continue => "continue",
+                crate::journal::SessionUse::Rebuild => "rebuild",
+                crate::journal::SessionUse::New => "new",
+            };
+            assert_eq!(
+                actual, expected,
+                "earlier user text {sent:?} -> {returned:?}"
+            );
+        }
+    }
+
     #[test]
     fn expired_reply_summaries_are_removed_at_the_next_input() {
         let mut sessions = AcpSessions::default();
