@@ -14,6 +14,12 @@ use std::{
     collections::HashMap,
     sync::{Arc, LazyLock, Mutex},
 };
+#[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Bounded page checks use real temporary files and start no runtime process."
+)]
+mod hash_tests;
 mod page;
 mod texts;
 use texts::Language;
