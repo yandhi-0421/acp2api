@@ -53,3 +53,4 @@ One bounded context: `GLOSSARY.md` at the root, and ADRs in `docs/adr/`.
 - Tests: `cargo test --workspace --locked`.
 - Format: `cargo fmt --all -- --check`.
 - Lint: `cargo clippy --workspace --all-targets --locked -- -D warnings`.
+- Use one `CARGO_TARGET_DIR` for each concurrent job. Do not build in a target directory until each test process of that directory has exited. A build can replace the fake ACP agent during a run. The acceptance harness then refuses to start it, and valid requests get HTTP 400 (#208).
