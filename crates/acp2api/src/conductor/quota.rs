@@ -349,7 +349,10 @@ impl Core {
             },
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
                 self.update_quota(id, session, update, now, commands);
-                if self.work[&id].completion_deadline() == Some(now) {
+                if matches!(&self.work[&id], Work::QuotaWorking {
+                    phase: QuotaPhase::Settling { at, .. }, ..
+                } if *at <= now)
+                {
                     self.finish_quota(id, Ok(()), now, wall, commands);
                 }
             }
@@ -360,7 +363,9 @@ impl Core {
                 else {
                     unreachable!()
                 };
-                *result = Err(message);
+                if !matches!(phase, QuotaPhase::FailedPrompt { .. }) {
+                    *result = Err(message);
+                }
                 match phase {
                     QuotaPhase::Prompt(session) => {
                         *phase = QuotaPhase::FailedPrompt {
@@ -415,30 +420,19 @@ impl Core {
             unreachable!()
         };
         let failed = matches!(phase, QuotaPhase::FailedPrompt { .. });
+        let at = if failed {
+            now
+        } else {
+            now.saturating_add(SETTLE_DELAY)
+        };
         match update {
             TurnUpdate::Text(chunk) => text.push_str(&chunk),
-            TurnUpdate::PromptEnded { .. } => {
-                *phase = QuotaPhase::Settling {
-                    session,
-                    at: if failed {
-                        now
-                    } else {
-                        now.saturating_add(SETTLE_DELAY)
-                    },
-                }
-            }
+            TurnUpdate::PromptEnded { .. } => *phase = QuotaPhase::Settling { session, at },
             TurnUpdate::Failed(error) => {
                 if !failed {
                     *result = Err(error);
                 }
-                *phase = QuotaPhase::Settling {
-                    session,
-                    at: if failed {
-                        now
-                    } else {
-                        now.saturating_add(SETTLE_DELAY)
-                    },
-                };
+                *phase = QuotaPhase::Settling { session, at };
             }
             TurnUpdate::Permission { request, .. }
             | TurnUpdate::RefusedPermission { request, .. } => {
@@ -464,7 +458,7 @@ impl Core {
             phase,
             text,
             result: recorded,
-            failed_reply,
+            reply_signals,
         } = self.work.remove(&id).unwrap()
         else {
             unreachable!()
@@ -478,7 +472,7 @@ impl Core {
                 Work::QuotaRetiring {
                     work: query.work.clone(),
                     session,
-                    failed_reply,
+                    reply_signals,
                 },
             );
         }
@@ -526,9 +520,11 @@ impl Core {
         };
         self.complete_quota(
             query,
-            (!unfinished)
-                .then(|| phase.session().map(str::to_owned))
-                .flatten(),
+            if unfinished {
+                None
+            } else {
+                phase.session().map(str::to_owned)
+            },
             end.map_err(|message| Failure::at(message, now)),
             now,
             commands,
@@ -554,6 +550,12 @@ impl Core {
         };
         if let Some(active) = response {
             let (forget, completion) = self.complete_request(active, result, now);
+            let forget = forget.filter(|session| {
+                !self
+                    .work
+                    .by_session(session)
+                    .is_some_and(|id| matches!(self.work[&id], Work::QuotaRetiring { .. }))
+            });
             commands.extend(completion);
             commands.extend(
                 session
@@ -648,7 +650,7 @@ impl Core {
         self.work.restore(
             id,
             Work::QuotaWorking {
-                failed_reply: None,
+                reply_signals: super::lockout::ReplySignals::default(),
                 query,
                 phase,
                 text: String::new(),

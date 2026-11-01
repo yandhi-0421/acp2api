@@ -6,36 +6,68 @@ use crate::{
 };
 use std::{path::Path, time::SystemTime};
 
-#[derive(Clone)]
-pub(super) struct FailedReply {
-    error: Box<Message>,
+#[derive(Clone, Default)]
+pub(super) struct ReplySignals {
+    error: Option<Box<Message>>,
     tail: String,
+    head_cut: bool,
+    signal: Option<&'static str>,
 }
 
-impl FailedReply {
-    fn new(error: Message, text: &str) -> Self {
-        let mut failed = Self {
-            error: Box::new(error),
-            tail: String::new(),
-        };
-        let _ = failed.observe(text);
-        failed
-    }
-
-    fn observe(&mut self, text: &str) -> Option<&'static str> {
+impl ReplySignals {
+    fn observe(&mut self, text: &str, ended: bool) -> Option<&'static str> {
+        use crate::messages::{LOCKOUT_SIGNALS, lockout_token_char};
         self.tail.push_str(text);
-        let signal = crate::messages::lockout_signal(None, &self.tail, None);
-        // PERMISSION_DENIED is the longest lockout signal that can cross chunks.
-        let mut start = self.tail.len().saturating_sub("PERMISSION_DENIED".len());
+        let begin = if self.head_cut {
+            self.tail
+                .find(|c: char| !lockout_token_char(c))
+                .unwrap_or(self.tail.len())
+        } else {
+            0
+        };
+        let end = if ended {
+            self.tail.len()
+        } else {
+            self.tail
+                .rfind(|c: char| !lockout_token_char(c))
+                .unwrap_or(0)
+        };
+        let token = if begin <= end {
+            &self.tail[begin..end]
+        } else {
+            ""
+        };
+        let signal =
+            if crate::messages::lockout_signal(None, token, None) == Some(LOCKOUT_SIGNALS[0]) {
+                Some(LOCKOUT_SIGNALS[0])
+            } else {
+                LOCKOUT_SIGNALS[1..]
+                    .iter()
+                    .copied()
+                    .find(|signal| self.tail.contains(signal))
+            };
+        let bound = LOCKOUT_SIGNALS
+            .iter()
+            .map(|signal| signal.len())
+            .max()
+            .unwrap();
+        let mut start = self.tail.len().saturating_sub(bound);
         while !self.tail.is_char_boundary(start) {
             start += 1;
         }
+        if start > 0 {
+            self.head_cut = self.tail[..start]
+                .chars()
+                .next_back()
+                .is_some_and(lockout_token_char)
+                && self.tail[start..]
+                    .chars()
+                    .next()
+                    .is_some_and(lockout_token_char);
+        }
         self.tail.drain(..start);
-        signal
-    }
-
-    pub(super) fn text(&self) -> &str {
-        &self.tail
+        self.signal = self.signal.or(signal);
+        self.signal
     }
 }
 
@@ -222,25 +254,48 @@ impl Core {
         };
         let (error, signal) = match runtime_event {
             RuntimeEvent::UpstreamError { session, .. } => {
-                let id = self.work.by_session(session);
-                let text = id.map(|id| self.work[&id].reply_text()).unwrap_or_default();
-                let result = runtime_event.upstream_error(&text)?;
-                if let Some(slot) = id
-                    .and_then(|id| self.work.get_mut(&id))
-                    .and_then(Work::failed_reply_mut)
-                {
-                    *slot = Some(FailedReply::new(result.0.clone(), &text));
+                let session = session.clone();
+                let id = self.work.by_session(&session);
+                let (error, mut signal) = runtime_event.upstream_error("")?;
+                let slot = if let Some(id) = id {
+                    self.work.get_mut(&id).and_then(Work::reply_signals_mut)
+                } else {
+                    self.sessions.reply_signals_mut(&session, now)
+                };
+                if let Some(slot) = slot {
+                    slot.error.get_or_insert_with(|| Box::new(error.clone()));
+                    signal = signal.or(slot.signal);
                 }
-                result
+                (error, signal)
             }
             RuntimeEvent::Turn {
                 session,
                 update: TurnUpdate::Text(text),
             } => {
                 let id = self.work.by_session(session)?;
-                let failed = self.work.get_mut(&id)?.failed_reply_mut()?.as_mut()?;
-                let signal = failed.observe(text)?;
-                (failed.error.as_ref().clone(), Some(signal))
+                let failed = self.work.get_mut(&id)?.reply_signals_mut()?;
+                let signal = failed.observe(text, false)?;
+                (failed.error.as_deref()?.clone(), Some(signal))
+            }
+            RuntimeEvent::Turn {
+                session,
+                update: TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_),
+            } => {
+                let late = self
+                    .work
+                    .by_session(session)
+                    .and_then(|id| self.work.get_mut(&id))
+                    .and_then(Work::reply_signals_mut)
+                    .and_then(|reply| {
+                        let signal = reply.observe("", true)?;
+                        Some((reply.error.as_deref()?.clone(), Some(signal)))
+                    });
+                let direct = runtime_event.upstream_error("");
+                if let Some((error, Some(signal))) = &direct {
+                    (error.clone(), Some(*signal))
+                } else {
+                    late.or(direct)?
+                }
             }
             _ => runtime_event.upstream_error("")?,
         };

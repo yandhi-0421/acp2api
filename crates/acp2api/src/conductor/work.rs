@@ -121,14 +121,14 @@ pub(super) enum Work {
     QuotaRetiring {
         work: String,
         session: String,
-        failed_reply: Option<super::lockout::FailedReply>,
+        reply_signals: super::lockout::ReplySignals,
     },
     QuotaQueued {
         query: QuotaQuery,
         session: Option<String>,
     },
     QuotaWorking {
-        failed_reply: Option<super::lockout::FailedReply>,
+        reply_signals: super::lockout::ReplySignals,
         query: QuotaQuery,
         phase: QuotaPhase,
         text: String,
@@ -142,30 +142,13 @@ pub(super) struct ModelRead {
 }
 
 impl Work {
-    pub(super) fn failed_reply_mut(&mut self) -> Option<&mut Option<super::lockout::FailedReply>> {
+    pub(super) fn reply_signals_mut(&mut self) -> Option<&mut super::lockout::ReplySignals> {
         match self {
-            Self::AcceptedWorking(active) => Some(&mut active.failed_reply),
-            Self::Retiring(outstanding) => Some(&mut outstanding.failed_reply),
-            Self::QuotaWorking { failed_reply, .. } => Some(failed_reply),
-            Self::QuotaRetiring { failed_reply, .. } => Some(failed_reply),
+            Self::AcceptedWorking(active) => Some(&mut active.reply_signals),
+            Self::Retiring(outstanding) => Some(&mut outstanding.reply_signals),
+            Self::QuotaWorking { reply_signals, .. } => Some(reply_signals),
+            Self::QuotaRetiring { reply_signals, .. } => Some(reply_signals),
             _ => None,
-        }
-    }
-
-    pub(super) fn reply_text(&self) -> String {
-        match self {
-            Self::AcceptedWorking(active) => active.reply_text(),
-            Self::Retiring(outstanding) => outstanding
-                .failed_reply
-                .as_ref()
-                .map(|failed| failed.text().to_owned())
-                .unwrap_or_default(),
-            Self::QuotaWorking { text, .. } => text.clone(),
-            Self::QuotaRetiring { failed_reply, .. } => failed_reply
-                .as_ref()
-                .map(|failed| failed.text().to_owned())
-                .unwrap_or_default(),
-            _ => String::new(),
         }
     }
 
