@@ -87,9 +87,23 @@
         if (resources === 0) {
             for (const sheet of document.styleSheets) rules(sheet);
         }
+        // Chrome keeps a headless window at 500 px or wider; a frame gives the page a 320 px viewport.
+        const frame = document.createElement('iframe');
+        frame.setAttribute('sandbox', 'allow-same-origin');
+        frame.style.cssText = 'width:320px;height:8000px;border:0';
+        frame.srcdoc = document.documentElement.outerHTML;
+        await new Promise(resolve => {
+            frame.onload = resolve;
+            document.body.append(frame);
+        });
+        const narrowWidth = frame.contentWindow.innerWidth;
+        const narrowScrollWidth = frame.contentDocument.documentElement.scrollWidth;
+        frame.remove();
         const audit = {
             browser: navigator.userAgent,
             dark: matchMedia('(prefers-color-scheme: dark)').matches,
+            narrow_width: narrowWidth,
+            narrow_scroll_width: narrowScrollWidth,
             resources: resources + imports,
             font_faces: fontFaces,
             fonts: Array.from(document.fonts, font => ({family: font.family, status: font.status})),

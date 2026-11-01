@@ -1,4 +1,56 @@
-use acp2api_acceptance::{panel_visual as visual, setup::TestRoot};
+use acp2api_acceptance::{
+    Scenario, Setup,
+    panel_check::{Panel, text},
+    panel_visual as visual, real_limit,
+    setup::TestRoot,
+};
+use std::time::Duration;
+
+#[tokio::test]
+async fn the_sideways_scroll_rule_rejects_a_page_wider_than_the_screen() {
+    let root = TestRoot::new();
+    let page = "<!doctype html><html><body style='margin:0'><div style='width:320px'>Lockout</div></body></html>";
+    let audit = visual::render(page, &root.path, false).await.unwrap();
+    visual::no_sideways_scroll(&audit).unwrap();
+    let wrong = page.replace("320px", "344px");
+    let audit = visual::render(&wrong, &root.path, false).await.unwrap();
+    let error = visual::no_sideways_scroll(&audit).expect_err("a wide page must fail");
+    assert!(error.contains("344 px"), "{error}");
+    root.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_lockout_page_does_not_scroll_sideways_on_a_narrow_screen() {
+    tokio::time::timeout(real_limit(Duration::from_secs(60)), async {
+        let mut scenario = Scenario::default();
+        scenario.plan(Setup::normal());
+        scenario.start().await;
+        scenario.stop().await;
+        std::fs::write(
+            scenario.root.path.join("data/state.json"),
+            r#"{"format":1,"lockout":{"since":"2026-10-18T00:00:00Z","signal":"403 PERMISSION_DENIED","original_error_text":"Synthetic account suspension"},"checked_builds":[]}"#,
+        )
+        .unwrap();
+        scenario.restart().await;
+        let mut panel = Panel::default();
+        panel.scenario(&mut scenario).await;
+        for (language, entry) in [
+            ("en", "End the lockout with the management password"),
+            ("zh-CN", "输入管理密码，结束锁死"),
+        ] {
+            panel.owner(language).language = language.into();
+            let html = text(&panel.view_session(language).await);
+            assert!(html.contains(entry), "{language} lockout page");
+            let audit = visual::render(&html, &scenario.root.path, false)
+                .await
+                .expect("Chrome renders the lockout page");
+            visual::no_sideways_scroll(&audit).unwrap();
+        }
+        scenario.finish(true).await;
+    })
+    .await
+    .expect("narrow lockout cap: 60 seconds, two panel views, two Chrome runs");
+}
 
 #[tokio::test]
 async fn first_tile_rules_read_the_rendered_surface_and_type() {

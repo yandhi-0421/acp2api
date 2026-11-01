@@ -18,6 +18,8 @@ static CHROME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub struct Audit {
     pub browser: String,
     pub dark: bool,
+    narrow_width: u32,
+    narrow_scroll_width: u32,
     resources: usize,
     font_faces: Vec<String>,
     fonts: Vec<Font>,
@@ -591,6 +593,15 @@ pub fn light_only(light: &Audit, dark: &Audit) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+pub fn no_sideways_scroll(audit: &Audit) -> Result<(), String> {
+    match (audit.narrow_width, audit.narrow_scroll_width) {
+        (320, ..=320) => Ok(()),
+        (width, content) => Err(format!(
+            "page scrolls sideways: {content} px of content on a {width} px screen"
+        )),
+    }
 }
 
 pub fn dark_first_tile(audit: &Audit) -> Result<(), String> {
