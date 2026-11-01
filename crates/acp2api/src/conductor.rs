@@ -12,6 +12,7 @@ mod work;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnRequest},
+    journal::StateDetail,
     messages::OwnerMessage,
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
@@ -476,12 +477,15 @@ impl Core {
                 RuntimeState::Unavailable(reason) => reason.cause,
                 _ => None,
             };
-            let notice = if self.state() == State::Lockout {
-                self.lockout_notice()
-            } else {
-                None
-            };
-            commands.insert(0, Command::State(self.state(), cause, notice));
+            commands.insert(
+                0,
+                Command::State(
+                    self.state(),
+                    self.lockout_notice()
+                        .map(StateDetail::Notice)
+                        .or(cause.map(StateDetail::Cause)),
+                ),
+            );
         }
         self.publish_view();
         commands
@@ -562,8 +566,7 @@ impl Conductor {
             core.publish_view();
             journal.state(
                 core.state().name(),
-                None,
-                core.lockout_notice(),
+                core.lockout_notice().map(StateDetail::Notice),
                 clock.as_ref(),
             );
             let mut checking: Option<CompatibilityCheck> = None;

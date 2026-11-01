@@ -127,7 +127,7 @@ main>section:nth-of-type(even) {
     background:#272729;
     color:#fff;
 }
-.dark button:focus-visible,.global-bar button:focus-visible {
+.dark button:focus-visible,.dark input:focus-visible,.global-bar button:focus-visible {
     outline-color:#fff;
 }
 #sign-in {
@@ -513,8 +513,11 @@ fn end_lockout(language: Language) -> String {
         "/manage/end-lockout",
         &format!(
             r#"<label for="end-lockout-password">{}</label><input type="password" id="end-lockout-password" name="password" autocomplete="current-password" required>{}"#,
-            language.pick("Management password", "管理密码"),
-            submit(language.pick("End the lockout", "结束锁死")),
+            language.labels().management_password,
+            submit(language.pick(
+                "End the lockout with the management password",
+                "输入管理密码，结束锁死",
+            )),
         ),
     )
 }
@@ -533,7 +536,7 @@ fn first_tile(
         .as_ref()
         .map(|text| format!("<p>{}</p>", escape(text)))
         .unwrap_or_default();
-    let sign_in = if view.state == State::Lockout {
+    let action = if view.state == State::Lockout {
         end_lockout(language)
     } else {
         match &view.sign_in_wait {
@@ -548,7 +551,7 @@ fn first_tile(
     let queued = figure(labels.requests_in_the_queue, view.queued);
     let build = figure(labels.build_in_use, build.unwrap_or("—"));
     format!(
-        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{evidence}{sign_in}<div class="figures">{places}{queued}{build}</div></section>"#,
+        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{evidence}{action}<div class="figures">{places}{queued}{build}</div></section>"#,
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )
 }

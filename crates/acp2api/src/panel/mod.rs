@@ -94,9 +94,8 @@ impl Panel {
             .acquire()
             .await
             .expect("the login semaphore stays open");
-        let check = (password, hash);
         let verified =
-            tokio::task::spawn_blocking(move || crate::store::verify_password(&check.0, &check.1))
+            tokio::task::spawn_blocking(move || crate::store::verify_password(&password, &hash))
                 .await
                 .unwrap_or(false);
         drop(permit);
@@ -252,6 +251,9 @@ struct EndLockoutForm {
     #[serde(default)]
     password: String,
 }
+fn wrong_password(language: Language) -> &'static str {
+    language.pick("The management password is wrong.", "管理密码不对。")
+}
 async fn login(
     State(panel): State<Panel>,
     Extension(language): Extension<Language>,
@@ -261,10 +263,7 @@ async fn login(
     if !panel.verify(form.password, hash.clone()).await {
         return (
             StatusCode::UNAUTHORIZED,
-            Html(page::login(
-                language,
-                Some(language.pick("The management password is wrong.", "管理密码不对。")),
-            )),
+            Html(page::login(language, Some(wrong_password(language)))),
         )
             .into_response();
     }
@@ -384,11 +383,7 @@ async fn end_lockout(
         )
         .await
     {
-        return panel.page(
-            language,
-            StatusCode::UNAUTHORIZED,
-            language.pick("The management password is wrong.", "管理密码不对。"),
-        );
+        return panel.page(language, StatusCode::UNAUTHORIZED, wrong_password(language));
     }
     match panel
         .conductor

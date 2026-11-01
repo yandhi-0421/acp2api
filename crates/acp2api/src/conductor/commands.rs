@@ -6,6 +6,7 @@ use super::{
 use crate::{
     Clock, HoldKind, Moment,
     conversation::{PromptRequest, TurnEvent},
+    journal::StateDetail,
     messages::OwnerMessage,
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent},
@@ -33,7 +34,7 @@ pub(super) enum Command {
         request: Box<PendingRequest>,
         error: crate::messages::Message,
     },
-    State(State, Option<std::io::ErrorKind>, Option<String>),
+    State(State, Option<StateDetail>),
     Usage {
         work: String,
         session: String,
@@ -134,8 +135,8 @@ impl Conductor {
                         hold: clock.hold(HoldKind::TurnEvent),
                     }));
                 }
-                Command::State(state, cause, notice) => {
-                    journal.state(state.name(), cause, notice, clock.as_ref());
+                Command::State(state, detail) => {
+                    journal.state(state.name(), detail, clock.as_ref());
                 }
                 Command::Usage { work, session } => {
                     let result = match readable(runtime, *read_open) {
