@@ -507,13 +507,22 @@ The core has these parts. Each part is a private module with a pure interface.
 - **`turns`.** One machine for each prompt turn:
   - the held reply text chunk and the 200 ms window (FR-028); usage and thought updates do not release the chunk;
   - after a complete stderr error, stdout continues until the prompt turn ends or 200 ms pass; further updates do not extend this wait;
+  - this wait covers API prompt turns and `/usage` prompt turns, also when `/usage` shares the ACP session of an API response;
+  - at the bound, acp2api cancels an unfinished failed prompt turn;
+  - it retains the ACP session until that prompt turn ends or its runtime process ends;
   - the stop scan across chunks (FR-015);
   - cancel at permission, and the refusal of each other permission request (FR-047);
   - the deadline of 5 minutes with no update (FR-051), and the deadline of 30 s after a cancel (FR-041);
   - the token usage (FR-025) and the drop of thought text (FR-018).
 - **`signals`.** The table of FR-034 over the error of each ACP call and the stderr error lines.
-  A lockout signal in an error line acts at once. A failed turn retains its error and a short text suffix while acp2api reads that turn.
+  A lockout signal in an error line acts at once. Each prompt turn retains a short text suffix before and after an error.
   The signal check also covers text after the response ends, for API requests and `/usage` prompts.
+
+  It precedes text filters and survives a disconnect or a repeated error.
+  A possible 403 signal at a chunk end waits for more text or the prompt turn end.
+
+  An ended disconnected prompt turn retains its signal evidence through the FR-028 window.
+  That evidence holds no place. A replacement of the runtime process discards it.
 - **`quota`.** `/usage` (FR-052), the parse of the reset time, and the limit of one refresh in 60 s.
 - **`owner`.** The owner actions of FR-053, the sign-in wait of FR-039, the script of the compatibility check of FR-044, and the notices of FR-047.
   After a copy error, an owner action answers 422 and keeps the current unavailable reason. These actions are retry, new search, and new path.
@@ -538,6 +547,7 @@ enum Work {
     AcceptedQueued(AcceptedRequest),
     AcceptedWorking { request: AcceptedRequest, execution: RequestExecution },
     Retiring(OutstandingWork),
+    QuotaRetiring { work: String, session: String, reply_signals: ReplySignals },
     OtherPlaceWork(OtherWork),
 }
 type WorkTable = BTreeMap<WorkId, Work>; // WorkId preserves arrival order; only the core mutates this table
@@ -570,8 +580,10 @@ An expired quota deadline has no effect on admission, even before its timer even
 The admission future owns one cancellation lease. Acceptance transfers it to the ticket, and a lost handoff acts as a disconnect.
 The shell sends acceptance before its dependent prompt command. A failed acceptance handoff suppresses that command.
 A disconnect during a prompt uses the existing cancel path. A disconnect during a non-prompt ACP call cannot release capacity early.
-An early error ends the response and discards its reply route.
+After the FR-028 wait, an error ends the response and discards its reply route.
 `Retiring` retains request and session metadata, with no reply route, until its ACP call or process ends.
+`QuotaRetiring` retains an unfinished failed `/usage` prompt turn after its response ends.
+It holds its place and its text route until the prompt turn or runtime process ends.
 A disconnected request retains its pending journal completion. An early error has already written that completion.
 
 No work entry, unresolved admission, or external wait owns a `Hold`. The shell registers continuations and deadlines before it releases the incoming hold.
@@ -586,7 +598,7 @@ This rule covers JSON bodies, refusals, the model list, and the management panel
 A completion or disconnect carries a new short hold through the next core transition. An occupied place can therefore wait while virtual time advances.
 Only an accepted stream has a keep-alive timer. Its first deadline starts at acceptance (FR-011).
 
-Implementation after #60: the conductor uses the three accepted and retiring variants.
+The conductor uses the accepted variants, `Retiring`, and `QuotaRetiring`.
 The records of ADR-0003 describe idle ACP sessions outside that table.
 
 ### The runtime driver
