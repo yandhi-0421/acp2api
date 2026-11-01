@@ -62,6 +62,38 @@ const CHINESE_LABELS: Labels = Labels {
 };
 
 impl Language {
+    pub(super) fn normal_sentence(self) -> &'static str {
+        self.pick(
+            "The official runtime is ready. acp2api forwards the requests.",
+            "官方运行时已就绪。请求正常转发。",
+        )
+    }
+    pub(super) fn sign_in_sentence(self) -> &'static str {
+        self.pick(
+            "The official runtime has no valid sign-in. Until a sign-in, acp2api refuses each request.",
+            "官方运行时没有有效的登录。登录之前，acp2api 拒绝每个请求。",
+        )
+    }
+    pub(super) fn quota_wait_sentence(self, reset: &str) -> String {
+        match self {
+            Self::English => format!(
+                "The Google quota is used up. Until {reset}, acp2api starts no prompt turn and refuses each request. The quota wait then ends automatically."
+            ),
+            Self::Chinese => format!(
+                "Google 配额已用完。{reset} 之前，acp2api 不启动 prompt 轮次，在本地拒绝请求。到时间后自动结束配额等待。"
+            ),
+        }
+    }
+    pub(super) fn lockout_sentence(self, time: &str) -> String {
+        match self {
+            Self::English => format!(
+                "At {time}, the official runtime gave a response that shows a risk to the Google account. Since then, acp2api sends no request to the official runtime."
+            ),
+            Self::Chinese => format!(
+                "{time}，官方运行时返回了一个可能危及 Google 账户的响应。从那时起，acp2api 不向官方运行时发送任何请求。"
+            ),
+        }
+    }
     pub(super) fn of(headers: &HeaderMap) -> Self {
         super::cookie(headers, COOKIE)
             .and_then(Self::from_code)
@@ -391,6 +423,72 @@ fn chinese_launch_failure(failure: &LaunchFailure) -> String {
 #[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lockout_sentence_uses_its_time_in_both_languages() {
+        for (time, english, chinese) in [
+            (
+                "2026-10-18T00:00:00Z",
+                "At 2026-10-18T00:00:00Z, the official runtime gave a response that shows a risk to the Google account. Since then, acp2api sends no request to the official runtime.",
+                "2026-10-18T00:00:00Z，官方运行时返回了一个可能危及 Google 账户的响应。从那时起，acp2api 不向官方运行时发送任何请求。",
+            ),
+            (
+                "2031-04-09T11:27:00Z",
+                "At 2031-04-09T11:27:00Z, the official runtime gave a response that shows a risk to the Google account. Since then, acp2api sends no request to the official runtime.",
+                "2031-04-09T11:27:00Z，官方运行时返回了一个可能危及 Google 账户的响应。从那时起，acp2api 不向官方运行时发送任何请求。",
+            ),
+        ] {
+            assert_eq!(Language::English.lockout_sentence(time), english);
+            assert_eq!(Language::Chinese.lockout_sentence(time), chinese);
+        }
+    }
+
+    #[test]
+    fn the_quota_wait_sentence_uses_its_reset_time_in_both_languages() {
+        for (reset, english, chinese) in [
+            (
+                "2026-10-18T00:02:00Z",
+                "The Google quota is used up. Until 2026-10-18T00:02:00Z, acp2api starts no prompt turn and refuses each request. The quota wait then ends automatically.",
+                "Google 配额已用完。2026-10-18T00:02:00Z 之前，acp2api 不启动 prompt 轮次，在本地拒绝请求。到时间后自动结束配额等待。",
+            ),
+            (
+                "2031-04-09T11:27:00Z",
+                "The Google quota is used up. Until 2031-04-09T11:27:00Z, acp2api starts no prompt turn and refuses each request. The quota wait then ends automatically.",
+                "Google 配额已用完。2031-04-09T11:27:00Z 之前，acp2api 不启动 prompt 轮次，在本地拒绝请求。到时间后自动结束配额等待。",
+            ),
+        ] {
+            assert_eq!(Language::English.quota_wait_sentence(reset), english);
+            assert_eq!(Language::Chinese.quota_wait_sentence(reset), chinese);
+        }
+    }
+
+    #[test]
+    fn the_sign_in_sentence_is_exact_in_both_languages() {
+        assert_eq!(
+            [
+                Language::English.sign_in_sentence(),
+                Language::Chinese.sign_in_sentence()
+            ],
+            [
+                "The official runtime has no valid sign-in. Until a sign-in, acp2api refuses each request.",
+                "官方运行时没有有效的登录。登录之前，acp2api 拒绝每个请求。",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_normal_state_sentence_is_exact_in_both_languages() {
+        assert_eq!(
+            [
+                Language::English.normal_sentence(),
+                Language::Chinese.normal_sentence()
+            ],
+            [
+                "The official runtime is ready. acp2api forwards the requests.",
+                "官方运行时已就绪。请求正常转发。",
+            ]
+        );
+    }
 
     fn language(cookie: Option<&str>, browser: Option<&str>) -> &'static str {
         let mut headers = HeaderMap::new();

@@ -38,6 +38,10 @@ mod panel;
 mod panel_document;
 #[path = "steps/panel_language_visual.rs"]
 mod panel_language_visual;
+#[path = "steps/panel_states.rs"]
+mod panel_states;
+#[path = "support/panel_states.rs"]
+mod panel_states_support;
 #[path = "steps/panel_tiles.rs"]
 mod panel_tiles;
 #[path = "support/panel_tiles.rs"]

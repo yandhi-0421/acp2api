@@ -18,6 +18,8 @@ static CHROME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub struct Audit {
     pub browser: String,
     pub dark: bool,
+    narrow_width: u32,
+    narrow_scroll_width: u32,
     resources: usize,
     font_faces: Vec<String>,
     fonts: Vec<Font>,
@@ -35,6 +37,7 @@ struct Paint {
 }
 #[derive(Debug, Deserialize)]
 struct Node {
+    parent: Option<usize>,
     index: usize,
     tag: String,
     role: String,
@@ -592,6 +595,15 @@ pub fn light_only(light: &Audit, dark: &Audit) -> Result<(), String> {
     Ok(())
 }
 
+pub fn no_sideways_scroll(audit: &Audit) -> Result<(), String> {
+    match (audit.narrow_width, audit.narrow_scroll_width) {
+        (320, ..=320) => Ok(()),
+        (width, content) => Err(format!(
+            "page scrolls sideways: {content} px of content on a {width} px screen"
+        )),
+    }
+}
+
 pub fn dark_first_tile(audit: &Audit) -> Result<(), String> {
     let tile = audit.nodes.iter().find(|node| node.tag == "section");
     match tile {
@@ -606,4 +618,81 @@ pub fn dark_first_tile(audit: &Audit) -> Result<(), String> {
         )),
         None => Err("FR-035 rendered management panel has no first tile".into()),
     }
+}
+
+pub fn first_tile_heading(audit: &Audit) -> Result<(), String> {
+    let heading = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "h1")
+        .ok_or("FR-054 rendered first tile needs a state heading")?;
+    if !heading.visible || px(&heading.paint.css["font-size"]) != 56. {
+        return Err(
+            "FR-054 first tile state must render visibly in 56 px type at the audit viewport"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+pub fn first_tile_presentation(audit: &Audit, shade: &str) -> Result<(), String> {
+    let tile = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "section")
+        .ok_or("FR-054 rendered panel needs a first tile")?;
+    first_tile_heading(audit)?;
+    if !tile.visible {
+        return Err("FR-054 first tile must render visibly".into());
+    }
+    let mut surface = tile;
+    while surface.paint.colors["background-color"][3] == 0 {
+        if surface.paint.css["background-image"] != "none" {
+            return Err("FR-054 first tile needs a solid surface, not an image".into());
+        }
+        let Some(parent) = surface.parent else { break };
+        surface = &audit.nodes[parent];
+    }
+    let background = surface.paint.colors["background-color"];
+    let matches = surface.paint.css["background-image"] == "none"
+        && match shade {
+            "dark" => background == [39, 39, 41, 255],
+            "light" => background == WHITE || background == [245, 245, 247, 255],
+            _ => panic!("unknown scenario shade: {shade}"),
+        };
+    if !matches {
+        return Err(format!(
+            "FR-054 first tile must render {shade}; background={background:?}"
+        ));
+    }
+    Ok(())
+}
+
+pub fn variant_a_bars(audit: &Audit) -> Result<(), String> {
+    let header = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "header")
+        .ok_or("FR-054 rendered global bar is absent")?;
+    let tile = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "section")
+        .ok_or("FR-054 rendered first tile is absent")?;
+    if !header.visible || header.paint.colors["background-color"] != [0, 0, 0, 255] {
+        return Err("FR-054 global bar must render visibly in black".into());
+    }
+    if !audit.nodes.iter().any(|node| {
+        node.visible
+            && header.index < node.index
+            && node.index < tile.index
+            && node.paint.css["backdrop-filter"]
+                .split_once("blur(")
+                .is_some_and(|(_, length)| px(length.split(')').next().unwrap()) > 0.)
+    }) {
+        return Err(
+            "FR-054 a frosted bar must render between the global bar and first tile".into(),
+        );
+    }
+    Ok(())
 }

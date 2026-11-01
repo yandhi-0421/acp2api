@@ -4,7 +4,7 @@ Feature: Management panel
   It is one long page of tiles in Chinese and English, and it follows the visual rules of the PRD.
   In a quoted panel text, a value in angle brackets is a value that the management panel fills in.
 
-  @FR-053 @issue-75 @wip
+  @FR-053 @issue-75
   Scenario Outline: The management panel offers the entry of each action of the owner
     Given the browser language is "en-US"
     And <state>
@@ -17,7 +17,6 @@ Feature: Management panel
       | the owner started the sign-in                                     | Cancel the sign-in                            |
       | acp2api is in the normal state                                    | Search again                                  |
       | acp2api is in the normal state                                    | Set the path of agy_acp_server                |
-      | acp2api found the build 1.6.0, which is not an accepted version   | Run the compatibility check for 1.6.0         |
       | acp2api is in the state "runtime unavailable"                     | Retry                                         |
       | acp2api is in lockout                                             | End the lockout with the management password  |
       | acp2api is in the normal state                                    | Make a new key                                |
@@ -26,7 +25,14 @@ Feature: Management panel
       | acp2api has not read the model names                              | Read the model names now                      |
       | the management panel has a notice                                 | Dismiss                                       |
 
-  @FR-053 @issue-75 @wip
+  @FR-053 @issue-194 @wip
+  Scenario: The management panel offers the compatibility check of a found build
+    Given the browser language is "en-US"
+    And acp2api found the build 1.6.0, which is not an accepted version
+    When the owner opens the management panel with a panel session
+    Then the management panel has the entry "Run the compatibility check for 1.6.0"
+
+  @FR-053 @issue-75
   Scenario Outline: No CLI command does an action of the owner
     Given <state>
     When the owner runs "acp2api <command>" in another terminal
@@ -37,7 +43,7 @@ Feature: Management panel
       | acp2api is in lockout                       | unlock  | acp2api is still in the state "lockout"  |
       | acp2api is in the normal state              | stop    | the first acp2api still answers requests |
 
-  @FR-054 @issue-75 @wip
+  @FR-054 @issue-75
   Scenario Outline: The page has its parts in the order of variant A of the prototype
     Given <case>
     When the owner opens the management panel with a panel session
@@ -62,7 +68,7 @@ Feature: Management panel
       | acp2api is in the state "runtime unavailable"                  |
       | acp2api is in lockout                                          |
 
-  @FR-054 @issue-75 @wip
+  @FR-054 @issue-75
   Scenario Outline: The first tile shows the state, its sentence, and its shade
     Given the browser language is "en-US"
     And acp2api is in <state>
@@ -81,7 +87,7 @@ Feature: Management panel
       | the state "runtime unavailable" after 3 failures       | Runtime unavailable | The runtime process failed 3 times in 10 minutes, so acp2api does not start it again by itself.                                  | dark  |
       | lockout                                                | Lockout             | At <time>, the official runtime gave a response that shows a risk to the Google account. Since then, acp2api sends no request to the official runtime. | dark |
 
-  @FR-054 @issue-75 @wip
+  @FR-054 @issue-75
   Scenario Outline: The first tile shows the action of a state that stops requests
     Given the browser language is "en-US"
     And acp2api is in the state "<state>"
@@ -102,13 +108,13 @@ Feature: Management panel
     When the owner opens the management panel with a panel session
     Then the first tile shows 1 place in use, 0 requests in the queue, and the build in use 1.4.0
 
-  @FR-054 @issue-75 @wip
+  @FR-054 @issue-75
   Scenario: In a lockout, the first tile shows the evidence
     Given acp2api is in lockout after the stderr error line 403 "PERMISSION_DENIED"
     When the owner opens the management panel with a panel session
     Then the first tile shows the signal, the time, and the original error text of the lockout
 
-  @FR-054 @issue-75 @wip
+  @FR-054 @issue-75
   Scenario Outline: The band of notices shows only when a notice exists
     Given <notices>
     When the owner opens the management panel with a panel session

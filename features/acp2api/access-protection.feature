@@ -137,3 +137,10 @@ Feature: Access protection
     Then the configuration file does not hold "P2"
     And the configuration file holds a hash of the management password
     And "P2" opens the management panel
+
+  @FR-009 @issue-75
+  Scenario: The exit of the panel ends the panel session
+    Given the owner opens the management panel with a panel session
+    When the owner exits the management panel
+    Then the management panel asks for the management password
+    And the old panel session cookie gives no access to the management panel
