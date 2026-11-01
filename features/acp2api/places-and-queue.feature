@@ -48,7 +48,7 @@ Feature: Places and queue
     And acp2api is in the state "sign-in required"
     And the sign-in check of request "A" waits for a runtime reply
     When request "B" arrives with a stream
-    And 330 s pass
+    And 299 s pass
     Then "B" has no response header, HTTP status, or stream event
     And "B" counts as one request in the queue
     When the sign-in check of "A" fails
