@@ -128,6 +128,7 @@ pub(crate) async fn start(
         builds,
         ports.clock.clone(),
         journal.clone(),
+        panel.clone(),
         settings,
         data.join("config.toml"),
         ports.release.highest_concurrency_limit(),

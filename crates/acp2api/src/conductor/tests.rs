@@ -339,8 +339,15 @@ async fn check_fixture(
     let configuration = root.join("config.toml");
     let settings = crate::store::read(&configuration, 1).unwrap().settings;
     let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
-    let (conductor, task) =
-        Conductor::start(builds, ports.clock, journal, settings, configuration, 1);
+    let (conductor, task) = Conductor::start(
+        builds,
+        ports.clock,
+        journal,
+        format!("http://127.0.0.1:{}/", settings.port),
+        settings,
+        configuration,
+        1,
+    );
     conductor
         .builds(crate::runtime_builds::Action::Initial, Hold::empty())
         .await
@@ -456,7 +463,7 @@ async fn a_planned_build_change_replaces_the_actor_runtime_after_the_running_tur
         let settings = crate::store::read(&config, 1).unwrap().settings;
         let choice = crate::runtime_builds::identity(&ports.release.listed_builds()[1]);
         let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
-        let (conductor, task) = Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 1);
+        let (conductor, task) = Conductor::start(builds, ports.clock.clone(), journal.clone(), format!("http://127.0.0.1:{}/", settings.port), settings, config, 1);
         conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
         let parse = |system: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"system","content":system},{"role":"user","content":"request"}]})).unwrap()).ok().unwrap().turn;
         let mut a = conductor.admit(parse("A"), Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), ResponseMode::Body).await.ok().unwrap();
@@ -565,6 +572,7 @@ fn start_without_runtime(
         crate::runtime_builds::Builds::fixture(folder, clock.clone()),
         clock.clone(),
         journal.clone(),
+        format!("http://127.0.0.1:{}/", settings.port),
         settings,
         configuration,
         3,

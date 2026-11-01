@@ -624,6 +624,7 @@ mod tests {
                 builds,
                 clock.clone(),
                 journal,
+                format!("http://127.0.0.1:{}/", settings.port),
                 settings,
                 folder.join("config.toml"),
                 1,
@@ -875,7 +876,7 @@ mod tests {
             let (stopped, stop) = tokio::sync::watch::channel(false);
             builds.start.stopped = stop;
             let settings = crate::store::Settings { port: 8329, concurrency_limit: 1, local_api_key: String::new(), management_password_hash: String::new(), agy_acp_server_path: None };
-            let (conductor, task) = Conductor::start(builds, clock.clone(), journal, settings, folder.join("config.toml"), 1);
+            let (conductor, task) = Conductor::start(builds, clock.clone(), journal, format!("http://127.0.0.1:{}/", settings.port), settings, folder.join("config.toml"), 1);
             conductor.builds(crate::runtime_builds::Action::Initial, crate::Hold::empty()).await.unwrap();
             let response = conductor.model_names(crate::Hold::empty()).await.err().unwrap().message.to_string();
             let panel = Panel::new(conductor, clock.clone(), 8329);
@@ -926,6 +927,7 @@ mod tests {
             crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
             clock.clone(),
             journal,
+            format!("http://127.0.0.1:{}/", settings.port),
             settings,
             unsaveable_configuration,
             1,
@@ -994,6 +996,7 @@ mod tests {
             crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
             clock.clone(),
             journal,
+            format!("http://127.0.0.1:{}/", settings.port),
             settings,
             folder.join("config.toml"),
             1,
@@ -1051,6 +1054,7 @@ mod tests {
             crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
             clock.clone(),
             journal,
+            format!("http://127.0.0.1:{}/", settings.port),
             settings,
             folder.join("config.toml"),
             1,
@@ -1098,6 +1102,7 @@ mod tests {
             crate::runtime_builds::Builds::fixture(&folder, clock.clone()),
             clock.clone(),
             journal,
+            format!("http://127.0.0.1:{}/", settings.port),
             settings,
             configuration,
             1,
