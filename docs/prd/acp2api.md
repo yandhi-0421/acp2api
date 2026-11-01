@@ -161,12 +161,12 @@ Each such refusal has an HTTP status from 400 to 499, and no prompt turn starts.
 
 - The management password protects the full management panel and each management endpoint.
 - After a correct password, acp2api gives a cookie for a panel session, with `HttpOnly` and `SameSite=Strict`.
-- A panel session ends at a restart of acp2api, or after 12 hours.
+- A panel session ends at a restart of acp2api, after 12 hours, or when the owner exits the management panel. An exit ends only the session of that browser.
 - A change of the management password ends each panel session.
 - acp2api keeps each management password only as a hash, including a random password that it makes at a start.
 - To end a lockout, the owner enters the management password again, also in an open panel session.
 
-**Pass:** each page and each endpoint of the management panel needs the password or a valid panel session. The configuration file holds no management password in plain text, only its hash. A panel session stops after 12 hours, after a restart, and after a change of the password.
+**Pass:** each page and each endpoint of the management panel needs the password or a valid panel session. The configuration file holds no management password in plain text, only its hash. A panel session stops after 12 hours, after a restart, after an exit, and after a change of the password.
 
 ### APIs
 
@@ -1046,6 +1046,7 @@ The reasons of M-14 are:
 | Sentence: 3 failures | 运行时进程在 10 分钟内失败了 3 次，所以 acp2api 不再自动启动它。 | The runtime process failed 3 times in 10 minutes, so acp2api does not start it again by itself. |
 | Sentence: failed copy | 已接受构建 <version> 的复制失败了，所以 acp2api 没有启动运行时进程。 | The copy of the accepted build <version> failed, so acp2api started no runtime process. |
 | Sentence: state file | acp2api 无法写入状态文件 state.json，所以没有启动运行时进程。 | acp2api cannot write its state file state.json, so it started no runtime process. |
+| Exit of the panel | 退出面板 | Exit the panel |
 | Retry entry | 重试 | Retry |
 | Compatibility check entry | 对 <version> 做兼容性检查 | Run the compatibility check for <version> |
 | State "lockout" | 已锁死 | Lockout |

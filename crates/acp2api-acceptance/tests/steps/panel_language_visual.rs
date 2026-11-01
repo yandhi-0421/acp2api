@@ -275,7 +275,7 @@ async fn light(w: &mut World) {
     acp2api_acceptance::panel_visual::light_only(&light, dark).unwrap();
 }
 
-async fn rendered(w: &mut World) -> &acp2api_acceptance::panel_visual::Audit {
+pub(crate) async fn rendered(w: &mut World) -> &acp2api_acceptance::panel_visual::Audit {
     if w.panel_rendered.is_none() {
         let html = document::html(w.panel.answer.as_ref().expect("the panel was opened"));
         w.panel_rendered = Some(

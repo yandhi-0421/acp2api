@@ -71,8 +71,9 @@ pub(crate) struct View {
     pub(crate) runtime_process: RuntimeProcess,
     pub(crate) places: usize,
     pub(crate) queued: usize,
+    pub(crate) quota_reset: Option<String>,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
-    pub(crate) lockout_evidence: Option<String>,
+    pub(crate) lockout_evidence: Option<crate::store::Lockout>,
     pub(crate) lockout_unsaved: bool,
     pub(crate) runtime_unavailable: Option<crate::messages::Unavailable>,
 }
@@ -85,6 +86,7 @@ impl Default for View {
             runtime_process: RuntimeProcess::Starting,
             places: 0,
             queued: 0,
+            quota_reset: None,
             sign_in_wait: None,
             lockout_evidence: None,
             lockout_unsaved: false,
@@ -507,15 +509,13 @@ impl Core {
             model_names: self.model_names.clone(),
             context_sizes: self.context_sizes.clone(),
             sign_in_wait: self.sign_in.wait().cloned(),
-            lockout_evidence: self
-                .lockout
-                .as_ref()
-                .map(|held| held.evidence().original_error_text.clone()),
+            lockout_evidence: self.lockout.as_ref().map(|held| held.evidence().clone()),
             lockout_unsaved: self.lockout_unsaved(),
             state: self.state(),
             runtime_process: self.lifecycle.state().runtime_process(),
             places: self.work.places(),
             queued: self.work.queued(),
+            quota_reset: self.quota.wait().map(|wait| wait.until.clone()),
             runtime_unavailable: match self.lifecycle.state() {
                 RuntimeState::Unavailable(reason) => Some(reason.message.clone()),
                 _ => None,

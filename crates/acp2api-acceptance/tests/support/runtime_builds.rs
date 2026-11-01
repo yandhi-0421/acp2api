@@ -99,13 +99,14 @@ pub fn install(w: &mut World, name: &str, version: &str, listed: bool) -> PathBu
     folder
 }
 pub async fn panel(w: &mut World) {
-    if w.panel.address.is_empty() {
+    let address = format!("127.0.0.1:{}", w.startup.root().port);
+    if w.panel.address != address {
         // Bind directly: Panel::startup seeds a normal copy, which would alter a search fixture.
         w.panel.bind(
             w.startup.root(),
             &w.startup.data,
             w.startup.panel_hub(),
-            format!("127.0.0.1:{}", w.startup.root().port),
+            address,
         );
         w.panel.login_initial("build-owner").await;
         assert_eq!(
