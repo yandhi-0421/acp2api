@@ -1021,7 +1021,8 @@ The reasons of M-14 are:
 - `acp2api found no executable of the official runtime`;
 - `no build that acp2api found is an accepted version`;
 - `the copy of the accepted build <version> failed`;
-- `the runtime process failed 3 times in 10 minutes`.
+- `the runtime process failed 3 times in 10 minutes`;
+- `acp2api cannot write its state file state.json`.
 
 ### Texts of the management panel
 

@@ -172,14 +172,14 @@ Feature: Lockout
     When a prompt turn ends with the stderr error line 403 "PERMISSION_DENIED"
     Then acp2api is in the state "lockout"
 
-  @FR-035 @issue-160 @wip
+  @FR-035 @issue-160
   Scenario: acp2api keeps a lockout in memory when it cannot write the state file
     Given acp2api cannot write the state file
     When a lockout signal starts a lockout
     Then acp2api is in the state "lockout"
     And the management panel shows the notice that the lockout is not in the state file
 
-  @FR-035 @issue-160 @wip
+  @FR-035 @issue-160
   Scenario: acp2api writes the lockout at the next request after the state file can be written
     Given acp2api cannot write the state file
     And a lockout signal started a lockout
@@ -188,7 +188,7 @@ Feature: Lockout
     Then the state file holds the lockout
     And the management panel does not show the notice that the lockout is not in the state file
 
-  @FR-035 @issue-160 @wip
+  @FR-035 @issue-160
   Scenario: acp2api starts no runtime process when it cannot make the state file
     Given acp2api is stopped, and the data folder holds no state file
     And acp2api cannot make the state file
@@ -197,7 +197,7 @@ Feature: Lockout
     And the management panel names the state file state.json
     And acp2api starts no runtime process
 
-  @FR-035 @issue-160 @wip
+  @FR-035 @issue-160
   Scenario: A retry starts the runtime process after the state file can be made
     Given acp2api is stopped, and the data folder holds no state file
     And acp2api cannot make the state file
