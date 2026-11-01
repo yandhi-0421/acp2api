@@ -276,7 +276,7 @@ async fn write_messages(
                 queue.bytes = 0;
                 queue.state = WriteState::Stopped;
             }
-            // The acknowledgement keeps _work held until the reader consumes the failure.
+            // Failure work stays held through acknowledgement, then in the writer result until stop joins it.
             // Stop cancels this wait: a cancellation failure must not hold its own grace open.
             let (acknowledge, received) = tokio::sync::oneshot::channel();
             tokio::select! {

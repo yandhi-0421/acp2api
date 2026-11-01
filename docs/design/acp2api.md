@@ -346,11 +346,11 @@ Invariants and error modes:
 - At stop, cancel frames keep their enqueue deadlines. The writer interrupts a pending non-cancel write or flush and skips queued non-cancel frames.
 - If stop interrupts a non-cancel frame in progress, the writer drops the pipe and backlog. A cancel behind that frame can be lost.
 - The writer join adds at most 30 s of clock wait. After a drained queue, the writer polls pipe shutdown once.
-- Process stop permits 5 s of grace on macOS and 0 s on Windows before Job Object termination. `os::PROCESS_STOP_GRACE` supplies the platform value.
+- On macOS, process stop permits up to 5 s of grace, then sends SIGKILL to the process group. Windows closes the Job Object with 0 s of grace. `os::PROCESS_STOP_GRACE` supplies the platform value.
 - The total clock wait for cancel and stop is at most 35 s on macOS and 30 s on Windows.
-- `Command::Lockout` awaits this stop inside the conductor. A stalled cancel can block the conductor for 35 s on macOS or 30 s on Windows.
+- Lockout, restart, and replacement await stop inside the conductor. A stalled cancel can block each path for 35 s on macOS or 30 s on Windows.
 - These bounds count conductor-clock waits. Executor scheduling and OS reaping follow termination.
-- No hold spans a pending pipe operation. Holds cover ready work and failure delivery until acknowledgement or stop.
+- No hold spans a pending pipe operation. Holds cover ready work. After a write failure, work stays held until stop joins the writer.
 - Stop retains work through the first poll of process stop, except while the writer waits on a cancel write. The completed writer transfers a Hold through its join result, so the process deadline registers before that work ends.
 - Stop drains stderr while the writer joins and preserves its order for the later reader. This stderr buffer has no line or byte cap yet.
 
