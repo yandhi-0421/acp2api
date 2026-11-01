@@ -781,7 +781,7 @@ impl Conductor {
                     hold = deadline(timer) => (Event::Deadline, hold),
                 };
                 let work = {
-                    let mut until_first_poll = Some(hold);
+                    let mut event_work = Some(hold);
                     let mut applying = std::pin::pin!(core.apply(
                         event,
                         &mut runtime,
@@ -790,9 +790,10 @@ impl Conductor {
                         &journal
                     ));
                     std::future::poll_fn(|cx| {
-                        let processing = clock.hold(HoldKind::TurnEvent);
+                        let processing = event_work
+                            .take()
+                            .unwrap_or_else(|| clock.hold(HoldKind::TurnEvent));
                         let result = applying.as_mut().poll(cx);
-                        until_first_poll.take();
                         result.map(|()| processing)
                     })
                     .await
