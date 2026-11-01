@@ -254,7 +254,10 @@ impl Message {
             || message.contains("logged_out")
     }
 }
-pub(crate) const LOCKOUT_SIGNALS: [&str; 3] = ["403", "PERMISSION_DENIED", "Terms of Service"];
+pub(crate) const STATUS_403: &str = "403";
+pub(crate) const PERMISSION_DENIED: &str = "PERMISSION_DENIED";
+pub(crate) const TERMS_OF_SERVICE: &str = "Terms of Service";
+pub(crate) const LOCKOUT_SIGNALS: [&str; 3] = [STATUS_403, PERMISSION_DENIED, TERMS_OF_SERVICE];
 
 pub(crate) fn lockout_token_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '.' | '-')
@@ -271,11 +274,11 @@ pub(crate) fn lockout_signal(
             .split(|c: char| !lockout_token_char(c))
             .any(|token| token.strip_suffix('.').unwrap_or(token) == "403")
     {
-        Some(LOCKOUT_SIGNALS[0])
-    } else if status == Some(LOCKOUT_SIGNALS[1]) || message.contains(LOCKOUT_SIGNALS[1]) {
-        Some(LOCKOUT_SIGNALS[1])
-    } else if message.contains(LOCKOUT_SIGNALS[2]) {
-        Some(LOCKOUT_SIGNALS[2])
+        Some(STATUS_403)
+    } else if status == Some(PERMISSION_DENIED) || message.contains(PERMISSION_DENIED) {
+        Some(PERMISSION_DENIED)
+    } else if message.contains(TERMS_OF_SERVICE) {
+        Some(TERMS_OF_SERVICE)
     } else {
         None
     }

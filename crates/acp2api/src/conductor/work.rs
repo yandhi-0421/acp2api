@@ -96,6 +96,13 @@ impl WorkTable {
             .iter()
             .find_map(|(id, work)| (work.key() == request).then_some(*id))
     }
+    pub(super) fn has_queued_session(&self, session: &str) -> bool {
+        self.items.values().any(|work| {
+            matches!(work,
+                Work::QuotaQueued { session: Some(current), .. } if current == session
+            )
+        })
+    }
 }
 impl std::ops::Deref for WorkTable {
     type Target = BTreeMap<WorkId, Work>;

@@ -15,8 +15,15 @@ pub(super) struct ReplySignals {
 }
 
 impl ReplySignals {
+    pub(super) fn ended_error(&mut self) -> Option<(Message, &'static str)> {
+        let signal = self.observe("", true)?;
+        Some((self.error.as_deref()?.clone(), signal))
+    }
+
     fn observe(&mut self, text: &str, ended: bool) -> Option<&'static str> {
-        use crate::messages::{LOCKOUT_SIGNALS, lockout_token_char};
+        use crate::messages::{
+            LOCKOUT_SIGNALS, PERMISSION_DENIED, STATUS_403, TERMS_OF_SERVICE, lockout_token_char,
+        };
         self.tail.push_str(text);
         let begin = if self.head_cut {
             self.tail
@@ -37,15 +44,14 @@ impl ReplySignals {
         } else {
             ""
         };
-        let signal =
-            if crate::messages::lockout_signal(None, token, None) == Some(LOCKOUT_SIGNALS[0]) {
-                Some(LOCKOUT_SIGNALS[0])
-            } else {
-                LOCKOUT_SIGNALS[1..]
-                    .iter()
-                    .copied()
-                    .find(|signal| self.tail.contains(signal))
-            };
+        let signal = if crate::messages::lockout_signal(None, token, None) == Some(STATUS_403) {
+            Some(STATUS_403)
+        } else {
+            [PERMISSION_DENIED, TERMS_OF_SERVICE]
+                .iter()
+                .copied()
+                .find(|signal| self.tail.contains(signal))
+        };
         let bound = LOCKOUT_SIGNALS
             .iter()
             .map(|signal| signal.len())
@@ -287,8 +293,8 @@ impl Core {
                     .and_then(|id| self.work.get_mut(&id))
                     .and_then(Work::reply_signals_mut)
                     .and_then(|reply| {
-                        let signal = reply.observe("", true)?;
-                        Some((reply.error.as_deref()?.clone(), Some(signal)))
+                        let (error, signal) = reply.ended_error()?;
+                        Some((error, Some(signal)))
                     });
                 let direct = runtime_event.upstream_error("");
                 if let Some((error, Some(signal))) = &direct {

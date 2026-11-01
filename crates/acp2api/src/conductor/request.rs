@@ -25,9 +25,12 @@ enum Phase {
         error: Failure,
         quota_reset: Option<quota::Wait>,
     },
+    AwaitingQuotaPreparation {
+        wait: quota::Wait,
+    },
     AwaitingQuotaEnd {
         wait: quota::Wait,
-        at: Option<Moment>,
+        at: Moment,
     },
     QuotaSettling {
         at: Moment,
@@ -37,6 +40,7 @@ enum Phase {
         at: Moment,
         can_continue: bool,
         result: Result<(), Failure>,
+        quota_reset: Option<quota::Wait>,
     },
 }
 
@@ -172,7 +176,7 @@ impl Active {
             Phase::Settling { at, .. }
             | Phase::QuotaSettling { at, .. }
             | Phase::FailedPrompt { at, .. } => Some(at),
-            Phase::AwaitingQuotaEnd { at, .. } => at,
+            Phase::AwaitingQuotaEnd { at, .. } => Some(at),
             _ => None,
         }
     }
@@ -185,8 +189,12 @@ impl Active {
 
     pub(super) fn quota_wait(&self) -> Option<&quota::Wait> {
         match &self.phase {
-            Phase::AwaitingQuotaEnd { wait, .. } | Phase::QuotaSettling { wait, .. } => Some(wait),
-            Phase::FailedPrompt { quota_reset, .. } => quota_reset.as_ref(),
+            Phase::AwaitingQuotaPreparation { wait }
+            | Phase::AwaitingQuotaEnd { wait, .. }
+            | Phase::QuotaSettling { wait, .. } => Some(wait),
+            Phase::FailedPrompt { quota_reset, .. } | Phase::Settling { quota_reset, .. } => {
+                quota_reset.as_ref()
+            }
             _ => None,
         }
     }
@@ -200,7 +208,7 @@ impl Active {
         } else if self.phase.update_deadline().is_some()
             || matches!(
                 self.phase,
-                Phase::FailedPrompt { .. } | Phase::AwaitingQuotaEnd { at: Some(_), .. }
+                Phase::FailedPrompt { .. } | Phase::AwaitingQuotaEnd { .. }
             )
         {
             Exit::CancelAndRetire
@@ -212,13 +220,16 @@ impl Active {
     fn waiting_for_stdout(&self) -> bool {
         matches!(
             self.phase,
-            Phase::FailedPrompt { .. } | Phase::AwaitingQuotaEnd { at: Some(_), .. }
+            Phase::FailedPrompt { .. } | Phase::AwaitingQuotaEnd { .. }
         )
     }
 
-    fn failed_prompt(&self) -> Option<&Failure> {
+    fn stored_error(&self, now: Moment) -> Option<Failure> {
         match &self.phase {
-            Phase::FailedPrompt { error, .. } => Some(error),
+            Phase::FailedPrompt { error, .. } => Some(error.clone()),
+            Phase::AwaitingQuotaPreparation { wait } | Phase::AwaitingQuotaEnd { wait, .. } => {
+                Some(Failure::at(wait.message(now), now))
+            }
             _ => None,
         }
     }
@@ -229,7 +240,7 @@ impl Active {
             Phase::FailedPrompt {
                 at, quota_reset, ..
             } => (*at, quota_reset.clone()),
-            Phase::AwaitingQuotaEnd { at: Some(at), wait } => (*at, Some(wait.clone())),
+            Phase::AwaitingQuotaEnd { at, wait } => (*at, Some(wait.clone())),
             _ => return false,
         };
         self.phase = Phase::FailedPrompt {
@@ -296,14 +307,17 @@ impl Active {
 
     fn prompt_turn_ended(&mut self, end: PromptTurnEnd, now: Moment) {
         match &self.phase {
-            Phase::FailedPrompt { error, .. } => {
+            Phase::FailedPrompt {
+                error, quota_reset, ..
+            } => {
                 self.phase = Phase::Settling {
+                    quota_reset: quota_reset.clone(),
                     at: now,
                     can_continue: false,
                     result: Err(error.clone()),
                 };
             }
-            Phase::AwaitingQuotaEnd { wait, .. } => {
+            Phase::AwaitingQuotaPreparation { wait } | Phase::AwaitingQuotaEnd { wait, .. } => {
                 self.phase = Phase::QuotaSettling {
                     at: now,
                     wait: wait.clone(),
@@ -313,6 +327,7 @@ impl Active {
                 PromptTurnEnd::Prompt(stop_reason) => self.prompt_stopped(stop_reason, now),
                 PromptTurnEnd::Failed(error) => {
                     self.phase = Phase::Settling {
+                        quota_reset: None,
                         at: now.saturating_add(SETTLE_DELAY),
                         can_continue: false,
                         result: Err(Failure::at(error, now)),
@@ -328,11 +343,13 @@ impl Active {
                 Phase::QuotaSettling { at: now, wait }
             }
             Phase::AwaitingQuotaEnd { at, .. } => Phase::AwaitingQuotaEnd { at, wait },
-            Phase::FailedPrompt { at, .. } => Phase::AwaitingQuotaEnd { at: Some(at), wait },
-            Phase::Preparing(_) => Phase::AwaitingQuotaEnd { at: None, wait },
+            Phase::FailedPrompt { at, .. } => Phase::AwaitingQuotaEnd { at, wait },
+            Phase::Preparing(_) | Phase::AwaitingQuotaPreparation { .. } => {
+                Phase::AwaitingQuotaPreparation { wait }
+            }
             _ => Phase::AwaitingQuotaEnd {
                 wait,
-                at: Some(now.saturating_add(SETTLE_DELAY)),
+                at: now.saturating_add(SETTLE_DELAY),
             },
         };
     }
@@ -350,7 +367,9 @@ impl Active {
 
     pub(super) fn prepared(&mut self, session: String, now: Moment) -> Option<PromptRequest> {
         self.session = Some(session);
-        if let Phase::AwaitingQuotaEnd { wait, .. } = &self.phase {
+        if let Phase::AwaitingQuotaPreparation { wait } | Phase::AwaitingQuotaEnd { wait, .. } =
+            &self.phase
+        {
             self.phase = Phase::QuotaSettling {
                 at: now,
                 wait: wait.clone(),
@@ -426,6 +445,7 @@ impl Active {
             Phase::Preparing(_)
             | Phase::Prompt { .. }
             | Phase::FailedPrompt { .. }
+            | Phase::AwaitingQuotaPreparation { .. }
             | Phase::AwaitingQuotaEnd { .. }
             | Phase::QuotaSettling { .. }
             | Phase::QuotaSettled => (false, result),
@@ -504,6 +524,7 @@ impl Active {
             self.stop = crate::conversation::Stop::MaxTokens;
         }
         self.phase = Phase::Settling {
+            quota_reset: None,
             at: now.saturating_add(SETTLE_DELAY),
             result: if stop_reason == Some(StopReason::MaxTurnRequests) {
                 Err(Failure::at(crate::messages::Message::MaxTurnRequests, now))
@@ -636,6 +657,15 @@ impl Core {
             && let Some((wait, known)) = self.quota_signal(error, now, wall, commands)
         {
             if known {
+                let reply = self
+                    .work
+                    .get_mut(&id)
+                    .unwrap()
+                    .reply_signals_mut()
+                    .unwrap()
+                    .clone();
+                self.sessions
+                    .remember_reply(session, reply, now.saturating_add(SETTLE_DELAY));
                 self.finish(id, Err(Failure::at(wait.message(now), now)), now, commands);
             } else {
                 let active = self.work.get_mut(&id).unwrap().execution_mut().unwrap();
@@ -881,17 +911,6 @@ impl Core {
             Work::QuotaRetiring { session, .. } => commands.push(Command::Forget(session)),
             work => {
                 let mut active = work.into_active().unwrap();
-                // RuntimeEvent::Failed uses Upstream; Closed uses RuntimeFailed.
-                let result = if result.as_ref().is_err_and(|failure| {
-                    matches!(
-                        failure.message,
-                        Message::RuntimeFailed | Message::Upstream(_)
-                    )
-                }) {
-                    active.failed_prompt().cloned().map_or(result, Err)
-                } else {
-                    result
-                };
                 let can_query_reset = active
                     .quota_wait()
                     .is_some_and(|wait| self.can_query_quota_reset(wait));
@@ -1036,6 +1055,10 @@ impl Core {
         wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
     ) {
+        if id.is_none() && self.work.has_queued_session(&session) {
+            let _ = self.quota_signal(&message, now, wall, commands);
+            return;
+        }
         if let Some((wait, known)) = self.quota_signal(&message, now, wall, commands) {
             if let Some(id) = id {
                 if let Some(active) = self.work.get_mut(&id).unwrap().execution_mut() {
@@ -1050,13 +1073,9 @@ impl Core {
                             self.finish(id, Ok(()), now, commands);
                         }
                     }
-                } else if !known {
-                    let model = match &self.work[&id] {
-                        Work::Retiring(outstanding) => Some(outstanding.model().to_owned()),
-                        Work::QuotaRetiring { .. } => None,
-                        _ => unreachable!(),
-                    };
-                    self.enqueue_reset_query(wait, model);
+                } else if !known && let Work::Retiring(outstanding) = &self.work[&id] {
+                    let model = outstanding.model().to_owned();
+                    self.enqueue_reset_query(wait, Some(model));
                 }
             } else {
                 commands.push(self.sessions.forget(session));
@@ -1083,14 +1102,29 @@ impl Core {
         &mut self,
         message: crate::messages::Message,
         now: Moment,
+        wall: std::time::SystemTime,
         commands: &mut Vec<Command>,
     ) {
+        let signal = self.work.values_mut().find_map(|work| {
+            let key = work.key().to_owned();
+            let (error, signal) = work.reply_signals_mut()?.ended_error()?;
+            Some((key, error, signal))
+        });
+        if let Some((key, error, signal)) = signal {
+            let id = self.work.by_request(&key);
+            self.start_lockout(signal, error, id, now, wall, commands);
+            return;
+        }
         while let Some(id) = self
             .work
             .iter()
             .find_map(|(id, work)| work.occupies_place().then_some(*id))
         {
-            self.finish(id, Err(Failure::at(message.clone(), now)), now, commands);
+            let failure = self.work[&id]
+                .execution()
+                .and_then(|active| active.stored_error(now))
+                .unwrap_or_else(|| Failure::at(message.clone(), now));
+            self.finish(id, Err(failure), now, commands);
         }
     }
 
@@ -1114,7 +1148,7 @@ impl Core {
             let error = self.work[&id]
                 .execution()
                 .and_then(|active| match &active.phase {
-                    Phase::AwaitingQuotaEnd { wait, at: Some(_) } => Some(Failure::at(
+                    Phase::AwaitingQuotaEnd { wait, .. } => Some(Failure::at(
                         self.refusal(now).unwrap_or_else(|| wait.message(now)),
                         now,
                     )),

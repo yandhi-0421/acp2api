@@ -384,6 +384,26 @@ impl Core {
         }
     }
     pub(super) fn enqueue_reset_query(&mut self, wait: Wait, model: Option<String>) {
+        if self.lockout.is_some() {
+            return;
+        }
+        let pending = self.work.values_mut().find_map(|work| match work {
+            Work::QuotaQueued { query, .. } | Work::QuotaWorking { query, .. } => {
+                match &mut query.purpose {
+                    QuotaPurpose::Reset {
+                        wait,
+                        model: current,
+                        response: None,
+                    } if *current == model => Some(wait),
+                    _ => None,
+                }
+            }
+            _ => None,
+        });
+        if let Some(pending) = pending {
+            *pending = wait;
+            return;
+        }
         self.enqueue_quota(
             QuotaPurpose::Reset {
                 wait,
