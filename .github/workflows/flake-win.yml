@@ -1,0 +1,37 @@
+name: Windows cancel check
+on:
+  push:
+    branches: [probe/203-runs, probe/main-control]
+jobs:
+  runs:
+    runs-on: windows-latest
+    timeout-minutes: 170
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo +1.96.0 build --workspace --locked
+      - name: Six whole runs, the same command as the check, with output on the console
+        shell: pwsh
+        run: |
+          $failed = 0
+          foreach ($run in 1..6) {
+            cargo +1.96.0 test --locked -p acp2api-acceptance --test acceptance
+            if ($LASTEXITCODE -ne 0) { $failed++; "run $run failed" }
+          }
+          "failed runs: $failed of 6"
+          exit 0
+      - name: Thirty runs of the outline alone
+        shell: pwsh
+        run: |
+          $failed = 0
+          foreach ($run in 1..30) {
+            cargo +1.96.0 test --locked -p acp2api-acceptance --test acceptance -- --name 'A prompt turn that does not end 30 s after its cancel is a failure' --color never
+            if ($LASTEXITCODE -ne 0) { $failed++; "run $run failed" }
+          }
+          "failed runs: $failed of 30"
+          exit 0
