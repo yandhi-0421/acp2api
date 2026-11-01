@@ -92,14 +92,6 @@ async fn view(panel: &Panel) -> String {
 async fn a_page_checks_the_build_away_from_the_async_worker() {
     hash_page(|panel, _, visits| async move {
         let worker = std::thread::current().id();
-        #[cfg(target_os = "macos")]
-        {
-            let mut tid = 0;
-            unsafe {
-                libc::pthread_threadid_np(0, &mut tid);
-            }
-            eprintln!("PAGE_ASYNC_THREAD tid={tid}");
-        }
         let html = view(&panel).await;
         assert!(html.contains("On the release list") && !html.contains("No build in use."));
         let form = password(

@@ -145,6 +145,7 @@ impl Panel {
     }
     async fn html(&self, language: Language, notice: Option<page::Line<'_>>) -> String {
         let conductor = self.conductor.clone();
+        let _work = self.clock.hold(crate::HoldKind::TurnEvent);
         let builds = tokio::task::spawn_blocking(move || conductor.builds_summary())
             .await
             .unwrap_or_else(|error| Err(error.to_string()));
