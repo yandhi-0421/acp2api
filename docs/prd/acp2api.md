@@ -727,8 +727,8 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
   - a prompt turn that does not end 30 s after its cancel.
   - an ACP write to a live runtime process that does not end in 30 s;
   - more than 128 MiB of ACP writes that wait for the runtime process.
-- After a failure, each prompt turn of the runtime process ends with the 503 row of FR-033 and message M-20. acp2api starts a new runtime process at once. After 3 failures in 10 minutes, acp2api goes into the state "runtime unavailable" (FR-040).
-- During each FR-028 wait, the stored error ends the prompt turn unless a condition with higher priority in FR-037 applies.
+- For a prompt turn without a stored FR-028 error, a runtime process failure gives the 503 row of FR-033 and message M-20. acp2api starts a new runtime process at once. After 3 failures in 10 minutes, acp2api goes into the state "runtime unavailable" (FR-040).
+- During an FR-028 wait, stored quota errors follow FR-037 at every end; other stored errors keep their own rows.
 
 **Pass:**
 
