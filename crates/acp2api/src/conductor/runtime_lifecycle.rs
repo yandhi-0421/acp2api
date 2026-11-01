@@ -68,7 +68,7 @@ pub(super) struct Lifecycle {
     state: RuntimeState,
     failures: VecDeque<Moment>,
     cleanup_before_start: bool,
-    changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
+    pub(super) changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
     replacement: Option<Replacement>,
     deferred_start: bool,
 }
@@ -89,6 +89,10 @@ impl Lifecycle {
         &self.state
     }
 
+    pub(super) fn defer_start(&mut self) {
+        self.deferred_start = true;
+    }
+
     pub(super) fn replacement_pending(&self) -> bool {
         self.replacement.is_some()
     }
@@ -97,16 +101,26 @@ impl Lifecycle {
         self.replacement = Some(replacement);
     }
 
-    pub(super) fn awaits_state_file(&self) -> bool {
-        matches!(
-            &self.state,
+    pub(super) fn state_file_reason(&self) -> Option<&crate::messages::Unavailable> {
+        match &self.state {
             RuntimeState::Unavailable(reason)
-                if matches!(reason.message.fault, crate::messages::RuntimeFault::StateFileNotWritable)
-        )
+                if matches!(
+                    reason.message.fault,
+                    crate::messages::RuntimeFault::StateFileNotWritable
+                ) =>
+            {
+                Some(&reason.message)
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn state_file_made(&mut self) {
-        self.state = RuntimeState::Serving;
+        if std::mem::take(&mut self.deferred_start) {
+            let (reply, _) = oneshot::channel();
+            self.changes
+                .push_back((crate::runtime_builds::Action::Initial, reply));
+        }
     }
 
     pub(super) fn lockout_stopped(&mut self) {
@@ -593,8 +607,7 @@ impl Core {
         &mut self,
         action: crate::runtime_builds::Action,
         reply: BuildReply,
-        clock: &dyn Clock,
-    ) -> Vec<Command> {
+    ) {
         if let Some(evidence) = &self.lockout {
             let result = if matches!(action, crate::runtime_builds::Action::Initial) {
                 self.lifecycle.deferred_start = true;
@@ -607,33 +620,9 @@ impl Core {
                 ))))
             };
             let _ = reply.send(result);
-            return Vec::new();
-        }
-        if self.lifecycle.awaits_state_file() {
-            if matches!(action, crate::runtime_builds::Action::Initial) {
-                let _ = reply.send(Ok(None));
-                return Vec::new();
-            }
-            return match crate::store::StateFile::normal().save(&self.state_path) {
-                Ok(()) => {
-                    self.lifecycle
-                        .changes
-                        .push_back((crate::runtime_builds::Action::Initial, reply));
-                    self.handle(Event::StateFileMade, clock.now(), clock.wall())
-                }
-                Err(_) => {
-                    let RuntimeState::Unavailable(reason) = &self.lifecycle.state else {
-                        unreachable!()
-                    };
-                    let message =
-                        crate::messages::Message::RuntimeUnavailable(reason.message.clone());
-                    let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(message))));
-                    Vec::new()
-                }
-            };
+            return;
         }
         self.lifecycle.changes.push_back((action, reply));
-        Vec::new()
     }
 
     pub(super) async fn next_build_change(

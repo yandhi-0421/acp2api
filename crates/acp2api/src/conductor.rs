@@ -167,7 +167,7 @@ enum Event {
         signalling_work: Option<WorkId>,
     },
     EndLockout,
-    StateFileMade,
+    StoredLockout(crate::store::Lockout),
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -360,7 +360,10 @@ impl Core {
                 self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
             }
             (None, Event::EndLockout) => self.end_lockout(now),
-            (None, Event::StateFileMade) => self.lifecycle.state_file_made(),
+            (None, Event::StoredLockout(evidence)) => {
+                self.lockout = Some(evidence);
+                self.lifecycle.lockout_stopped();
+            }
             (None, Event::CheckPending(request)) => {
                 self.work.add(Work::CheckQueued(*request));
             }
@@ -534,17 +537,19 @@ impl Conductor {
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
         let state_path = builds.start.data.join(crate::store::STATE_FILE);
-        let (lockout, cause) = lockout::load(&state_path, clock.as_ref(), &journal);
-        let lifecycle = Lifecycle::new(if lockout.is_some() {
-            RuntimeState::Stopped
-        } else if let Some(cause) = cause {
-            RuntimeState::Unavailable(UnavailableReason {
-                message: actor_builds.unavailable(RuntimeFault::StateFileNotWritable),
-                cause: Some(cause),
-            })
-        } else {
-            RuntimeState::Serving
-        });
+        let (lockout, lifecycle_state) = match lockout::load(&state_path, clock.as_ref(), &journal)
+        {
+            lockout::Loaded::Lockout(evidence) => (Some(evidence), RuntimeState::Stopped),
+            lockout::Loaded::NotWritable(cause) => (
+                None,
+                RuntimeState::Unavailable(UnavailableReason {
+                    message: actor_builds.unavailable(RuntimeFault::StateFileNotWritable),
+                    cause: Some(cause),
+                }),
+            ),
+            lockout::Loaded::Normal => (None, RuntimeState::Serving),
+        };
+        let lifecycle = Lifecycle::new(lifecycle_state);
         let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
@@ -711,17 +716,27 @@ impl Conductor {
                         };
                         match work {
                             Input::Builds { action, reply, hold } => {
-                                let mut commands =
-                                    core.build_change(action, reply, clock.as_ref()).into();
-                                Self::commands(
-                                    &mut core,
-                                    &mut runtime,
-                                    &mut read_open,
-                                    &clock,
-                                    &journal,
-                                    &mut commands,
-                                )
-                                .await;
+                                if core.lifecycle.state_file_reason().is_some() {
+                                    let mut commands = core
+                                        .state_file_change(
+                                            action,
+                                            reply,
+                                            clock.as_ref(),
+                                            &journal,
+                                        )
+                                        .into();
+                                    Self::commands(
+                                        &mut core,
+                                        &mut runtime,
+                                        &mut read_open,
+                                        &clock,
+                                        &journal,
+                                        &mut commands,
+                                    )
+                                    .await;
+                                } else {
+                                    core.build_change(action, reply);
+                                }
                                 drop(hold);
                                 continue;
                             }

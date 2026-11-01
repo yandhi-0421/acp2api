@@ -6,28 +6,33 @@ use crate::{
 };
 use std::{path::Path, time::SystemTime};
 
-pub(super) fn load(
-    path: &Path,
-    clock: &dyn Clock,
-    journal: &Journal,
-) -> (Option<Lockout>, Option<std::io::ErrorKind>) {
+pub(super) enum Loaded {
+    Normal,
+    Lockout(Lockout),
+    NotWritable(std::io::ErrorKind),
+}
+
+pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Loaded {
     match StateFile::read(path) {
         Ok(state) => {
-            // FR-035 requires a new normal state file after the owner deletes it.
-            let save_error = if !path.exists()
-                && let Err(error) = state.save(path)
-            {
-                journal.state_file_failure(
-                    "state_file_write_failed",
-                    "create",
-                    error.kind(),
-                    clock,
-                );
-                Some(error.kind())
+            if let Some(evidence) = state.lockout {
+                Loaded::Lockout(evidence)
+            } else if !path.exists() {
+                // FR-035 requires a new normal state file after the owner deletes it.
+                if let Err(error) = state.save(path) {
+                    journal.state_file_failure(
+                        "state_file_write_failed",
+                        "create",
+                        error.kind(),
+                        clock,
+                    );
+                    Loaded::NotWritable(error.kind())
+                } else {
+                    Loaded::Normal
+                }
             } else {
-                None
-            };
-            (state.lockout, save_error)
+                Loaded::Normal
+            }
         }
         Err(error) => {
             let case = if error.kind() == std::io::ErrorKind::InvalidData {
@@ -36,15 +41,11 @@ pub(super) fn load(
                 "state file cannot be read"
             };
             let diagnostic = format!("{case}: {:?}", error.kind());
-            (
-                Some(Lockout {
-                    since: crate::journal::timestamp(clock.wall())
-                        .expect("clock after the Unix epoch"),
-                    signal: diagnostic.clone(),
-                    original_error_text: diagnostic,
-                }),
-                None,
-            )
+            Loaded::Lockout(Lockout {
+                since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
+                signal: diagnostic.clone(),
+                original_error_text: diagnostic,
+            })
         }
     }
 }
@@ -209,5 +210,43 @@ impl Core {
                 .count();
         commands.insert(after_cancels, Command::Lockout(evidence));
         self.lifecycle.refuse_build_changes(&message, commands);
+    }
+
+    pub(super) fn state_file_change(
+        &mut self,
+        action: crate::runtime_builds::Action,
+        reply: BuildReply,
+        clock: &dyn Clock,
+        journal: &Journal,
+    ) -> Vec<Command> {
+        if matches!(action, crate::runtime_builds::Action::Initial) {
+            self.lifecycle.defer_start();
+            let _ = reply.send(Ok(None));
+            return Vec::new();
+        }
+        match load(&self.state_path, clock, journal) {
+            Loaded::Normal => {
+                self.lifecycle.state_file_made();
+                self.lifecycle.changes.push_back((action, reply));
+                Vec::new()
+            }
+            Loaded::NotWritable(_) => {
+                let reason = self
+                    .lifecycle
+                    .state_file_reason()
+                    .cloned()
+                    .expect("state file fault");
+                let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(
+                    Message::RuntimeUnavailable(reason),
+                ))));
+                Vec::new()
+            }
+            Loaded::Lockout(evidence) => {
+                let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(
+                    Message::lockout(&evidence, &self.panel_address, false),
+                ))));
+                self.handle(Event::StoredLockout(evidence), clock.now(), clock.wall())
+            }
+        }
     }
 }
