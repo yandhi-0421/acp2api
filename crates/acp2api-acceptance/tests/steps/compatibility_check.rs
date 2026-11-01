@@ -1,4 +1,5 @@
 use crate::{World, build_support as build, compatibility_support as check};
+use crate::{panel_document as document, panel_states_support as panel};
 use acp2api_acceptance::{
     client::{ApiCall, ApiClient},
     setup::alive,
@@ -244,6 +245,26 @@ async fn restored(w: &mut World) {
         build::request(w).await.status,
         200,
         "FR-044 restored build serves requests"
+    );
+}
+
+#[then(expr = "the row with the full path of the found build has the entry {string}")]
+fn found_build_entry(w: &mut World, entry: String) {
+    let folder = w.compatibility.candidate.as_ref().expect("a found build");
+    let [server, _] = check::identity(folder);
+    let expected = entry.replace("<short hash>", &server[..12]);
+    let path = folder.join(build::program());
+    let path = path.to_str().unwrap();
+    let html = document::html(w.panel.answer.as_ref().unwrap());
+    let row = document::elements(&html, "li")
+        .find(|row| document::visible(row.content).contains(path))
+        .unwrap_or_else(|| panic!("FR-042 the found build keeps its full path: {path}"));
+    let buttons: Vec<_> = document::elements(row.content, "button")
+        .map(|button| document::visible(button.content))
+        .collect();
+    assert!(
+        panel::entry(row.content, &expected),
+        "FR-053 the row of the found build needs the entry: {expected}; actual: {buttons:?}"
     );
 }
 
