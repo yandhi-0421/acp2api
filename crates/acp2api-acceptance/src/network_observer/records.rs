@@ -25,6 +25,9 @@ pub(super) fn macos(bytes: &[u8]) -> Result<Vec<Attempt>, String> {
         let message = event["eventMessage"]
             .as_str()
             .ok_or("unified log lacks eventMessage")?;
+        if !message.starts_with("Sandbox:") {
+            continue;
+        }
         let lower = message.to_ascii_lowercase();
         if ["dropped", "suppressed", "lost"]
             .iter()
@@ -164,6 +167,22 @@ mod tests {
         );
     }
     #[test]
+    fn log_query_diagnostics_do_not_hide_sandbox_denials() {
+        // Recorded message excerpts from the orchestrator's native log query.
+        let capture = br#"[
+            {"eventType":"logEvent","processID":0,"eventMessage":"Sandbox: Python(72753) deny(1) network-outbound remote:*:9"},
+            {"eventType":"logEvent","eventMessage":"log run noninteractively, ... args: ... eventMessage CONTAINS[c] 'network-outbound'"},
+            {"eventType":"logEvent","eventMessage":"log run noninteractively, ... args: ... eventMessage CONTAINS[c] 'network-outbound' OR eventType == 'lossEvent' OR (eventMessage BEGINSWITH 'Sandbox:' AND eventMessage CONTAINS[c] 'suppressed') OR (process == 'logd' AND (eventMessage CONTAINS[c] 'dropped' OR eventMessage CONTAINS[c] 'lost'))"}
+        ]"#;
+        assert_eq!(
+            macos(capture).expect("log diagnostics must not invalidate sandbox evidence"),
+            vec![Attempt {
+                pid: 72753,
+                destination: Destination::SandboxDeny
+            }]
+        );
+    }
+    #[test]
     fn fake_agent_and_other_child_denials_do_not_count_as_product_connections() {
         assert!(
             Observation::select(100, macos(&mac(DENY)).unwrap())
@@ -219,7 +238,8 @@ mod tests {
         for value in [
             json!([{"eventType":"lossEvent"}]),
             json!([{"eventType":"logEvent","eventMessage":"Sandbox: 12 messages suppressed"}]),
-            json!([{"eventType":"logEvent","eventMessage":"3 network-outbound messages dropped"}]),
+            json!([{"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages dropped"}]),
+            json!([{"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages lost"}]),
         ] {
             assert!(macos(&serde_json::to_vec(&value).unwrap()).is_err());
         }
@@ -227,7 +247,7 @@ mod tests {
     #[test]
     fn malformed_or_incomplete_sandbox_records_fail_closed() {
         for message in [
-            "network-outbound",
+            "Sandbox: network-outbound",
             "Sandbox: Python(?) deny(1) network-outbound",
             "Sandbox: Python72753 deny(1) network-outbound",
         ] {

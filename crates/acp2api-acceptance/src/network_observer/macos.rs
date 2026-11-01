@@ -19,7 +19,20 @@ impl Capture {
     }
     pub fn read(&self) -> Result<Vec<Attempt>, String> {
         let mut command = Command::new("/usr/bin/log");
-        command.args(["show", "--style", "json", "--info", "--debug", "--loss", "--start", &self.start, "--end", &date(true)?, "--predicate", "eventMessage CONTAINS[c] 'network-outbound' OR eventType == 'lossEvent' OR (eventMessage BEGINSWITH 'Sandbox:' AND eventMessage CONTAINS[c] 'suppressed') OR (process == 'logd' AND (eventMessage CONTAINS[c] 'dropped' OR eventMessage CONTAINS[c] 'lost'))"]);
+        command.args([
+            "show",
+            "--style",
+            "json",
+            "--info",
+            "--debug",
+            "--loss",
+            "--start",
+            &self.start,
+            "--end",
+            &date(true)?,
+            "--predicate",
+            "eventMessage CONTAINS[c] 'network-outbound'",
+        ]);
         records::macos(&output(command)?.stdout)
     }
 }

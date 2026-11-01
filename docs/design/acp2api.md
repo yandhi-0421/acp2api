@@ -1516,7 +1516,14 @@ A direct socket route still reaches the kernel rule. The design does not depend 
 The capture records its start time before the first control.
 After the host exits, `log show` reads the bounded window in JSON, with info, debug, and loss events enabled.
 Its end bound includes the current second in full.
+The query uses the single predicate `eventMessage CONTAINS[c] 'network-outbound'`.
+The orchestrator measured that this predicate returns a real denial, but any additional `OR` clause returns none on this Mac.
+Both control PIDs must appear, so a query that misses their events fails the run.
+
 The parser reads the target PID from the sandbox message, not the kernel process ID of the log record.
+It accepts only messages that start with `Sandbox:` and contain ` deny(` and `network-outbound`.
+It ignores the log tool's own diagnostic, which quotes the query predicate.
+An outbound Sandbox message without a parsable PID remains an error.
 Any `network-outbound` denial for the host fails FR-046, including one that ends before traffic leaves the host.
 The message can redact the destination. Any outbound denial for the host PID fails the check, without a remote address.
 The orchestrator recorded this compact line:
@@ -1527,6 +1534,7 @@ kernel[0:3f9eba] (Sandbox) Sandbox: Python(72753) deny(1) network-outbound remot
 
 The local `log(1)` man page defines JSON output as an array of dictionaries.
 The parser reads `eventMessage` from each dictionary and extracts `72753` from the message above.
+It rejects a returned `lossEvent` and checks for dropped, suppressed, or lost records only in Sandbox messages.
 
 ### Windows
 
