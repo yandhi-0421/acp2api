@@ -418,3 +418,6 @@ impl Core {
         }
     }
 }
+
+#[cfg(test)]
+mod signal_tests;

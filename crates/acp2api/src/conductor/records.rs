@@ -377,6 +377,21 @@ mod tests {
     use super::*;
     use crate::conversation::{Conversation, Part, Role};
 
+    #[test]
+    fn expired_reply_summaries_are_removed_at_the_next_input() {
+        let mut sessions = AcpSessions::default();
+        for i in 0..1000 {
+            sessions.remember_reply(format!("s{i}"), Default::default(), 100);
+        }
+        sessions.expire(100);
+        assert_eq!(sessions.settled_replies.len(), 1000);
+        sessions.expire(101);
+        assert!(
+            sessions.settled_replies.is_empty(),
+            "expired summaries must not accumulate"
+        );
+    }
+
     fn chat_turn(body: serde_json::Value) -> crate::conversation::TurnRequest {
         crate::dialect::CHAT
             .parse(&serde_json::to_vec(&body).unwrap())

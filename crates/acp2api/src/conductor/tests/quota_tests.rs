@@ -602,13 +602,19 @@ fn a_runtime_failure_while_awaiting_quota_end_keeps_the_reset_query() {
     assert_eq!(
         ended
             .iter()
-            .filter(|command| matches!(command,
-                Command::Emit(_, TurnEvent::End(Err(crate::messages::Message::Upstream(error))))
-                    if error == "runtime failed"
+            .filter(|command| matches!(
+                command,
+                Command::Emit(
+                    _,
+                    TurnEvent::End(Err(crate::messages::Message::QuotaWait {
+                        retry_after: 3600,
+                        ..
+                    }))
+                )
             ))
             .count(),
         1,
-        "the runtime failure still ends the API request once"
+        "FR-028 keeps the stored quota error when the runtime process ends"
     );
     assert_eq!(core.work.values().filter(|work| matches!(work,
         Work::QuotaWorking { query: QuotaQuery { purpose: QuotaPurpose::Reset { wait, model: Some(model), response: None }, .. }, phase: QuotaPhase::Preparing, .. }
