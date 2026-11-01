@@ -1,7 +1,6 @@
 use crate::{World, panel_tiles_support as tiles, places_support as queue};
 use acp2api_acceptance::{
-    TurnPlan, client::Call, content_check, endpoint_check, fake::ModelSpec, journal_check,
-    system_check,
+    TurnPlan, client::Call, endpoint_check, fake::ModelSpec, journal_check, system_check,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -43,7 +42,9 @@ pub async fn send(w: &mut World, endpoint: &str, field: Option<(&str, Value)>) {
             .usage(137, 1_048_576),
     );
     w.request.queue_next(&w.scenario);
-    content_check::send(&mut w.scenario, call).await;
+    let live = w.scenario.client().await.send(call);
+    w.scenario.time.advance_to(n as u64 * 1000 + 217).await;
+    w.scenario.answer = Some(live.finish_current(&mut w.scenario.time).await);
     let answer = w.scenario.answer.as_ref().unwrap();
     assert_eq!(answer.status, 200, "request reaches the HTTP seam");
     let prompts = w.scenario.fake().record().prompts();
