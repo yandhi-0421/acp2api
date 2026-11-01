@@ -79,10 +79,6 @@ pub(crate) struct View {
     pub(crate) quota_reset: Option<String>,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
     pub(crate) lockout_evidence: Option<crate::store::Lockout>,
-    #[allow(
-        dead_code,
-        reason = "read by the separate #195 management panel change"
-    )]
     pub(crate) lockout_cause: Option<LockoutCause>,
     pub(crate) lockout_unsaved: bool,
     pub(crate) runtime_unavailable: Option<crate::messages::Unavailable>,

@@ -618,10 +618,10 @@ During a lockout, acp2api sends no request to the official runtime.
 - The response that started the lockout also holds the original error text of Google, because that text can hold the link to an appeal.
 - acp2api shows the notice in one terminal line, and in the dark first tile of the management panel.
 - During a lockout, acp2api starts no runtime process, sends no `/usage`, and the management panel has no sign-in entry.
-- acp2api writes the lockout and its evidence into its state file: the signal, the time, and the original error text, with the redaction of FR-056.
+- After a lockout signal, acp2api writes the lockout and its evidence into its state file. The evidence is the signal, the time, and the original error text, with the redaction of FR-056.
 - When this write fails, the lockout stays in memory, and the management panel shows the notice M-30. acp2api tries the write again at each later request and at each change of state, until the write succeeds or the lockout ends.
 - A restart of acp2api does not end a lockout. acp2api reads the state file at each start.
-  - When the state file exists, and acp2api cannot read it, or the file is damaged, acp2api is in lockout. The first tile shows the text `Sentence of "lockout": state file`, which gives no time. The evidence shows the true signal, for example `damaged state file: InvalidData`.
+  - When the state file exists, and acp2api cannot read it, or the file is damaged, acp2api is in lockout. The first tile shows the text `Sentence of "lockout": state file`, which gives no time. The evidence shows the true signal, for example `damaged state file: InvalidData`. acp2api does not write this lockout.
   - When no state file exists, acp2api is not in lockout, and it makes a new state file.
   - When acp2api cannot make the new state file, it goes into the state "runtime unavailable", with the M-14 reason `acp2api cannot write its state file state.json`. It starts no runtime process until a retry can write the file.
 - Only the owner ends a lockout. The management panel shows the evidence, the owner enters the management password, and the lockout ends at once. No timer and no automatic step end it.

@@ -1,5 +1,5 @@
 use super::texts::{Labels, Language};
-use crate::conductor::{RuntimeProcess, State};
+use crate::conductor::{LockoutCause, RuntimeProcess, State};
 
 pub(super) const COUNTDOWN: &str = r#"const timer = document.getElementById('sign-in-time');
 const seconds = Number(timer.dataset.seconds);
@@ -627,10 +627,15 @@ fn state_sentence(language: Language, view: &crate::conductor::View) -> Option<S
             .quota_reset
             .as_deref()
             .map(|reset| language.quota_wait_sentence(reset)),
-        State::Lockout => view
-            .lockout_evidence
-            .as_ref()
-            .map(|evidence| language.lockout_sentence(&evidence.since)),
+        State::Lockout => match view.lockout_cause {
+            Some(LockoutCause::StateFile) => {
+                Some(language.state_file_lockout_sentence().to_owned())
+            }
+            Some(LockoutCause::Signal) | None => view
+                .lockout_evidence
+                .as_ref()
+                .map(|evidence| language.lockout_sentence(&evidence.since)),
+        },
         // The reason of runtime_unavailable is this sentence.
         State::RuntimeUnavailable => None,
     }
@@ -1240,6 +1245,17 @@ fn current_build(language: Language, build: Option<crate::runtime_builds::Curren
     )
 }
 
+/// The first 12 characters of the server hash of a `<server>:<harness>` identity.
+fn short_hash(identity: &str) -> String {
+    identity
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(12)
+        .collect()
+}
+
 fn found_row(language: Language, row: &crate::runtime_builds::BuildRow) -> String {
     let check = if row.version.is_none() {
         format!(
@@ -1248,7 +1264,9 @@ fn found_row(language: Language, row: &crate::runtime_builds::BuildRow) -> Strin
 {}
 </form>"#,
             escape(&row.identity),
-            submit(language.pick("Run the compatibility check", "做兼容性检查")),
+            submit(&escape(
+                &language.compatibility_check_entry(&short_hash(&row.identity))
+            )),
         )
     } else {
         String::new()
@@ -1592,6 +1610,56 @@ mod tests {
                 original_error_text: "Denied <b>&\"now\"".into(),
             }),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_found_build_offers_its_check_by_short_hash_and_keeps_its_full_identity() {
+        let row = crate::runtime_builds::BuildRow {
+            path: "/builds/1.6.0/agy_acp_server".into(),
+            version: None,
+            identity: "0123456789abcdef:fedcba9876543210".into(),
+            acceptance: None,
+        };
+        for (language, entry) in [
+            (
+                Language::English,
+                "<button type=\"submit\">Run the compatibility check for 0123456789ab</button>",
+            ),
+            (
+                Language::Chinese,
+                "<button type=\"submit\">对 0123456789ab 做兼容性检查</button>",
+            ),
+        ] {
+            let html = found_row(language, &row);
+            assert_eq!(
+                [
+                    html.contains(entry),
+                    html.contains(r#"name="build" value="0123456789abcdef:fedcba9876543210""#),
+                    html.contains("<code>/builds/1.6.0/agy_acp_server</code>"),
+                ],
+                [true, true, true],
+                "FR-053 entry, hidden identity, and full path: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_short_hash_takes_at_most_twelve_characters_of_the_server_hash() {
+        for (identity, short) in [
+            ("0123456789abcdef:fedcba9876543210", "0123456789ab"),
+            ("0123456789ab:fedcba9876543210", "0123456789ab"),
+            ("012345678:fedcba9876543210", "012345678"),
+            ("0123456789abcdef", "0123456789ab"),
+            ("0123", "0123"),
+            (":", ""),
+            ("", ""),
+            (
+                "哈希哈希哈希哈希哈希哈希哈希:fedcba",
+                "哈希哈希哈希哈希哈希哈希",
+            ),
+        ] {
+            assert_eq!(short_hash(identity), short, "{identity}");
         }
     }
 
