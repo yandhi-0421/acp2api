@@ -130,6 +130,41 @@ Feature: Lockout
       | the state file is damaged                         |
       | the state file exists, and acp2api cannot read it |
 
+  @FR-035 @issue-195
+  Scenario Outline: After a restart, the first tile gives the true cause of the lockout
+    Given the browser language is "<language>"
+    And <state file>
+    When the owner restarts acp2api
+    And the owner opens the management panel in that browser
+    Then the first tile shows the sentence "<sentence>"
+    And the first tile shows the lockout signal "<signal>"
+
+    Examples:
+      | language | state file                                        | sentence | signal                          |
+      | en-US    | the state file is damaged                         | acp2api cannot read its state file state.json, or the file is damaged. It cannot show that no lockout is in effect, so it sends no request to the official runtime. | damaged state file: InvalidData |
+      | en-US    | the state file exists, and acp2api cannot read it | acp2api cannot read its state file state.json, or the file is damaged. It cannot show that no lockout is in effect, so it sends no request to the official runtime. | state file cannot be read       |
+      | zh-CN    | the state file is damaged                         | acp2api 无法读取状态文件 state.json，或该文件已损坏。它无法确认当前没有锁死，所以不向官方运行时发送任何请求。 | damaged state file: InvalidData |
+      | en-US    | the state file holds a lockout                    | At <time>, the official runtime gave a response that shows a risk to the Google account. Since then, acp2api sends no request to the official runtime. | 403 PERMISSION_DENIED           |
+
+  @FR-035 @issue-195
+  Scenario: A second restart keeps the sentence of a damaged state file
+    Given the state file is damaged
+    When the owner restarts acp2api
+    And the owner restarts acp2api
+    And the owner opens the management panel
+    Then the first tile shows the sentence "acp2api cannot read its state file state.json, or the file is damaged. It cannot show that no lockout is in effect, so it sends no request to the official runtime."
+
+  @FR-035 @issue-195
+  Scenario: A retry that finds a damaged state file gives the sentence of the state file
+    Given acp2api is stopped, and the data folder holds no state file
+    And acp2api cannot make the state file
+    And the owner started acp2api
+    When acp2api can make the state file
+    And the data folder then holds a damaged state file
+    And the owner asks for a retry, and the retry finds the damaged state file
+    And the owner opens the management panel
+    Then the first tile shows the sentence "acp2api cannot read its state file state.json, or the file is damaged. It cannot show that no lockout is in effect, so it sends no request to the official runtime."
+
   @FR-035 @issue-70
   Scenario: No timer ends a lockout
     Given acp2api is in lockout since a lockout signal
