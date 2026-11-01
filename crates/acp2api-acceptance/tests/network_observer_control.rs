@@ -41,10 +41,10 @@ async fn short_and_failed_testnet_attempts_fail_the_destination_check() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(windows)]
 #[tokio::test]
-#[ignore = "Requires sandbox-exec and unified log access outside Codex"]
-async fn ipv6_localhost_is_denied_by_the_literal_ipv4_profile() {
+#[ignore = "Requires native Windows audit access; CI runs this explicitly"]
+async fn ipv6_localhost_fails_the_windows_destination_check() {
     let observer = Observer::begin().unwrap();
     let mut command =
         tokio::process::Command::from(observer.command(&binary("network-observer-control")));
@@ -64,9 +64,10 @@ async fn ipv6_localhost_is_denied_by_the_literal_ipv4_profile() {
             .unwrap()
             .success()
     );
-    observer
+    let error = observer
         .finish(pid)
-        .expect("complete log window")
+        .expect("complete OS evidence, including both canaries")
         .only_loopback()
-        .expect_err("::1 must produce a sandbox deny");
+        .expect_err("planted ::1 attempt must fail the destination assertion");
+    assert!(error.starts_with("FR-046 outbound attempt outside 127.0.0.1:"));
 }

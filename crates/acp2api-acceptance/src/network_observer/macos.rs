@@ -1,7 +1,7 @@
 use super::{Attempt, output, records};
 use std::{path::Path, process::Command};
 
-const PROFILE: &str = "(version 1)(allow default)(deny network-outbound (remote ip \"*:*\"))(allow network-outbound (remote ip \"127.0.0.1:*\"))";
+const PROFILE: &str = "(version 1)(allow default)(deny network-outbound (remote ip \"*:*\"))(allow network-outbound (remote ip \"localhost:*\"))";
 #[derive(Debug)]
 pub(super) struct Capture {
     start: String,

@@ -1481,10 +1481,11 @@ With the runtime prefix `mcp_client-tools_`, each member name has at most 64 cha
 The runtime driver keeps the tools of its session, and maps the title of a permission request back to one of them with these MCP names.
 This correction adds no port, external dependency, or stored format.
 
-## Outbound connection observer (issue #138, round 2)
+## Outbound connection observer (issue #138)
 
 **Decided design.** Use the OS rules and event logs around the test host process.
-The orchestrator selected this design in the round 2 brief. Keep `@wip` until native verification and the acceptance freeze.
+The orchestrator selected this design in round 2 and the macOS profile correction in round 3.
+Keep `@wip` until native verification and the acceptance freeze.
 The release executable and the test host still call the same `acp2api::run` of ADR-0008.
 No product port, socket hook, or product behavior changes.
 
@@ -1501,12 +1502,15 @@ Thus the design can use its audit rights.
 ```text
 (version 1)(allow default)
 (deny network-outbound (remote ip "*:*"))
-(allow network-outbound (remote ip "127.0.0.1:*"))
+(allow network-outbound (remote ip "localhost:*"))
 ```
 
-The allow rule names the exact IPv4 address, rather than `localhost`.
-The native controls must prove that `127.0.0.1` works and `::1` produces a denial.
-The semantics of `localhost` and the exact profile remain unverified inside Codex.
+The profile language accepts only `*` or `localhost` as the host.
+The orchestrator observed that a literal `127.0.0.1` profile fails at launch and that `localhost` also allows `::1`.
+Round 3 accepts this gap: a macOS run does not detect a connection to `::1`.
+That address is loopback, so no traffic leaves the machine.
+The same product code runs on Windows, where the audit compares literal addresses and detects `::1`.
+The native macOS controls still require a successful `127.0.0.1` connection and denials for short and failed TEST-NET attempts.
 A direct socket route still reaches the kernel rule. The design does not depend on replacement libc symbols.
 
 The capture records its start time before the first control.
@@ -1514,7 +1518,15 @@ After the host exits, `log show` reads the bounded window in JSON, with info, de
 Its end bound includes the current second in full.
 The parser reads the target PID from the sandbox message, not the kernel process ID of the log record.
 Any `network-outbound` denial for the host fails FR-046, including one that ends before traffic leaves the host.
-The message can redact the destination. The strict profile makes a denial sufficient evidence of a forbidden attempt.
+The message can redact the destination. Any outbound denial for the host PID fails the check, without a remote address.
+The orchestrator recorded this compact line:
+
+```text
+kernel[0:3f9eba] (Sandbox) Sandbox: Python(72753) deny(1) network-outbound remote:*:9
+```
+
+The local `log(1)` man page defines JSON output as an array of dictionaries.
+The parser reads `eventMessage` from each dictionary and extracts `72753` from the message above.
 
 ### Windows
 
@@ -1528,6 +1540,7 @@ A PowerShell reader selects events 5156 and 5157 between that cursor and the end
 It reads the named XML fields, rather than localized event text.
 The Rust parser accepts decimal or prefixed hexadecimal `ProcessID` values and selects outbound records only.
 A destination other than the exact IPv4 address `127.0.0.1` fails FR-046.
+The native Windows control requires a planted `::1` attempt to fail this destination assertion.
 The Windows capture also requires outbound evidence for the observed PID.
 
 A temporary firewall rule blocks `192.0.2.1` for the control executable alone.
@@ -1553,7 +1566,7 @@ The final destination assertion selects only the product host PID.
 Host adapter connections to the hub count. The fake ACP agent and other child PIDs do not count.
 The kernel profile and WFP apply below std, tokio, socket2, mio, and native socket functions.
 Thus the product and its dependencies do not need a new seam.
-macOS records forbidden attempts; it does not produce an inventory of allowed connections.
+macOS records denied outbound attempts; it does not produce an inventory of allowed localhost connections.
 The evidence promise rests on the OS rule, the native controls, and explicit failure on an observed gap.
 
 Each control has one attempt and a two-second body limit. A parent caps its process run.
@@ -1577,7 +1590,7 @@ All changes to frozen harness and workflow files are additions for this scenario
 The CI workflow explicitly runs the native controls and the `@issue-138` scenario on both operating systems.
 It also runs the ignored Windows cleanup test. The scenario retains `@wip` in the default suite.
 The orchestrator must run the macOS native checks outside Codex.
-Windows execution, audit restoration, profile address matching, and native log delivery remain unproven until those runs succeed.
+Windows execution, audit restoration, and native log delivery remain unproven until those runs succeed.
 
 ## Open questions
 
