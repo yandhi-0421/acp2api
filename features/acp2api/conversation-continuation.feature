@@ -153,3 +153,234 @@ Feature: The conversation in each prompt
     Then the official runtime gets "session/load" for that ACP session in a new runtime process
     And the official runtime gets only the prompt "How are you?" in that ACP session
     And the API client gets the reply "Fine." after the replay of the completed tool call
+
+  @FR-021 @issue-218
+  Scenario Outline: A changed form of the arguments of the last tool call continues the ACP session
+    Given an API client uses "<api>"
+    And the API client offers the client tools Bash, Edit, Read, and Write
+    And the official runtime called the client tool "<tool>" with the arguments <emitted>
+    When the API client sends that tool call with the arguments <returned> and the tool result "Done."
+    Then the official runtime gets only the tool result "Done." in the same ACP session
+    And the count of ACP sessions stays the same
+
+    Examples:
+      | api                       | tool  | emitted                                                                   | returned                                                                                   |
+      | POST /v1/messages         | Edit  | {"file_path":"a.py","old_string":"    x = 1","new_string":"    x = 4"}    | {"replace_all":false,"file_path":"a.py","old_string":"    x = 1","new_string":"    x = 4"} |
+      | POST /v1/messages         | Write | {"file_path":"a.py","content":"def f():\\n    x = 1   \\n\\ty = 2\\t\\n"} | {"file_path":"a.py","content":"def f():\\n    x = 1\\n\\ty = 2\\n"}                        |
+      | POST /v1/messages         | Bash  | {"command":"cd /work && make test"}                                       | {"command":"make test"}                                                                    |
+      | POST /v1/messages         | Bash  | {"description":"Run the tests","command":"make test"}                     | {"command":"make test","description":"Run the tests"}                                      |
+      | POST /v1/messages         | Read  | {"file_path":"a.py"}                                                      | {"file_path":"b.py"}                                                                       |
+      | POST /v1/chat/completions | Edit  | {"file_path":"a.py","old_string":"x","new_string":"y"}                    | {"replace_all":false,"file_path":"a.py","old_string":"x","new_string":"y"}                 |
+      | POST /v1/chat/completions | Bash  | {"description":"Run the tests","command":"make test"}                     | {"command":"make test","description":"Run the tests"}                                      |
+      | POST /v1/responses        | Bash  | {"command":"cd /work && make test"}                                       | {"command":"make test"}                                                                    |
+      | POST /v1/responses        | Read  | {"file_path":"a.py"}                                                      | {"file_path":"b.py"}                                                                       |
+
+  @FR-021 @issue-218
+  Scenario Outline: Another call ID or another name of the last tool call stops the match
+    Given an API client uses "<api>"
+    And the API client offers the client tools Bash, Edit, Read, and Write
+    And the official runtime called the client tool "Edit" with the arguments {"file_path":"a.py"}
+    When the API client sends that tool call with <change> and the tool result "Done."
+    Then the request does a rebuild
+
+    Examples:
+      | api                       | change                   |
+      | POST /v1/messages         | the call ID "call-other" |
+      | POST /v1/messages         | the name "Write"         |
+      | POST /v1/chat/completions | the call ID "call-other" |
+      | POST /v1/chat/completions | the name "Write"         |
+      | POST /v1/responses        | the call ID "call-other" |
+      | POST /v1/responses        | the name "Write"         |
+
+  @FR-021 @issue-218
+  Scenario Outline: After a match, a later change of the arguments of that tool call stops the match
+    Given an API client uses "<api>"
+    And the API client offers the client tools Bash, Edit, Read, and Write
+    And the official runtime called the client tool "Bash" with the arguments <emitted>
+    When the API client sends that tool call with the arguments <returned> and the tool result "Done."
+    Then the official runtime gets only the tool result "Done." in the same ACP session
+    And the count of ACP sessions stays the same
+    When the API client sends the next user message "Next"
+    Then the official runtime gets only the prompt "Next" in the same ACP session
+    And the count of ACP sessions stays the same
+    When the API client sends the same conversation with that tool call changed to the arguments <later> and the new user message "Again"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       | emitted                                               | returned                                              | later                                                 |
+      | POST /v1/messages         | {"command":"cd /work && make"}                        | {"command":"make"}                                    | {"command":"cd /work && make"}                        |
+      | POST /v1/messages         | {"description":"Run the tests","command":"make test"} | {"command":"make test","description":"Run the tests"} | {"description":"Run the tests","command":"make test"} |
+      | POST /v1/messages         | {"command":"cd /work && echo  a"}                     | {"command":"echo  a"}                                 | {"command":"echo a"}                                  |
+      | POST /v1/chat/completions | {"command":"cd /work && make"}                        | {"command":"make"}                                    | {"command":"cd /work && make"}                        |
+      | POST /v1/responses        | {"command":"cd /work && make"}                        | {"command":"make"}                                    | {"command":"cd /work && make"}                        |
+
+  @FR-021 @issue-218
+  Scenario Outline: After a match, a later change of the call ID of that tool call stops the match
+    Given an API client uses "<api>"
+    And the API client offers the client tools Bash, Edit, Read, and Write
+    And the official runtime called the client tool "Bash" with the arguments {"command":"cd /work && make"}
+    When the API client sends that tool call with the arguments {"command":"make"} and the tool result "Done."
+    Then the official runtime gets only the tool result "Done." in the same ACP session
+    And the count of ACP sessions stays the same
+    When the API client sends the same conversation with the call ID "call-other" for that tool call and the new user message "Again"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       |
+      | POST /v1/messages         |
+      | POST /v1/chat/completions |
+
+  @FR-021 @issue-218
+  Scenario Outline: A change of white space in an earlier user message stops the match
+    Given an API client uses "<api>"
+    And the API client sent the user message <sent>, and the official runtime replied "Fine."
+    When the API client sends the same conversation with <sent> changed to <changed> and the new user message "Next"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       | sent                 | changed            |
+      | POST /v1/messages         | "if a:\\n    return" | "if a:\\n  return" |
+      | POST /v1/chat/completions | "if a:\\n    return" | "if a:\\n  return" |
+      | POST /v1/messages         | "name =  value"      | "name = value"     |
+      | POST /v1/responses        | "name =  value"      | "name = value"     |
+      | POST /v1/messages         | "one   \\ntwo"       | "one\\ntwo"        |
+      | POST /v1/chat/completions | "one\\r\\ntwo"       | "one\\ntwo"        |
+
+  @FR-021 @issue-218
+  Scenario Outline: A change of white space in an earlier tool result stops the match
+    Given an API client uses "<api>"
+    And the API client offers the client tools Bash, Edit, Read, and Write
+    And the official runtime called the client tool "Read" with the arguments {"file_path":"a.py"}
+    And the API client sent the tool result <sent> for that tool call, and the official runtime replied "Fine."
+    When the API client sends the same conversation with <sent> changed to <changed> and the new user message "Next"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       | sent                 | changed            |
+      | POST /v1/messages         | "if a:\\n    return" | "if a:\\n  return" |
+      | POST /v1/chat/completions | "if a:\\n    return" | "if a:\\n  return" |
+      | POST /v1/responses        | "if a:\\n    return" | "if a:\\n  return" |
+      | POST /v1/messages         | "one   \\ntwo"       | "one\\ntwo"        |
+
+  @FR-021 @issue-218
+  Scenario Outline: A change of white space in an earlier assistant text that is not the last reply stops the match
+    Given an API client uses "<api>"
+    And the API client sent the user message "One", and the official runtime replied <sent>
+    And the API client sent the user message "Two", and the official runtime replied "Fine."
+    When the API client sends the same conversation with <sent> changed to <changed> and the new user message "Next"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       | sent                 | changed            |
+      | POST /v1/messages         | "if a:\\n    return" | "if a:\\n  return" |
+      | POST /v1/chat/completions | "if a:\\n    return" | "if a:\\n  return" |
+      | POST /v1/messages         | "one   \\ntwo"       | "one\\ntwo"        |
+
+  @FR-021 @issue-218
+  Scenario Outline: A change of white space in the system prompt stops the match
+    Given an API client uses "<api>"
+    And the API client sets the system prompt "Rules:\\n    one"
+    And the API client sent the user message "One", and the official runtime replied "Fine."
+    When the API client sends the same conversation with "Rules:\\n    one" changed to "Rules:\\n  one" and the new user message "Next"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       |
+      | POST /v1/messages         |
+      | POST /v1/chat/completions |
+
+  @FR-021 @issue-218
+  Scenario Outline: A change of white space in a description of a client tool stops the match
+    Given an API client uses "<api>"
+    And the API client offers the client tool "Read" with the description "Read  a file."
+    And the API client sent the user message "One", and the official runtime replied "Fine."
+    When the API client sends the same conversation with "Read  a file." changed to "Read a file." and the new user message "Next"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       |
+      | POST /v1/messages         |
+      | POST /v1/chat/completions |
+
+  @FR-021 @issue-218
+  Scenario Outline: The last reply text in a clean form continues the ACP session
+    Given an API client uses "<api>"
+    And the API client sent the user message "One", and the official runtime replied <reply>
+    When the API client sends the same conversation with <reply> changed to <clean> and the new user message "Next"
+    Then the official runtime gets only the prompt "Next" in the same ACP session
+    And the count of ACP sessions stays the same
+
+    Examples:
+      | api                       | reply                                 | clean                |
+      | POST /v1/messages         | "one\\r\\ntwo"                        | "one\\ntwo"          |
+      | POST /v1/messages         | "lone\\rcarriage"                     | "lonecarriage"       |
+      | POST /v1/messages         | "one   \\ntwo\\t\\nthree"             | "one\\ntwo\\nthree"  |
+      | POST /v1/messages         | "  Text"                              | "Text"               |
+      | POST /v1/messages         | "Text\\n"                             | "Text"               |
+      | POST /v1/messages         | "\\n  if a:\\r\\n    return   \\n\\n" | "if a:\\n    return" |
+      | POST /v1/chat/completions | "lone\\rcarriage"                     | "lonecarriage"       |
+      | POST /v1/chat/completions | "one   \\ntwo\\t\\nthree"             | "one\\ntwo\\nthree"  |
+      | POST /v1/chat/completions | "\\n\\nText\\n\\n"                    | "Text"               |
+      | POST /v1/responses        | "one\\r\\ntwo"                        | "one\\ntwo"          |
+      | POST /v1/responses        | "Text   "                             | "Text"               |
+
+  @FR-021 @issue-218
+  Scenario Outline: The last reply text in a clean form continues the ACP session before the last tool call
+    Given an API client uses "<api>"
+    And the API client offers the client tools Bash, Edit, Read, and Write
+    And the official runtime replied "Let me run it.\n" and called the client tool "Bash" with the arguments {"command":"cd /work && make"}
+    When the API client sends that reply text as "Let me run it.", that tool call with the arguments {"command":"make"}, and the tool result "Done."
+    Then the official runtime gets only the tool result "Done." in the same ACP session
+    And the count of ACP sessions stays the same
+
+    Examples:
+      | api                       |
+      | POST /v1/messages         |
+      | POST /v1/chat/completions |
+      | POST /v1/responses        |
+
+  @FR-021 @issue-218
+  Scenario Outline: Changed indentation or changed spaces in the last reply text stops the match
+    Given an API client uses "<api>"
+    And the API client sent the user message "One", and the official runtime replied <reply>
+    When the API client sends the same conversation with <reply> changed to <changed> and the new user message "Next"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       | reply                | changed              |
+      | POST /v1/messages         | "if a:\\n    return" | "if a:\\n  return"   |
+      | POST /v1/messages         | "if a:\\n\\treturn"  | "if a:\\n    return" |
+      | POST /v1/messages         | "name =  value"      | "name = value"       |
+      | POST /v1/chat/completions | "if a:\\n    return" | "if a:\\n  return"   |
+      | POST /v1/chat/completions | "name =  value"      | "name = value"       |
+      | POST /v1/responses        | "if a:\\n    return" | "if a:\\n  return"   |
+
+  @FR-021 @issue-218
+  Scenario Outline: Changed indentation in the text before the last tool call stops the match
+    Given an API client uses "<api>"
+    And the API client offers the client tools Bash, Edit, Read, and Write
+    And the official runtime replied "Steps:\n    make" and called the client tool "Bash" with the arguments {"command":"make"}
+    When the API client sends that reply text as "Steps:\n  make", that tool call with the arguments {"command":"make"}, and the tool result "Done."
+    Then the request does a rebuild
+
+    Examples:
+      | api                       |
+      | POST /v1/messages         |
+      | POST /v1/chat/completions |
+
+  @FR-021 @issue-218
+  Scenario Outline: After a match, a later change of the same text stops the match
+    Given an API client uses "<api>"
+    And the API client sent the user message "One", and the official runtime replied <reply>
+    When the API client sends the same conversation with <reply> changed to <clean> and the new user message "Next"
+    Then the official runtime gets only the prompt "Next" in the same ACP session
+    And the count of ACP sessions stays the same
+    When the API client sends the same conversation with <clean> changed to <later> and the new user message "Again"
+    Then the request does a rebuild
+
+    Examples:
+      | api                       | reply         | clean       | later         |
+      | POST /v1/messages         | "Text\\n"     | "Text"      | "Text\\n"     |
+      | POST /v1/messages         | "one  \\ntwo" | "one\\ntwo" | "one  \\ntwo" |
+      | POST /v1/chat/completions | "one  \\ntwo" | "one\\ntwo" | "one \\ntwo"  |
+      | POST /v1/responses        | "Text\\n"     | "Text"      | " Text"       |
