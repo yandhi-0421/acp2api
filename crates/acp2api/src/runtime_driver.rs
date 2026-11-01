@@ -214,7 +214,9 @@ async fn write_messages(
 ) {
     while let Some((bytes, deadline, cancel)) = messages.recv().await {
         // Keep completed I/O or the deadline visible until the state or failure handoff ends.
-        let (result, _work) = {
+        let (result, _work) = if !cancel && *stopping.borrow() {
+            (Ok(()), Hold::empty())
+        } else {
             let mut _until_first_poll = {
                 let mut queue = writer_state.lock().unwrap();
                 if matches!(queue.state, WriteState::Stopped) {
