@@ -110,7 +110,7 @@ fn write_failed(path: &Path, evidence: &Lockout, journal: &Journal, clock: &dyn 
         Ok(()) => false,
         Err(LockoutSaveError::Read(error)) => {
             journal.state_file_failure("state_file_read_failed", "lockout", error.kind(), clock);
-            false
+            error.kind() != std::io::ErrorKind::InvalidData
         }
         Err(LockoutSaveError::Write(error)) => {
             journal.state_file_failure("state_file_write_failed", "lockout", error.kind(), clock);
@@ -261,13 +261,17 @@ impl Core {
         self.lifecycle.refuse_build_changes(&message, commands);
     }
 
-    pub(super) fn state_file_change(
+    pub(super) fn build_input(
         &mut self,
         action: crate::runtime_builds::Action,
         reply: BuildReply,
         clock: &dyn Clock,
         journal: &Journal,
     ) -> Vec<Command> {
+        let Some(reason) = self.lifecycle.state_file_reason().cloned() else {
+            self.build_change(action, reply);
+            return Vec::new();
+        };
         if matches!(action, crate::runtime_builds::Action::Initial) {
             self.lifecycle.defer_start();
             let _ = reply.send(Ok(None));
@@ -280,11 +284,6 @@ impl Core {
                 Vec::new()
             }
             Loaded::NotWritable(_) => {
-                let reason = self
-                    .lifecycle
-                    .state_file_reason()
-                    .cloned()
-                    .expect("state file fault");
                 let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(
                     Message::RuntimeUnavailable(reason),
                 ))));

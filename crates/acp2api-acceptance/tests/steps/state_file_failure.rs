@@ -33,7 +33,16 @@ async fn request_comes(w: &mut World) {
 }
 
 #[then("the state file holds the lockout")]
-fn state_file_holds_lockout(w: &mut World) {
+async fn state_file_holds_lockout(w: &mut World) {
+    for _ in 0..200 {
+        if lockout_support::state_path(w).is_file() {
+            let state = lockout_support::state(w);
+            if state["lockout"].is_object() {
+                break;
+            }
+        }
+        w.scenario.time.settle().await;
+    }
     let state = lockout_support::state(w);
     assert_eq!(state["format"], 1);
     let lockout = &state["lockout"];
@@ -85,29 +94,9 @@ async fn stopped_no_state_file(w: &mut World) {
 }
 
 #[given("acp2api cannot make the state file")]
-#[allow(clippy::disallowed_methods)]
 fn cannot_make_state_file(w: &mut World) {
     let data_dir = w.scenario.root.path.join("data");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::metadata(&data_dir).unwrap().permissions();
-        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o555)).unwrap();
-        w.lockout.unreadable = Some((data_dir, perms));
-    }
-    #[cfg(windows)]
-    {
-        let status = std::process::Command::new("icacls")
-            .arg(&data_dir)
-            .args(["/deny", "*S-1-1-0:(WD,AD)"])
-            .status()
-            .unwrap();
-        assert!(
-            status.success(),
-            "icacls denies new files in the data folder"
-        );
-        w.lockout.denied = Some(data_dir);
-    }
+    w.lockout.deny_new_files(data_dir);
 }
 
 #[given("the owner started acp2api")]

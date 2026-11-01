@@ -87,28 +87,28 @@ impl Conductor {
                     core.publish_view();
                 }
                 Command::ClearLockout(reply) => {
-                    if core.lockout_unsaved() {
-                        commands.extend(core.handle(Event::EndLockout, clock.now(), clock.wall()));
-                        let _ = reply.send(Ok(()));
+                    let saved = if core.lockout_unsaved() {
+                        Ok(())
                     } else {
-                        match lockout::clear(&core.state_path) {
-                            Ok(()) => {
-                                commands.extend(core.handle(
-                                    Event::EndLockout,
-                                    clock.now(),
-                                    clock.wall(),
-                                ));
-                                let _ = reply.send(Ok(()));
-                            }
-                            Err(error) => {
-                                journal.state_file_failure(
-                                    "state_file_write_failed",
-                                    "lockout_end",
-                                    error.kind(),
-                                    clock.as_ref(),
-                                );
-                                let _ = reply.send(Err(OwnerMessage::LockoutEndNotSaved));
-                            }
+                        lockout::clear(&core.state_path)
+                    };
+                    match saved {
+                        Ok(()) => {
+                            commands.extend(core.handle(
+                                Event::EndLockout,
+                                clock.now(),
+                                clock.wall(),
+                            ));
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(error) => {
+                            journal.state_file_failure(
+                                "state_file_write_failed",
+                                "lockout_end",
+                                error.kind(),
+                                clock.as_ref(),
+                            );
+                            let _ = reply.send(Err(OwnerMessage::LockoutEndNotSaved));
                         }
                     }
                 }

@@ -190,14 +190,6 @@ impl Lifecycle {
         self.replacement.as_ref()
     }
 
-    pub(super) fn queue_change(
-        &mut self,
-        action: crate::runtime_builds::Action,
-        reply: BuildReply,
-    ) {
-        self.changes.push_back((action, reply));
-    }
-
     pub(super) fn pop_change(&mut self) -> Option<(crate::runtime_builds::Action, BuildReply)> {
         self.changes.pop_front()
     }
@@ -618,7 +610,7 @@ impl Core {
     ) {
         if let Some(evidence) = &self.lockout {
             let result = if matches!(action, crate::runtime_builds::Action::Initial) {
-                self.lifecycle.deferred_start = true;
+                self.lifecycle.defer_start();
                 Ok(None)
             } else {
                 Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
@@ -644,7 +636,7 @@ impl Core {
             let mut changed = (**publish.borrow()).clone();
             match builds.select(action, &mut changed, configuration).await {
                 Err(error) => {
-                    // Only the start after a stored lockout has no reader.
+                    // Only the start after a stored lockout or after the state file is made has no reader.
                     if initial && reply.is_closed() {
                         return Some(BuildSelection::StartFailed(error));
                     }

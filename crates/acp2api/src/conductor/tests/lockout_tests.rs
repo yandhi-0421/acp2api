@@ -449,7 +449,7 @@ async fn a_lockout_answers_the_waiting_and_queued_build_changes() {
         initial: false,
     });
     core.lifecycle
-        .queue_change(crate::runtime_builds::Action::Search, queued);
+        .queue(crate::runtime_builds::Action::Search, queued);
     let commands = core.handle(
         Event::Runtime(RuntimeEvent::UpstreamError {
             session: "running".into(),
@@ -964,20 +964,19 @@ async fn a_lockout_stays_when_its_end_cannot_be_written() {
     std::fs::remove_dir_all(folder).unwrap();
 }
 
-#[test]
-fn after_a_retry_that_finds_the_state_file_normal_state_is_still_runtime_unavailable_until_runtime_ready()
- {
+fn test_environment(prefix: &str) -> (PathBuf, PathBuf, Arc<dyn Clock>, crate::journal::Journal) {
     let folder = std::env::temp_dir().join(format!(
-        "acp2api-retry-normal-{}",
+        "acp2api-{prefix}-{}",
         crate::random_hex::<12>().unwrap()
     ));
     std::fs::create_dir_all(&folder).unwrap();
     let state_path = folder.join(crate::store::STATE_FILE);
     let clock = crate::Ports::production().clock;
     let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    (folder, state_path, clock, journal)
+}
 
-    crate::store::StateFile::normal().save(&state_path).unwrap();
-
+fn unavailable_state_file_lifecycle() -> Lifecycle {
     let mut lifecycle = Lifecycle::new(RuntimeState::Unavailable(UnavailableReason {
         message: crate::messages::Unavailable {
             fault: RuntimeFault::StateFileNotWritable,
@@ -987,14 +986,95 @@ fn after_a_retry_that_finds_the_state_file_normal_state_is_still_runtime_unavail
         cause: Some(std::io::ErrorKind::PermissionDenied),
     }));
     lifecycle.defer_start();
+    lifecycle
+}
+
+#[tokio::test]
+async fn next_build_change_returns_the_queued_change_after_a_failed_start() {
+    let (folder, state_path, clock, journal) = test_environment("deferred-start-failed");
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    // Make official-runtime/server a directory so hashes fails on initial start
+    std::fs::create_dir_all(
+        folder
+            .join(crate::runtime_builds::COPY)
+            .join(crate::runtime_builds::SERVER),
+    )
+    .unwrap();
+
     let mut core = Core {
         state_path,
-        lifecycle,
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+
+    let target_path = folder.join("custom-runtime");
+    let (reply, rx) = oneshot::channel();
+    let commands = core.build_input(
+        crate::runtime_builds::Action::Path(target_path),
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+    assert!(commands.is_empty());
+
+    let builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+    let (publish, _) = tokio::sync::watch::channel(Arc::new(crate::store::Settings {
+        port: 8329,
+        concurrency_limit: 1,
+        local_api_key: String::new(),
+        management_password_hash: String::new(),
+        agy_acp_server_path: None,
+    }));
+    let configuration = folder.join("config.toml");
+
+    let first = core
+        .next_build_change(&builds, &publish, &configuration)
+        .await;
+    let Some(BuildSelection::StartFailed(error)) = first else {
+        panic!("expected StartFailed");
+    };
+
+    let mut runtime = None;
+    let mut read_open = false;
+    core.deferred_start_failed(error, &mut runtime, &mut read_open, &journal, &builds)
+        .await;
+
+    let second = core
+        .next_build_change(&builds, &publish, &configuration)
+        .await;
+    assert!(
+        second.is_none(),
+        "next_build_change processes the queued change without conductor action"
+    );
+
+    let reply_result = rx.await.unwrap();
+    assert!(
+        matches!(
+            reply_result,
+            Ok(Some(crate::messages::OwnerMessage::PathWithoutHarness))
+        ),
+        "the queued action receives its reply"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn after_a_retry_that_finds_the_state_file_normal_state_is_still_runtime_unavailable_until_runtime_ready()
+ {
+    let (folder, state_path, clock, journal) = test_environment("retry-normal");
+
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    let mut core = Core {
+        state_path,
+        lifecycle: unavailable_state_file_lifecycle(),
         ..Core::fixture(1)
     };
 
     let (reply, _rx) = oneshot::channel();
-    let commands = core.state_file_change(
+    let commands = core.build_input(
         crate::runtime_builds::Action::Search,
         reply,
         clock.as_ref(),
@@ -1025,14 +1105,7 @@ fn after_a_retry_that_finds_the_state_file_normal_state_is_still_runtime_unavail
 
 #[test]
 fn a_retry_leaves_a_state_file_with_other_content_byte_for_byte_unchanged() {
-    let folder = std::env::temp_dir().join(format!(
-        "acp2api-retry-unchanged-{}",
-        crate::random_hex::<12>().unwrap()
-    ));
-    std::fs::create_dir_all(&folder).unwrap();
-    let state_path = folder.join(crate::store::STATE_FILE);
-    let clock = crate::Ports::production().clock;
-    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    let (folder, state_path, clock, journal) = test_environment("retry-unchanged");
 
     let hash = "c".repeat(64);
     let saved = serde_json::json!({
@@ -1049,23 +1122,14 @@ fn a_retry_leaves_a_state_file_with_other_content_byte_for_byte_unchanged() {
     let initial_bytes = serde_json::to_vec(&saved).unwrap();
     std::fs::write(&state_path, &initial_bytes).unwrap();
 
-    let mut lifecycle = Lifecycle::new(RuntimeState::Unavailable(UnavailableReason {
-        message: crate::messages::Unavailable {
-            fault: RuntimeFault::StateFileNotWritable,
-            versions: "1.4.0".into(),
-            port: 8329,
-        },
-        cause: Some(std::io::ErrorKind::PermissionDenied),
-    }));
-    lifecycle.defer_start();
     let mut core = Core {
         state_path: state_path.clone(),
-        lifecycle,
+        lifecycle: unavailable_state_file_lifecycle(),
         ..Core::fixture(1)
     };
 
     let (reply, _rx) = oneshot::channel();
-    core.state_file_change(
+    core.build_input(
         crate::runtime_builds::Action::Search,
         reply,
         clock.as_ref(),
@@ -1083,14 +1147,7 @@ fn a_retry_leaves_a_state_file_with_other_content_byte_for_byte_unchanged() {
 
 #[tokio::test]
 async fn a_retry_that_finds_a_stored_lockout_gives_state_lockout_and_queues_initial_on_end() {
-    let folder = std::env::temp_dir().join(format!(
-        "acp2api-retry-lockout-{}",
-        crate::random_hex::<12>().unwrap()
-    ));
-    std::fs::create_dir_all(&folder).unwrap();
-    let state_path = folder.join(crate::store::STATE_FILE);
-    let clock = crate::Ports::production().clock;
-    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    let (folder, state_path, clock, journal) = test_environment("retry-lockout");
 
     let evidence = crate::store::Lockout {
         since: "2026-10-18T12:00:00Z".into(),
@@ -1104,23 +1161,14 @@ async fn a_retry_that_finds_a_stored_lockout_gives_state_lockout_and_queues_init
     });
     std::fs::write(&state_path, saved.to_string()).unwrap();
 
-    let mut lifecycle = Lifecycle::new(RuntimeState::Unavailable(UnavailableReason {
-        message: crate::messages::Unavailable {
-            fault: RuntimeFault::StateFileNotWritable,
-            versions: "1.4.0".into(),
-            port: 8329,
-        },
-        cause: Some(std::io::ErrorKind::PermissionDenied),
-    }));
-    lifecycle.defer_start();
     let mut core = Core {
         state_path: state_path.clone(),
-        lifecycle,
+        lifecycle: unavailable_state_file_lifecycle(),
         ..Core::fixture(1)
     };
 
     let (reply, rx) = oneshot::channel();
-    let _commands = core.state_file_change(
+    let _commands = core.build_input(
         crate::runtime_builds::Action::Search,
         reply,
         clock.as_ref(),
@@ -1154,35 +1202,19 @@ async fn a_retry_that_finds_a_stored_lockout_gives_state_lockout_and_queues_init
 
 #[test]
 fn a_retry_with_action_path_queues_action_initial_then_that_path() {
-    let folder = std::env::temp_dir().join(format!(
-        "acp2api-retry-path-{}",
-        crate::random_hex::<12>().unwrap()
-    ));
-    std::fs::create_dir_all(&folder).unwrap();
-    let state_path = folder.join(crate::store::STATE_FILE);
-    let clock = crate::Ports::production().clock;
-    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    let (folder, state_path, clock, journal) = test_environment("retry-path");
 
     crate::store::StateFile::normal().save(&state_path).unwrap();
 
-    let mut lifecycle = Lifecycle::new(RuntimeState::Unavailable(UnavailableReason {
-        message: crate::messages::Unavailable {
-            fault: RuntimeFault::StateFileNotWritable,
-            versions: "1.4.0".into(),
-            port: 8329,
-        },
-        cause: Some(std::io::ErrorKind::PermissionDenied),
-    }));
-    lifecycle.defer_start();
     let mut core = Core {
         state_path,
-        lifecycle,
+        lifecycle: unavailable_state_file_lifecycle(),
         ..Core::fixture(1)
     };
 
     let target_path = folder.join("custom-runtime");
     let (reply, _rx) = oneshot::channel();
-    let commands = core.state_file_change(
+    let commands = core.build_input(
         crate::runtime_builds::Action::Path(target_path.clone()),
         reply,
         clock.as_ref(),
@@ -1208,32 +1240,18 @@ fn a_retry_with_action_path_queues_action_initial_then_that_path() {
 #[tokio::test]
 async fn a_retry_with_an_unwritable_file_replies_with_the_full_m14_text() {
     use std::os::unix::fs::PermissionsExt;
-    let folder = std::env::temp_dir().join(format!(
-        "acp2api-retry-unwritable-{}",
-        crate::random_hex::<12>().unwrap()
-    ));
-    std::fs::create_dir_all(&folder).unwrap();
-    let state_path = folder.join(crate::store::STATE_FILE);
-    let clock = crate::Ports::production().clock;
-    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    let (folder, state_path, clock, journal) = test_environment("retry-unwritable");
 
-    let unavailable_msg = crate::messages::Unavailable {
-        fault: RuntimeFault::StateFileNotWritable,
-        versions: "1.4.0".into(),
-        port: 8329,
-    };
-    let expected_m14 =
-        crate::messages::Message::RuntimeUnavailable(unavailable_msg.clone()).to_string();
+    let lifecycle = unavailable_state_file_lifecycle();
+    let expected_m14 = crate::messages::Message::RuntimeUnavailable(
+        lifecycle.state_file_reason().unwrap().clone(),
+    )
+    .to_string();
     assert!(
         expected_m14.contains("acp2api cannot write its state file state.json"),
         "M-14 text contains 'acp2api cannot write its state file state.json'"
     );
 
-    let mut lifecycle = Lifecycle::new(RuntimeState::Unavailable(UnavailableReason {
-        message: unavailable_msg,
-        cause: Some(std::io::ErrorKind::PermissionDenied),
-    }));
-    lifecycle.defer_start();
     let mut core = Core {
         state_path: state_path.clone(),
         lifecycle,
@@ -1243,7 +1261,7 @@ async fn a_retry_with_an_unwritable_file_replies_with_the_full_m14_text() {
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
 
     let (reply, rx) = oneshot::channel();
-    let commands = core.state_file_change(
+    let commands = core.build_input(
         crate::runtime_builds::Action::Search,
         reply,
         clock.as_ref(),
@@ -1267,16 +1285,13 @@ async fn a_retry_with_an_unwritable_file_replies_with_the_full_m14_text() {
 
 #[tokio::test]
 async fn a_read_failure_at_the_lockout_start_gives_no_notice() {
-    let folder = std::env::temp_dir().join(format!(
-        "acp2api-read-failure-no-notice-{}",
-        crate::random_hex::<12>().unwrap()
-    ));
-    std::fs::create_dir_all(&folder).unwrap();
-    let state_path = folder.join(crate::store::STATE_FILE);
-    let clock = crate::Ports::production().clock;
-    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    let (folder, state_path, clock, journal) = test_environment("read-failure-no-notice");
 
     std::fs::write(&state_path, b"invalid json content").unwrap();
+    let Err(read_error) = crate::store::StateFile::read(&state_path) else {
+        panic!("expected read error");
+    };
+    assert_eq!(read_error.kind(), std::io::ErrorKind::InvalidData);
 
     let mut core = Core {
         state_path: state_path.clone(),
@@ -1309,18 +1324,65 @@ async fn a_read_failure_at_the_lockout_start_gives_no_notice() {
     std::fs::remove_dir_all(folder).unwrap();
 }
 
+#[tokio::test]
+async fn an_other_read_failure_gives_the_notice_and_a_later_retry_saves_the_lockout() {
+    let (folder, state_path, clock, journal) = test_environment("read-failure-directory");
+
+    std::fs::create_dir(&state_path).unwrap();
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        ..Core::fixture(1)
+    };
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    let mut commands = VecDeque::from([Command::Lockout(evidence)]);
+    Conductor::commands(
+        &mut core,
+        &mut None,
+        &mut false,
+        &clock,
+        &journal,
+        &mut commands,
+    )
+    .await;
+
+    assert_eq!(core.state(), State::Lockout);
+    assert!(
+        core.view.borrow().lockout_unsaved,
+        "FR-035: an other read failure gives the notice"
+    );
+
+    std::fs::remove_dir(&state_path).unwrap();
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    core.retry_lockout_save();
+
+    assert!(
+        !core.view.borrow().lockout_unsaved,
+        "FR-035: after replacing the directory with a normal file, the retry saves the lockout"
+    );
+    assert!(
+        crate::store::StateFile::read(&state_path)
+            .unwrap()
+            .lockout
+            .is_some(),
+        "FR-035: the lockout is saved in the state file"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_write_failure_gives_the_notice_and_a_later_save_clears_it() {
     use std::os::unix::fs::PermissionsExt;
-    let folder = std::env::temp_dir().join(format!(
-        "acp2api-write-failure-notice-{}",
-        crate::random_hex::<12>().unwrap()
-    ));
-    std::fs::create_dir_all(&folder).unwrap();
-    let state_path = folder.join(crate::store::STATE_FILE);
-    let clock = crate::Ports::production().clock;
-    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    let (folder, state_path, clock, journal) = test_environment("write-failure-notice");
 
     crate::store::StateFile::normal().save(&state_path).unwrap();
 
@@ -1370,14 +1432,7 @@ async fn a_write_failure_gives_the_notice_and_a_later_save_clears_it() {
 #[tokio::test]
 async fn an_end_of_an_unsaved_lockout_succeeds_while_the_file_still_cannot_be_written() {
     use std::os::unix::fs::PermissionsExt;
-    let folder = std::env::temp_dir().join(format!(
-        "acp2api-unsaved-end-succeeds-{}",
-        crate::random_hex::<12>().unwrap()
-    ));
-    std::fs::create_dir_all(&folder).unwrap();
-    let state_path = folder.join(crate::store::STATE_FILE);
-    let clock = crate::Ports::production().clock;
-    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    let (folder, state_path, clock, journal) = test_environment("unsaved-end-succeeds");
 
     crate::store::StateFile::normal().save(&state_path).unwrap();
 

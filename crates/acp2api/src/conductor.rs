@@ -657,6 +657,7 @@ impl Conductor {
                                 &actor_builds,
                             )
                             .await;
+                            continue;
                         }
                         None => {}
                     }
@@ -717,27 +718,23 @@ impl Conductor {
                         };
                         match work {
                             Input::Builds { action, reply, hold } => {
-                                if core.lifecycle.state_file_reason().is_some() {
-                                    let mut commands = core
-                                        .state_file_change(
-                                            action,
-                                            reply,
-                                            clock.as_ref(),
-                                            &journal,
-                                        )
-                                        .into();
-                                    Self::commands(
-                                        &mut core,
-                                        &mut runtime,
-                                        &mut read_open,
-                                        &clock,
+                                let mut commands = core
+                                    .build_input(
+                                        action,
+                                        reply,
+                                        clock.as_ref(),
                                         &journal,
-                                        &mut commands,
                                     )
-                                    .await;
-                                } else {
-                                    core.build_change(action, reply);
-                                }
+                                    .into();
+                                Self::commands(
+                                    &mut core,
+                                    &mut runtime,
+                                    &mut read_open,
+                                    &clock,
+                                    &journal,
+                                    &mut commands,
+                                )
+                                .await;
                                 drop(hold);
                                 continue;
                             }
