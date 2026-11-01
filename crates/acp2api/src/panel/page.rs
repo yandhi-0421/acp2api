@@ -1,5 +1,6 @@
 use super::texts::{Labels, Language};
 use crate::conductor::{RuntimeProcess, State};
+use crate::messages::Message;
 
 pub(super) const COUNTDOWN: &str = r#"const timer = document.getElementById('sign-in-time');
 const seconds = Number(timer.dataset.seconds);
@@ -544,6 +545,10 @@ fn first_tile(
         .unwrap_or_default();
     if view.lockout_unsaved {
         let text = lockout_unsaved(language);
+        evidence.push_str(&format!(r#"<p role="status">{text}</p>"#));
+    }
+    if let Some(message) = &view.runtime_unavailable {
+        let text = escape(&language.api_message(&Message::RuntimeUnavailable(message.clone())));
         evidence.push_str(&format!(r#"<p role="status">{text}</p>"#));
     }
     let action = if view.state == State::Lockout {
@@ -1401,6 +1406,49 @@ mod tests {
             ],
             [true, true, true],
             "FR-054 dynamic build and folder text is HTML-escaped"
+        );
+    }
+
+    #[test]
+    fn the_first_tile_renders_the_runtime_unavailable_reason_in_both_languages() {
+        let unavailable = crate::messages::Unavailable::no_executable();
+        let view_with_reason = crate::conductor::View {
+            state: State::RuntimeUnavailable,
+            runtime_unavailable: Some(unavailable.clone()),
+            ..Default::default()
+        };
+        let view_without_reason = crate::conductor::View {
+            state: State::RuntimeUnavailable,
+            runtime_unavailable: None,
+            ..Default::default()
+        };
+
+        let en_reason = escape(
+            &Language::English.api_message(&Message::RuntimeUnavailable(unavailable.clone())),
+        );
+        let zh_reason =
+            escape(&Language::Chinese.api_message(&Message::RuntimeUnavailable(unavailable)));
+
+        let en_tile = first_tile(Language::English, &view_with_reason, 0, None);
+        let zh_tile = first_tile(Language::Chinese, &view_with_reason, 0, None);
+        let none_en_tile = first_tile(Language::English, &view_without_reason, 0, None);
+        let none_zh_tile = first_tile(Language::Chinese, &view_without_reason, 0, None);
+
+        assert!(
+            en_tile.contains(&format!(r#"<p role="status">{en_reason}</p>"#)),
+            "FR-035 English panel renders the runtime unavailable reason"
+        );
+        assert!(
+            zh_tile.contains(&format!(r#"<p role="status">{zh_reason}</p>"#)),
+            "FR-035 Chinese panel renders the runtime unavailable reason"
+        );
+        assert!(
+            !none_en_tile.contains(r#"<p role="status">"#),
+            "FR-035 English panel with None renders no status paragraph"
+        );
+        assert!(
+            !none_zh_tile.contains(r#"<p role="status">"#),
+            "FR-035 Chinese panel with None renders no status paragraph"
         );
     }
 }

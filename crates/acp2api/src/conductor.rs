@@ -74,6 +74,7 @@ pub(crate) struct View {
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
     pub(crate) lockout_evidence: Option<String>,
     pub(crate) lockout_unsaved: bool,
+    pub(crate) runtime_unavailable: Option<crate::messages::Unavailable>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -87,6 +88,7 @@ impl Default for View {
             sign_in_wait: None,
             lockout_evidence: None,
             lockout_unsaved: false,
+            runtime_unavailable: None,
         }
     }
 }
@@ -512,6 +514,10 @@ impl Core {
             runtime_process: self.lifecycle.state().runtime_process(),
             places: self.work.places(),
             queued: self.work.queued(),
+            runtime_unavailable: match self.lifecycle.state() {
+                RuntimeState::Unavailable(reason) => Some(reason.message.clone()),
+                _ => None,
+            },
         }));
     }
 }
