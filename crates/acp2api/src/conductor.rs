@@ -149,6 +149,7 @@ pub(crate) enum ResponseMode {
 }
 pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
+const ACP_CALL_LIMIT: Moment = 300_000;
 const SETTLE_DELAY: Moment = 200;
 struct Core {
     lockout: Option<lockout::HeldLockout>,
@@ -319,7 +320,7 @@ impl Core {
         now: Moment,
         wall: std::time::SystemTime,
     ) -> Vec<Command> {
-        if matches!(event, Event::Deadline) && self.sessions.cancellation_due(now) {
+        if matches!(event, Event::Deadline) && self.sessions.runtime_failure_due(now) {
             return self.handle(Event::RuntimeFailure, now, wall);
         }
         if matches!(event, Event::Deadline)
@@ -337,6 +338,11 @@ impl Core {
             })
         ) {
             self.sessions.preparation_failed();
+        }
+        if let Event::StartFailed(work, _) | Event::Runtime(RuntimeEvent::Prepared { work, .. }) =
+            &event
+        {
+            self.sessions.call_deadlines.remove(work);
         }
         let upstream_error = self.upstream_error(&mut event, now, &mut commands);
         self.retry_waits.retain(|wait| wait.deadline > now);
@@ -365,6 +371,16 @@ impl Core {
             self.sessions.cancel_ended(session);
         }
         let quota_work = work_id.filter(|id| matches!(self.work[id], Work::QuotaWorking { .. }));
+        if let (
+            Some(id),
+            Event::Runtime(RuntimeEvent::Turn {
+                update: TurnUpdate::PromptEnded { .. } | TurnUpdate::Failed(_),
+                ..
+            }),
+        ) = (quota_work, &event)
+        {
+            self.sessions.call_deadlines.remove(self.work[&id].key());
+        }
         match (quota_work, event) {
             (
                 None,
@@ -506,6 +522,17 @@ impl Core {
         }
         commands.extend(self.sessions.expire(now));
         self.start_queued_work(now, &mut commands);
+        for command in &commands {
+            if let Command::Prepare { work, .. } | Command::Usage { work, .. } = command {
+                self.sessions
+                    .call_deadlines
+                    .insert(work.clone(), now.saturating_add(ACP_CALL_LIMIT));
+            }
+        }
+        let work = &self.work;
+        self.sessions
+            .call_deadlines
+            .retain(|key, _| work.by_request(key).is_some());
         self.emit_keep_alives(now, &mut commands);
         if self.state() != previous {
             let cause = match self.lifecycle.state() {

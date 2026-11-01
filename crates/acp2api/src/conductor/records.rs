@@ -173,6 +173,7 @@ pub(super) struct AcpSessions {
     startup: Option<String>,
     use_sequence: u64,
     cancels: BTreeMap<String, Moment>,
+    pub(super) call_deadlines: BTreeMap<String, Moment>,
     settled_replies: BTreeMap<String, (super::lockout::ReplySignals, Moment)>,
 }
 impl AcpSessions {
@@ -215,6 +216,7 @@ impl AcpSessions {
         }
     }
     pub(super) fn replaced(&mut self, startup: Option<String>) {
+        self.call_deadlines.clear();
         self.settled_replies.clear();
         self.held = usize::from(startup.is_some());
         self.startup = startup;
@@ -379,10 +381,14 @@ impl AcpSessions {
             .iter()
             .map(|record| record.record.expires)
             .chain(self.cancels.values().copied())
+            .chain(self.call_deadlines.values().copied())
             .min()
     }
-    pub(super) fn cancellation_due(&self, now: Moment) -> bool {
-        self.cancels.values().any(|at| *at <= now)
+    pub(super) fn runtime_failure_due(&self, now: Moment) -> bool {
+        self.cancels
+            .values()
+            .chain(self.call_deadlines.values())
+            .any(|at| *at <= now)
     }
     pub(super) fn cancel(&mut self, session: String, now: Moment) -> Command {
         self.cancels
@@ -393,12 +399,13 @@ impl AcpSessions {
     pub(super) fn cancel_ended(&mut self, session: &str) {
         self.cancels.remove(session);
     }
-    pub(super) fn clear_cancels(&mut self) {
+    pub(super) fn clear_deadlines(&mut self) {
         self.cancels.clear();
+        self.call_deadlines.clear();
     }
     pub(super) fn runtime_failed(&mut self) {
         self.settled_replies.clear();
-        self.clear_cancels();
+        self.clear_deadlines();
         self.startup = None;
     }
     pub(super) fn disconnect(
@@ -464,6 +471,7 @@ impl AcpSessions {
             startup,
             use_sequence,
             cancels: BTreeMap::new(),
+            call_deadlines: BTreeMap::new(),
             settled_replies: BTreeMap::new(),
         }
     }
@@ -779,9 +787,9 @@ mod tests {
         let mut sessions = AcpSessions::default();
         sessions.cancel("running".into(), 1_000);
         sessions.cancel("running".into(), 20_000);
-        assert!(!sessions.cancellation_due(30_999));
+        assert!(!sessions.runtime_failure_due(30_999));
         assert!(
-            sessions.cancellation_due(31_000),
+            sessions.runtime_failure_due(31_000),
             "FR-041 the first cancel sets the 30 s deadline"
         );
     }
