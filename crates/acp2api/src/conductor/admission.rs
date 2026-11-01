@@ -239,19 +239,15 @@ impl Core {
                 (Some(id), request::Start::Prompt(now))
             }
             Some((session, records::Location::Unloaded(cwd))) => {
-                commands.push(Command::Prepare {
+                commands.push(self.sessions.prepare(
                     work,
-                    settings: settings.clone(),
-                    load: Some((session.clone(), cwd)),
-                });
+                    settings.clone(),
+                    Some((session.clone(), cwd)),
+                ));
                 (Some(session), request::Start::Prepare(prompt))
             }
             None => {
-                commands.push(Command::Prepare {
-                    work,
-                    settings: settings.clone(),
-                    load: None,
-                });
+                commands.push(self.sessions.prepare(work, settings.clone(), None));
                 (None, request::Start::Prepare(prompt))
             }
         };
@@ -334,10 +330,24 @@ impl Core {
             outcome: crate::journal::Outcome::Disconnected,
         }));
     }
+    pub(super) fn needs_session_replacement(&self) -> bool {
+        self.sessions.full()
+            && self.work.values().any(|work| match work {
+                Work::AcceptedQueued(request) if !request.reply.output.is_closed() => self
+                    .sessions
+                    .needs_one_more(&request.turn, &SessionSettings::for_turn(&request.turn)),
+                _ => false,
+            })
+    }
+
     pub(super) fn start_queued_work(&mut self, now: Moment, commands: &mut Vec<Command>) {
+        if self.lifecycle.session_limit_waiting() && !self.needs_session_replacement() {
+            self.resume_after_session_limit();
+        }
         let mut places = self.work.places();
         while self.lockout.is_none()
-            && matches!(self.lifecycle.state(), RuntimeState::Serving)
+            && (matches!(self.lifecycle.state(), RuntimeState::Serving)
+                || self.lifecycle.session_limit_waiting())
             && places < usize::from(self.limit)
         {
             let Some(id) = self.work.iter().find_map(|(id, work)| match work {
@@ -345,7 +355,9 @@ impl Core {
                 Work::CheckQueued(_) => Some(*id),
                 Work::QuotaQueued { .. } if !self.sign_in.required() => Some(*id),
                 Work::AcceptedQueued(_)
-                    if !self.sign_in.required() && self.quota.wait().is_none() =>
+                    if matches!(self.lifecycle.state(), RuntimeState::Serving)
+                        && !self.sign_in.required()
+                        && self.quota.wait().is_none() =>
                 {
                     Some(*id)
                 }
@@ -353,26 +365,38 @@ impl Core {
             }) else {
                 break;
             };
+            if let Work::AcceptedQueued(request) = &self.work[&id]
+                && !request.reply.output.is_closed()
+                && self.sessions.full()
+                && self
+                    .sessions
+                    .needs_one_more(&request.turn, &SessionSettings::for_turn(&request.turn))
+            {
+                self.lifecycle
+                    .plan(super::runtime_lifecycle::Replacement::SessionLimit);
+                self.wait_for_session_limit();
+                continue;
+            }
             let request = match self.work.remove(&id).unwrap() {
                 Work::ModelsQueued(read) => {
-                    commands.push(Command::Prepare {
-                        work: read.work.clone(),
-                        settings: SessionSettings {
+                    commands.push(self.sessions.prepare(
+                        read.work.clone(),
+                        SessionSettings {
                             tools: Vec::new(),
                             system: None,
                         },
-                        load: None,
-                    });
+                        None,
+                    ));
                     self.work.restore(id, Work::ModelsReading(read));
                     places += 1;
                     continue;
                 }
                 Work::CheckQueued(request) => {
-                    commands.push(Command::Prepare {
-                        work: request.request.id.clone(),
-                        settings: SessionSettings::for_turn(&request.turn),
-                        load: None,
-                    });
+                    commands.push(self.sessions.prepare(
+                        request.request.id.clone(),
+                        SessionSettings::for_turn(&request.turn),
+                        None,
+                    ));
                     self.work.restore(id, Work::Checking(request));
                     places += 1;
                     continue;

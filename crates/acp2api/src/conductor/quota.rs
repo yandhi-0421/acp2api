@@ -589,14 +589,14 @@ impl Core {
             });
             QuotaPhase::Prompt(session)
         } else {
-            commands.push(Command::Prepare {
-                work: query.work.clone(),
-                settings: SessionSettings {
+            commands.push(self.sessions.prepare(
+                query.work.clone(),
+                SessionSettings {
                     tools: Vec::new(),
                     system: None,
                 },
-                load: None,
-            });
+                None,
+            ));
             QuotaPhase::Preparing
         };
         self.work.restore(

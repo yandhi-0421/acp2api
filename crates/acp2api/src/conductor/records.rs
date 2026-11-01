@@ -116,8 +116,13 @@ pub(super) struct Selection {
     pub(super) ready: Option<(String, Location)>,
     pub(super) record: RequestRecord,
 }
+pub(super) const SESSIONS_PER_RUNTIME_PROCESS: usize = 8;
+
 #[derive(Default)]
 pub(super) struct AcpSessions {
+    // Successful session/new and session/load calls plus pending preparations.
+    // Forgetting a record does not close its ACP session in the runtime process.
+    held: usize,
     records: Vec<Record>,
     startup: Option<String>,
     use_sequence: u64,
@@ -145,7 +150,42 @@ impl AcpSessions {
         }
     }
     pub(super) fn replaced(&mut self, startup: Option<String>) {
+        self.held = usize::from(startup.is_some());
         self.startup = startup;
+    }
+    pub(super) fn prepare(
+        &mut self,
+        work: String,
+        settings: SessionSettings,
+        load: Option<(String, std::path::PathBuf)>,
+    ) -> Command {
+        self.held += 1;
+        Command::Prepare {
+            work,
+            settings,
+            load,
+        }
+    }
+    pub(super) fn preparation_failed(&mut self) {
+        self.held -= 1;
+    }
+    pub(super) fn full(&self) -> bool {
+        self.held >= SESSIONS_PER_RUNTIME_PROCESS
+    }
+    pub(super) fn needs_one_more(
+        &self,
+        turn: &crate::conversation::TurnRequest,
+        settings: &SessionSettings,
+    ) -> bool {
+        let hashes = crate::conversation::record_hashes(&turn.conversation);
+        let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
+        let items = turn.conversation.items();
+        match select(&self.records, &hashes, tools_hash, &items) {
+            Some((index, _)) => matches!(self.records[index].location, Location::Unloaded(_)),
+            None => {
+                !(settings.system.is_none() && settings.tools.is_empty() && self.startup.is_some())
+            }
+        }
     }
     pub(super) fn models_ready(&mut self, session: String) -> Option<Command> {
         self.startup.replace(session).map(Command::Forget)
@@ -308,6 +348,11 @@ impl AcpSessions {
         use_sequence: u64,
     ) -> Self {
         Self {
+            held: records
+                .iter()
+                .filter(|record| matches!(record.location, Location::Loaded))
+                .count()
+                + usize::from(startup.is_some()),
             records,
             startup,
             use_sequence,

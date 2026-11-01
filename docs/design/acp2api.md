@@ -586,6 +586,23 @@ Only an accepted stream has a keep-alive timer. Its first deadline starts at acc
 Implementation after #60: the conductor uses the three accepted and retiring variants.
 The records of ADR-0003 describe idle ACP sessions outside that table.
 
+#### ACP sessions in each runtime process
+
+`AcpSessions` owns a count separate from its records and the tool cache of the runtime driver.
+Its `prepare` method reserves one ACP session before the dispatcher selects more work.
+Both `session/new` and `session/load` use that method, including model reads, sign-in checks, and quota queries.
+
+A failed `Prepared` result releases the reservation before error handling, including the quota path.
+A local dispatch failure also releases its reservation. A successful call keeps its count after record expiry or `Forget`.
+Each replacement resets the count to its successful startup ACP session, or zero when startup creates none.
+
+The existing replacement path has a separate `SessionLimit` reason. It keeps the queue and uses the existing failure rule.
+The dispatcher can serve auxiliary work during this wait. Accepted requests keep their order until the replacement ends.
+
+The dispatcher withdraws this reason when capacity returns or no connected queued request needs another ACP session.
+It preserves the owner sign-in wait. An explicit cancel or timeout changes the reason to `SignIn`.
+These transitions implement the final decisions of [#204](https://github.com/yandhi-0421/acp2api/issues/204).
+
 ### The runtime driver
 
 `runtime_driver` carries out the ACP commands of the conductor on one runtime process. It gives the conductor each line as an event.

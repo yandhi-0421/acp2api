@@ -329,6 +329,12 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
+        if matches!(
+            &event,
+            Event::Runtime(RuntimeEvent::Prepared { result: Err(_), .. })
+        ) {
+            self.sessions.preparation_failed();
+        }
         let upstream_error = self.upstream_error(&mut event, now, &mut commands);
         self.retry_waits.retain(|wait| wait.deadline > now);
         self.quota.expire(now);

@@ -211,6 +211,7 @@ impl Conductor {
                         Err(error) => Err(error),
                     };
                     if let Err(error) = result {
+                        core.sessions.preparation_failed();
                         commands.extend(core.command_failed(
                             Some(work),
                             error,
