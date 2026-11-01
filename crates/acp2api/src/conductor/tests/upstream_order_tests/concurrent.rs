@@ -142,6 +142,52 @@ impl Drop for PromptTurns {
 }
 
 #[test]
+fn max_turn_requests_keeps_the_last_reply_chunk_during_an_unrelated_state() {
+    for condition in [0, 429, 401] {
+        for before in [false, true] {
+            let mut turns = PromptTurns::new();
+            turns.start("first", "m");
+            turns.start("second", "m");
+            if before && condition != 0 {
+                turns.error("second", condition, 1);
+            }
+            turns.update("first", TurnUpdate::Text("first ".into()), 2);
+            turns.update("first", TurnUpdate::Text("last".into()), 3);
+            turns.update(
+                "first",
+                TurnUpdate::PromptEnded {
+                    stop_reason: Some(StopReason::MaxTurnRequests),
+                },
+                10,
+            );
+            if !before && condition != 0 {
+                turns.error("second", condition, 20);
+            }
+            turns.handle(Event::Deadline, 210);
+            let mut text = String::new();
+            let mut errors = Vec::new();
+            for command in &turns.commands {
+                if let Command::Emit(output, event) = command
+                    && output.same_channel(&turns.outputs["first"])
+                {
+                    match event {
+                        TurnEvent::Text(chunk) => text.push_str(chunk),
+                        TurnEvent::End(Err(error)) => errors.push(error),
+                        _ => {}
+                    }
+                }
+            }
+            assert_eq!(
+                text, "first last",
+                "max_turn_requests keeps the held chunk with condition {condition}, before={before}"
+            );
+            assert!(matches!(&errors[..], [Message::MaxTurnRequests]));
+            assert!(matches!(errors[0].row(), crate::messages::Row::Other502));
+        }
+    }
+}
+
+#[test]
 fn a_new_quota_error_uses_a_new_query_after_the_previous_query_failed() {
     for failure in ["stderr", "rpc"] {
         let mut turns = PromptTurns::new();

@@ -39,7 +39,7 @@ fn a_cut_suffix_does_not_turn_order_1403_into_a_lockout_signal() {
     turn.text(" Boston.", 30);
     assert!(
         turn.core.lockout.is_none(),
-        "F4 a cut token head is not a new 403 token"
+        "a cut token head is not a new 403 token"
     );
     turn.end(40);
     assert!(turn.core.lockout.is_none());
@@ -53,7 +53,7 @@ fn an_unfinished_403_token_waits_for_the_next_chunk_or_the_turn_end() {
         turn.text("Total 403", 20);
         assert!(
             turn.core.lockout.is_none(),
-            "F4 the token at a chunk end is incomplete"
+            "the token at a chunk end is incomplete"
         );
         if let Some(text) = continuation {
             turn.text(text, 30);
@@ -86,7 +86,7 @@ fn failed_reply_signals_survive_a_disconnect_before_the_error() {
     assert_eq!(
         locked,
         [true, true],
-        "F5 text before stderr counts on either side of disconnect"
+        "text before stderr counts on either side of disconnect"
     );
 }
 
@@ -98,7 +98,7 @@ fn failed_reply_signals_include_text_discarded_after_a_client_tool_call() {
     turn.error(400, 30);
     assert!(
         turn.core.lockout.is_some(),
-        "F5 the signal scan precedes reply filtering"
+        "the signal scan precedes reply filtering"
     );
 }
 
@@ -112,7 +112,7 @@ fn a_repeated_error_does_not_reset_a_split_failed_reply_signal() {
     turn.text("Service", 40);
     assert!(
         turn.core.lockout.is_some(),
-        "F5 repeated stderr preserves a split signal"
+        "repeated stderr preserves a split signal"
     );
 }
 
@@ -125,7 +125,7 @@ fn the_longest_lockout_signal_can_cross_a_chunk_after_sixteen_bytes() {
     turn.text("D", 20);
     assert!(
         turn.core.lockout.is_some(),
-        "F7 retain enough bytes for PERMISSION_DENIED"
+        "retain enough bytes for PERMISSION_DENIED"
     );
 }
 
@@ -139,7 +139,7 @@ fn a_reply_suffix_cuts_multibyte_text_at_a_character_boundary() {
     turn.text("Service", 30);
     assert!(
         turn.core.lockout.is_some(),
-        "F7 UTF-8 tail trimming preserves the next signal"
+        "UTF-8 tail trimming preserves the next signal"
     );
 }
 
@@ -152,7 +152,7 @@ fn a_lockout_signal_can_start_before_the_stderr_error_and_finish_after_it() {
     turn.text("Service", 30);
     assert!(
         turn.core.lockout.is_some(),
-        "F7 the pre-error suffix remains part of this turn"
+        "the pre-error suffix remains part of this turn"
     );
 }
 

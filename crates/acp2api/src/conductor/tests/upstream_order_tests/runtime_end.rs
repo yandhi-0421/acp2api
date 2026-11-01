@@ -1,6 +1,125 @@
 use super::*;
 
 #[test]
+fn a_process_end_keeps_its_error_for_work_without_a_stored_error() {
+    for path in ["prompt", "refresh", "checking", "models"] {
+        for condition in [0, 429, 401] {
+            for failed in [false, true] {
+                let (mut turn, mut owner) = if path == "refresh" {
+                    let (turn, owner) = PromptTurn::quota_query();
+                    (turn, Some(owner))
+                } else {
+                    (PromptTurn::new(), None)
+                };
+                let (admission, _answer) = oneshot::channel();
+                let (connection, _lease) = mpsc::unbounded_channel();
+                if matches!(path, "checking" | "models") {
+                    turn.core = Core::fixture(2);
+                    if path == "checking" {
+                        let journal =
+                            crate::journal::Journal::open(&turn.root, std::time::UNIX_EPOCH)
+                                .unwrap();
+                        let parsed = crate::dialect::CHAT
+                            .parse(
+                                br#"{"model":"m","messages":[{"role":"user","content":"check"}]}"#,
+                            )
+                            .ok()
+                            .unwrap()
+                            .turn;
+                        turn.handle(
+                            Event::CheckPending(Box::new(PendingRequest {
+                                mode: ResponseMode::Body,
+                                turn: parsed,
+                                request: journal.begin(crate::journal::Api::Chat, 0),
+                                admission,
+                                connection,
+                            })),
+                            0,
+                        );
+                        assert!(
+                            turn.core
+                                .work
+                                .values()
+                                .any(|work| matches!(work, Work::Checking(_)))
+                        );
+                    } else {
+                        let (reply, _answer) = oneshot::channel();
+                        turn.handle(Event::ReadModelNames(reply), 0);
+                        assert!(
+                            turn.core
+                                .work
+                                .values()
+                                .any(|work| matches!(work, Work::ModelsReading(_)))
+                        );
+                    }
+                }
+                if condition != 0 {
+                    turn.handle(
+                        Event::Runtime(RuntimeEvent::UpstreamError {
+                            session: "other".into(),
+                            error: crate::messages::HttpError {
+                                code: Some(condition),
+                                status: "X".into(),
+                                message: "resets 1970-01-01T00:02:00Z".into(),
+                            },
+                        }),
+                        10,
+                    );
+                }
+                let commands = turn.core.handle(
+                    if failed {
+                        Event::Runtime(RuntimeEvent::Failed("process failure".into()))
+                    } else {
+                        Event::Runtime(RuntimeEvent::Closed)
+                    },
+                    60,
+                    std::time::UNIX_EPOCH,
+                );
+                let mut errors: Vec<_> = commands
+                    .iter()
+                    .filter_map(|command| match command {
+                        Command::Emit(_, TurnEvent::End(Err(error)))
+                        | Command::RefusePending { error, .. }
+                        | Command::ModelsRead {
+                            result: Err(crate::messages::OwnerMessage::Api(error)),
+                            ..
+                        } => Some(error.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(owner) = owner.as_mut() {
+                    let error = owner.try_recv().unwrap().unwrap_err();
+                    if let crate::messages::OwnerMessage::Api(error) = error {
+                        errors.push(error);
+                    } else {
+                        panic!("unexpected refresh error: {error:?}");
+                    }
+                }
+                assert_eq!(
+                    errors.len(),
+                    1,
+                    "{path}, condition={condition}, failed={failed}"
+                );
+                match &errors[0] {
+                    crate::messages::Message::RuntimeFailed => assert!(!failed),
+                    crate::messages::Message::Upstream(text) => {
+                        assert!(failed);
+                        assert_eq!(text, "process failure");
+                    }
+                    other => panic!("{path}, condition={condition}, failed={failed}: {other:?}"),
+                }
+                if path == "prompt" {
+                    assert_eq!(turn.core.retry_waits.len(), 1);
+                    assert_eq!(turn.core.retry_waits[0].deadline, 30_060);
+                } else {
+                    assert!(turn.core.retry_waits.is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_process_failure_during_the_stdout_wait_preserves_the_upstream_error() {
     for rpc in [false, true] {
         for ending in ["closed", "failed", "timeout", "expired"] {
@@ -63,52 +182,89 @@ fn a_process_failure_during_the_stdout_wait_preserves_the_upstream_error() {
 
 #[test]
 fn waiting_errors_follow_the_current_state_priority_at_each_ending() {
-    for (rpc, closed) in [(false, false), (false, true), (true, true)] {
-        for replacement in [401, 429] {
-            let mut turn = PromptTurn::new();
-            if rpc {
-                turn.update(
-                    TurnUpdate::Failed(crate::messages::Message::UpstreamHttp(
-                        crate::messages::HttpError {
-                            code: Some(429),
-                            status: "X".into(),
-                            message: "No reset time".into(),
-                        },
-                    )),
-                    10,
-                );
-            } else {
-                turn.error(429, 10);
-            }
-            turn.handle(
-                Event::Runtime(RuntimeEvent::UpstreamError {
-                    session: "other".into(),
-                    error: crate::messages::HttpError {
-                        code: Some(replacement),
+    for code in [400, 500, 503, 429] {
+        for rpc in [false, true] {
+            for replacement in [401, 429] {
+                for ending in ["deadline", "closed", "end"] {
+                    if rpc && ending == "end" {
+                        continue;
+                    }
+                    if code == 429
+                        && replacement == 401
+                        && (ending == "end" || rpc && ending == "deadline")
+                    {
+                        continue;
+                    }
+                    let mut turn = PromptTurn::new();
+                    let error = crate::messages::HttpError {
+                        code: Some(code),
                         status: "X".into(),
-                        message: "resets 1970-01-01T00:02:00Z".into(),
-                    },
-                }),
-                20,
-            );
-            turn.handle(
-                if closed {
-                    Event::Runtime(RuntimeEvent::Closed)
-                } else {
-                    Event::Deadline
-                },
-                if closed { 60 } else { 210 },
-            );
-            assert_eq!(turn.ends.len(), 1);
-            match &turn.ends[0].1 {
-                Err(crate::messages::Message::SignInRequired(_)) => assert_eq!(replacement, 401),
-                Err(crate::messages::Message::QuotaWait { retry_after, .. }) => {
-                    assert_eq!(replacement, 429);
-                    assert_eq!(*retry_after, 120);
+                        message: "No reset time".into(),
+                    };
+                    if rpc {
+                        turn.update(
+                            TurnUpdate::Failed(crate::messages::Message::UpstreamHttp(error)),
+                            10,
+                        );
+                    } else {
+                        turn.handle(
+                            Event::Runtime(RuntimeEvent::UpstreamError {
+                                session: "running".into(),
+                                error,
+                            }),
+                            10,
+                        );
+                    }
+                    turn.handle(
+                        Event::Runtime(RuntimeEvent::UpstreamError {
+                            session: "other".into(),
+                            error: crate::messages::HttpError {
+                                code: Some(replacement),
+                                status: "X".into(),
+                                message: "resets 1970-01-01T00:02:00Z".into(),
+                            },
+                        }),
+                        20,
+                    );
+                    match ending {
+                        "deadline" => turn.handle(Event::Deadline, 210),
+                        "closed" => turn.handle(Event::Runtime(RuntimeEvent::Closed), 60),
+                        _ => turn.end(60),
+                    }
+                    turn.handle(Event::Deadline, 210);
+                    assert_eq!(
+                        turn.ends.len(),
+                        1,
+                        "code={code}, rpc={rpc}, replacement={replacement}, {ending}"
+                    );
+                    match &turn.ends[0].1 {
+                        Err(crate::messages::Message::UpstreamHttp(error)) => {
+                            assert_eq!(error.code, Some(code))
+                        }
+                        Err(crate::messages::Message::SignInRequired(_)) => {
+                            assert_eq!(code, 429);
+                            assert_eq!(replacement, 401);
+                        }
+                        Err(crate::messages::Message::QuotaWait { retry_after, .. }) => {
+                            assert_eq!(code, 429);
+                            assert_eq!(replacement, 429);
+                            assert_eq!(*retry_after, 120);
+                        }
+                        other => panic!(
+                            "code={code}, rpc={rpc}, replacement={replacement}, {ending}: {other:?}"
+                        ),
+                    }
+                    if code == 429 {
+                        assert!(turn.core.retry_waits.is_empty());
+                    } else {
+                        assert!(matches!(
+                            &turn.ends[0].1,
+                            Err(crate::messages::Message::UpstreamHttp(_))
+                        ));
+                        assert_eq!(turn.core.retry_waits.len(), 1);
+                        assert_eq!(turn.core.retry_waits[0].deadline, 30_010);
+                    }
                 }
-                other => panic!(
-                    "priority for rpc={rpc}, closed={closed}, replacement={replacement}: {other:?}"
-                ),
             }
         }
     }
@@ -140,7 +296,7 @@ fn stop_and_lockout_still_override_a_pending_upstream_error() {
                     !lockout,
                 _ => false,
             }),
-            "F3 lockout and stop keep their priority"
+            "lockout and stop keep their priority"
         );
     }
 }
@@ -222,7 +378,7 @@ fn a_quota_error_while_a_known_session_loads_does_not_start_a_prompt_cancel_time
             !commands
                 .iter()
                 .any(|command| matches!(command, Command::Cancel(_))),
-            "F6 session/load is not a running prompt with a 200 ms cancel bound"
+            "session/load is not a running prompt with a 200 ms cancel bound"
         );
         let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
@@ -236,7 +392,7 @@ fn a_quota_error_while_a_known_session_loads_does_not_start_a_prompt_cancel_time
         turn.handle(Event::Deadline, 500);
         assert!(
             !turn.core.sessions.cancellation_due(30_230),
-            "F6 a completed load leaves no stale cancellation"
+            "a completed load leaves no stale cancellation"
         );
         turn.handle(Event::Deadline, 30_230);
         assert!(matches!(turn.core.lifecycle.state(), RuntimeState::Serving));
@@ -254,7 +410,7 @@ fn a_failed_usage_cancel_has_a_thirty_second_runtime_failure_bound() {
         expired.iter().any(|command| matches!(command,
             Command::Cancel(session) if session == "running"
         )),
-        "F7 a failed usage prompt must actually be cancelled"
+        "a failed usage prompt must actually be cancelled"
     );
     turn.handle(Event::Deadline, 30_199);
     assert!(matches!(turn.core.lifecycle.state(), RuntimeState::Serving));

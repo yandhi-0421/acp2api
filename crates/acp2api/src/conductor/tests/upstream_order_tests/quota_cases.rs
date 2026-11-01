@@ -120,12 +120,12 @@ fn assert_failed_shared_quota_keeps_session(reset: bool) {
         !commands.iter().any(|command| matches!(command,
             Command::Forget(session) if session == "running"
         )),
-        "F1 unfinished shared usage must retain the runtime text route"
+        "unfinished shared usage must retain the runtime text route"
     );
     turn.text("Terms of Service", 430);
     assert!(
         turn.core.lockout.is_some(),
-        "F1 late shared usage text locks out"
+        "late shared usage text locks out"
     );
 }
 
@@ -162,7 +162,7 @@ fn a_repeat_quota_error_at_the_deadline_cannot_complete_a_running_turn() {
             !commands
                 .iter()
                 .any(|command| matches!(command, Command::Emit(_, TurnEvent::End(Ok(_))))),
-            "F2 an equal deadline is not a prompt end"
+            "an equal deadline is not a prompt end"
         );
         commands.extend(
             turn.core
@@ -172,7 +172,7 @@ fn a_repeat_quota_error_at_the_deadline_cannot_complete_a_running_turn() {
             commands.iter().any(|command| matches!(command,
                 Command::Cancel(session) if session == "running"
             )),
-            "F2 the unfinished failed turn is cancelled"
+            "the unfinished failed turn is cancelled"
         );
         assert_eq!(
             commands
@@ -180,7 +180,7 @@ fn a_repeat_quota_error_at_the_deadline_cannot_complete_a_running_turn() {
                 .filter(|command| matches!(command, Command::Emit(_, TurnEvent::End(Err(_)))))
                 .count(),
             1,
-            "F2 the failed response ends exactly once with an error"
+            "the failed response ends exactly once with an error"
         );
     }
 }
@@ -197,7 +197,7 @@ fn a_usage_text_update_at_the_deadline_does_not_end_the_prompt() {
         commands.iter().any(|command| matches!(command,
             Command::Cancel(session) if session == "running"
         )),
-        "F2 a text update at the usage deadline still needs cancellation"
+        "a text update at the usage deadline still needs cancellation"
     );
     assert_eq!(turn.core.work.places(), 1);
 }
@@ -233,7 +233,7 @@ fn a_failed_usage_keeps_its_first_error_across_stderr_and_rpc_failures() {
     assert_eq!(
         codes,
         [Some(503), Some(503)],
-        "F7 usage must retain the first upstream error"
+        "usage must retain the first upstream error"
     );
 }
 
@@ -245,7 +245,7 @@ fn a_repeated_unknown_quota_error_keeps_the_first_stdout_deadline() {
     assert_eq!(
         turn.core.next_deadline(),
         Some(200),
-        "F7 repeated 429 must not extend the wait"
+        "repeated 429 must not extend the wait"
     );
     turn.handle(Event::Deadline, 200);
     assert_eq!(turn.output.len(), 1);
@@ -279,7 +279,7 @@ fn a_quota_reset_query_survives_a_non_quota_error_before_stdout_ends() {
                 ))
                 .count(),
             1,
-            "F7 replacing a pending quota error must preserve its reset query"
+            "replacing a pending quota error must preserve its reset query"
         );
     }
 }
@@ -306,7 +306,7 @@ fn a_quota_rpc_failure_after_stderr_starts_usage_without_a_second_wait() {
             ))
             .count(),
         1,
-        "F7 quota_failure must not add 200 ms after stderr and the RPC end"
+        "quota_failure must not add 200 ms after stderr and the RPC end"
     );
     assert!(
         !commands

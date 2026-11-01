@@ -368,11 +368,7 @@ fn errors_and_process_endings_keep_the_response_and_usage_query_bounded() {
                                 } else if text == "Terms of Service" {
                                     ("lockout", 403)
                                 } else if path == "reset" || path == "refusal" {
-                                    if path == "refusal"
-                                        && !rpc_first
-                                        && code != 429
-                                        && matches!(ending, "closed" | "failed")
-                                    {
+                                    if !rpc_first && matches!(ending, "closed" | "failed") {
                                         if ending == "failed" {
                                             ("process", 503)
                                         } else {
@@ -382,10 +378,7 @@ fn errors_and_process_endings_keep_the_response_and_usage_query_bounded() {
                                         ("quota", 429)
                                     }
                                 } else if code == 429 {
-                                    if second == 503
-                                        && last_is_second
-                                        && (rpc_first || matches!(ending, "end" | "rpc"))
-                                    {
+                                    if second == 503 && last_is_second {
                                         ("upstream", 503)
                                     } else {
                                         ("quota", 429)
