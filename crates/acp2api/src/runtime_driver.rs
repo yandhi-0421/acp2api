@@ -171,7 +171,8 @@ struct WriteQueue {
 pub(crate) struct Runtime {
     input: mpsc::UnboundedSender<(Vec<u8>, Moment, bool)>,
     // JoinSet aborts on drop, so a discarded Runtime cannot leave stdin open in a detached task.
-    writer: tokio::task::JoinSet<()>,
+    writer: tokio::task::JoinSet<Hold>,
+    cancel_wait: tokio::sync::watch::Receiver<bool>,
     stop_writer: tokio::sync::watch::Sender<bool>,
     write_state: Arc<std::sync::Mutex<WriteQueue>>,
     lines: mpsc::Receiver<(Line, Hold)>,
@@ -209,6 +210,7 @@ async fn write_messages(
     writer_state: Arc<std::sync::Mutex<WriteQueue>>,
     writer_clock: Arc<dyn Clock>,
     writer_lines: mpsc::Sender<(Line, Hold)>,
+    cancel_wait: tokio::sync::watch::Sender<bool>,
 ) {
     while let Some((bytes, deadline, cancel)) = messages.recv().await {
         // Keep completed I/O or the deadline visible until the state or failure handoff ends.
@@ -227,8 +229,10 @@ async fn write_messages(
             };
             tokio::pin!(writing);
             let completion_clock = &writer_clock;
+            let cancel_wait = &cancel_wait;
             let writing = std::future::poll_fn(move |cx| {
                 let result = writing.as_mut().poll(cx);
+                cancel_wait.send_replace(cancel && result.is_pending());
                 let result = result.map(|result| {
                     (
                         result.map_err(|error| Message::Upstream(error.to_string())),
@@ -357,14 +361,25 @@ impl Runtime {
             bytes: 0,
             state: WriteState::Idle,
         }));
-        writer.spawn(write_messages(
+        let (waiting, cancel_wait) = tokio::sync::watch::channel(false);
+        let writer_clock = start.clock.clone();
+        let writing = write_messages(
             child.stdin,
             messages,
             stopping,
             write_state.clone(),
-            start.clock.clone(),
+            writer_clock.clone(),
             tx.clone(),
-        ));
+            waiting,
+        );
+        writer.spawn(async move {
+            tokio::pin!(writing);
+            std::future::poll_fn(|cx| {
+                let work = writer_clock.hold(HoldKind::TurnEvent);
+                writing.as_mut().poll(cx).map(|()| work)
+            })
+            .await
+        });
         let clock = start.clock.clone();
         tokio::spawn(async move {
             let mut stdout = BufReader::new(child.stdout).split(b'\n');
@@ -405,6 +420,7 @@ impl Runtime {
         let runtime = Self {
             input,
             writer,
+            cancel_wait,
             stop_writer,
             write_state,
             lines,
@@ -1029,13 +1045,16 @@ impl Runtime {
         drop(self.input);
         self.stop_writer.send_replace(true);
         let mut buffered = Vec::new();
-        {
+        let mut writer_work = {
             let joining = self.writer.join_next();
             tokio::pin!(joining);
             loop {
                 tokio::select! {
                     biased;
-                    _ = &mut joining => break,
+                    work = &mut joining => break work,
+                    _ = self.cancel_wait.wait_for(|waiting| *waiting), if until_stop_poll.is_some() => {
+                        until_stop_poll.take();
+                    }
                     Some((line, _hold)) = self.lines.recv() => match line {
                         Line::Stderr(line) => buffered.push(Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(&line))),
                         Line::StderrClosed | Line::Closed => self.stderr_closed = true,
@@ -1043,11 +1062,12 @@ impl Runtime {
                     },
                 }
             }
-        }
+        };
         let mut stopping = self.tree.stop(self.clock);
         std::future::poll_fn(move |cx| {
             let result = stopping.as_mut().poll(cx);
             until_stop_poll.take();
+            writer_work.take();
             result
         })
         .await;
