@@ -1115,9 +1115,13 @@ impl Core {
     }
 
     fn waiting_error(&self, id: WorkId, now: Moment) -> Option<Failure> {
-        self.refusal(now)
-            .map(|message| Failure::at(message, now))
-            .or_else(|| self.work[&id].execution()?.stored_error(now))
+        let stored = self.work[&id].execution()?.stored_error(now)?;
+        Some(match stored.message {
+            Message::QuotaWait { .. } => self
+                .refusal(now)
+                .map_or(stored, |message| Failure::at(message, now)),
+            _ => stored,
+        })
     }
 
     pub(super) fn end_occupying_work(
