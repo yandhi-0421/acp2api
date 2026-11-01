@@ -375,6 +375,12 @@ No text of an API client starts a slash command of the official runtime. The fir
 The model gets the conversation of each request one time, with no item that the API client did not send. ADR-0003 gives the method.
 
 - When a request continues the conversation that an ACP session holds, only the new items go to the model.
+- A request continues that conversation only when each earlier item is the same. The comparison is exact. Thus a change of white space in an item stops the match, for example a change of indentation or of spaces in a string.
+- An API client can change the form of the reply of the last prompt turn before it sends that reply back. Thus two exceptions apply to that reply, and to no other item:
+  - **The last tool call.** acp2api compares the call ID and the name, not the arguments. The ACP session keeps the arguments of the model.
+  - **The last reply text.** Before the comparison, acp2api removes each CR and the white space at each line end. It also trims the two ends. Indentation and white space inside a line stay significant.
+- These exceptions read only the text and the fields of the request. They test no API client.
+- After a match, acp2api keeps the form that the API client sent. Each later comparison of that item is exact.
 - Else acp2api does a rebuild. The first prompt of a new ACP session holds the neutral line and the earlier part of the conversation as text with role labels. Each image is at its place, and the system prompt is not part of this text.
 - The neutral line is `The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.`
 - The next request of a conversation does a rebuild after each of these events:
@@ -391,6 +397,12 @@ The model gets the conversation of each request one time, with no item that the 
 - A request that adds one user message to the last conversation sends only that message, in the same ACP session.
 - A request with an edited earlier message gives a new ACP session whose first prompt starts with the neutral line.
 - A stop sequence cuts a reply. The next request then gives a new ACP session, and its text holds the reply only up to the cut.
+- A request that changes only the arguments of the last tool call sends only its tool result, in the same ACP session. The number of ACP sessions does not change.
+- A request with another call ID or another name for the last tool call gives a new ACP session.
+- A request can change the last reply text only by a removed CR, removed white space at a line end, or a trim. That request sends only its new items, in the same ACP session. The number of ACP sessions does not change.
+- A trim can hide changed indentation at the start of the last reply text, including its first line. Changed indentation elsewhere, or changed inner spaces, gives a new ACP session. Each other item requires exact white space.
+- A reply of only white space that the API client removes stops the match and gives a new ACP session.
+- After a match with one of these changes, a further change of that item in a later request gives a new ACP session.
 - No response holds a notice of a rebuild, and the log has one rebuild line for each rebuild.
 
 ### Tools

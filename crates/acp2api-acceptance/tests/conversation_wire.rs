@@ -90,7 +90,7 @@ async fn all_dialects_continue_only_new_content_and_log_before_completion_3() {
 }
 
 #[tokio::test]
-async fn normalized_history_and_tool_order_keep_client_new_text_exact() {
+async fn tool_order_keeps_client_new_text_exact() {
     let mut s = scenario();
     let a = c::tools(
         "a",
@@ -113,8 +113,8 @@ async fn normalized_history_and_tool_order_keep_client_new_text_exact() {
     c::send(
         &mut s,
         c::call(
-            msgs("First text", "Old reply", "New  \n text"),
-            Some("Be\nkind"),
+            msgs("First \n text", "Old \n reply", "New  \n text"),
+            Some("Be  kind"),
             json!([b[0], a[0]]),
         ),
         "Second",

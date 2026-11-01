@@ -24,6 +24,10 @@ mod end_lockout_support;
 mod error_statuses;
 #[path = "support/error_cases.rs"]
 mod error_support;
+#[path = "steps/history_match.rs"]
+mod history_match;
+#[path = "support/history_match.rs"]
+mod history_support;
 #[path = "steps/keep_alive.rs"]
 mod keep_alive;
 #[path = "support/keep_alive.rs"]
@@ -146,6 +150,7 @@ struct World {
     upstream: upstream_error::ErrorState,
     request: usage_contract::RequestCase,
     conversation: conversation::ConversationState,
+    history: history_support::HistoryState,
     fields: request_fields::FieldState,
     safety: runtime_safety::SafetyState,
     server_tools: server_tools::ServerToolState,

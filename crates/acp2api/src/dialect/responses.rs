@@ -199,7 +199,7 @@ mod tests {
             .ok()
             .unwrap()
             .form;
-        let mut wire = Encoding::new("resp_", "call_", form, std::time::UNIX_EPOCH).unwrap();
+        let mut wire = Encoding::new("resp_", form, std::time::UNIX_EPOCH).unwrap();
         for stop in [Stop::EndTurn, Stop::MaxTokens] {
             wire.stop = stop;
             let body = Responses.body(

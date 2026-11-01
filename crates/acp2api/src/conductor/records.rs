@@ -73,23 +73,57 @@ impl OutstandingWork {
 }
 pub(super) struct RequestRecord {
     hashes: RecordHashes,
+    last_reply: LastReply,
     tools: ToolSetHash,
     used: u64,
     expires: Moment,
 }
+#[derive(Default)]
+struct LastReply {
+    text: Option<conversation::ItemHash>,
+    tool_call: Option<(String, String)>,
+}
+impl LastReply {
+    fn len(&self) -> usize {
+        usize::from(self.text.is_some()) + usize::from(self.tool_call.is_some())
+    }
+    fn matches(&self, mut items: &[&Item]) -> bool {
+        if let Some(hash) = self.text {
+            match items {
+                [
+                    Item::Message {
+                        role: conversation::Role::Assistant,
+                        name: None,
+                        parts,
+                    },
+                    rest @ ..,
+                ] if matches!(&parts[..], [conversation::Part::Text(text)]
+                    if conversation::clean_reply_hash(text) == hash) =>
+                {
+                    items = rest
+                }
+                _ => return false,
+            }
+        }
+        match &self.tool_call {
+            Some((id, name)) => matches!(items.first(),
+                Some(Item::ToolCall { id: call_id, name: call_name, .. })
+                    if call_id == id && call_name == name),
+            None => true,
+        }
+    }
+}
 impl RequestRecord {
-    pub(super) fn with_reply(
-        mut self,
-        text: &str,
-        tool_hash: Option<crate::conversation::ItemHash>,
-    ) -> Self {
-        if tool_hash.is_none() || !text.is_empty() {
-            self.hashes.messages.push(conversation::reply_hash(text));
-        }
-        if let Some(hash) = tool_hash {
-            self.hashes.messages.push(hash);
-        }
+    pub(super) fn with_reply(mut self, text: &str, tool_call: Option<(String, String)>) -> Self {
+        self.last_reply = LastReply {
+            text: (tool_call.is_none() || !text.is_empty())
+                .then(|| conversation::clean_reply_hash(text)),
+            tool_call,
+        };
         self
+    }
+    fn len(&self) -> usize {
+        self.hashes.messages.len() + self.last_reply.len()
     }
     pub(super) fn hashes(&self) -> &RecordHashes {
         &self.hashes
@@ -107,6 +141,7 @@ impl RequestRecord {
     ) -> Self {
         Self {
             hashes,
+            last_reply: LastReply::default(),
             tools,
             used,
             expires,
@@ -294,10 +329,7 @@ impl AcpSessions {
             checked_session.is_some(),
         );
         let matched = match source {
-            Source::Record(index) => Some((
-                index,
-                &items[self.records[index].record.hashes.messages.len()..],
-            )),
+            Source::Record(index) => Some((index, &items[self.records[index].record.len()..])),
             _ => None,
         };
         let prompt = match matched {
@@ -327,6 +359,7 @@ impl AcpSessions {
         self.use_sequence += 1;
         let record = RequestRecord {
             hashes,
+            last_reply: LastReply::default(),
             tools: tools_hash,
             used: self.use_sequence,
             expires: now.saturating_add(24 * 60 * 60 * 1000),
@@ -451,16 +484,200 @@ fn select<'a>(
         .filter(|(_, record)| {
             record.record.tools == tools
                 && record.record.hashes.is_continued_by(hashes)
-                && conversation::continues_after(items, record.record.hashes.messages.len())
+                && record
+                    .record
+                    .last_reply
+                    .matches(&items[record.record.hashes.messages.len()..])
+                && conversation::continues_after(items, record.record.len())
         })
-        .max_by_key(|(_, record)| (record.record.hashes.messages.len(), record.record.used))
-        .map(|(index, record)| (index, &items[record.record.hashes.messages.len()..]))
+        .max_by_key(|(_, record)| (record.record.len(), record.record.used))
+        .map(|(index, record)| (index, &items[record.record.len()..]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::conversation::{Conversation, Part, Role};
+
+    fn session_use(selection: &Selection) -> &'static str {
+        match selection.kind {
+            crate::journal::SessionUse::Continue => "continue",
+            crate::journal::SessionUse::Rebuild => "rebuild",
+            crate::journal::SessionUse::New => "new",
+        }
+    }
+
+    #[test]
+    fn issue218_last_tool_call_compares_id_and_name_without_arguments() {
+        for (id, name, arguments, expected) in [
+            ("call-id", "Bash", r#"{"command":"make"}"#, "continue"),
+            (
+                "call-id",
+                "Bash",
+                r#"{"command":"cd /work && make"}"#,
+                "continue",
+            ),
+            ("other", "Bash", r#"{"command":"make"}"#, "rebuild"),
+            ("call-id", "Read", r#"{"command":"make"}"#, "rebuild"),
+        ] {
+            let first = turn_a();
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(
+                    selection
+                        .record
+                        .with_reply("", Some(("call-id".into(), "Bash".into()))),
+                ),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                {"role":"assistant","tool_calls":[{"id":id,"type":"function","function":{"name":name,"arguments":arguments}}]},
+                {"role":"tool","tool_call_id":id,"content":"Done."}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            assert_eq!(
+                session_use(&selection),
+                expected,
+                "last call {id} {name} {arguments}"
+            );
+            if expected == "continue" {
+                assert!(
+                    matches!(&selection.prompt[..], [conversation::PromptBlock::Text(text)]
+                    if text == &format!("Result of your tool call {name} {arguments}:\nDone.")),
+                    "FR-023 sends one result with the request's arguments"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn issue218_only_last_reply_text_uses_clean_form() {
+        use serde_json::json;
+        let assistant = |text: &str| json!({"role":"assistant","content":text});
+        for (reply, returned, expected) in [
+            (
+                "\n  if a:\r\n    return  \t\n\n",
+                assistant("if a:\n    return"),
+                "continue",
+            ),
+            ("one\rcarriage", assistant("onecarriage"), "continue"),
+            ("one\u{2003}\ntwo\u{a0}", assistant("one\ntwo"), "continue"),
+            ("if a:\n    return", assistant("if a:\n  return"), "rebuild"),
+            ("name =  value", assistant("name = value"), "rebuild"),
+            (" \n\t", assistant(""), "continue"),
+            ("R", json!({"role":"user","content":"R"}), "rebuild"),
+            (
+                "R",
+                json!({"role":"assistant","name":"bob","content":"R"}),
+                "rebuild",
+            ),
+            (
+                "R",
+                json!({"role":"assistant","content":[{"type":"text","text":"R"},{"type":"text","text":""}]}),
+                "rebuild",
+            ),
+        ] {
+            let first = turn_a();
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply(reply, None)),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                returned,
+                {"role":"user","content":"Next"}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            assert_eq!(
+                session_use(&selection),
+                expected,
+                "last reply {reply:?} -> {returned:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn issue218_a_match_keeps_the_client_form_for_later_exact_comparisons() {
+        for (later, expected) in [("one\ntwo", "continue"), ("one \ntwo", "rebuild")] {
+            let first = turn_a();
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply("one  \ntwo", None)),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                {"role":"assistant","content":"one\ntwo"},
+                {"role":"user","content":"Next"}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            assert_eq!(
+                session_use(&selection),
+                "continue",
+                "first client form matches"
+            );
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply("Fine.", None)),
+            );
+            let later = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":"A"},
+                {"role":"assistant","content":later},
+                {"role":"user","content":"Next"},
+                {"role":"assistant","content":"Fine."},
+                {"role":"user","content":"Again"}
+            ]}));
+            let (selection, _) = sessions.select(&later, &settings, None, 2);
+            assert_eq!(
+                session_use(&selection),
+                expected,
+                "accepted client form is exact later"
+            );
+        }
+    }
+
+    #[test]
+    fn issue218_earlier_items_keep_exact_white_space() {
+        for (sent, returned, expected) in [
+            ("if a:\n    return", "if a:\n  return", "rebuild"),
+            ("one  \ntwo", "one\ntwo", "rebuild"),
+            ("same  text", "same  text", "continue"),
+        ] {
+            let first = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":sent}
+            ]}));
+            let settings = SessionSettings::for_turn(&first);
+            let mut sessions = AcpSessions::default();
+            let (selection, _) = sessions.select(&first, &settings, None, 0);
+            sessions.keep(
+                "recorded".into(),
+                Some(selection.record.with_reply("R", None)),
+            );
+            let next = chat_turn(serde_json::json!({"model":"m", "messages":[
+                {"role":"user","content":returned},
+                {"role":"assistant","content":"R"},
+                {"role":"user","content":"Next"}
+            ]}));
+            let (selection, _) = sessions.select(&next, &settings, None, 1);
+            let actual = match selection.kind {
+                crate::journal::SessionUse::Continue => "continue",
+                crate::journal::SessionUse::Rebuild => "rebuild",
+                crate::journal::SessionUse::New => "new",
+            };
+            assert_eq!(
+                actual, expected,
+                "earlier user text {sent:?} -> {returned:?}"
+            );
+        }
+    }
 
     #[test]
     fn expired_reply_summaries_are_removed_at_the_next_input() {
@@ -524,6 +741,7 @@ mod tests {
                 location: Location::Loaded,
                 session: "short-recent".into(),
                 record: RequestRecord {
+                    last_reply: LastReply::default(),
                     hashes: RecordHashes {
                         system: hashes.system,
                         messages: hashes.messages[..1].into(),
@@ -537,6 +755,7 @@ mod tests {
                 location: Location::Loaded,
                 session: "long-older".into(),
                 record: RequestRecord {
+                    last_reply: LastReply::default(),
                     hashes: RecordHashes {
                         system: hashes.system,
                         messages: hashes.messages[..2].into(),

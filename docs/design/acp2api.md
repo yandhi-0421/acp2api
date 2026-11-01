@@ -126,7 +126,7 @@ FRs in scope and their modules (section "Shape" gives each module):
 FRs that this design does not fully design:
 
 - FR-041, the real value of N: open decision OD-1. The design has the replacement rule and the constant `SESSIONS_PER_RUNTIME_PROCESS` with the value 8. This value is temporary, and no measurement supports it.
-- SC-006: open decision OD-2. The design keeps memory low, because records hold only hashes and acp2api keeps no history text. It sets no target.
+- SC-006: open decision OD-2. The design limits record memory to hashes, plus the last call ID and tool name in plain text. It keeps no message text or tool arguments. It sets no target.
 
 Limits from the ground step:
 
@@ -388,6 +388,7 @@ pub fn prompt(kind: SessionUse, items: &[Item]) -> Vec<PromptBlock>;   // FR-016
 pub fn system_prompt_addition(system: &[SystemPart]) -> Option<String>; // FR-019
 pub fn record_hashes(conversation: &Conversation) -> Vec<ItemHash>;    // ADR-0003
 pub fn tool_set_hash(tools: &ClientTools) -> ToolSetHash;              // ADR-0003
+pub fn clean_reply_hash(text: &str) -> ItemHash;                               // ADR-0003, "Last reply"
 pub fn estimate_tokens(text: &str) -> u64;                             // FR-025
 pub fn input_tokens(conversation: &Conversation, tool_text: &str) -> u64; // FR-025: full normalized input, not only new items
 ```
@@ -395,6 +396,7 @@ pub fn input_tokens(conversation: &Conversation, tool_text: &str) -> u64; // FR-
 - `dialect::messages` removes the attribution block of Claude Code before it builds `system` (section "Decided values"). The block changes with each request, so the hash of the system prompt must never hold it.
 - Each system part keeps its original `System` or `Developer` role. A named part uses that role in its label.
 - An ignored field or block never enters a domain type. Thus it is never part of a hash (ADR-0003).
+- Each hash reads the exact text. Section "2026-11-02: compare the last reply in the form of the API client" gives the form of the last reply.
 
 Each answer that is not a success is one value of one type. `messages` owns the map from a case to a row of FR-033 (make-illegal-states-unrepresentable):
 
@@ -495,7 +497,7 @@ The core has these parts. Each part is a private module with a pure interface.
 - **`places`.** The concurrency limit and one private table of work (FR-049, FR-050). Queued and occupied counts derive from its variants.
   - A request holds a place from its first ACP call to the end of its prompt turn.
   - The sign-in check, each `/usage`, and the read of the model names each hold a place.
-- **`records`.** The records and the match, the choice, and the drop of ADR-0003. The N rule of ADR-0004, with the constant `SESSIONS_PER_RUNTIME_PROCESS` (value 8, temporary: OD-1).
+- **`records`.** The records and the match, the choice, and the drop of ADR-0003. Each record keeps its last reply apart from its exact hashes. The N rule of ADR-0004, with the constant `SESSIONS_PER_RUNTIME_PROCESS` (value 8, temporary: OD-1).
 - **`retry`.** The retry waits of FR-029. The key is the hash of the system prompt, the items, the tool set, and the model ID.
 - **`catalog`.** The model names (FR-012) and the resolution of the thinking level (FR-013).
   - After `initialize`, the startup sign-in check sends one `session/new`, with one place and no prompt turn.
@@ -1530,6 +1532,25 @@ The MCP adapter gives each tool its MCP name, so that the model sees the name of
 With the runtime prefix `mcp_client-tools_`, each member name has at most 64 characters.
 The runtime driver keeps the tools of its session, and maps the title of a permission request back to one of them with these MCP names.
 This correction adds no port, external dependency, or stored format.
+
+### 2026-11-02: compare the last reply in the form of the API client
+
+ADR-0003 and FR-021 hold the rule. This section gives its shape. Issue #218 builds it.
+
+- `ItemHasher::text` keeps the exact text. This applies to the names, the items, the system prompt, and the set of client tools.
+- `tool_call_hash` also reads the call ID. Thus a later change of the call ID of an earlier tool call stops the match. The hash of the last tool call of a record is not used, because the record keeps that call apart.
+- `RequestRecord` holds the exact hashes of the items of its request, and one `LastReply` value:
+  - the hash of the clean form of the reply text, when the reply has a text;
+  - the call ID and the name of the tool call, when the reply has a tool call.
+- The match has two parts:
+  - The exact hashes of the request must start with the exact hashes of the record.
+  - The next items of the request must match `LastReply`, in the order of the reply. A text matches an assistant message with no name and one text part, when the hash of its clean form is the same. A tool call matches an `Item::ToolCall` with the same call ID and the same name.
+- `continues_after` does not change. It reads the items after the last reply.
+- After a match, `select` builds the next `RequestRecord` from the request, as it does now. Thus that record holds the form of the API client, and only the new reply is a `LastReply`.
+- `retry` keeps `RecordHashes::is_continued_by`. Its hashes hold no reply, so its comparison stays exact.
+- `Active::finish` creates the call ID before it writes the record. It calls `dialect::call_identifier` for the prefix and random identifier. The record and the response receive that same ID.
+
+`features/acp2api/conversation-continuation.feature` holds the scenarios with the tag `@issue-218`.
 
 ## Outbound connection observer (issue #138)
 

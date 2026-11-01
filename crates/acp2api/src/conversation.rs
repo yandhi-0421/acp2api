@@ -299,20 +299,7 @@ impl ItemHasher {
         self.0.update(text.as_bytes());
     }
     fn text(&mut self, text: &str) {
-        let mut normalized = String::new();
-        let mut space = false;
-        for ch in text.chars() {
-            if ch.is_whitespace() {
-                if !space {
-                    normalized.push(' ');
-                }
-                space = true;
-            } else {
-                normalized.push(ch);
-                space = false;
-            }
-        }
-        self.field(&normalized);
+        self.field(text);
     }
     fn name(&mut self, name: Option<&str>) {
         self.field(if name.is_some() { "named" } else { "unnamed" });
@@ -340,8 +327,10 @@ fn item_hash(item: &Item) -> ItemHash {
             (hash, parts)
         }
         Item::ToolCall {
-            name, arguments, ..
-        } => return tool_call_hash(name, arguments),
+            id,
+            name,
+            arguments,
+        } => return tool_call_hash(id, name, arguments),
     };
     for part in parts {
         match part {
@@ -364,8 +353,9 @@ fn item_hash(item: &Item) -> ItemHash {
     }
     ItemHash(hash.finish())
 }
-pub(crate) fn tool_call_hash(name: &str, arguments: &str) -> ItemHash {
+fn tool_call_hash(id: &str, name: &str, arguments: &str) -> ItemHash {
     let mut hash = ItemHasher::new("tool call");
+    hash.field(id);
     hash.text(name);
     hash.text(arguments);
     ItemHash(hash.finish())
@@ -382,11 +372,17 @@ pub(crate) fn record_hashes(conversation: &Conversation) -> RecordHashes {
         messages: conversation.items().into_iter().map(item_hash).collect(),
     }
 }
-pub(crate) fn reply_hash(text: &str) -> ItemHash {
+pub(crate) fn clean_reply_hash(text: &str) -> ItemHash {
+    let without_cr = text.replace('\r', "");
+    let clean = without_cr
+        .split('\n')
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
     item_hash(&Item::Message {
         role: Role::Assistant,
         name: None,
-        parts: vec![Part::Text(text.into())],
+        parts: vec![Part::Text(clean.trim().into())],
     })
 }
 pub(crate) fn tool_set_hash(tools: &[ClientTool]) -> ToolSetHash {
@@ -508,7 +504,7 @@ pub(crate) enum TurnEvent {
     KeepAlive,
     Stop(Stop),
     Text(String),
-    ToolCall(ToolCall),
+    ToolCall { id: String, call: ToolCall },
     End(Result<Usage, crate::messages::Message>),
 }
 pub(crate) struct Ticket {

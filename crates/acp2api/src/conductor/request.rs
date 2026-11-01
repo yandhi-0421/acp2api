@@ -430,6 +430,7 @@ impl Active {
         result: Result<(), Failure>,
         now: Moment,
         catalog: Option<&crate::catalog::Catalog>,
+        make_call_id: impl FnOnce(crate::journal::Api) -> Result<String, String>,
     ) -> (
         Vec<Command>,
         Option<retry::Wait>,
@@ -453,10 +454,16 @@ impl Active {
             | Phase::QuotaSettling { .. }
             | Phase::QuotaSettled => (false, result),
         };
-        let tool_hash = self
-            .tool_call
-            .as_ref()
-            .map(|call| crate::conversation::tool_call_hash(&call.name, &call.arguments));
+        let result = result.and_then(|()| {
+            self.tool_call
+                .take()
+                .map(|call| {
+                    make_call_id(self.request.api)
+                        .map(|id| (call, id))
+                        .map_err(|error| Failure::at(Message::Upstream(error), now))
+                })
+                .transpose()
+        });
         let retry = result
             .as_ref()
             .err()
@@ -471,13 +478,15 @@ impl Active {
         }
         self.release_or_cut_reply(None, now, &mut commands);
         let can_continue = can_continue && self.stop.sequence().is_none();
-        let end = result.map_err(|failure| failure.message).map(|()| {
+        let mut last_call = None;
+        let end = result.map_err(|failure| failure.message).map(|call| {
             let mut output = self.text.clone();
-            if let Some(call) = self.tool_call.take() {
+            if let Some((call, id)) = call {
+                last_call = Some((id.clone(), call.name.clone()));
                 output.push_str(&call.arguments);
                 commands.push(Command::Emit(
                     self.reply.output.clone(),
-                    TurnEvent::ToolCall(call),
+                    TurnEvent::ToolCall { id, call },
                 ));
             }
             Usage {
@@ -486,7 +495,7 @@ impl Active {
             }
         });
         let record = if self.session.is_some() && end.is_ok() && can_continue {
-            Some(self.record.with_reply(&self.text, tool_hash))
+            Some(self.record.with_reply(&self.text, last_call))
         } else {
             None
         };
@@ -958,7 +967,12 @@ impl Core {
     ) -> (Option<String>, Vec<Command>) {
         self.keep_quota_wait_reset_query(&active);
         let session = active.session().map(str::to_owned);
-        let (commands, retry, record) = active.finish(result, now, self.catalog.as_ref());
+        let (commands, retry, record) = active.finish(
+            result,
+            now,
+            self.catalog.as_ref(),
+            crate::dialect::call_identifier,
+        );
         self.retry_waits.extend(retry);
         let forget = session.and_then(|session| self.sessions.keep(session, record));
         (forget, commands)
