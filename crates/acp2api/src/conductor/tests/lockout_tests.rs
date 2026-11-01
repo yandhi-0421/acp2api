@@ -1060,6 +1060,61 @@ async fn next_build_change_returns_the_queued_change_after_a_failed_start() {
     std::fs::remove_dir_all(folder).unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_queued_search_replies_before_the_deadline_after_a_failed_deferred_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let (folder, state_path, clock, journal) = test_environment("deferred-start-failed-loop");
+    let builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+    let configuration = folder.join("config.toml");
+    let settings = crate::store::read(&configuration, 1).unwrap().settings;
+    assert!(!state_path.exists());
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (conductor, task) =
+        Conductor::start(builds, clock.clone(), journal, settings, configuration, 1);
+    conductor
+        .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+        .await
+        .unwrap();
+
+    assert_eq!(conductor.view().state, State::RuntimeUnavailable);
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::create_dir_all(
+        folder
+            .join(crate::runtime_builds::COPY)
+            .join(crate::runtime_builds::SERVER),
+    )
+    .unwrap();
+
+    let reply = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        conductor.builds(crate::runtime_builds::Action::Search, Hold::empty()),
+    )
+    .await;
+
+    assert!(
+        reply.is_ok(),
+        "FR-040: the search reply arrives before the deadline after a deferred initial start fails"
+    );
+
+    let unavailable = conductor
+        .model_names(Hold::empty())
+        .await
+        .err()
+        .map(|error| error.message.to_string())
+        .unwrap_or_default();
+    assert!(
+        unavailable.contains("acp2api: the official runtime is unavailable:"),
+        "FR-040: the runtime remains unavailable with an FR-040 message"
+    );
+
+    drop(conductor);
+    task.await.unwrap();
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
 #[test]
 fn after_a_retry_that_finds_the_state_file_normal_state_is_still_runtime_unavailable_until_runtime_ready()
  {
