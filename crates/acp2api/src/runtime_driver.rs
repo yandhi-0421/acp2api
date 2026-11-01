@@ -168,8 +168,13 @@ struct WriteQueue {
     bytes: usize,
     state: WriteState,
 }
+struct Frame {
+    bytes: Vec<u8>,
+    deadline: Moment,
+    cancel: bool,
+}
 pub(crate) struct Runtime {
-    input: mpsc::UnboundedSender<(Vec<u8>, Moment, bool)>,
+    input: mpsc::UnboundedSender<Frame>,
     // JoinSet aborts on drop, so a discarded Runtime cannot leave stdin open in a detached task.
     writer: tokio::task::JoinSet<Hold>,
     cancel_wait: tokio::sync::watch::Receiver<bool>,
@@ -205,14 +210,19 @@ struct ConfiguringPrompt {
 }
 async fn write_messages(
     mut pipe: ProcessWrite,
-    mut messages: mpsc::UnboundedReceiver<(Vec<u8>, Moment, bool)>,
+    mut messages: mpsc::UnboundedReceiver<Frame>,
     mut stopping: tokio::sync::watch::Receiver<bool>,
     writer_state: Arc<std::sync::Mutex<WriteQueue>>,
     writer_clock: Arc<dyn Clock>,
     writer_lines: mpsc::Sender<(Line, Hold)>,
     cancel_wait: tokio::sync::watch::Sender<bool>,
 ) {
-    while let Some((bytes, deadline, cancel)) = messages.recv().await {
+    while let Some(Frame {
+        bytes,
+        deadline,
+        cancel,
+    }) = messages.recv().await
+    {
         // Keep completed I/O or the deadline visible until the state or failure handoff ends.
         let (result, _work) = if !cancel && *stopping.borrow() {
             (Ok(()), Hold::empty())
@@ -356,7 +366,7 @@ impl Runtime {
         )
         .await?;
         let (tx, lines) = mpsc::channel(128);
-        let (input, messages) = mpsc::unbounded_channel::<(Vec<u8>, Moment, bool)>();
+        let (input, messages) = mpsc::unbounded_channel::<Frame>();
         let mut writer = tokio::task::JoinSet::new();
         let (stop_writer, stopping) = tokio::sync::watch::channel(false);
         let write_state = Arc::new(std::sync::Mutex::new(WriteQueue {
@@ -575,7 +585,9 @@ impl Runtime {
         &self.session
     }
     async fn write(&mut self, value: Value) -> Result<(), CommandError> {
-        let cancel = value["method"] == "session/cancel";
+        self.enqueue(value, false)
+    }
+    fn enqueue(&mut self, value: Value, cancel: bool) -> Result<(), CommandError> {
         let mut bytes =
             serde_json::to_vec(&value).map_err(|e| CommandError::from(e.to_string()))?;
         bytes.push(b'\n');
@@ -598,7 +610,11 @@ impl Runtime {
             };
         }
         self.input
-            .send((bytes, deadline, cancel))
+            .send(Frame {
+                bytes,
+                deadline,
+                cancel,
+            })
             .map_err(|_| CommandError::Io(Message::RuntimeStdinWriterStopped))
     }
     pub(crate) async fn permission(
@@ -617,10 +633,10 @@ impl Runtime {
         {
             pending.continuation = None;
         }
-        self.write(
+        self.enqueue(
             json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}}),
+            true,
         )
-        .await
     }
     async fn refuse(&mut self, request: &Value) -> Result<(), CommandError> {
         self.write(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32601,"message":"Method not found"}}))
