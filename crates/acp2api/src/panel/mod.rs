@@ -14,6 +14,12 @@ use std::{
     collections::HashMap,
     sync::{Arc, LazyLock, Mutex},
 };
+#[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Bounded page checks use real temporary files and start no runtime process."
+)]
+mod hash_tests;
 mod page;
 mod texts;
 use texts::Language;
@@ -103,12 +109,16 @@ impl Panel {
         verified
     }
     async fn act(&self, language: Language, action: OwnerAction) -> Result<(), Response> {
-        self.conductor
+        match self
+            .conductor
             .owner(action, self.clock.hold(crate::HoldKind::TurnEvent))
             .await
-            .map_err(|_| self.failed(language))
+        {
+            Ok(()) => Ok(()),
+            Err(_) => Err(self.failed(language).await),
+        }
     }
-    fn failed(&self, language: Language) -> Response {
+    async fn failed(&self, language: Language) -> Response {
         self.page(
             language,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -117,22 +127,28 @@ impl Panel {
                 "设置没有保存。请重试。",
             ),
         )
+        .await
     }
-    fn notice(&self, language: Language, notice: &crate::messages::OwnerMessage) -> Response {
+    async fn notice(&self, language: Language, notice: &crate::messages::OwnerMessage) -> Response {
         let line = page::Line {
             text: &language.owner_message(notice),
             error: notice.is_failure(),
         };
-        Html(self.html(language, Some(line))).into_response()
+        Html(self.html(language, Some(line)).await).into_response()
     }
-    fn page(&self, language: Language, status: StatusCode, text: &str) -> Response {
+    async fn page(&self, language: Language, status: StatusCode, text: &str) -> Response {
         let line = page::Line {
             text,
             error: !status.is_success(),
         };
-        (status, Html(self.html(language, Some(line)))).into_response()
+        (status, Html(self.html(language, Some(line)).await)).into_response()
     }
-    fn html(&self, language: Language, notice: Option<page::Line<'_>>) -> String {
+    async fn html(&self, language: Language, notice: Option<page::Line<'_>>) -> String {
+        let conductor = self.conductor.clone();
+        let _work = self.clock.hold(crate::HoldKind::TurnEvent);
+        let builds = tokio::task::spawn_blocking(move || conductor.builds_summary())
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
         page::settings(page::Page {
             language,
             settings: &self.conductor.settings(),
@@ -141,7 +157,7 @@ impl Panel {
             data_folder: self.conductor.data_folder(),
             notice,
             notices: &self.conductor.notices(),
-            builds: self.conductor.builds_summary(),
+            builds,
             quota_result: &self.conductor.quota_result(),
             history: &self.conductor.history(),
             view: &self.conductor.view(),
@@ -226,7 +242,7 @@ async fn index(
     headers: HeaderMap,
 ) -> Html<String> {
     Html(if panel.session(&headers) {
-        panel.html(language, None)
+        panel.html(language, None).await
     } else {
         page::login(language, None)
     })
@@ -320,16 +336,24 @@ async fn refresh_quota(
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
     drop(lease.release());
     match panel.conductor.owner(OwnerAction::RefreshQuota, hold).await {
-        Ok(()) => panel.page(
-            language,
-            StatusCode::OK,
-            language.pick("Quota refreshed.", "配额已刷新。"),
-        ),
-        Err(error) => panel.page(
-            language,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &language.owner_message(&error),
-        ),
+        Ok(()) => {
+            panel
+                .page(
+                    language,
+                    StatusCode::OK,
+                    language.pick("Quota refreshed.", "配额已刷新。"),
+                )
+                .await
+        }
+        Err(error) => {
+            panel
+                .page(
+                    language,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &language.owner_message(&error),
+                )
+                .await
+        }
     }
 }
 async fn read_models(
@@ -344,16 +368,24 @@ async fn read_models(
         .owner(OwnerAction::ReadModelNames, hold)
         .await
     {
-        Ok(()) => panel.page(
-            language,
-            StatusCode::OK,
-            language.pick("Model names read.", "模型名已读取。"),
-        ),
-        Err(error) => panel.page(
-            language,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &crate::journal::redact_error(&language.owner_message(&error)),
-        ),
+        Ok(()) => {
+            panel
+                .page(
+                    language,
+                    StatusCode::OK,
+                    language.pick("Model names read.", "模型名已读取。"),
+                )
+                .await
+        }
+        Err(error) => {
+            panel
+                .page(
+                    language,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &crate::journal::redact_error(&language.owner_message(&error)),
+                )
+                .await
+        }
     }
 }
 async fn sign_in(State(panel): State<Panel>, Extension(language): Extension<Language>) -> Response {
@@ -375,12 +407,15 @@ impl Panel {
             .owner(action, self.clock.hold(crate::HoldKind::TurnEvent))
             .await
         {
-            Ok(()) => Html(self.html(language, None)).into_response(),
-            Err(error) => self.page(
-                language,
-                StatusCode::UNPROCESSABLE_ENTITY,
-                &language.owner_message(&error),
-            ),
+            Ok(()) => Html(self.html(language, None).await).into_response(),
+            Err(error) => {
+                self.page(
+                    language,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &language.owner_message(&error),
+                )
+                .await
+            }
         }
     }
 }
@@ -396,7 +431,9 @@ async fn end_lockout(
         )
         .await
     {
-        return panel.page(language, StatusCode::UNAUTHORIZED, wrong_password(language));
+        return panel
+            .page(language, StatusCode::UNAUTHORIZED, wrong_password(language))
+            .await;
     }
     match panel
         .conductor
@@ -407,7 +444,7 @@ async fn end_lockout(
         .await
     {
         Ok(()) => Redirect::to("/").into_response(),
-        Err(message) => panel.notice(language, &message),
+        Err(message) => panel.notice(language, &message).await,
     }
 }
 async fn password(
@@ -416,16 +453,18 @@ async fn password(
     Form(form): Form<Password>,
 ) -> Response {
     if form.password.is_empty() {
-        return panel.page(
-            language,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            language.pick("Enter a new management password.", "输入新的管理密码。"),
-        );
+        return panel
+            .page(
+                language,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                language.pick("Enter a new management password.", "输入新的管理密码。"),
+            )
+            .await;
     }
     let Ok(Ok(hash)) =
         tokio::task::spawn_blocking(move || crate::store::hash_password(&form.password)).await
     else {
-        return panel.failed(language);
+        return panel.failed(language).await;
     };
     match panel
         .act(language, OwnerAction::SetPasswordHash(hash))
@@ -452,25 +491,31 @@ async fn concurrency(
     {
         Some(n) => n,
         None => {
-            return panel.page(
-                language,
-                StatusCode::UNPROCESSABLE_ENTITY,
-                language.pick(
-                    "Choose a concurrency limit supported on this platform.",
-                    "选择这个平台支持的并发上限。",
-                ),
-            );
+            return panel
+                .page(
+                    language,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    language.pick(
+                        "Choose a concurrency limit supported on this platform.",
+                        "选择这个平台支持的并发上限。",
+                    ),
+                )
+                .await;
         }
     };
     match panel
         .act(language, OwnerAction::SetConcurrencyLimit(limit))
         .await
     {
-        Ok(()) => panel.page(
-            language,
-            StatusCode::OK,
-            language.pick("Concurrency limit saved.", "并发上限已保存。"),
-        ),
+        Ok(()) => {
+            panel
+                .page(
+                    language,
+                    StatusCode::OK,
+                    language.pick("Concurrency limit saved.", "并发上限已保存。"),
+                )
+                .await
+        }
         Err(response) => response,
     }
 }
@@ -511,13 +556,17 @@ async fn runtime_action(
     let hold = panel.clock.hold(crate::HoldKind::TurnEvent);
     drop(lease.release());
     match panel.conductor.builds(action, hold).await {
-        Ok(Some(notice)) => panel.notice(language, &notice),
-        Ok(None) => Html(panel.html(language, None)).into_response(),
-        Err(error) => panel.page(
-            language,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &language.launch_failure(&error),
-        ),
+        Ok(Some(notice)) => panel.notice(language, &notice).await,
+        Ok(None) => Html(panel.html(language, None).await).into_response(),
+        Err(error) => {
+            panel
+                .page(
+                    language,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &language.launch_failure(&error),
+                )
+                .await
+        }
     }
 }
 async fn search(
@@ -1067,7 +1116,7 @@ mod tests {
                 version: "1.6.0".into(),
             },
         ] {
-            let answer = panel.notice(Language::English, &notice);
+            let answer = panel.notice(Language::English, &notice).await;
             let status = answer.status();
             let body = axum::body::to_bytes(answer.into_body(), 1 << 18).await;
             let body = String::from_utf8(body.unwrap().to_vec()).unwrap();

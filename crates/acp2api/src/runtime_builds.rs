@@ -6,6 +6,7 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -211,8 +212,20 @@ impl Builds {
     fn hashes(folder: &Path) -> Result<BuildIdentity, LaunchFailure> {
         let hash = |name: &str| -> Result<Option<String>, LaunchFailure> {
             let path = folder.join(name);
-            match fs::read(&path) {
-                Ok(bytes) => Ok(Some(crate::hex(&Sha256::digest(bytes)))),
+            let digest = fs::File::open(&path).and_then(|mut file| {
+                let mut digest = Sha256::new();
+                let mut buffer = [0; 64 * 1024];
+                loop {
+                    match file.read(&mut buffer) {
+                        Ok(0) => return Ok(crate::hex(&digest.finalize())),
+                        Ok(count) => digest.update(&buffer[..count]),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => return Err(error),
+                    }
+                }
+            });
+            match digest {
+                Ok(hash) => Ok(Some(hash)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(error) => Err(LaunchFailure::Io(std::io::Error::new(
                     error.kind(),
