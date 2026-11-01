@@ -542,6 +542,7 @@ impl Conductor {
         builds: crate::runtime_builds::Builds,
         clock: Arc<dyn Clock>,
         journal: crate::journal::Journal,
+        panel_address: String,
         settings: crate::store::Settings,
         configuration: PathBuf,
         highest: u8,
@@ -566,7 +567,6 @@ impl Conductor {
             lockout::Loaded::Normal => (None, RuntimeState::Serving),
         };
         let lifecycle = Lifecycle::new(lifecycle_state);
-        let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
         let (notices, notices_watch) = watch::channel(Arc::new(Vec::new()));
