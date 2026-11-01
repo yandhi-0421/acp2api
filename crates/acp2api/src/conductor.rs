@@ -64,6 +64,11 @@ pub(crate) enum RuntimeProcess {
     Stopping,
     Stopped,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LockoutCause {
+    Signal,
+    StateFile,
+}
 pub(crate) struct View {
     pub(crate) model_names: Vec<String>,
     pub(crate) context_sizes: BTreeMap<String, u64>,
@@ -74,6 +79,11 @@ pub(crate) struct View {
     pub(crate) quota_reset: Option<String>,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
     pub(crate) lockout_evidence: Option<crate::store::Lockout>,
+    #[allow(
+        dead_code,
+        reason = "read by the separate #195 management panel change"
+    )]
+    pub(crate) lockout_cause: Option<LockoutCause>,
     pub(crate) lockout_unsaved: bool,
     pub(crate) runtime_unavailable: Option<crate::messages::Unavailable>,
 }
@@ -89,6 +99,7 @@ impl Default for View {
             quota_reset: None,
             sign_in_wait: None,
             lockout_evidence: None,
+            lockout_cause: None,
             lockout_unsaved: false,
             runtime_unavailable: None,
         }
@@ -168,7 +179,7 @@ enum Event {
         signalling_work: Option<WorkId>,
     },
     EndLockout,
-    StoredLockout(crate::store::Lockout),
+    StoredLockout(crate::store::Lockout, LockoutCause),
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -361,8 +372,8 @@ impl Core {
                 self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
             }
             (None, Event::EndLockout) => self.end_lockout(now),
-            (None, Event::StoredLockout(evidence)) => {
-                self.lockout = Some(lockout::HeldLockout::saved(evidence));
+            (None, Event::StoredLockout(evidence, cause)) => {
+                self.lockout = Some(lockout::HeldLockout::saved(evidence, cause));
                 self.lifecycle.lockout_stopped();
             }
             (None, Event::CheckPending(request)) => {
@@ -510,6 +521,7 @@ impl Core {
             context_sizes: self.context_sizes.clone(),
             sign_in_wait: self.sign_in.wait().cloned(),
             lockout_evidence: self.lockout.as_ref().map(|held| held.evidence().clone()),
+            lockout_cause: self.lockout.as_ref().map(|held| held.cause()),
             lockout_unsaved: self.lockout_unsaved(),
             state: self.state(),
             runtime_process: self.lifecycle.state().runtime_process(),
@@ -538,8 +550,8 @@ impl Conductor {
         let state_path = builds.start.data.join(crate::store::STATE_FILE);
         let (lockout, lifecycle_state) = match lockout::load(&state_path, clock.as_ref(), &journal)
         {
-            lockout::Loaded::Lockout(evidence) => (
-                Some(lockout::HeldLockout::saved(evidence)),
+            lockout::Loaded::Lockout(evidence, cause) => (
+                Some(lockout::HeldLockout::saved(evidence, cause)),
                 RuntimeState::Stopped,
             ),
             lockout::Loaded::NotWritable(cause) => (
