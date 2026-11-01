@@ -1483,136 +1483,91 @@ This correction adds no port, external dependency, or stored format.
 
 ## Outbound connection observer (issue #138)
 
-**Decided design.** Use the OS rules and event logs around the test host process.
-The orchestrator selected this design in round 2 and the macOS profile correction in round 3.
-Keep `@wip` until native verification and the acceptance freeze.
-The release executable and the test host still call the same `acp2api::run` of ADR-0008.
-No product port, socket hook, or product behavior changes.
-
-Round 1 confused the Codex sandbox with the host environment.
-A nested `sandbox-exec` failure does not show that an unprivileged host cannot apply a profile.
-The orchestrator observed a kernel denial and its unified-log record outside Codex.
-The Windows CI job uses a GitHub-hosted runner, which [runs as administrator with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Thus the design can use its audit rights.
+The acceptance scenario observes the test host that calls the same `acp2api::run` as the release executable (ADR-0008).
+It exercises API requests, sign-in, and a new search with a fake ACP agent.
+The scenario runs in the default acceptance suite on macOS and Windows.
+The harness adds no product socket hook, port, or configuration option.
 
 ### macOS
 
-`Observer::command` starts the test host through `sandbox-exec` with this profile:
+The kernel kills the test host at its first forbidden outbound attempt, including a short or failed attempt.
+`Observer::command` applies this profile through `sandbox-exec`:
 
 ```text
 (version 1)(allow default)
-(deny network-outbound (remote ip "*:*"))
+(deny network-outbound (with send-signal SIGKILL) (remote ip "*:*"))
 (allow network-outbound (remote ip "localhost:*"))
 ```
 
-The profile language accepts only `*` or `localhost` as the host.
-The orchestrator observed that a literal `127.0.0.1` profile fails at launch and that `localhost` also allows `::1`.
-Round 3 accepts this gap: a macOS run does not detect a connection to `::1`.
-That address is loopback, so no traffic leaves the machine.
-The same product code runs on Windows, where the audit compares literal addresses and detects `::1`.
-The native macOS controls still require a successful `127.0.0.1` connection and denials for short and failed TEST-NET attempts.
-A direct socket route still reaches the kernel rule. The design does not depend on replacement libc symbols.
+The evidence is the host's real exit status. No log supplies evidence for this check.
+The macOS log loses sandbox denials without a loss event or dropped-message notice.
+Visible controls on both sides of a missing denial cannot prove a complete record.
+The [native measurements](../research/2026-11-01-macos-sandbox-deny-evidence.md) give the reason for the signal rule.
 
-The capture starts `log stream --style ndjson --info --debug --timeout 2m` before the first control.
-It waits at most eight seconds for the `Filtering the log data using "..."` header before it returns.
-The orchestrator found that `log show` returns a kernel sandbox denial only on its first read, even with the same window and predicate.
-Repeated queries therefore cannot support the poll in `Observer::collect`.
-The earlier claim that `OR` clauses remove the denials was incorrect.
+A successful loopback control must live. Short and failed TEST-NET controls must die by SIGKILL under the same profile.
+A short control precedes the host, and a failed control follows its exit.
+The native controls also require a connection to `127.0.0.2` to fail the destination check.
+These exit checks prove that the profile is active without a log-delivery dependency.
 
-The stream uses the full predicate below. It does not pass `--ignore-dropped`.
+The profile permits `::1`. This accepted gap is local loopback traffic; it sends no traffic outside the machine.
+Windows compares literal addresses for the same product code and detects an attempt to `::1`.
+The profile also applies to child processes, but a child's death is not evidence that the host opened a forbidden connection.
+For example, SIGKILL of the fake ACP agent does not fail this destination check when the host itself exits normally.
+Other scenario assertions can still fail if that child cannot serve a request.
 
-```text
-eventMessage CONTAINS[c] 'network-outbound' OR eventType == 'lossEvent' OR (eventMessage BEGINSWITH 'Sandbox:' AND eventMessage CONTAINS[c] 'suppressed') OR (process == 'logd' AND (eventMessage CONTAINS[c] 'dropped' OR eventMessage CONTAINS[c] 'lost'))
-```
+### Host lifecycle
 
-Reader threads retain complete stdout records and report stderr output, read errors, early exit, and cap violations as capture errors.
-Each read parses all retained records, so an earlier read cannot consume a denial.
-Both control PIDs must appear within the existing ten-second wait, so a missing control fails the run.
-`Capture::drop` stops and reaps the stream child and joins its readers on normal completion, an error, and a panic.
+The observed launch captures stdout and stderr under the existing terminal cap.
+The harness checks that the host stays alive through readiness and the scenario actions.
+If an action panics, the step reads the host status before it propagates the original panic.
+A premature host exit fails with the `FR-046 outbound attempt outside 127.0.0.1` prefix and its actual status.
 
-The parser reads the target PID from the sandbox message, not the kernel process ID of the log record.
-It accepts only messages that start with `Sandbox:` and contain ` deny(` and `network-outbound`.
-It ignores the log tool's own diagnostic, which quotes the query predicate.
-An outbound Sandbox message without a parsable PID remains an error.
-Any `network-outbound` denial for the host fails FR-046, including one that ends before traffic leaves the host.
-The message can redact the destination. Any outbound denial for the host PID fails the check, without a remote address.
-The orchestrator recorded this compact line:
-
-```text
-kernel[0:3f9eba] (Sandbox) Sandbox: Python(72753) deny(1) network-outbound remote:*:9
-```
-
-After the header, the parser accepts one JSON object per complete line and skips a partial last line.
-It reads `eventMessage` from each object and extracts `72753` from the message above.
-It rejects a returned `lossEvent` and checks for dropped, suppressed, or lost records only in Sandbox messages.
-The local man page documents dropped-message notices but does not give their format.
-No notice-specific parser assumes a format. A complete non-JSON line after the header fails NDJSON decoding.
+The observed shutdown first checks that the host is still alive, then requests a graceful stop through the hub.
+It returns the real exit status. SIGKILL and other unsuccessful exits fail the destination check.
+It polls the process without a virtual-time barrier, which a killed host cannot complete.
+If the shutdown deadline requires a harness kill, that path returns an FR-046 error even if the kill races with another exit.
+The shared shutdown path for other scenarios is unchanged.
 
 ### Windows
 
-The observer serializes global audit changes with an OS file lock.
-It saves the exact `Filtering Platform Connection` policy through `AuditQuerySystemPolicy`.
-It enables success and failure through `auditpol`, with subcategory GUID `{0CCE9226-69AE-11D9-BED3-505054503030}`.
-The test process enables its available `SeSecurityPrivilege`; it grants no new account right.
+The observer serializes audit-policy changes with an OS file lock and enables the available test-process `SeSecurityPrivilege`.
+It saves the Filtering Platform Connection policy and enables success and failure audits through `auditpol`.
+The subcategory GUID is `{0CCE9226-69AE-11D9-BED3-505054503030}`.
+The test needs an elevated Windows account; hosted CI provides that account.
 
-The capture records a Security-log cursor after setup.
-A PowerShell reader selects events 5156 and 5157 between that cursor and the end record.
-It reads the named XML fields, rather than localized event text.
-The Rust parser accepts decimal or prefixed hexadecimal `ProcessID` values and selects outbound records only.
-A destination other than the exact IPv4 address `127.0.0.1` fails FR-046.
-The native Windows control requires a planted `::1` attempt to fail this destination assertion.
-The Windows capture also requires outbound evidence for the observed PID.
+The capture saves a Security-log record and timestamp after setup.
+A structured event query selects connection events 5156 and 5157 for the host and both control PIDs within that window.
+It accepts decimal and hexadecimal PID fields. Unrelated processes do not consume the connection-record cap.
+A separate selector retains audit-gap events 1100, 1101, 1102, 1104, 1108, and 4719 regardless of PID.
+The selectors share one capped reader. The [Windows event-query contract](https://learn.microsoft.com/en-us/windows/win32/wes/consuming-events) defines this query form.
 
-A temporary firewall rule blocks `192.0.2.1` for the control executable alone.
-Thus the short and failed TEST-NET controls produce audits without traffic to a remote host.
-The rule does not constrain the product executable.
-Normal completion restores the saved audit policy, verifies it, and removes the rule.
-The cleanup guard also runs during setup errors and a failed run.
-A native Windows test plants a panic and checks policy restoration and rule removal.
-Cleanup errors fail a successful run; cleanup errors during an existing failure appear in its output.
+The parser reads named XML fields and selects outbound records only.
+Only the host PID contributes to the final destination assertion; the fake ACP agent and other children do not contribute.
+A destination other than the literal IPv4 address `127.0.0.1` fails FR-046, including `::1`.
+The host must have at least one outbound audit record.
+Both control PIDs must have forbidden outbound records within a ten-second delivery wait.
+A cleared or overwritten cursor, policy change, malformed selected record, audit-gap event, or cap violation fails the check.
 
-The primary event schemas are [5156](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-5156) and [5157](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-5157).
-The policy functions are [AuditQuerySystemPolicy](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-auditquerysystempolicy) and [AuditSetSystemPolicy](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-auditsetsystempolicy).
+A temporary firewall rule blocks `192.0.2.1` for the control executable alone, without constraining the product executable.
+Normal completion restores the audit policy, verifies it, and removes the rule.
+A saved audit value of zero is restored as `0x4`; zero and `0x4` compare as equivalent no-auditing states.
+The [audit-policy flags](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-audit_policy_information) distinguish unchanged (`0`) from no auditing (`0x4`).
+The cleanup guard also runs on setup errors and panic. A native test checks restoration and rule removal after a failed run.
+A kill of the test process can bypass cleanup; recovery on a retained machine needs a separate follow-up.
 
-### Identity, evidence, and limits
+### Limits and checks
 
-A short control runs before the host. A failed control runs after its exit.
-Both have separate PIDs. Their records must appear in the same capture before the host can pass.
-A bounded poll waits for those records to reach the OS log.
-Missing controls, unreadable logs, malformed records, loss reports, suppression, or output overflow fail the scenario.
-Windows also rejects a cleared or overwritten cursor, audit-drop events, log-service failures, and policy changes during the window.
+Each control makes one connection attempt and has a two-second body limit.
+The short control polls a tokio connection once; the failed control uses a 200 ms std timeout.
+Bounded observer commands have an eight-second limit and a 1 MiB cap for each output stream.
+Windows evidence has a 4096-record cap, and the observation window has a 90-second limit.
+The scenario sends at most nine HTTP requests and retains the existing terminal, hub, and journal caps.
 
-The final destination assertion selects only the product host PID.
-Host adapter connections to the hub count. The fake ACP agent and other child PIDs do not count.
-The kernel profile and WFP apply below std, tokio, socket2, mio, and native socket functions.
-Thus the product and its dependencies do not need a new seam.
-macOS records denied outbound attempts; it does not produce an inventory of allowed localhost connections.
-The evidence promise rests on the OS rule, the native controls, and explicit failure on an observed gap.
-
-Each control has one attempt and a two-second body limit. A parent caps its process run.
-The short control polls a tokio connection once and drops it immediately.
-The failed control uses a 200 ms std connection timeout.
-Short observer commands have an eight-second limit and a 1 MiB cap for each output stream.
-The live stream has a two-minute process timeout and an eight-second header wait.
-Its stdout cap is 1 MiB, including the header, and its record cap is 4096.
-Any stderr output fails the capture. The observation window retains its 90-second limit.
-The scenario fixture sends at most nine HTTP requests and keeps the existing terminal, hub, and journal caps.
-
-### Verification gates
-
-Parser tests use the orchestrator's recorded macOS denial and Microsoft's published event fields.
-They cover PID isolation, both WFP event types, direction, exact IPv4 matching, missing fields, record order, loss, and caps.
-A separate fixture test exercises the same API, sign-in, and search actions against the real product without OS observation.
-That fixture test does not prove FR-046.
-
-`Scenario::start_network_observed` is a separate launch path in the harness, so frozen launch behavior needs no edits.
-It wraps the same test host, captures its readiness output, and uses the existing virtual time and fake ACP agent.
-All changes to frozen harness and workflow files are additions for this scenario and its native controls.
-
-The CI workflow explicitly runs the native controls and the `@issue-138` scenario on both operating systems.
-It also runs the ignored Windows cleanup test. The scenario retains `@wip` in the default suite.
-The orchestrator must run the macOS native checks outside Codex.
-Windows execution, audit restoration, and native log delivery remain unproven until those runs succeed.
+Unit tests check exit classification, premature exit, forced shutdown, audit normalization, PID isolation, event direction, gaps, and caps.
+The parser tests require the exact error for each invalid record.
+A fixture test exercises the real product and graceful observed shutdown without OS enforcement.
+Native controls run in separate CI steps so each command determines its own result.
+The default workspace test run includes the FR-046 scenario; there is no duplicate scenario-only CI step.
 
 ## Open questions
 
