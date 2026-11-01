@@ -36,10 +36,12 @@ impl Panel {
     pub fn bind(&mut self, root: &TestRoot, data: &Path, hub: Hub, address: String) {
         self.config = data.join("config.toml");
         self.address = address;
-        self.client = Some(
-            ApiClient::new(self.address.clone(), String::new(), hub.clone())
-                .without_local_api_key(),
-        );
+        let client = ApiClient::new(self.address.clone(), String::new(), hub.clone())
+            .without_local_api_key();
+        for owner in self.owners.values_mut() {
+            owner.client = client.clone();
+        }
+        self.client = Some(client);
         self.hub = Some(hub);
         self.old_key = root.key.clone();
         self.initial_password = root.password.clone();
