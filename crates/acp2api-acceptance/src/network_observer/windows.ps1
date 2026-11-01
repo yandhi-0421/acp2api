@@ -26,7 +26,7 @@ switch ($Operation) {
     'UnblockControl' {
         try { $existing = Get-NetFirewallRule -Name $Rule }
         catch {
-            if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_Name,*') { throw }
+            if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_InstanceID,*') { throw }
             $existing = $null
         }
         if ($null -ne $existing) { $existing | Remove-NetFirewallRule }
@@ -47,7 +47,7 @@ switch ($Operation) {
         }
         $window = "EventRecordID > $Start and EventRecordID <= $newest"
         $connections = "*[System[(EventID=5156 or EventID=5157) and $window] and EventData[$($pidTerms -join ' or ')]]"
-        $gaps = "*[System[(EventID=1100 or EventID=1101 or EventID=1102 or EventID=1104 or EventID=1108 or EventID=4719) and $window]]"
+        $gaps = "*[System[(EventID=1100 or EventID=1101 or EventID=1102 or EventID=1104 or EventID=1108 or EventID=4612 or EventID=4719) and $window]]"
         $events = @(Read-Events @($connections, $gaps) 4096 | Select-Object record,id,fields)
         @{anchor = ($anchor.Count -eq 1 -and $anchor[0].time -eq $Time); oldest = $oldest; newest = $newest; events = $events} | ConvertTo-Json -Depth 6 -Compress
     }

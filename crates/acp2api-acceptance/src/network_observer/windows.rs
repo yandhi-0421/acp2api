@@ -245,7 +245,7 @@ mod tests {
         );
         let mut check = Command::new("powershell.exe");
         check.args(["-NoProfile", "-NonInteractive", "-Command"])
-            .arg(format!("$ErrorActionPreference='Stop'; try {{ Get-NetFirewallRule -Name '{rule}'; throw 'control rule survived failed run' }} catch {{ if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_InstanceID,*') {{ throw }} }}"));
+            .arg(format!("$ErrorActionPreference='Stop'; try {{ Get-NetFirewallRule -Name '{rule}'; throw 'control rule survived failed run' }} catch {{ if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_InstanceID,*') {{ throw }} }}; exit 0"));
         output(check).expect("temporary firewall rule removed during unwind");
     }
 }

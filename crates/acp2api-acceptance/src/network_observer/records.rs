@@ -126,7 +126,7 @@ mod tests {
     }
     #[test]
     fn audit_loss_clear_full_service_stop_and_policy_changes_fail_closed() {
-        for id in [1100, 1101, 1102, 1104, 1108, 4719] {
+        for id in [1100, 1101, 1102, 1104, 1108, 4612, 4719] {
             assert_eq!(
                 parse(&win(vec![json!({"record":11,"id":id,"fields":{}})])),
                 Err(format!("Security log/audit gap event {id}"))
