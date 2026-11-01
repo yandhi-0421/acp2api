@@ -71,7 +71,7 @@ pub(crate) struct View {
     pub(crate) runtime_process: RuntimeProcess,
     pub(crate) places: usize,
     pub(crate) queued: usize,
-    pub(crate) quota_reset: Option<std::time::SystemTime>,
+    pub(crate) quota_reset: Option<String>,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
     pub(crate) lockout_evidence: Option<crate::store::Lockout>,
     pub(crate) lockout_unsaved: bool,
@@ -515,7 +515,7 @@ impl Core {
             runtime_process: self.lifecycle.state().runtime_process(),
             places: self.work.places(),
             queued: self.work.queued(),
-            quota_reset: self.quota.wait().map(|wait| wait.until),
+            quota_reset: self.quota.wait().map(|wait| wait.until.clone()),
             runtime_unavailable: match self.lifecycle.state() {
                 RuntimeState::Unavailable(reason) => Some(reason.message.clone()),
                 _ => None,

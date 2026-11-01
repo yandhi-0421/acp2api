@@ -625,8 +625,8 @@ fn state_sentence(language: Language, view: &crate::conductor::View) -> Option<S
         State::SignInRequired => Some(language.sign_in_sentence().to_owned()),
         State::QuotaWait => view
             .quota_reset
-            .and_then(|reset| crate::journal::timestamp(reset).ok())
-            .map(|reset| language.quota_wait_sentence(&reset)),
+            .as_deref()
+            .map(|reset| language.quota_wait_sentence(reset)),
         State::Lockout => view
             .lockout_evidence
             .as_ref()
@@ -1599,7 +1599,7 @@ mod tests {
     fn the_first_tile_shows_the_exact_chinese_sentence_of_each_state() {
         let quota = crate::conductor::View {
             state: State::QuotaWait,
-            quota_reset: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(120)),
+            quota_reset: Some("1970-01-01T00:02:00Z".into()),
             ..Default::default()
         };
         let sign_in = crate::conductor::View {

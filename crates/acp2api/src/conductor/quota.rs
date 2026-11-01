@@ -74,7 +74,7 @@ fn error_text(message: &Message) -> Option<&str> {
 pub(super) struct Wait {
     pub timer: TimerId,
     pub deadline: Moment,
-    pub(super) until: SystemTime,
+    pub(super) until: String,
 }
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct TimerId(pub u64);
@@ -84,12 +84,12 @@ impl Wait {
             timer,
             deadline: now
                 .saturating_add(until.duration_since(wall).unwrap_or_default().as_millis() as u64),
-            until,
+            until: crate::journal::timestamp(until).expect("reset time in UTC"),
         }
     }
     pub fn message(&self, now: Moment) -> Message {
         Message::QuotaWait {
-            until: crate::journal::timestamp(self.until).expect("reset time in UTC"),
+            until: self.until.clone(),
             retry_after: self.deadline.saturating_sub(now).div_ceil(1000),
         }
     }
