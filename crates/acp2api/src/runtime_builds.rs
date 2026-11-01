@@ -1431,6 +1431,159 @@ mod tests {
         .expect("deferred start cap: 5 seconds");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn a_failed_deferred_start_gives_runtime_unavailable() {
+        use crate::{BoxFuture, Clock, Launched, ProcessLauncher, ProcessTree};
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        struct Tree;
+        impl ProcessTree for Tree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async {})
+            }
+        }
+        struct Launcher(Arc<AtomicUsize>);
+        impl ProcessLauncher for Launcher {
+            fn launch(&self, _: crate::LaunchSpec) -> Result<Launched, crate::LaunchError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                let (child, agent) = tokio::io::duplex(65536);
+                let (stdout, stdin) = tokio::io::split(child);
+                tokio::spawn(async move {
+                    let (input, mut output) = tokio::io::split(agent);
+                    let mut input = tokio::io::BufReader::new(input);
+                    for _ in 0..4 {
+                        let mut bytes = Vec::new();
+                        if input.read_until(b'\n', &mut bytes).await.unwrap_or(0) == 0 {
+                            break;
+                        }
+                        assert!(bytes.len() <= 65536, "ACP line cap: 64 KiB");
+                        let call: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                        let result = match call["method"].as_str().unwrap() {
+                            "initialize" => {
+                                serde_json::json!({"protocolVersion":1,"agentInfo":{"version":"1.6.0"}})
+                            }
+                            "session/new" => {
+                                serde_json::json!({"sessionId":"first","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]})
+                            }
+                            method => panic!("unexpected ACP method: {method}"),
+                        };
+                        let line = format!(
+                            "{}\n",
+                            serde_json::json!({"jsonrpc":"2.0","id":call["id"],"result":result})
+                        );
+                        if output.write_all(line.as_bytes()).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                Ok(Launched {
+                    stdin: Box::pin(stdin),
+                    stdout: Box::pin(stdout),
+                    stderr: Box::pin(tokio::io::empty()),
+                    tree: Box::new(Tree),
+                })
+            }
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let root = std::env::temp_dir().join(format!(
+                "acp2api-deferred-start-failed-{}",
+                crate::random_hex::<12>().unwrap()
+            ));
+            let copy = root.join(COPY);
+            fs::create_dir_all(&copy).unwrap();
+            for name in [SERVER, HARNESS] {
+                fs::write(copy.join(name), b"checked-only-binary").unwrap();
+            }
+            let hash = crate::hex(&Sha256::digest(b"checked-only-binary"));
+            let mut ports = Ports::production();
+            let platform = ports.release.platform().to_string();
+            ports.release = Arc::new(Facts(vec![ListedBuild {
+                version: "1.4.0".into(),
+                platform: platform.clone(),
+                agy_acp_server_sha256: "other-hash".repeat(2),
+                localharness_external_sha256: "other-hash".repeat(2),
+            }]));
+            let launches = Arc::new(AtomicUsize::new(0));
+            ports.launcher = Arc::new(Launcher(launches.clone()));
+            let state = serde_json::json!({
+                "format": 1,
+                "lockout": {
+                    "since": "2026-10-18T12:00:00Z",
+                    "signal": "403",
+                    "original_error_text": "Account suspended",
+                },
+                "checked_builds": [{
+                    "version": "1.6.0",
+                    "platform": platform,
+                    "agy_acp_server_sha256": hash,
+                    "localharness_external_sha256": hash,
+                    "checked_at": "2026-10-18T12:00:00Z"
+                }]
+            });
+            let state_path = root.join(crate::store::STATE_FILE);
+            fs::write(&state_path, state.to_string()).unwrap();
+            let builds = Builds::new(
+                &ports,
+                Environment {
+                    account_root: root.join("account"),
+                    home: None,
+                    local_app_data: None,
+                    temp: root.join("temp"),
+                    path: vec![],
+                    exe_dir: root.join("exe"),
+                },
+                root.clone(),
+                crate::account::Temporary::fixture(&root),
+                crate::runtime_driver::mcp::ToolSets::new(0),
+                tokio::sync::watch::channel(false).1,
+                0,
+            );
+            let config = root.join("config.toml");
+            let settings = crate::store::read(&config, 3).unwrap().settings;
+            let journal =
+                crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
+            let (conductor, task) = crate::conductor::Conductor::start(
+                builds,
+                ports.clock.clone(),
+                journal,
+                settings,
+                config,
+                3,
+            );
+            let initial = conductor
+                .builds(Action::Initial, crate::Hold::empty())
+                .await;
+            assert!(matches!(initial, Ok(None)));
+            assert_eq!(launches.load(Ordering::SeqCst), 0);
+            fs::set_permissions(&copy, fs::Permissions::from_mode(0o000)).unwrap();
+            let owner = conductor
+                .owner(
+                    crate::conductor::OwnerAction::EndLockout,
+                    crate::Hold::empty(),
+                )
+                .await;
+            assert!(matches!(owner, Ok(())));
+            while conductor.view().state != crate::conductor::State::RuntimeUnavailable {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(launches.load(Ordering::SeqCst), 0);
+            fs::set_permissions(&copy, fs::Permissions::from_mode(0o755)).unwrap();
+            drop(conductor);
+            task.await.unwrap();
+            fs::remove_dir_all(root).unwrap();
+        })
+        .await
+        .expect("deferred start bound: 5 seconds");
+    }
+
     #[tokio::test]
     async fn an_accepted_copy_start_failure_retries_until_runtime_unavailable() {
         refused_starts(|_| Action::Initial).await;

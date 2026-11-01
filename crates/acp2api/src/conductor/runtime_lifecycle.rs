@@ -28,6 +28,7 @@ pub(super) enum Replacement {
 pub(super) enum BuildSelection {
     Retire(Replacement),
     Ready(Replacement),
+    StartFailed(LaunchFailure),
 }
 
 pub(super) type CompatibilityCheck = crate::BoxFuture<'static, CompletedCheck>;
@@ -609,6 +610,10 @@ impl Core {
             let mut changed = (**publish.borrow()).clone();
             match builds.select(action, &mut changed, configuration).await {
                 Err(error) => {
+                    // Only the start after a stored lockout has no reader.
+                    if initial && reply.is_closed() {
+                        return Some(BuildSelection::StartFailed(error));
+                    }
                     let _ = reply.send(Err(error));
                 }
                 Ok(selection) => {
@@ -667,5 +672,22 @@ impl Core {
         } else {
             self.sign_in.clear_required();
         }
+    }
+
+    pub(super) async fn deferred_start_failed(
+        &mut self,
+        error: LaunchFailure,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+    ) {
+        let fault = if matches!(error, LaunchFailure::NoExecutable) {
+            crate::messages::RuntimeFault::NoExecutable
+        } else {
+            crate::messages::RuntimeFault::NotAccepted
+        };
+        self.make_unavailable(fault, error.io_kind(), runtime, read_open, journal, builds)
+            .await;
     }
 }

@@ -622,6 +622,16 @@ impl Conductor {
                         Some(BuildSelection::Ready(replacement)) => {
                             core.lifecycle.plan(replacement)
                         }
+                        Some(BuildSelection::StartFailed(error)) => {
+                            core.deferred_start_failed(
+                                error,
+                                &mut runtime,
+                                &mut read_open,
+                                &journal,
+                                &actor_builds,
+                            )
+                            .await;
+                        }
                         None => {}
                     }
                     if core.lifecycle.replacement_pending() && core.replacement_ready() {
