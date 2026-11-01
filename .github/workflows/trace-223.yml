@@ -17,13 +17,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: cargo +1.96.0 build --workspace --locked
-      - name: Whole runs with the trace
+      - name: Runs of the workspace command with the trace
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force trace | Out-Null
           $failed = 0
-          foreach ($run in 1..10) {
-            cargo +1.96.0 test --locked -p acp2api-acceptance --test acceptance 2>&1 | Tee-Object -FilePath "trace/raw-$run.log" | Select-String -Pattern 'scenarios \(' -SimpleMatch:$false
+          foreach ($run in 1..7) {
+            cargo +1.96.0 test --workspace --locked --no-fail-fast 2>&1 | Tee-Object -FilePath "trace/raw-$run.log" | Select-String -Pattern 'scenarios \(' -SimpleMatch:$false
             if ($LASTEXITCODE -ne 0) {
               $failed++
               Move-Item "trace/raw-$run.log" "trace/failed-$run.log"
@@ -32,7 +32,7 @@ jobs:
               Remove-Item "trace/raw-$run.log"
             }
           }
-          "failed runs: $failed of 10"
+          "failed runs: $failed of 7"
           exit 0
       - uses: actions/upload-artifact@v4
         with:
