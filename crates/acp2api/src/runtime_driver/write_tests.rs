@@ -284,6 +284,52 @@ async fn stop_keeps_work_through_the_first_process_stop_poll() {
 }
 
 #[tokio::test]
+async fn stop_drains_queued_cancels_until_the_write_deadline() {
+    // Four cancellation frames, five real seconds, at most 16 KiB per pipe.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut sent = Vec::new();
+        for receive in [true, false] {
+            let mut f = fixture().await;
+            f.recording.allow(0);
+            f.runtime.cancel("first").await.unwrap();
+            f.runtime.cancel("second").await.unwrap();
+            f.waits.recv().await.unwrap();
+            let recording = f.recording.clone();
+            let mut stopping = std::pin::pin!(f.runtime.stop());
+            assert!(futures_util::poll!(&mut stopping).is_pending());
+            tokio::task::yield_now().await;
+            if receive {
+                recording.allow(16 * 1024);
+            } else {
+                f.now.send_replace(WRITE_TIMEOUT);
+            }
+            stopping.await;
+            let bytes = recording.bytes.lock().unwrap().clone();
+            sent.push(
+                String::from_utf8(bytes)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(
+            sent,
+            vec![
+                vec![
+                    json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"first"}}),
+                    json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"second"}}),
+                ],
+                vec![],
+            ],
+            "FR-035/FR-045 send every queued cancel before stop unless its write deadline expires"
+        );
+    })
+    .await
+    .expect("cancel drain cap: 5 s");
+}
+
+#[tokio::test]
 async fn no_frame_follows_a_timed_out_partial_frame() {
     // Two frames, five real seconds, at most 16 KiB of recorded bytes.
     tokio::time::timeout(Duration::from_secs(5), async {

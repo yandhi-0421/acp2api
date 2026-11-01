@@ -169,7 +169,7 @@ struct WriteQueue {
     state: WriteState,
 }
 pub(crate) struct Runtime {
-    input: mpsc::UnboundedSender<(Vec<u8>, Moment)>,
+    input: mpsc::UnboundedSender<(Vec<u8>, Moment, bool)>,
     // JoinSet aborts on drop, so a discarded Runtime cannot leave stdin open in a detached task.
     writer: tokio::task::JoinSet<()>,
     stop_writer: tokio::sync::watch::Sender<bool>,
@@ -204,13 +204,13 @@ struct ConfiguringPrompt {
 }
 async fn write_messages(
     mut pipe: ProcessWrite,
-    mut messages: mpsc::UnboundedReceiver<(Vec<u8>, Moment)>,
+    mut messages: mpsc::UnboundedReceiver<(Vec<u8>, Moment, bool)>,
     mut stopping: tokio::sync::watch::Receiver<bool>,
     writer_state: Arc<std::sync::Mutex<WriteQueue>>,
     writer_clock: Arc<dyn Clock>,
     writer_lines: mpsc::Sender<(Line, Hold)>,
 ) {
-    while let Some((bytes, deadline)) = messages.recv().await {
+    while let Some((bytes, deadline, cancel)) = messages.recv().await {
         // Keep completed I/O or the deadline visible until the state or failure handoff ends.
         let (result, _work) = {
             let mut _until_first_poll = {
@@ -245,7 +245,7 @@ async fn write_messages(
                 work = timer => {
                     (Err(Message::RuntimeStdinWriteTimedOut), work)
                 }
-                _ = stopping.wait_for(|stopped| *stopped) => match writing.as_mut().now_or_never() {
+                _ = stopping.wait_for(|stopped| *stopped), if !cancel => match writing.as_mut().now_or_never() {
                     Some(result) => result,
                     None => return,
                 },
@@ -350,7 +350,7 @@ impl Runtime {
         )
         .await?;
         let (tx, lines) = mpsc::channel(128);
-        let (input, messages) = mpsc::unbounded_channel::<(Vec<u8>, Moment)>();
+        let (input, messages) = mpsc::unbounded_channel::<(Vec<u8>, Moment, bool)>();
         let mut writer = tokio::task::JoinSet::new();
         let (stop_writer, stopping) = tokio::sync::watch::channel(false);
         let write_state = Arc::new(std::sync::Mutex::new(WriteQueue {
@@ -557,6 +557,7 @@ impl Runtime {
         &self.session
     }
     async fn write(&mut self, value: Value) -> Result<(), CommandError> {
+        let cancel = value["method"] == "session/cancel";
         let mut bytes =
             serde_json::to_vec(&value).map_err(|e| CommandError::from(e.to_string()))?;
         bytes.push(b'\n');
@@ -579,7 +580,7 @@ impl Runtime {
             };
         }
         self.input
-            .send((bytes, deadline))
+            .send((bytes, deadline, cancel))
             .map_err(|_| CommandError::Io(Message::RuntimeStdinWriterStopped))
     }
     pub(crate) async fn permission(
@@ -1020,15 +1021,29 @@ impl Runtime {
     }
     /// Retain stopped-process stderr for the bounded `stop_and_drain_stderr` reader.
     async fn stop_stderr(mut self) -> impl Stream<Item = RuntimeEvent> {
-        // Pipe writes, flush, shutdown, and the writer join add 0 ms of clock wait to stop.
+        // Pending cancels keep their enqueue deadlines before process-stop grace begins.
         // Shutdown: 5 s grace on macOS; 0 s on Windows before Job Object termination.
         // Cancellation: 30 s to failure, then stop: 35 s on macOS, 30 s on Windows.
         // These bounds exclude executor scheduling and OS reaping after termination.
-        // Finish only immediately-ready writes and poll pipe shutdown once.
         let mut until_stop_poll = Some(self.clock.hold(HoldKind::TurnEvent));
         drop(self.input);
         self.stop_writer.send_replace(true);
-        let _ = self.writer.join_next().await;
+        let mut buffered = Vec::new();
+        {
+            let joining = self.writer.join_next();
+            tokio::pin!(joining);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut joining => break,
+                    Some((line, _hold)) = self.lines.recv() => match line {
+                        Line::Stderr(line) => buffered.push(Self::stderr(&mut self.stderr_session, &String::from_utf8_lossy(&line))),
+                        Line::StderrClosed | Line::Closed => self.stderr_closed = true,
+                        _ => {},
+                    },
+                }
+            }
+        }
         let mut stopping = self.tree.stop(self.clock);
         std::future::poll_fn(move |cx| {
             let result = stopping.as_mut().poll(cx);
@@ -1043,7 +1058,7 @@ impl Runtime {
         {
             self.tool_sets.remove(&tools.mcp_url);
         }
-        stream::unfold(
+        stream::iter(buffered).chain(stream::unfold(
             (self.lines, self.stderr_session, self.stderr_closed),
             |(mut lines, mut session, closed)| async move {
                 if closed {
@@ -1062,7 +1077,7 @@ impl Runtime {
                 }
                 None
             },
-        )
+        ))
     }
 }
 

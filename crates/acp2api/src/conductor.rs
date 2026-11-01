@@ -779,9 +779,23 @@ impl Conductor {
                     }
                     hold = deadline(timer) => (Event::Deadline, hold),
                 };
-                core.apply(event, &mut runtime, &mut read_open, &clock, &journal)
+                {
+                    let mut until_first_poll = Some(hold);
+                    let mut applying = std::pin::pin!(core.apply(
+                        event,
+                        &mut runtime,
+                        &mut read_open,
+                        &clock,
+                        &journal
+                    ));
+                    std::future::poll_fn(|cx| {
+                        let _processing = clock.hold(HoldKind::TurnEvent);
+                        let result = applying.as_mut().poll(cx);
+                        until_first_poll.take();
+                        result
+                    })
                     .await;
-                drop(hold);
+                }
                 if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
                     break;
                 }
