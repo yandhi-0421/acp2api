@@ -69,6 +69,7 @@ pub(super) struct Lifecycle {
     cleanup_before_start: bool,
     changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
     replacement: Option<Replacement>,
+    deferred_start: bool,
 }
 
 impl Lifecycle {
@@ -79,6 +80,7 @@ impl Lifecycle {
             cleanup_before_start: false,
             changes: VecDeque::new(),
             replacement: None,
+            deferred_start: false,
         }
     }
 
@@ -99,7 +101,15 @@ impl Lifecycle {
     }
 
     pub(super) fn lockout_ended(&mut self) {
-        self.state = RuntimeState::Restarting;
+        if std::mem::take(&mut self.deferred_start) {
+            // The start of this process has not run, so the end runs it as a start.
+            let (reply, _) = oneshot::channel();
+            self.changes
+                .push_back((crate::runtime_builds::Action::Initial, reply));
+            self.state = RuntimeState::Serving;
+        } else {
+            self.state = RuntimeState::Restarting;
+        }
     }
 
     pub(super) fn refuse_build_changes(
@@ -571,6 +581,7 @@ impl Core {
     ) {
         if let Some(evidence) = &self.lockout {
             let result = if matches!(action, crate::runtime_builds::Action::Initial) {
+                self.lifecycle.deferred_start = true;
                 Ok(None)
             } else {
                 Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
