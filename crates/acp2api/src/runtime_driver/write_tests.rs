@@ -63,6 +63,8 @@ impl Drop for Pipe {
 struct TestClock {
     now: watch::Sender<Moment>,
     waits: mpsc::UnboundedSender<Moment>,
+    holds: Arc<AtomicUsize>,
+    registrations: Arc<Mutex<Vec<(Moment, bool)>>>,
 }
 impl Clock for TestClock {
     fn now(&self) -> Moment {
@@ -72,9 +74,16 @@ impl Clock for TestClock {
         SystemTime::UNIX_EPOCH + Duration::from_millis(self.now())
     }
     fn hold(&self, _: HoldKind) -> Hold {
-        Hold::empty()
+        self.holds.fetch_add(1, Ordering::SeqCst);
+        let holds = self.holds.clone();
+        Hold::on_drop(move || {
+            holds.fetch_sub(1, Ordering::SeqCst);
+        })
     }
     fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
+        let mut registrations = self.registrations.lock().unwrap();
+        assert!(registrations.len() < 32, "clock capture cap: 32 deadlines");
+        registrations.push((at, self.holds.load(Ordering::SeqCst) > 0));
         self.waits.send(at).unwrap();
         let mut now = self.now.subscribe();
         Box::pin(async move {
@@ -93,6 +102,20 @@ impl ProcessTree for Tree {
     }
     fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
         Box::pin(async {})
+    }
+}
+struct GraceTree;
+impl ProcessTree for GraceTree {
+    fn pid(&self) -> u32 {
+        std::process::id()
+    }
+    fn exited(&mut self) -> BoxFuture<'_, ExitStatus> {
+        Box::pin(std::future::pending())
+    }
+    fn stop(self: Box<Self>, clock: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+        Box::pin(async move {
+            let _work = clock.sleep_until(clock.now() + 5_000).await;
+        })
     }
 }
 struct Launcher(Mutex<Option<Launched>>);
@@ -141,6 +164,8 @@ pub(crate) async fn fixture() -> Fixture {
         clock: Arc::new(TestClock {
             now: now.clone(),
             waits,
+            holds: Arc::new(AtomicUsize::new(0)),
+            registrations: Arc::default(),
         }),
         launcher: Arc::new(Launcher(Mutex::new(Some(Launched {
             stdin: Box::pin(Pipe(recording.clone())),
@@ -165,6 +190,97 @@ pub(crate) async fn fixture() -> Fixture {
         _stdout: output,
         _root: root,
     }
+}
+
+#[tokio::test]
+async fn stop_keeps_work_while_the_writer_join_is_pending() {
+    // One frame, five real seconds, 16 KiB of pipe bytes and 32 clock records.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut f = fixture().await;
+        f.runtime
+            .write(json!({"prompt":"blocked pipe content"}))
+            .await
+            .unwrap();
+        f.waits.recv().await.unwrap();
+        f.now.send_replace(30_200);
+        let (waits, mut deadlines) = mpsc::unbounded_channel();
+        let clock = Arc::new(TestClock {
+            now: f.now.clone(),
+            waits,
+            holds: Arc::new(AtomicUsize::new(0)),
+            registrations: Arc::default(),
+        });
+        f.runtime.clock = clock.clone();
+        f.runtime.tree = Box::new(GraceTree);
+        let stopping = f.runtime.stop();
+        tokio::pin!(stopping);
+        assert!(stopping.as_mut().now_or_never().is_none());
+        assert!(
+            clock.holds.load(Ordering::SeqCst) > 0,
+            "the pending writer join must retain stop work"
+        );
+        tokio::select! {
+            _ = &mut stopping => panic!("stop must wait for its process grace"),
+            at = deadlines.recv() => assert_eq!(at, Some(35_200)),
+        }
+        assert_eq!(
+            *clock.registrations.lock().unwrap(),
+            [(35_200, true)],
+            "the process deadline must exist before stop work ends"
+        );
+        assert_eq!(
+            clock.holds.load(Ordering::SeqCst),
+            0,
+            "the process grace must permit clock advancement"
+        );
+        f.now.send_replace(35_200);
+        stopping.await;
+    })
+    .await
+    .expect("stop writer-join cap: 5 s");
+}
+
+#[tokio::test]
+async fn stop_keeps_work_through_the_first_process_stop_poll() {
+    // One frame, five real seconds, 16 KiB of pipe bytes and 32 clock records.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut f = fixture().await;
+        f.runtime
+            .write(json!({"prompt":"a timed out partial frame"}))
+            .await
+            .unwrap();
+        f.waits.recv().await.unwrap();
+        f.now.send_replace(30_000);
+        let _ = f.runtime.next().await;
+        f.runtime.writer.join_next().await.unwrap().unwrap();
+        let (waits, mut deadlines) = mpsc::unbounded_channel();
+        let clock = Arc::new(TestClock {
+            now: f.now.clone(),
+            waits,
+            holds: Arc::new(AtomicUsize::new(0)),
+            registrations: Arc::default(),
+        });
+        f.runtime.clock = clock.clone();
+        f.runtime.tree = Box::new(GraceTree);
+        let stopping = f.runtime.stop();
+        tokio::pin!(stopping);
+        assert!(stopping.as_mut().now_or_never().is_none());
+        assert_eq!(deadlines.recv().await, Some(35_000));
+        assert_eq!(
+            *clock.registrations.lock().unwrap(),
+            [(35_000, true)],
+            "the first stop poll must register its deadline under a hold"
+        );
+        assert_eq!(
+            clock.holds.load(Ordering::SeqCst),
+            0,
+            "the grace itself must not retain stop work"
+        );
+        f.now.send_replace(35_000);
+        stopping.await;
+    })
+    .await
+    .expect("stop first-poll cap: 5 s");
 }
 
 #[tokio::test]
