@@ -128,6 +128,7 @@ pub(crate) async fn start(
         builds,
         ports.clock.clone(),
         journal.clone(),
+        panel.clone(),
         settings,
         data.join("config.toml"),
         ports.release.highest_concurrency_limit(),
@@ -724,3 +725,7 @@ mod lifecycle_tests {
         .expect("startup lifecycle cap: 5 seconds; one HTTP request, 64 KiB response cap");
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod panel_links_tests;

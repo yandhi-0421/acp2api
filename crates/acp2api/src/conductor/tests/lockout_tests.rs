@@ -1077,8 +1077,15 @@ async fn a_queued_search_replies_before_the_deadline_after_a_failed_deferred_sta
     assert!(!state_path.exists());
 
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
-    let (conductor, task) =
-        Conductor::start(builds, clock.clone(), journal, settings, configuration, 1);
+    let (conductor, task) = Conductor::start(
+        builds,
+        clock.clone(),
+        journal,
+        format!("http://127.0.0.1:{}/", settings.port),
+        settings,
+        configuration,
+        1,
+    );
     conductor
         .builds(crate::runtime_builds::Action::Initial, Hold::empty())
         .await

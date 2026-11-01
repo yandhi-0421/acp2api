@@ -225,6 +225,7 @@ async fn a_check_queues_requests_when_no_accepted_runtime_existed() {
             builds,
             ports.clock.clone(),
             journal,
+            format!("http://127.0.0.1:{}/", settings.port),
             settings,
             configuration,
             1,

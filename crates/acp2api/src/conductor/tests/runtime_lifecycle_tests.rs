@@ -391,7 +391,7 @@ async fn a_failed_owner_copy_preserves_the_existing_unavailable_reason() {
         let config = folder.join("config.toml");
         let settings = crate::store::read(&config, 1).unwrap().settings;
         let journal = crate::journal::Journal::open(&folder.join("logs"), ports.clock.wall()).unwrap();
-        let (conductor, task) = Conductor::start(builds.clone(), ports.clock.clone(), journal, settings, config, 1);
+        let (conductor, task) = Conductor::start(builds.clone(), ports.clock.clone(), journal, format!("http://127.0.0.1:{}/", settings.port), settings, config, 1);
         conductor.builds(crate::runtime_builds::Action::Initial, Hold::empty()).await.unwrap();
         let before = conductor.model_names(Hold::empty()).await.err().map(|error| error.message.to_string());
         std::fs::create_dir_all(&source).unwrap();
@@ -663,8 +663,15 @@ async fn a_start_without_state_survives_an_unwritable_data_folder() {
         let state_path = folder.join(crate::store::STATE_FILE);
         assert!(!state_path.exists());
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
-        let (conductor, task) =
-            Conductor::start(builds, clock.clone(), journal, settings, configuration, 3);
+        let (conductor, task) = Conductor::start(
+            builds,
+            clock.clone(),
+            journal,
+            format!("http://127.0.0.1:{}/", settings.port),
+            settings,
+            configuration,
+            3,
+        );
         let result = conductor
             .builds(crate::runtime_builds::Action::Initial, Hold::empty())
             .await;
