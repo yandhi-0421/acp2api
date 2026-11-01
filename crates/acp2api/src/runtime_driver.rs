@@ -1025,10 +1025,17 @@ impl Runtime {
         // Cancellation: 30 s to failure, then stop: 35 s on macOS, 30 s on Windows.
         // These bounds exclude executor scheduling and OS reaping after termination.
         // Finish only immediately-ready writes and poll pipe shutdown once.
+        let mut until_stop_poll = Some(self.clock.hold(HoldKind::TurnEvent));
         drop(self.input);
         self.stop_writer.send_replace(true);
         let _ = self.writer.join_next().await;
-        self.tree.stop(self.clock).await;
+        let mut stopping = self.tree.stop(self.clock);
+        std::future::poll_fn(move |cx| {
+            let result = stopping.as_mut().poll(cx);
+            until_stop_poll.take();
+            result
+        })
+        .await;
         for tools in self
             .tools
             .into_values()
