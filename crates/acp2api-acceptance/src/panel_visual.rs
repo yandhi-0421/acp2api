@@ -591,3 +591,19 @@ pub fn light_only(light: &Audit, dark: &Audit) -> Result<(), String> {
     }
     Ok(())
 }
+
+pub fn dark_first_tile(audit: &Audit) -> Result<(), String> {
+    let tile = audit.nodes.iter().find(|node| node.tag == "section");
+    match tile {
+        Some(tile)
+            if tile.visible && tile.paint.colors["background-color"] == [39, 39, 41, 255] =>
+        {
+            Ok(())
+        }
+        Some(tile) => Err(format!(
+            "FR-035 first tile must render visibly with #272729 background; visible={}, background={:?}",
+            tile.visible, tile.paint.colors["background-color"]
+        )),
+        None => Err("FR-035 rendered management panel has no first tile".into()),
+    }
+}

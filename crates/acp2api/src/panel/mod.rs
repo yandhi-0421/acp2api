@@ -60,6 +60,7 @@ pub(crate) fn router(conductor: Conductor, clock: Arc<dyn Clock>, port: u16) -> 
         .route("/manage/models", post(read_models))
         .route("/manage/sign-in", post(sign_in))
         .route("/manage/cancel-sign-in", post(cancel_sign_in))
+        .route("/manage/end-lockout", post(end_lockout))
         .route("/manage/notice", post(dismiss_notice))
         .route("/manage/search", post(search))
         .route("/manage/retry", post(retry))
@@ -86,6 +87,19 @@ impl Panel {
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|_, s| s.password_hash == hash && now.saturating_sub(s.since) < LIFETIME);
         cookie(headers, COOKIE).is_some_and(|value| sessions.contains_key(value))
+    }
+    async fn verify(&self, password: String, hash: String) -> bool {
+        let permit = self
+            .logins
+            .acquire()
+            .await
+            .expect("the login semaphore stays open");
+        let verified =
+            tokio::task::spawn_blocking(move || crate::store::verify_password(&password, &hash))
+                .await
+                .unwrap_or(false);
+        drop(permit);
+        verified
     }
     async fn act(&self, language: Language, action: OwnerAction) -> Result<(), Response> {
         self.conductor
@@ -232,30 +246,24 @@ async fn set_language(Form(choice): Form<LanguageChoice>) -> Response {
 struct Password {
     password: String,
 }
+#[derive(Deserialize)]
+struct EndLockoutForm {
+    #[serde(default)]
+    password: String,
+}
+fn wrong_password(language: Language) -> &'static str {
+    language.pick("The management password is wrong.", "管理密码不对。")
+}
 async fn login(
     State(panel): State<Panel>,
     Extension(language): Extension<Language>,
     Form(form): Form<Password>,
 ) -> Response {
     let hash = panel.conductor.settings().management_password_hash.clone();
-    let permit = panel
-        .logins
-        .acquire()
-        .await
-        .expect("the login semaphore stays open");
-    let check = (form.password, hash.clone());
-    let verified =
-        tokio::task::spawn_blocking(move || crate::store::verify_password(&check.0, &check.1))
-            .await
-            .unwrap_or(false);
-    drop(permit);
-    if !verified {
+    if !panel.verify(form.password, hash.clone()).await {
         return (
             StatusCode::UNAUTHORIZED,
-            Html(page::login(
-                language,
-                Some(language.pick("The management password is wrong.", "管理密码不对。")),
-            )),
+            Html(page::login(language, Some(wrong_password(language)))),
         )
             .into_response();
     }
@@ -361,6 +369,32 @@ impl Panel {
                 &language.owner_message(&error),
             ),
         }
+    }
+}
+async fn end_lockout(
+    State(panel): State<Panel>,
+    Extension(language): Extension<Language>,
+    Form(form): Form<EndLockoutForm>,
+) -> Response {
+    if !panel
+        .verify(
+            form.password,
+            panel.conductor.settings().management_password_hash.clone(),
+        )
+        .await
+    {
+        return panel.page(language, StatusCode::UNAUTHORIZED, wrong_password(language));
+    }
+    match panel
+        .conductor
+        .owner(
+            OwnerAction::EndLockout,
+            panel.clock.hold(crate::HoldKind::TurnEvent),
+        )
+        .await
+    {
+        Ok(()) => Redirect::to("/").into_response(),
+        Err(message) => panel.notice(language, &message),
     }
 }
 async fn password(

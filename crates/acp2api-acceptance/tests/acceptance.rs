@@ -16,6 +16,10 @@ mod condition_overlap;
 mod copy_failure;
 #[path = "support/copy_failure.rs"]
 mod copy_failure_support;
+#[path = "steps/end_lockout.rs"]
+mod end_lockout;
+#[path = "support/end_lockout.rs"]
+mod end_lockout_support;
 #[path = "steps/error_statuses.rs"]
 mod error_statuses;
 #[path = "support/error_cases.rs"]
@@ -112,6 +116,7 @@ struct World {
     panel_tiles: panel_tiles_support::TileState,
     prompt_sessions: std::collections::HashMap<String, String>,
     lockout: lockout_support::LockoutState,
+    end_lockout: end_lockout_support::EndLockoutState,
     keep_alive: keep_alive_support::KeepAliveState,
     sign_in: sign_in_support::SignInState,
     retry: retry_support::RetryState,

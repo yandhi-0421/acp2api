@@ -338,6 +338,7 @@ fn chinese_owner_message(message: &OwnerMessage) -> String {
         OwnerMessage::NoAnswerBeforeDeadline => "官方运行时在截止时间之前没有回答。".into(),
         OwnerMessage::VersionDiffers => "initialize 的版本和已接受的构建不一致。".into(),
         OwnerMessage::GeminiFolderNotFound => "找不到所有者的 Gemini 文件夹。".into(),
+        OwnerMessage::LockoutEndNotSaved => "acp2api 无法写入状态文件，所以锁死没有结束。".into(),
         OwnerMessage::Diagnostic(text) => text.clone(),
     }
 }

@@ -9,7 +9,7 @@ Feature: Safety toward Google and the official runtime
     When an API client sends requests, the owner signs in, and the owner starts a new search
     Then each network connection that acp2api opens goes to 127.0.0.1
 
-  @FR-046 @issue-73 @wip
+  @FR-046 @issue-73
   Scenario Outline: acp2api does not change the sign-in files of the official runtime
     Given the runtime home holds the sign-in files of the official runtime
     When <event>

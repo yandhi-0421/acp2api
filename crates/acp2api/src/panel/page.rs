@@ -127,7 +127,7 @@ main>section:nth-of-type(even) {
     background:#272729;
     color:#fff;
 }
-.dark button:focus-visible,.global-bar button:focus-visible {
+.dark button:focus-visible,.dark input:focus-visible,.global-bar button:focus-visible {
     outline-color:#fff;
 }
 #sign-in {
@@ -508,6 +508,19 @@ fn sign_in_wait(
     );
     format!(r#"<p class="surface">{waits}{address}</p>{cancel}<script>{COUNTDOWN}</script>"#)
 }
+fn end_lockout(language: Language) -> String {
+    post_form(
+        "/manage/end-lockout",
+        &format!(
+            r#"<label for="end-lockout-password">{}</label><input type="password" id="end-lockout-password" name="password" autocomplete="current-password" required>{}"#,
+            language.labels().management_password,
+            submit(language.pick(
+                "End the lockout with the management password",
+                "输入管理密码，结束锁死",
+            )),
+        ),
+    )
+}
 fn first_tile(
     language: Language,
     view: &crate::conductor::View,
@@ -523,18 +536,22 @@ fn first_tile(
         .as_ref()
         .map(|text| format!("<p>{}</p>", escape(text)))
         .unwrap_or_default();
-    let sign_in = match &view.sign_in_wait {
-        Some(wait) => sign_in_wait(language, wait, now),
-        None => post_form(
-            "/manage/sign-in",
-            &submit(language.pick("Sign in with Google", "用 Google 账户登录")),
-        ),
+    let action = if view.state == State::Lockout {
+        end_lockout(language)
+    } else {
+        match &view.sign_in_wait {
+            Some(wait) => sign_in_wait(language, wait, now),
+            None => post_form(
+                "/manage/sign-in",
+                &submit(language.pick("Sign in with Google", "用 Google 账户登录")),
+            ),
+        }
     };
     let places = figure(labels.places_in_use, view.places);
     let queued = figure(labels.requests_in_the_queue, view.queued);
     let build = figure(labels.build_in_use, build.unwrap_or("—"));
     format!(
-        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{evidence}{sign_in}<div class="figures">{places}{queued}{build}</div></section>"#,
+        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{evidence}{action}<div class="figures">{places}{queued}{build}</div></section>"#,
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )
 }

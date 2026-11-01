@@ -28,15 +28,18 @@ pub(crate) struct CheckedBuild {
     pub(crate) checked_at: String,
 }
 impl StateFile {
+    pub(crate) fn normal() -> Self {
+        Self {
+            format: 1,
+            lockout: None,
+            checked_builds: Vec::new(),
+        }
+    }
     pub(crate) fn read(path: &Path) -> std::io::Result<Self> {
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    format: 1,
-                    lockout: None,
-                    checked_builds: Vec::new(),
-                });
+                return Ok(Self::normal());
             }
             Err(error) => {
                 return Err(std::io::Error::new(

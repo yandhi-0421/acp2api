@@ -28,6 +28,7 @@ pub(super) enum Replacement {
 pub(super) enum BuildSelection {
     Retire(Replacement),
     Ready(Replacement),
+    StartFailed(LaunchFailure),
 }
 
 pub(super) type CompatibilityCheck = crate::BoxFuture<'static, CompletedCheck>;
@@ -69,6 +70,7 @@ pub(super) struct Lifecycle {
     cleanup_before_start: bool,
     changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
     replacement: Option<Replacement>,
+    deferred_start: bool,
 }
 
 impl Lifecycle {
@@ -79,6 +81,7 @@ impl Lifecycle {
             cleanup_before_start: false,
             changes: VecDeque::new(),
             replacement: None,
+            deferred_start: false,
         }
     }
 
@@ -96,6 +99,20 @@ impl Lifecycle {
 
     pub(super) fn lockout_stopped(&mut self) {
         self.state = RuntimeState::Stopped;
+    }
+
+    pub(super) fn lockout_ended(&mut self, now: Moment) {
+        self.failures
+            .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
+        if std::mem::take(&mut self.deferred_start) {
+            // The start of this process has not run, so the end runs it as a start.
+            let (reply, _) = oneshot::channel();
+            self.changes
+                .push_back((crate::runtime_builds::Action::Initial, reply));
+            self.state = RuntimeState::Serving;
+        } else {
+            self.state = RuntimeState::Restarting;
+        }
     }
 
     pub(super) fn refuse_build_changes(
@@ -153,7 +170,7 @@ impl Lifecycle {
 }
 
 const MAX_RUNTIME_FAILURES: usize = 3;
-const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
+pub(super) const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 
 impl Core {
     pub(super) async fn replace(
@@ -567,6 +584,7 @@ impl Core {
     ) {
         if let Some(evidence) = &self.lockout {
             let result = if matches!(action, crate::runtime_builds::Action::Initial) {
+                self.lifecycle.deferred_start = true;
                 Ok(None)
             } else {
                 Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
@@ -592,6 +610,10 @@ impl Core {
             let mut changed = (**publish.borrow()).clone();
             match builds.select(action, &mut changed, configuration).await {
                 Err(error) => {
+                    // Only the start after a stored lockout has no reader.
+                    if initial && reply.is_closed() {
+                        return Some(BuildSelection::StartFailed(error));
+                    }
                     let _ = reply.send(Err(error));
                 }
                 Ok(selection) => {
@@ -650,5 +672,22 @@ impl Core {
         } else {
             self.sign_in.clear_required();
         }
+    }
+
+    pub(super) async fn deferred_start_failed(
+        &mut self,
+        error: LaunchFailure,
+        runtime: &mut Option<Runtime>,
+        read_open: &mut bool,
+        journal: &crate::journal::Journal,
+        builds: &crate::runtime_builds::Builds,
+    ) {
+        let fault = if matches!(error, LaunchFailure::NoExecutable) {
+            crate::messages::RuntimeFault::NoExecutable
+        } else {
+            crate::messages::RuntimeFault::NotAccepted
+        };
+        self.make_unavailable(fault, error.io_kind(), runtime, read_open, journal, builds)
+            .await;
     }
 }

@@ -12,6 +12,7 @@ mod work;
 use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnRequest},
+    journal::StateDetail,
     messages::OwnerMessage,
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
@@ -88,6 +89,7 @@ impl Default for View {
     }
 }
 pub(crate) enum OwnerAction {
+    EndLockout,
     SignIn,
     CancelSignIn,
     RefreshQuota,
@@ -159,6 +161,7 @@ enum Event {
         error: crate::messages::Message,
         signalling_work: Option<WorkId>,
     },
+    EndLockout,
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -231,6 +234,13 @@ impl Core {
     ) -> Vec<Command> {
         let mut changed = (**settings.borrow()).clone();
         let change = match action {
+            OwnerAction::EndLockout => {
+                if self.lockout.is_none() {
+                    let _ = reply.send(Ok(()));
+                    return Vec::new();
+                }
+                return vec![Command::ClearLockout(reply)];
+            }
             OwnerAction::SignIn => {
                 if self.lockout.is_some()
                     || self.sign_in.wait().is_some()
@@ -343,6 +353,7 @@ impl Core {
             ) => {
                 self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
             }
+            (None, Event::EndLockout) => self.end_lockout(now),
             (None, Event::CheckPending(request)) => {
                 self.work.add(Work::CheckQueued(*request));
             }
@@ -466,7 +477,15 @@ impl Core {
                 RuntimeState::Unavailable(reason) => reason.cause,
                 _ => None,
             };
-            commands.insert(0, Command::State(self.state(), cause));
+            commands.insert(
+                0,
+                Command::State(
+                    self.state(),
+                    self.lockout_notice()
+                        .map(StateDetail::Notice)
+                        .or(cause.map(StateDetail::Cause)),
+                ),
+            );
         }
         self.publish_view();
         commands
@@ -545,7 +564,11 @@ impl Conductor {
             };
             let mut read_open = false;
             core.publish_view();
-            journal.state(core.state().name(), None, clock.as_ref());
+            journal.state(
+                core.state().name(),
+                core.lockout_notice().map(StateDetail::Notice),
+                clock.as_ref(),
+            );
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
@@ -598,6 +621,16 @@ impl Conductor {
                         }
                         Some(BuildSelection::Ready(replacement)) => {
                             core.lifecycle.plan(replacement)
+                        }
+                        Some(BuildSelection::StartFailed(error)) => {
+                            core.deferred_start_failed(
+                                error,
+                                &mut runtime,
+                                &mut read_open,
+                                &journal,
+                                &actor_builds,
+                            )
+                            .await;
                         }
                         None => {}
                     }

@@ -600,7 +600,7 @@ fn lockout_records_state_and_cancels_and_persists_before_any_response_ends() {
     );
     let state = commands
         .iter()
-        .position(|command| matches!(command, Command::State(State::Lockout, _)))
+        .position(|command| matches!(command, Command::State(State::Lockout, ..)))
         .unwrap();
     let cancel = commands
         .iter()
@@ -616,7 +616,7 @@ fn lockout_records_state_and_cancels_and_persists_before_any_response_ends() {
         .unwrap();
     let state_notices = commands
         .iter()
-        .filter(|command| matches!(command, Command::State(State::Lockout, _)))
+        .filter(|command| matches!(command, Command::State(State::Lockout, ..)))
         .count();
     std::fs::remove_dir_all(folder).unwrap();
     assert_eq!(state_notices, 1);
@@ -806,4 +806,151 @@ async fn a_failed_check_reply_signals_lockout_without_persisting_private_text() 
         "Terms of Service",
         "acp2api: upstream error 503 UNAVAILABLE: Service unavailable",
     ).await;
+}
+
+#[test]
+fn the_end_of_a_lockout_restarts_the_runtime_and_clears_the_file() {
+    let folder = std::env::temp_dir().join(format!(
+        "acp2api-end-lockout-{}",
+        crate::random_hex::<12>().unwrap()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let state_path = folder.join(crate::store::STATE_FILE);
+    let clock = crate::Ports::production().clock;
+    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+
+    let hash = "a".repeat(64);
+    let saved = serde_json::json!({
+        "format": 1,
+        "lockout": {
+            "since": "2026-10-18T12:00:00Z",
+            "signal": "403",
+            "original_error_text": "Account suspended",
+        },
+        "checked_builds": [{
+            "version": "1.6.0",
+            "platform": "macos-arm64",
+            "agy_acp_server_sha256": hash,
+            "localharness_external_sha256": hash,
+            "checked_at": "2026-10-18T12:00:00Z",
+        }]
+    });
+    std::fs::write(&state_path, saved.to_string()).unwrap();
+
+    let evidence = lockout::load(&state_path, clock.as_ref(), &journal).unwrap();
+    let mut core = Core {
+        state_path: state_path.clone(),
+        lockout: Some(evidence),
+        lifecycle: Lifecycle::new(RuntimeState::Stopped),
+        ..Core::fixture(1)
+    };
+
+    let commands = core.handle(Event::EndLockout, 0, std::time::UNIX_EPOCH);
+    assert_eq!(core.state(), State::Running);
+    assert!(matches!(core.lifecycle.state(), RuntimeState::Restarting));
+    assert!(
+        commands
+            .iter()
+            .any(|command| matches!(command, Command::State(State::Running, ..)))
+    );
+
+    lockout::clear(&state_path).unwrap();
+    let state = crate::store::StateFile::read(&state_path).unwrap();
+    assert!(state.lockout.is_none());
+    assert_eq!(state.checked_builds.len(), 1);
+    assert_eq!(state.checked_builds[0].build.version, "1.6.0");
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn old_runtime_failures_do_not_stop_the_start_after_a_lockout() {
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    let mut core = Core::fixture(1);
+    core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+    core.handle(Event::RuntimeFailure, 1, std::time::UNIX_EPOCH);
+    core.handle(Event::RuntimeFailure, 2, std::time::UNIX_EPOCH);
+    core.lockout = Some(evidence.clone());
+    core.handle(
+        Event::EndLockout,
+        RUNTIME_FAILURE_WINDOW + 3,
+        std::time::UNIX_EPOCH,
+    );
+    assert_eq!(core.lifecycle.failure_count(), 0);
+
+    let mut core = Core::fixture(1);
+    core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+    core.handle(Event::RuntimeFailure, 1, std::time::UNIX_EPOCH);
+    core.handle(
+        Event::RuntimeFailure,
+        RUNTIME_FAILURE_WINDOW + 1,
+        std::time::UNIX_EPOCH,
+    );
+    core.lockout = Some(evidence);
+    core.handle(
+        Event::EndLockout,
+        RUNTIME_FAILURE_WINDOW + 3,
+        std::time::UNIX_EPOCH,
+    );
+    assert_eq!(core.lifecycle.failure_count(), 1);
+}
+
+#[tokio::test]
+async fn a_lockout_stays_when_its_end_cannot_be_written() {
+    let folder = std::env::temp_dir().join(format!(
+        "acp2api-lockout-stays-{}",
+        crate::random_hex::<12>().unwrap()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let clock = crate::Ports::production().clock;
+    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    // Row 1: state_path is a folder, so that the save fails
+    let folder_path = folder.join("state-is-a-folder");
+    std::fs::create_dir_all(&folder_path).unwrap();
+    let mut core = Core {
+        state_path: folder_path,
+        lockout: Some(evidence.clone()),
+        ..Core::fixture(1)
+    };
+    let (reply, answer) = oneshot::channel();
+    let mut batch = VecDeque::from([Command::ClearLockout(reply)]);
+    Conductor::commands(
+        &mut core, &mut None, &mut false, &clock, &journal, &mut batch,
+    )
+    .await;
+    assert_eq!(core.state(), State::Lockout);
+    assert!(matches!(
+        answer.await.unwrap(),
+        Err(OwnerMessage::LockoutEndNotSaved)
+    ));
+
+    // Row 2: writable path: State::Running, and Ok(())
+    let file_path = folder.join(crate::store::STATE_FILE);
+    let mut core = Core {
+        state_path: file_path,
+        lockout: Some(evidence),
+        ..Core::fixture(1)
+    };
+    let (reply, answer) = oneshot::channel();
+    let mut batch = VecDeque::from([Command::ClearLockout(reply)]);
+    Conductor::commands(
+        &mut core, &mut None, &mut false, &clock, &journal, &mut batch,
+    )
+    .await;
+    assert_eq!(core.state(), State::Running);
+    assert!(matches!(answer.await.unwrap(), Ok(())));
+
+    std::fs::remove_dir_all(folder).unwrap();
 }

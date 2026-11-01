@@ -1,6 +1,6 @@
 use super::quota::{QuotaPhase, QuotaPurpose, QuotaQuery};
 use super::request::Active;
-use super::runtime_lifecycle::Replacement;
+use super::runtime_lifecycle::{RUNTIME_FAILURE_WINDOW, Replacement};
 use super::work::ResponseChannel;
 use super::*;
 use crate::runtime_builds::SelectedBuild;
@@ -144,7 +144,7 @@ fn quota_expiry_on_an_owner_event_keeps_runtime_unavailable_and_reports_state_ch
     let states: Vec<_> = commands
         .into_iter()
         .filter_map(|command| match command {
-            Command::State(state, _) => Some(state),
+            Command::State(state, ..) => Some(state),
             _ => None,
         })
         .collect();

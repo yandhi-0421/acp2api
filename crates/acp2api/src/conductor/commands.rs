@@ -6,6 +6,7 @@ use super::{
 use crate::{
     Clock, HoldKind, Moment,
     conversation::{PromptRequest, TurnEvent},
+    journal::StateDetail,
     messages::OwnerMessage,
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent},
@@ -20,6 +21,7 @@ pub(super) enum Command {
     },
     Authenticate,
     Lockout(crate::store::Lockout),
+    ClearLockout(oneshot::Sender<Result<(), OwnerMessage>>),
     RefuseBuildChange {
         reply: BuildReply,
         error: crate::messages::Message,
@@ -32,7 +34,7 @@ pub(super) enum Command {
         request: Box<PendingRequest>,
         error: crate::messages::Message,
     },
-    State(State, Option<std::io::ErrorKind>),
+    State(State, Option<StateDetail>),
     Usage {
         work: String,
         session: String,
@@ -84,6 +86,21 @@ impl Conductor {
                     core.lifecycle.lockout_stopped();
                     core.publish_view();
                 }
+                Command::ClearLockout(reply) => match lockout::clear(&core.state_path) {
+                    Ok(()) => {
+                        commands.extend(core.handle(Event::EndLockout, clock.now(), clock.wall()));
+                        let _ = reply.send(Ok(()));
+                    }
+                    Err(error) => {
+                        journal.state_file_failure(
+                            "state_file_write_failed",
+                            "lockout_end",
+                            error.kind(),
+                            clock.as_ref(),
+                        );
+                        let _ = reply.send(Err(OwnerMessage::LockoutEndNotSaved));
+                    }
+                },
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
                         commands.extend(core.command_failed(
@@ -118,8 +135,8 @@ impl Conductor {
                         hold: clock.hold(HoldKind::TurnEvent),
                     }));
                 }
-                Command::State(state, cause) => {
-                    journal.state(state.name(), cause, clock.as_ref());
+                Command::State(state, detail) => {
+                    journal.state(state.name(), detail, clock.as_ref());
                 }
                 Command::Usage { work, session } => {
                     let result = match readable(runtime, *read_open) {

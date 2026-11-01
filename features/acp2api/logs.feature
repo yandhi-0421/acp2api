@@ -52,13 +52,13 @@ Feature: Logs
     When a quota signal starts a quota wait
     Then the log has one line for the change to the state "quota wait"
 
-  @FR-056 @issue-73 @wip
+  @FR-056 @issue-73
   Scenario: No log, terminal, or state file holds the content of a request
     When an API client sends a request with the marker "MARKER-7Q" in the message text, the system prompt, a tool argument, and a tool result
     And a lockout signal then starts a lockout
     Then the logs, the terminal, and the state file do not hold "MARKER-7Q"
 
-  @FR-056 @issue-73 @wip
+  @FR-056 @issue-73
   Scenario: No log, terminal line, or state file holds the local API key or the management password
     Given the local API key is "K1" and the management password is "P1"
     And the owner restarted acp2api, so the start made no new key and no new password
