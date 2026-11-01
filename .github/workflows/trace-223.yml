@@ -1,0 +1,39 @@
+name: Trace disconnect on Windows
+on:
+  push:
+    branches: [probe/main-control]
+jobs:
+  runs:
+    runs-on: windows-latest
+    timeout-minutes: 170
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo +1.96.0 build --workspace --locked
+      - name: Whole runs with the trace
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force trace | Out-Null
+          $failed = 0
+          foreach ($run in 1..10) {
+            cargo +1.96.0 test --locked -p acp2api-acceptance --test acceptance 2>&1 | Tee-Object -FilePath "trace/raw-$run.log" | Select-String -Pattern 'scenarios \(' -SimpleMatch:$false
+            if ($LASTEXITCODE -ne 0) {
+              $failed++
+              Move-Item "trace/raw-$run.log" "trace/failed-$run.log"
+              "run $run failed"
+            } else {
+              Remove-Item "trace/raw-$run.log"
+            }
+          }
+          "failed runs: $failed of 10"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trace-223
+          path: trace/
+          retention-days: 3

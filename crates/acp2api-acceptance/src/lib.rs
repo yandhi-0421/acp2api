@@ -2,6 +2,7 @@
 pub mod adapters;
 pub mod build_fixture;
 pub mod client;
+pub mod debug223;
 pub mod fake;
 pub mod hub;
 pub mod scenario;

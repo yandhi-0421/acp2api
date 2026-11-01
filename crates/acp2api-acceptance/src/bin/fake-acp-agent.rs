@@ -82,7 +82,7 @@ fn main() -> ExitCode {
                 }
                 send(
                     &writer,
-                    &json!({"op":"Got","line":line.trim_end_matches('\n')}),
+                    &json!({"op":"Got","line":line.trim_end_matches('\n'),"debug223_read_us":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros().to_string()}),
                 );
                 let stop = {
                     let mut plan = stop_stdin.lock().unwrap();

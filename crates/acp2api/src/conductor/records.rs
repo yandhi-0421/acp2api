@@ -350,6 +350,10 @@ impl AcpSessions {
     ) -> (Option<OutstandingWork>, Vec<Command>) {
         let mut commands = Vec::new();
         let exit = active.exit();
+        crate::debug223::event(
+            "disconnect_transition",
+            format!("v={now} cancel={}", matches!(exit, Exit::CancelAndRetire)),
+        );
         if matches!(exit, Exit::CancelAndRetire) {
             commands.push(self.cancel(active.session().unwrap().to_owned(), now));
         }

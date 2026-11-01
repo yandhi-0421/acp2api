@@ -649,6 +649,7 @@ impl Runtime {
             .await
     }
     pub(crate) async fn cancel(&mut self, session: &str) -> Result<(), CommandError> {
+        crate::debug223::event("cancel_enqueue", format!("session={session}"));
         for pending in self
             .configuring
             .values_mut()

@@ -91,6 +91,9 @@ impl Scenario {
     pub fn launch_host(&mut self, env: &[(&str, PathBuf)], run: &Path) -> &Child {
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
+        if self.hub.debug223_enabled() {
+            command.env("ACP2API_DEBUG223", "1");
+        }
         command.env(TIME_FACTOR_ENV, time_factor().to_string());
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());

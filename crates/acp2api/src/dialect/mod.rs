@@ -132,6 +132,7 @@ impl<T: WireDialect + 'static> Dialect for T {
                 let initial = self.start(&mut wire).into();
                 let output_hold = Arc::new(Mutex::new(None));
                 let state = StreamState {
+                    _probe: crate::debug223::DropTrace("stream_receiver_dropped".into()),
                     events,
                     wire,
                     pending: initial,
@@ -209,6 +210,7 @@ struct StreamState {
     hold: Option<Hold>,
     output_hold: Arc<Mutex<Option<Hold>>>,
     ended: bool,
+    _probe: crate::debug223::DropTrace,
 }
 
 pub(crate) fn hold_body(

@@ -273,9 +273,30 @@ async fn run() {
         .steps(timed_steps::collection::<World>())
         .with_parser(selection::Selected::new(&args, &default_tags))
         .max_concurrent_scenarios(config["concurrent_scenarios"].as_integer().unwrap() as usize)
-        .after(|_, _, _, finished, world| {
+        .before(|feature, _, scenario, world| {
+            Box::pin(async move {
+                acp2api_acceptance::debug223::trace(
+                    "scenario_start",
+                    format!(
+                        "port={} hub={} feature={} scenario={}",
+                        world.scenario.root.port,
+                        world.scenario.hub.address,
+                        feature.name,
+                        scenario.name
+                    ),
+                );
+            })
+        })
+        .after(|_, _, scenario, finished, world| {
             Box::pin(async move {
                 if let Some(world) = world {
+                    acp2api_acceptance::debug223::trace(
+                        "scenario_end",
+                        format!(
+                            "port={} scenario={} result={finished:?}",
+                            world.scenario.root.port, scenario.name
+                        ),
+                    );
                     world.lockout.restore();
                     runtime_continuation::cleanup(world);
                     runtime_support::cleanup(world).await;
@@ -285,6 +306,21 @@ async fn run() {
                         .scenario
                         .finish(matches!(finished, ScenarioFinished::StepPassed))
                         .await;
+                    if world.scenario.hub.debug223_enabled() {
+                        acp2api_acceptance::debug223::trace(
+                            "cleanup_done",
+                            format!("port={}", world.scenario.root.port),
+                        );
+                        for entry in world.scenario.hub.entries() {
+                            if entry.event["kind"] == "terminal"
+                                && let Some(line) = entry.event["text"]
+                                    .as_str()
+                                    .filter(|s| s.contains("[DEBUG-223]"))
+                            {
+                                eprint!("{line}");
+                            }
+                        }
+                    }
                 }
             })
         })

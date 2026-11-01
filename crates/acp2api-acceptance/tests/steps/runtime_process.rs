@@ -68,6 +68,7 @@ fn still_running(w: &mut World) {
 }
 #[given(expr = "the prompt turns of the requests {string} and {string} run in the runtime process")]
 async fn two_running(w: &mut World, a: String, b: String) {
+    w.scenario.hub.enable_debug223();
     process::held(w, &a, true, TurnEndPlan::IgnoreCancel).await;
     process::held(w, &b, false, TurnEndPlan::Stop("end_turn".into())).await;
     assert_eq!(process::calls(w, "session/prompt").len(), 2);
@@ -127,8 +128,35 @@ async fn replaced(w: &mut World) {
 )]
 async fn disconnected(w: &mut World, a: String, cancelled: String) {
     assert_eq!(a, cancelled);
+    w.scenario.hub.debug223(
+        "step_drop",
+        format!(
+            "name={a} session={:?} v={} counts={:?}",
+            w.prompt_sessions.get(&a),
+            w.scenario.hub.now(),
+            w.scenario.hub.counts()
+        ),
+    );
     drop(process::take(w, &a));
     process::observe(w, |w| !process::calls(w, "session/cancel").is_empty()).await;
+    w.scenario.hub.debug223(
+        "observation_end",
+        format!(
+            "v={} cancels={} counts={:?}",
+            w.scenario.hub.now(),
+            process::calls(w, "session/cancel").len(),
+            w.scenario.hub.counts()
+        ),
+    );
+    for entry in w.scenario.hub.entries() {
+        if entry.event["kind"] == "terminal"
+            && let Some(line) = entry.event["text"]
+                .as_str()
+                .filter(|s| s.contains("[DEBUG-223]"))
+        {
+            eprint!("{line}");
+        }
+    }
     assert_eq!(
         process::calls(w, "session/cancel").len(),
         1,

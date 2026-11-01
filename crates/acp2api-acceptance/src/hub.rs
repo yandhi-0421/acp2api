@@ -84,6 +84,7 @@ struct ProcessIo {
     stop_requested: bool,
 }
 pub(crate) struct State {
+    pub debug223: bool,
     pub active_request: Option<(usize, Value)>,
     pub client_sockets: HashMap<u64, ClientSocket>,
     pub next_socket: u64,
@@ -191,6 +192,7 @@ impl Hub {
                 entries: Vec::new(),
                 bytes: 0,
                 failure: None,
+                debug223: false,
                 active_request: None,
                 sleepers: HashMap::new(),
                 wake_pending: Vec::new(),
@@ -335,6 +337,18 @@ impl Hub {
                     if let Some(line) = message["line"].as_str() {
                         match serde_json::from_str::<Value>(line) {
                             Ok(value) => {
+                                if state.debug223 && value["method"] == "session/cancel" {
+                                    crate::debug223::trace(
+                                        "fake_got_cancel",
+                                        format!(
+                                            "hub={} v={} session={} fake_read_us={}",
+                                            self.address,
+                                            state.now,
+                                            value["params"]["sessionId"],
+                                            message["debug223_read_us"]
+                                        ),
+                                    );
+                                }
                                 let mut redacted = value.clone();
                                 redact(&mut redacted);
                                 state.record(json!({"kind":"got","line":redacted.to_string()}));
@@ -542,6 +556,17 @@ impl Hub {
             .active_request
             .clone()
             .expect("an API request precedes its prompt assertion")
+    }
+    pub fn enable_debug223(&self) {
+        self.shared.0.lock().unwrap().debug223 = true;
+    }
+    pub fn debug223_enabled(&self) -> bool {
+        self.shared.0.lock().unwrap().debug223
+    }
+    pub fn debug223(&self, event: &str, fields: impl std::fmt::Display) {
+        if self.debug223_enabled() {
+            crate::debug223::trace(event, format!("hub={} {fields}", self.address));
+        }
     }
     pub fn now(&self) -> u64 {
         self.shared.0.lock().unwrap().now

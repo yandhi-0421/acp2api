@@ -161,7 +161,7 @@ pub(crate) async fn start(
     let router = crate::front::router(conductor, ports.clock.clone(), tools, journal, port);
     let clock = ports.clock.clone();
     let serving = async move {
-        axum::serve(listener, router)
+        axum::serve(crate::debug223::Listener(listener), router)
             .with_graceful_shutdown(async move {
                 ports.stop.stopped().await;
                 stopping.send_replace(true);

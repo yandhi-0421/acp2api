@@ -732,9 +732,11 @@ impl Conductor {
                         continue;
                     }
                     work = first_closed(&connected), if !connected.is_empty() => {
+                        crate::debug223::event("conductor_closed", format!("request={work} v={}", clock.now()));
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
                     }
                     work = first_closed(&pending), if !pending.is_empty() => {
+                        crate::debug223::event("conductor_closed", format!("request={work} v={}", clock.now()));
                         (Event::Disconnected(work), clock.hold(HoldKind::TurnEvent))
                     }
                     work = recv.recv() => {

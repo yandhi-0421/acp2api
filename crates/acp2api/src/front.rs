@@ -153,6 +153,8 @@ async fn turn(
     Extension(lease): Extension<RequestHold>,
     body: Result<Bytes, BytesRejection>,
 ) -> axum::response::Response {
+    let _probe = crate::debug223::DropTrace(request.id.clone());
+    crate::debug223::event("http_handler", &request.id);
     let hold = lease.release();
     let body = match body {
         Ok(body) => body,

@@ -161,6 +161,15 @@ pub struct Call {
 }
 impl Drop for Call {
     fn drop(&mut self) {
+        self.hub.debug223(
+            "call_abort_requested",
+            format!(
+                "task={} request={:?} finished={}",
+                self.task.id(),
+                self.request_id(),
+                self.task.is_finished()
+            ),
+        );
         self.task.abort();
     }
 }
@@ -320,8 +329,16 @@ impl ApiClient {
             id,
             hub: self.hub.clone(),
         };
+        self.hub.debug223(
+            "client_socket_open",
+            format!(
+                "socket={id} local={:?} peer={:?}",
+                stream.local_addr(),
+                stream.peer_addr()
+            ),
+        );
         let stream = CountSocket {
-            inner: tokio::net::TcpStream::from_std(stream).map_err(|e| e.to_string())?,
+            inner: Some(tokio::net::TcpStream::from_std(stream).map_err(|e| e.to_string())?),
             id,
             hub: self.hub.clone(),
         };
@@ -329,7 +346,8 @@ impl ApiClient {
             .await
             .map_err(|e| e.to_string())?;
         let connection = AbortOnDrop(tokio::spawn(async move {
-            let _ = connection.await;
+            let result = connection.await;
+            let _ = result;
         }));
         let mut builder = Request::builder()
             .method(call.method.as_str())
@@ -527,20 +545,31 @@ struct SocketLease {
 }
 impl Drop for SocketLease {
     fn drop(&mut self) {
-        self.hub
+        let socket = self
+            .hub
             .shared
             .0
             .lock()
             .unwrap()
             .client_sockets
             .remove(&self.id);
+        drop(socket);
+        self.hub
+            .debug223("client_duplicate_closed", format!("socket={}", self.id));
         self.hub.shared.1.notify_all();
     }
 }
 struct CountSocket {
-    inner: tokio::net::TcpStream,
+    inner: Option<tokio::net::TcpStream>,
     id: u64,
     hub: Hub,
+}
+impl Drop for CountSocket {
+    fn drop(&mut self) {
+        drop(self.inner.take());
+        self.hub
+            .debug223("client_io_closed", format!("socket={}", self.id));
+    }
 }
 impl tokio::io::AsyncRead for CountSocket {
     fn poll_read(
@@ -549,7 +578,7 @@ impl tokio::io::AsyncRead for CountSocket {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let before = buf.filled().len();
-        let result = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        let result = std::pin::Pin::new(self.inner.as_mut().unwrap()).poll_read(cx, buf);
         if let std::task::Poll::Ready(Ok(())) = result {
             let n = buf.filled().len() - before;
             if let Some(socket) = self
@@ -574,19 +603,19 @@ impl tokio::io::AsyncWrite for CountSocket {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+        std::pin::Pin::new(self.inner.as_mut().unwrap()).poll_write(cx, buf)
     }
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+        std::pin::Pin::new(self.inner.as_mut().unwrap()).poll_flush(cx)
     }
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+        std::pin::Pin::new(self.inner.as_mut().unwrap()).poll_shutdown(cx)
     }
 }
 struct ObservedBody<'a> {
