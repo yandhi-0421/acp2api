@@ -259,6 +259,18 @@ async fn shutdown_during_stalled_stdin_ends_the_request_and_stops_every_process(
             error["error"]["message"],
             "acp2api: acp2api stopped before the end of this request."
         );
+        // The response can finish before the writer joins and process stop registers its grace.
+        let stopping = observed(&s, || {
+            definitely_exited(pid)
+                || s.time.next_deadline() == Some(origin + acp2api::os::PROCESS_STOP_GRACE)
+        })
+        .await;
+        require(
+            &mut s,
+            stopping,
+            "shutdown must reach process stop without another clock wait",
+        )
+        .await;
         s.time
             .advance_to(origin + acp2api::os::PROCESS_STOP_GRACE)
             .await;
