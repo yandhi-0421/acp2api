@@ -696,3 +696,42 @@ async fn a_start_without_state_survives_an_unwritable_data_folder() {
     .await
     .expect("state-file startup test cap: five seconds, no runtime launches");
 }
+
+#[tokio::test]
+async fn exit_keeps_work_until_the_runtime_stop_is_first_polled() {
+    use crate::runtime_driver::write_tests::{
+        GraceTree, IdleClock, Launcher, Pipe, Recording, TestClock,
+    };
+    // One process, two ACP frames under 16 KiB, 32 clock records, five real seconds.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let (clock, mut deadlines) = TestClock::new();
+        let clock = IdleClock::new(clock);
+        let recording = Recording::new(16 * 1024);
+        let replies = [
+            serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}),
+            serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"ready","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+        ].iter().map(|reply| format!("{reply}\n")).collect::<String>();
+        let mut ports = crate::Ports::production();
+        ports.clock = clock.clone();
+        ports.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(crate::Launched {
+            stdin: Box::pin(Pipe(recording.clone())),
+            stdout: Box::pin(Output(std::io::Cursor::new(replies.into_bytes()))),
+            stderr: Box::pin(Output(std::io::Cursor::new(Vec::new()))),
+            tree: Box::new(GraceTree),
+        }))));
+        let (stop, stopped) = watch::channel(false);
+        let (root, conductor, task) = check_fixture(ports, stopped).await;
+        assert!(conductor.model_names(Hold::empty()).await.is_ok());
+        while recording.bytes.lock().unwrap().iter().filter(|byte| **byte == b'\n').count() < 2 {
+            tokio::task::yield_now().await;
+        }
+        while deadlines.try_recv().is_ok() {}
+        clock.advance_on_next_idle(30_000);
+        stop.send_replace(true);
+        assert_eq!(deadlines.recv().await, Some(5_000),
+            "exit work must cover the gap from apply completion to runtime stop");
+        task.await.unwrap();
+        drop(conductor);
+        std::fs::remove_dir_all(root).unwrap();
+    }).await.expect("actor exit handoff cap: 5 s");
+}
