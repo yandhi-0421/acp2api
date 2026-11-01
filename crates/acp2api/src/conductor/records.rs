@@ -555,17 +555,30 @@ mod tests {
 
     #[test]
     fn issue218_only_last_reply_text_uses_clean_form() {
+        use serde_json::json;
+        let assistant = |text: &str| json!({"role":"assistant","content":text});
         for (reply, returned, expected) in [
             (
                 "\n  if a:\r\n    return  \t\n\n",
-                "if a:\n    return",
+                assistant("if a:\n    return"),
                 "continue",
             ),
-            ("one\rcarriage", "onecarriage", "continue"),
-            ("one\u{2003}\ntwo\u{a0}", "one\ntwo", "continue"),
-            ("if a:\n    return", "if a:\n  return", "rebuild"),
-            ("name =  value", "name = value", "rebuild"),
-            (" \n\t", "", "continue"),
+            ("one\rcarriage", assistant("onecarriage"), "continue"),
+            ("one\u{2003}\ntwo\u{a0}", assistant("one\ntwo"), "continue"),
+            ("if a:\n    return", assistant("if a:\n  return"), "rebuild"),
+            ("name =  value", assistant("name = value"), "rebuild"),
+            (" \n\t", assistant(""), "continue"),
+            ("R", json!({"role":"user","content":"R"}), "rebuild"),
+            (
+                "R",
+                json!({"role":"assistant","name":"bob","content":"R"}),
+                "rebuild",
+            ),
+            (
+                "R",
+                json!({"role":"assistant","content":[{"type":"text","text":"R"},{"type":"text","text":""}]}),
+                "rebuild",
+            ),
         ] {
             let first = turn_a();
             let settings = SessionSettings::for_turn(&first);
@@ -577,7 +590,7 @@ mod tests {
             );
             let next = chat_turn(serde_json::json!({"model":"m", "messages":[
                 {"role":"user","content":"A"},
-                {"role":"assistant","content":returned},
+                returned,
                 {"role":"user","content":"Next"}
             ]}));
             let (selection, _) = sessions.select(&next, &settings, None, 1);

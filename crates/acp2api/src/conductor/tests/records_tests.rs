@@ -186,6 +186,7 @@ fn a_tool_call_does_not_make_a_refused_turn_reusable() {
             std::time::UNIX_EPOCH,
         );
         let commands = core.handle(Event::Deadline, 200, std::time::UNIX_EPOCH);
+        let commands = answer_quota(&mut core, commands, 200);
         let call_id = commands
             .iter()
             .find_map(|command| match command {
@@ -194,8 +195,7 @@ fn a_tool_call_does_not_make_a_refused_turn_reusable() {
                 }
                 _ => None,
             })
-            .unwrap_or_else(|| "unreturned-call".into());
-        answer_quota(&mut core, commands, 200);
+            .expect("each row returns its tool call, including after the refusal quota query");
         let body = r#"{"model":"gemini-3.8-flash","tools":[{"type":"function","function":{"name":"read","parameters":{}}}],"messages":[
                 {"role":"user","content":"First"},
                 {"role":"assistant","content":"Before","tool_calls":[{"id":"call-id","function":{"name":"read","arguments":"{}"}}]},
