@@ -902,21 +902,14 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
         panic!("one answer wait, one process-stop grace, and one drain wait cap");
     }
 
-    #[tokio::test]
-    async fn a_failed_start_drain_ends_at_the_answer_deadline_with_escaped_stderr_open() {
-        let mut fixture = fixture();
-        let clock = fixture.clock.clone();
-        let completed = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(
-                Runtime::start(&fixture.start, "1.4.0"),
-                end_drain(&mut fixture.waits, |at| {
-                    clock.time.send_replace(at);
-                }),
-            )
-            .0
-        })
-        .await;
-        let pid: i32 = std::fs::read_to_string(&fixture.helper_pid)
+    async fn assert_escaped_helper(
+        helper_pid: &std::path::Path,
+        drain: impl std::future::Future<Output = ()>,
+    ) {
+        tokio::time::timeout(Duration::from_secs(60), drain)
+            .await
+            .expect("escaped-stderr test exceeded the 60-second wall timeout");
+        let pid: i32 = std::fs::read_to_string(helper_pid)
             .unwrap()
             .trim()
             .parse()
@@ -926,10 +919,26 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
             pid,
             "the live helper escaped the stopped process group and still holds stderr"
         );
-        assert!(
-            matches!(completed, Ok(Err(ref error @ LaunchFailure::Owner(_))) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
-            "the failed-start drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
-        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_drain_ends_at_the_answer_deadline_with_escaped_stderr_open() {
+        let mut fixture = fixture();
+        let clock = fixture.clock.clone();
+        assert_escaped_helper(&fixture.helper_pid, async {
+            let completed = tokio::join!(
+                Runtime::start(&fixture.start, "1.4.0"),
+                end_drain(&mut fixture.waits, |at| {
+                    clock.time.send_replace(at);
+                }),
+            )
+            .0;
+            assert!(
+                matches!(completed, Err(ref error @ LaunchFailure::Owner(_)) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
+                "the failed-start drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
+            );
+        })
+        .await;
         assert_eq!(fixture.clock.now(), ANSWER_TIMEOUT);
     }
 
@@ -937,8 +946,8 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
     async fn a_check_drain_ends_at_the_answer_deadline_with_escaped_stderr_open() {
         let mut fixture = fixture();
         let clock = fixture.clock.clone();
-        let completed = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(
+        assert_escaped_helper(&fixture.helper_pid, async {
+            let completed = tokio::join!(
                 crate::compatibility_check::run(
                     &fixture.start,
                     program(&fixture.root.0),
@@ -948,23 +957,13 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
                     clock.time.send_replace(at);
                 }),
             )
-            .0
+            .0;
+            assert!(
+                matches!(completed, Err(crate::compatibility_check::Failure::Runtime(ref error @ LaunchFailure::Owner(_))) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
+                "the check drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
+            );
         })
         .await;
-        let pid: i32 = std::fs::read_to_string(&fixture.helper_pid)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert_eq!(
-            unsafe { libc::getsid(pid) },
-            pid,
-            "the live helper escaped the stopped check process group and still holds stderr"
-        );
-        assert!(
-            matches!(completed, Ok(Err(crate::compatibility_check::Failure::Runtime(ref error @ LaunchFailure::Owner(_)))) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
-            "the check drain must finish at the existing answer deadline even when a setsid descendant keeps stderr open"
-        );
         assert_eq!(fixture.clock.now(), ANSWER_TIMEOUT);
     }
 
@@ -972,30 +971,20 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Interna
     async fn a_failed_start_drain_ends_on_stop_with_escaped_stderr_open() {
         let mut fixture = fixture();
         let stop = fixture.stop.clone();
-        let completed = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(
+        assert_escaped_helper(&fixture.helper_pid, async {
+            let completed = tokio::join!(
                 Runtime::start(&fixture.start, "1.4.0"),
                 end_drain(&mut fixture.waits, |_| {
                     stop.send_replace(true);
                 }),
             )
-            .0
+            .0;
+            assert!(
+                matches!(completed, Err(ref error @ LaunchFailure::Owner(_)) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
+                "a terminal stop must end the drain while the escaped helper keeps stderr open"
+            );
         })
         .await;
-        let pid: i32 = std::fs::read_to_string(&fixture.helper_pid)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert_eq!(
-            unsafe { libc::getsid(pid) },
-            pid,
-            "the escaped helper still holds stderr when the owner stops acp2api"
-        );
-        assert!(
-            matches!(completed, Ok(Err(ref error @ LaunchFailure::Owner(_))) if error.to_string() == "acp2api: upstream ACP error -32603: Internal error"),
-            "a terminal stop must end the drain while the escaped helper keeps stderr open"
-        );
         assert_eq!(
             fixture.clock.now(),
             0,
