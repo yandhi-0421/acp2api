@@ -344,6 +344,31 @@ fn action(w: &mut World, expected: String) {
     );
 }
 
+#[when("the owner opens the management panel in that browser")]
+async fn open_in_browser(w: &mut World) {
+    w.panel.scenario(&mut w.scenario).await;
+    w.panel.answer = Some(w.panel.view_session("B1").await);
+}
+
+#[then(expr = "the first tile shows the lockout signal {string}")]
+fn shown_signal(w: &mut World, expected: String) {
+    let html = document::html(w.panel.answer.as_ref().unwrap());
+    let evidence = document::elements(support::first_tile(&html), "dl")
+        .find(|list| {
+            document::attribute(list.tag, "class")
+                .is_some_and(|classes| classes.split_whitespace().any(|class| class == "evidence"))
+        })
+        .expect("FR-054 the first tile has a lockout evidence list");
+    let signal = document::elements(evidence.content, "dd")
+        .next()
+        .map(|value| document::visible(value.content))
+        .expect("FR-054 the first row of the lockout evidence is the signal");
+    assert!(
+        signal.contains(&expected),
+        "FR-035 the evidence keeps the true signal: {expected}; actual: {signal}"
+    );
+}
+
 #[then("the first tile shows the signal, the time, and the original error text of the lockout")]
 fn shown_evidence(w: &mut World) {
     let html = document::html(w.panel.answer.as_ref().unwrap());

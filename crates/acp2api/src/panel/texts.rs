@@ -94,6 +94,18 @@ impl Language {
             ),
         }
     }
+    pub(super) fn state_file_lockout_sentence(self) -> &'static str {
+        self.pick(
+            "acp2api cannot read its state file state.json, or the file is damaged. It cannot show that no lockout is in effect, so it sends no request to the official runtime.",
+            "acp2api 无法读取状态文件 state.json，或该文件已损坏。它无法确认当前没有锁死，所以不向官方运行时发送任何请求。",
+        )
+    }
+    pub(super) fn compatibility_check_entry(self, short_hash: &str) -> String {
+        match self {
+            Self::English => format!("Run the compatibility check for {short_hash}"),
+            Self::Chinese => format!("对 {short_hash} 做兼容性检查"),
+        }
+    }
     pub(super) fn of(headers: &HeaderMap) -> Self {
         super::cookie(headers, COOKIE)
             .and_then(Self::from_code)
@@ -441,6 +453,20 @@ mod tests {
             assert_eq!(Language::English.lockout_sentence(time), english);
             assert_eq!(Language::Chinese.lockout_sentence(time), chinese);
         }
+    }
+
+    #[test]
+    fn the_state_file_lockout_sentence_is_exact_in_both_languages() {
+        assert_eq!(
+            [
+                Language::English.state_file_lockout_sentence(),
+                Language::Chinese.state_file_lockout_sentence()
+            ],
+            [
+                "acp2api cannot read its state file state.json, or the file is damaged. It cannot show that no lockout is in effect, so it sends no request to the official runtime.",
+                "acp2api 无法读取状态文件 state.json，或该文件已损坏。它无法确认当前没有锁死，所以不向官方运行时发送任何请求。",
+            ]
+        );
     }
 
     #[test]

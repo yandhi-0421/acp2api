@@ -618,10 +618,10 @@ During a lockout, acp2api sends no request to the official runtime.
 - The response that started the lockout also holds the original error text of Google, because that text can hold the link to an appeal.
 - acp2api shows the notice in one terminal line, and in the dark first tile of the management panel.
 - During a lockout, acp2api starts no runtime process, sends no `/usage`, and the management panel has no sign-in entry.
-- acp2api writes the lockout and its evidence into its state file: the signal, the time, and the original error text, with the redaction of FR-056.
+- After a lockout signal, acp2api writes the lockout and its evidence into its state file. The evidence is the signal, the time, and the original error text, with the redaction of FR-056.
 - When this write fails, the lockout stays in memory, and the management panel shows the notice M-30. acp2api tries the write again at each later request and at each change of state, until the write succeeds or the lockout ends.
 - A restart of acp2api does not end a lockout. acp2api reads the state file at each start.
-  - When the state file exists, and acp2api cannot read it, or the file is damaged, acp2api is in lockout.
+  - When the state file exists, and acp2api cannot read it, or the file is damaged, acp2api is in lockout. The first tile shows the text `Sentence of "lockout": state file`, which gives no time. The evidence shows the true signal, for example `damaged state file: InvalidData`. acp2api does not write this lockout.
   - When no state file exists, acp2api is not in lockout, and it makes a new state file.
   - When acp2api cannot make the new state file, it goes into the state "runtime unavailable", with the M-14 reason `acp2api cannot write its state file state.json`. It starts no runtime process until a retry can write the file.
 - Only the owner ends a lockout. The management panel shows the evidence, the owner enters the management password, and the lockout ends at once. No timer and no automatic step end it.
@@ -633,6 +633,7 @@ During a lockout, acp2api sends no request to the official runtime.
 - After a lockout signal, the official runtime gets no request, and no runtime process runs.
 - Each request gets M-12, and the first response also holds the original text.
 - After a restart, acp2api is still in lockout, and a damaged state file gives a lockout.
+- With a damaged or unreadable state file, the first tile shows the text `Sentence of "lockout": state file` and the true signal. With a lockout in the state file, it keeps the text `Sentence of "lockout"`.
 - After a deletion of the state file and a restart, acp2api is not in lockout.
 - After the password in the management panel, lockout ends. The next request runs when no other condition stops it.
 
@@ -1027,7 +1028,9 @@ The reasons of M-14 are:
 
 ### Texts of the management panel
 
-`<…>` marks a value that the management panel fills in.
+`<…>` marks a value that the management panel fills in. `<short hash>` is the first 12 characters of the SHA-256 value of `agy_acp_server`, the main executable of a build.
+
+A build that is not an accepted version has no verified version before its compatibility check (ADR-0006). Thus, the compatibility check entry names the build by `<short hash>`. The row of the build keeps its full path.
 
 | Item | Chinese | English |
 |---|---|---|
@@ -1048,9 +1051,10 @@ The reasons of M-14 are:
 | Sentence: state file | acp2api 无法写入状态文件 state.json，所以没有启动运行时进程。 | acp2api cannot write its state file state.json, so it started no runtime process. |
 | Exit of the panel | 退出面板 | Exit the panel |
 | Retry entry | 重试 | Retry |
-| Compatibility check entry | 对 <version> 做兼容性检查 | Run the compatibility check for <version> |
+| Compatibility check entry | 对 <short hash> 做兼容性检查 | Run the compatibility check for <short hash> |
 | State "lockout" | 已锁死 | Lockout |
 | Sentence of "lockout" | <time>，官方运行时返回了一个可能危及 Google 账户的响应。从那时起，acp2api 不向官方运行时发送任何请求。 | At <time>, the official runtime gave a response that shows a risk to the Google account. Since then, acp2api sends no request to the official runtime. |
+| Sentence of "lockout": state file | acp2api 无法读取状态文件 state.json，或该文件已损坏。它无法确认当前没有锁死，所以不向官方运行时发送任何请求。 | acp2api cannot read its state file state.json, or the file is damaged. It cannot show that no lockout is in effect, so it sends no request to the official runtime. |
 | Entry that ends a lockout | 输入管理密码，结束锁死 | End the lockout with the management password |
 | Notice of a built-in tool | 内置工具 <name> 在没有权限请求的情况下运行。acp2api 取消了这个 prompt 轮次，并给 API 客户端返回了错误。 | The built-in tool <name> ran with no permission request. acp2api cancelled the prompt turn and sent an error to the API client. |
 | New build | 发现新构建 <version> | New build found: <version> |

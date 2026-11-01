@@ -8,7 +8,7 @@ use std::{path::Path, time::SystemTime};
 
 pub(super) enum Loaded {
     Normal,
-    Lockout(Lockout),
+    Lockout(Lockout, LockoutCause),
     NotWritable(std::io::ErrorKind),
 }
 
@@ -16,7 +16,7 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Loaded 
     match StateFile::read(path) {
         Ok(state) => {
             if let Some(evidence) = state.lockout {
-                Loaded::Lockout(evidence)
+                Loaded::Lockout(evidence, LockoutCause::Signal)
             } else if !path.exists() {
                 // FR-035 requires a new normal state file after the owner deletes it.
                 if let Err(error) = state.save(path) {
@@ -41,24 +41,30 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Loaded 
                 "state file cannot be read"
             };
             let diagnostic = format!("{case}: {:?}", error.kind());
-            Loaded::Lockout(Lockout {
-                since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
-                signal: diagnostic.clone(),
-                original_error_text: diagnostic,
-            })
+            Loaded::Lockout(
+                Lockout {
+                    since: crate::journal::timestamp(clock.wall())
+                        .expect("clock after the Unix epoch"),
+                    signal: diagnostic.clone(),
+                    original_error_text: diagnostic,
+                },
+                LockoutCause::StateFile,
+            )
         }
     }
 }
 
 pub(super) struct HeldLockout {
     evidence: Lockout,
+    cause: LockoutCause,
     unsaved: bool,
 }
 
 impl HeldLockout {
-    pub(super) fn saved(evidence: Lockout) -> Self {
+    pub(super) fn saved(evidence: Lockout, cause: LockoutCause) -> Self {
         Self {
             evidence,
+            cause,
             unsaved: false,
         }
     }
@@ -70,11 +76,19 @@ impl HeldLockout {
         clock: &dyn Clock,
     ) -> Self {
         let unsaved = write_failed(path, &evidence, journal, clock);
-        Self { evidence, unsaved }
+        Self {
+            evidence,
+            cause: LockoutCause::Signal,
+            unsaved,
+        }
     }
 
     pub(super) fn evidence(&self) -> &Lockout {
         &self.evidence
+    }
+
+    pub(super) fn cause(&self) -> LockoutCause {
+        self.cause
     }
 
     pub(super) fn unsaved(&self) -> bool {
@@ -236,7 +250,7 @@ impl Core {
         };
         let message = Message::lockout(&evidence, &self.panel_address, false);
         let first_message = Message::lockout(&evidence, &self.panel_address, true);
-        self.lockout = Some(HeldLockout::saved(evidence.clone()));
+        self.lockout = Some(HeldLockout::saved(evidence.clone(), LockoutCause::Signal));
         self.sign_in.end_wait();
         let before = commands.len();
         self.end_all_work(
@@ -289,11 +303,15 @@ impl Core {
                 ))));
                 Vec::new()
             }
-            Loaded::Lockout(evidence) => {
+            Loaded::Lockout(evidence, cause) => {
                 let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(
                     Message::lockout(&evidence, &self.panel_address, false),
                 ))));
-                self.handle(Event::StoredLockout(evidence), clock.now(), clock.wall())
+                self.handle(
+                    Event::StoredLockout(evidence, cause),
+                    clock.now(),
+                    clock.wall(),
+                )
             }
         }
     }
