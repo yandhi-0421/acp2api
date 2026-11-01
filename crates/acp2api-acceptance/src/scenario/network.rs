@@ -2,7 +2,11 @@ use super::*;
 use crate::network_observer::{FORBIDDEN, Observer, check_exit};
 
 impl Scenario {
-    pub async fn start_network_observed(&mut self, observer: &Observer) -> u32 {
+    pub async fn start_network_observed(
+        &mut self,
+        observer: &Observer,
+        env: &[(&str, &str)],
+    ) -> u32 {
         assert!(
             self.host.is_none(),
             "network observation starts before the host"
@@ -15,7 +19,8 @@ impl Scenario {
         let mut command = observer.command(&binary("acp2api-test-host"));
         command
             .env_clear()
-            .env(TIME_FACTOR_ENV, time_factor().to_string());
+            .env(TIME_FACTOR_ENV, time_factor().to_string())
+            .envs(env.iter().copied());
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         let mut host = command

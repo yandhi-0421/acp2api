@@ -26,6 +26,8 @@ jobs:
       - run: cargo +1.96.0 test --workspace --locked --no-fail-fast
       - name: Verify the native outbound connection controls
         run: cargo +1.96.0 test -p acp2api-acceptance --test network_observer_control --locked -- --ignored --test-threads=1
+      - name: Verify a planted outbound attempt in the observed host
+        run: cargo +1.96.0 test -p acp2api-acceptance --test network_fixture --locked -- --ignored --test-threads=1
       - name: Verify native audit cleanup
         run: cargo +1.96.0 test -p acp2api-acceptance --lib --locked network_observer -- --ignored --test-threads=1
       - run: cargo +1.96.0 fmt --all -- --check

@@ -18,7 +18,7 @@ fn checked_host_result<T>(scenario: &mut Scenario, result: std::thread::Result<T
 async fn observed(w: &mut World) {
     crate::network_support::prepare(&mut w.scenario);
     let observer = Observer::begin().expect("OS network observer and initial control");
-    let result = AssertUnwindSafe(w.scenario.start_network_observed(&observer))
+    let result = AssertUnwindSafe(w.scenario.start_network_observed(&observer, &[]))
         .catch_unwind()
         .await;
     let pid = checked_host_result(&mut w.scenario, result);
