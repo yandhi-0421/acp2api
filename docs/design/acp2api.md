@@ -592,16 +592,28 @@ The records of ADR-0003 describe idle ACP sessions outside that table.
 Its `prepare` method reserves one ACP session before the dispatcher selects more work.
 Both `session/new` and `session/load` use that method, including model reads, sign-in checks, and quota queries.
 
-A failed `Prepared` result releases the reservation before error handling, including the quota path.
+A rejected ACP call releases the reservation before error handling, including the quota path.
+`PreparationError` distinguishes a rejection from an unusable successful response. A successful response keeps its count despite a missing ID or invalid catalog.
 A local dispatch failure also releases its reservation. A successful call keeps its count after record expiry or `Forget`.
 Each replacement resets the count to its successful startup ACP session, or zero when startup creates none.
 
-The existing replacement path has a separate `SessionLimit` reason. It keeps the queue and uses the existing failure rule.
-The dispatcher can serve auxiliary work during this wait. Accepted requests keep their order until the replacement ends.
+The existing replacement path has a separate `SessionLimit` reason and a `SessionLimitWait` state.
+This state reports a runtime process that runs. It keeps the queue and uses the existing failure rule.
+The dispatcher can serve model reads, sign-in checks, and quota queries during this wait.
+Accepted requests keep their order until the replacement ends. This includes requests whose sign-in check has completed.
+
+One predicate tests whether a connected request needs another ACP session after its retry checks pass.
+The capacity gate and record consumption use the same choice of ACP session.
+The dispatcher evaluates that gate after retry refusals and before each request starts, including a request with a completed sign-in check.
+Replacement readiness tests occupied places before it hashes queued requests.
 
 The dispatcher withdraws this reason when capacity returns or no connected queued request needs another ACP session.
 It preserves the owner sign-in wait. An explicit cancel or timeout changes the reason to `SignIn`.
-These transitions implement the final decisions of [#204](https://github.com/yandhi-0421/acp2api/issues/204).
+The owner can start a sign-in during this state, and the same wait rule applies.
+
+Build selection continues during the limit wait. `Keep` and `Notice` answer without a stop.
+A selection that needs replacement takes over the limit demand before the actor can start a replacement.
+FR-041 holds the owner decisions on [#204](https://github.com/yandhi-0421/acp2api/issues/204).
 
 ### The runtime driver
 

@@ -707,6 +707,11 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
 - acp2api starts one runtime process at its own start. During a lockout, it starts none.
 - All ACP sessions and all prompt turns use this one runtime process. acp2api does not stop it when no request comes.
 - When the runtime process holds N ACP sessions, and a request needs one more, acp2api keeps each new request in the queue. When no prompt turn runs, it replaces the runtime process. In the first release, N = 8. This value is temporary, and no measurement supports it. The measurement after the release sets the real value (OD-1). N is a constant, not a setting.
+- The owner made these decisions on [#204](https://github.com/yandhi-0421/acp2api/issues/204):
+  - If no connected request still needs another ACP session, acp2api withdraws the limit replacement and keeps the runtime process.
+  - Model reads, sign-in checks, and quota queries count toward N. They may pass N, also while the replacement waits.
+  - A limit replacement does not end an owner sign-in wait. The replacement waits for that sign-in wait to end.
+  - While the replacement waits, requests that continue an ACP session also wait. The requests keep their order of arrival.
 - These events are failures:
   - a start with no answer in 5 minutes;
   - an exit that acp2api did not cause;
