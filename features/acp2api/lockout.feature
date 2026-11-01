@@ -192,7 +192,7 @@ Feature: Lockout
   Scenario: acp2api starts no runtime process when it cannot make the state file
     Given acp2api is stopped, and the data folder holds no state file
     And acp2api cannot make the state file
-    When the owner starts acp2api
+    When the owner started acp2api
     Then acp2api is in the state "runtime unavailable"
     And the management panel names the state file state.json
     And acp2api starts no runtime process

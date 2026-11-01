@@ -2,6 +2,8 @@ use crate::{World, lockout_support as lockout};
 use acp2api_acceptance::{client::Answer, journal_check, panel_check};
 use serde_json::json;
 
+use std::path::PathBuf;
+
 pub const OWNER: &str = "lockout-owner";
 pub const END: &str = "/manage/end-lockout";
 pub const SIGN_IN_FILES: [(&str, &[u8]); 2] = [
@@ -12,6 +14,7 @@ pub const SIGN_IN_FILES: [(&str, &[u8]); 2] = [
 #[derive(Debug, Default)]
 pub struct EndLockoutState {
     pub marker: String,
+    pub denied: Option<PathBuf>,
 }
 
 pub async fn page(w: &mut World) -> String {
