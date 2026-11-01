@@ -506,12 +506,19 @@ acp2api accepts a request after the checks of the local API key, of the request,
 The official runtime sends the text of an upstream error as normal reply text. No such text reaches the API client as reply text.
 
 - acp2api holds the newest reply text chunk until the next reply text chunk. A usage update or thought text does not release it.
-- At the end of a prompt turn, acp2api waits up to 200 ms for the error lines of the ACP session. The wait ends early when both lines are there: `Antigravity SDK error processing prompt for session <ID>` and the last line of its traceback.
-- With no error line at the end of this wait, acp2api sends the held chunk.
-- After an error line, acp2api drops the held chunk, and it ends the response with the error. The text that acp2api sent before the held chunk stays in the response.
+- At the end of a prompt turn, acp2api waits up to 200 ms for the error lines of the ACP session.
+  The wait ends early when both lines arrive.
+  These are `Antigravity SDK error processing prompt for session <ID>` and the last line of its traceback.
+- When both error lines arrive before the prompt turn ends, acp2api continues to read stdout for up to 200 ms.
+- This wait ends at once when the prompt turn ends. Further updates or error lines do not extend it.
+- With no error line at the end of the wait after a prompt turn, acp2api sends the held chunk.
+- After the error wait, acp2api drops the held chunk and ends the response with the error.
+- The text that acp2api sent before the held chunk stays in the response, also when stderr arrives before those stdout chunks.
+- An error line that itself holds a lockout signal starts a lockout at once (FR-034).
+- Reply text after an error line still counts under FR-034 while acp2api reads that prompt turn, also after the response ends.
 - When an error line comes after the wait, the ACP session never continues, and acp2api writes a log line.
 
-**Pass:** in a test, the last chunk of a prompt turn is the error text, and the error line comes 0 to 200 ms after it. The response then has the error and no error text. The text before that chunk is in the response.
+**Pass:** the last chunk of a prompt turn is the error text. Its error line can arrive before stdout, or up to 200 ms after the turn ends. The response has the error and no error text. The text before that chunk is in the response. A turn that does not end keeps no response open beyond the 200 ms stdout wait.
 
 #### FR-029 — Retry wait
 

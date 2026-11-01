@@ -55,7 +55,7 @@ Each item gives the decision, its reason, its effect, and its way back. The appr
    - ACP uses the types of `agent-client-protocol-schema` with an own JSON-RPC line loop. It does not use the connection of `agent-client-protocol`.
    - The MCP server of the client tools is an own small module, not `rmcp`.
    - Reasons for the own line loop:
-     - FR-028 needs the order of the stdout lines and the stderr lines in which acp2api reads them.
+     - FR-028 needs stdout line order and a bounded wait after an error line. Read order across the pipes does not establish the order of the official runtime.
      - The settle of virtual time needs a count of the lines that acp2api handled. The library hides both in its tasks.
      - The library had three major versions from 2026-06-24 to 2026-10-06 (crates.io).
    - Reasons for the own MCP server:
@@ -506,11 +506,14 @@ The core has these parts. Each part is a private module with a pure interface.
   - The check uses the signal rules of FR-034. During a lockout, it sends nothing.
 - **`turns`.** One machine for each prompt turn:
   - the held reply text chunk and the 200 ms window (FR-028); usage and thought updates do not release the chunk;
+  - after a complete stderr error, stdout continues until the prompt turn ends or 200 ms pass; further updates do not extend this wait;
   - the stop scan across chunks (FR-015);
   - cancel at permission, and the refusal of each other permission request (FR-047);
   - the deadline of 5 minutes with no update (FR-051), and the deadline of 30 s after a cancel (FR-041);
   - the token usage (FR-025) and the drop of thought text (FR-018).
 - **`signals`.** The table of FR-034 over the error of each ACP call and the stderr error lines.
+  A lockout signal in an error line acts at once. A failed turn retains its error and a short text suffix while acp2api reads that turn.
+  The signal check also covers text after the response ends, for API requests and `/usage` prompts.
 - **`quota`.** `/usage` (FR-052), the parse of the reset time, and the limit of one refresh in 60 s.
 - **`owner`.** The owner actions of FR-053, the sign-in wait of FR-039, the script of the compatibility check of FR-044, and the notices of FR-047.
   After a copy error, an owner action answers 422 and keeps the current unavailable reason. These actions are retry, new search, and new path.
