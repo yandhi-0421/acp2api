@@ -123,6 +123,45 @@ impl Clock for TestClock {
         })
     }
 }
+pub(crate) struct IdleClock {
+    clock: Arc<TestClock>,
+    advance: Arc<Mutex<Option<Moment>>>,
+}
+impl IdleClock {
+    pub(crate) fn new(clock: Arc<TestClock>) -> Arc<Self> {
+        Arc::new(Self {
+            clock,
+            advance: Arc::default(),
+        })
+    }
+    pub(crate) fn advance_on_next_idle(&self, at: Moment) {
+        *self.advance.lock().unwrap() = Some(at);
+    }
+}
+impl Clock for IdleClock {
+    fn now(&self) -> Moment {
+        self.clock.now()
+    }
+    fn wall(&self) -> SystemTime {
+        self.clock.wall()
+    }
+    fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
+        self.clock.sleep_until(at)
+    }
+    fn hold(&self, kind: HoldKind) -> Hold {
+        let work = self.clock.hold(kind);
+        let clock = self.clock.clone();
+        let advance = self.advance.clone();
+        Hold::on_drop(move || {
+            drop(work);
+            if clock.holds.load(Ordering::SeqCst) == 0
+                && let Some(at) = advance.lock().unwrap().take()
+            {
+                clock.now.send_replace(at);
+            }
+        })
+    }
+}
 struct Tree;
 impl ProcessTree for Tree {
     fn pid(&self) -> u32 {
@@ -135,7 +174,7 @@ impl ProcessTree for Tree {
         Box::pin(async {})
     }
 }
-struct GraceTree;
+pub(crate) struct GraceTree;
 impl ProcessTree for GraceTree {
     fn pid(&self) -> u32 {
         std::process::id()
@@ -288,6 +327,38 @@ async fn stalled_cancel_releases_clock_then_hands_work_to_process_stop() {
     })
     .await
     .expect("stalled cancel clock cap: 5 s");
+}
+
+#[tokio::test]
+async fn a_completed_cancel_cannot_release_stop_work_before_the_writer_joins() {
+    // One frame, five real seconds, 16 KiB pipe capture and 32 clock registrations.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (stderr, _errors) = tokio::io::duplex(1);
+        let mut f = fixture_with_stderr(Box::pin(stderr)).await;
+        f.recording.allow(0);
+        f.runtime.cancel("completed").await.unwrap();
+        assert_eq!(f.waits.recv().await, Some(WRITE_TIMEOUT));
+        f.recording.allow(16 * 1024);
+        while !f.recording.bytes.lock().unwrap().ends_with(b"\n") {
+            tokio::task::yield_now().await;
+        }
+        let clock = IdleClock::new(f.clock.clone());
+        f.runtime.clock = clock.clone();
+        f.runtime.tree = Box::new(GraceTree);
+        clock.advance_on_next_idle(WRITE_TIMEOUT);
+        let stopping = f.runtime.stop();
+        let advancing = async {
+            assert_eq!(
+                f.waits.recv().await,
+                Some(5_000),
+                "a completed cancel must not permit time to advance before process stop"
+            );
+            f.clock.advance_to(5_000).await;
+        };
+        tokio::join!(stopping, advancing);
+    })
+    .await
+    .expect("completed cancel stop cap: 5 s");
 }
 
 #[tokio::test]
