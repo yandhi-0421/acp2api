@@ -633,7 +633,16 @@ impl Core {
         }
     }
 
-    pub(super) fn runtime_failed(&mut self, now: Moment, commands: &mut Vec<Command>) {
+    pub(super) fn runtime_failed(
+        &mut self,
+        now: Moment,
+        wall: std::time::SystemTime,
+        commands: &mut Vec<Command>,
+    ) {
+        self.end_occupying_work(crate::messages::Message::RuntimeFailed, now, wall, commands);
+        if self.lockout.is_some() {
+            return;
+        }
         self.refuse_model_reads(&crate::messages::Message::RuntimeFailed, commands);
         self.sign_in.end_wait();
         self.lifecycle.state = RuntimeState::Restarting;
@@ -642,7 +651,6 @@ impl Core {
             .failures
             .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
         self.lifecycle.failures.push_back(now);
-        self.end_occupying_work(crate::messages::Message::RuntimeFailed, now, commands);
         self.catalog = None;
     }
 

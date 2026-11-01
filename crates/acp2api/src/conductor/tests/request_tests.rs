@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn a_prompt_after_a_quota_signal_keeps_its_no_update_deadline() {
+fn a_prompt_after_another_turns_quota_signal_keeps_its_no_update_deadline() {
     let folder = std::env::temp_dir().join(format!(
         "acp2api-quota-idle-{}",
         crate::random_hex::<12>().unwrap()
@@ -11,7 +11,7 @@ fn a_prompt_after_a_quota_signal_keeps_its_no_update_deadline() {
         let (mut core, _, _tickets) = prompting_with_waiter(&journal);
         core.handle(
             Event::Runtime(RuntimeEvent::UpstreamError {
-                session: "running".into(),
+                session: "quota-signal".into(),
                 error: crate::messages::HttpError {
                     code: Some(429),
                     status: "RESOURCE_EXHAUSTED".into(),
