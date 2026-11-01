@@ -11,10 +11,12 @@ With the same window and predicate, `log show` returned sandbox denials on its f
 The next three reads returned no denials.
 Thus repeated historical queries cannot supply a cumulative observation window.
 
-Initial live-stream startup probes received all denials in five of five runs with one predicate clause.
+The orchestrator ran the initial `log stream` startup rounds on 2026-11-01, on Darwin 27.2.
+These received all denials in five of five runs with one predicate clause.
 They also received all denials in three of three runs with the full predicate.
 These short runs did not establish complete delivery over longer windows.
 
+The review of HEAD `8c93665e9961db7ae4209cf13918e0b916b85948` supplied the following log-loss measurements on Darwin 27.2.
 A 100-second run issued one denied control per second and lost 13 of 100 denial lines between visible lines.
 There was no `lossEvent`, dropped-message notice, or suppression notice.
 Other windows lost every control for tens of seconds. A warm window with 150 triples lost none.
@@ -50,7 +52,11 @@ The measured profile was:
 | Dial to `127.0.0.2` | Process died by SIGKILL; no repetition count was supplied. |
 | Forbidden dial in a child | Child died by SIGKILL; parent lived and exited 0. |
 
-A separate review probe killed all 80 forbidden controls: 40 short and 40 failed attempts.
+The orchestrator supplied the table's SIGKILL profile measurements from 2026-11-01, on Darwin 27.2.
+The 30/30 forbidden dials and 20/20 loopback dials belong to these rounds.
+
+The review of HEAD `8c93665e9961db7ae4209cf13918e0b916b85948` supplied a separate SIGKILL probe.
+It killed all 80 forbidden controls: 40 short and 40 failed attempts.
 All 40 loopback controls in that probe lived.
 These are separate probe cohorts; their counts are not combined with the table above.
 
@@ -59,4 +65,3 @@ The Windows audit check compares literal destination addresses and covers `::1` 
 
 The signal rule makes the host exit status the evidence for its first forbidden attempt.
 A child-only death does not establish a forbidden attempt by its parent.
-Native controls and a 20-run planted-host check remain required for the revised harness.

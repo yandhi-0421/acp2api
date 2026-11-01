@@ -1504,6 +1504,8 @@ The macOS log loses sandbox denials without a loss event or dropped-message noti
 Visible controls on both sides of a missing denial cannot prove a complete record.
 The [native measurements](../research/2026-11-01-macos-sandbox-deny-evidence.md) give the reason for the signal rule.
 
+`sandbox-exec` does not nest. Native macOS checks must run outside another sandbox.
+
 A successful loopback control must live. Short and failed TEST-NET controls must die by SIGKILL under the same profile.
 A short control precedes the host, and a failed control follows its exit.
 The native controls also require a connection to `127.0.0.2` to fail the destination check.
@@ -1526,7 +1528,7 @@ The observed shutdown first checks that the host is still alive, then requests a
 It returns the real exit status. SIGKILL and other unsuccessful exits fail the destination check.
 It polls the process without a virtual-time barrier, which a killed host cannot complete.
 If the shutdown deadline requires a harness kill, that path returns an FR-046 error even if the kill races with another exit.
-The shared shutdown path for other scenarios is unchanged.
+Other scenarios use `Scenario::stop` for shutdown.
 
 ### Windows
 
@@ -1538,11 +1540,13 @@ The test needs an elevated Windows account; hosted CI provides that account.
 The capture saves a Security-log record and timestamp after setup.
 A structured event query selects connection events 5156 and 5157 for the host and both control PIDs within that window.
 It accepts decimal and hexadecimal PID fields. Unrelated processes do not consume the connection-record cap.
-A separate selector retains audit-gap events 1100, 1101, 1102, 1104, 1108, and 4719 regardless of PID.
+A separate selector retains audit-gap events 1100, 1101, 1102, 1104, 1108, 4612, and 4719 regardless of PID.
+Event [4612](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4612) reports discarded audits after an audit-queue overflow.
 The selectors share one capped reader. The [Windows event-query contract](https://learn.microsoft.com/en-us/windows/win32/wes/consuming-events) defines this query form.
 
 The parser reads named XML fields and selects outbound records only.
 Only the host PID contributes to the final destination assertion; the fake ACP agent and other children do not contribute.
+If Windows attributes a host record to PID 0 or 4, the selector excludes it and can miss the attempt.
 A destination other than the literal IPv4 address `127.0.0.1` fails FR-046, including `::1`.
 The host must have at least one outbound audit record.
 Both control PIDs must have forbidden outbound records within a ten-second delivery wait.
@@ -1567,7 +1571,12 @@ Unit tests check exit classification, premature exit, forced shutdown, audit nor
 The parser tests require the exact error for each invalid record.
 A fixture test exercises the real product and graceful observed shutdown without OS enforcement.
 Native controls run in separate CI steps so each command determines its own result.
-The default workspace test run includes the FR-046 scenario; there is no duplicate scenario-only CI step.
+The default workspace test run includes the FR-046 scenario.
+
+A separate native CI step starts the real test host through `Scenario::start_network_observed` with `ACP2API_TEST_OUTBOUND_DIAL` set.
+Only the test host reads this variable. Before `acp2api::run`, the host makes one connection attempt to `192.0.2.1:9` with a 200 ms timeout.
+The test requires the FR-046 failure text from observed startup, shutdown, or the destination assertion.
+It has a 60-second cap and uses the same request and log caps as the fixture.
 
 ## Open questions
 
