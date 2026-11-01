@@ -38,7 +38,12 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
     }
 }
 
-pub(super) fn persist(path: &Path, evidence: Lockout, journal: &Journal, clock: &dyn Clock) {
+pub(super) fn persist(
+    path: &Path,
+    evidence: Lockout,
+    journal: &Journal,
+    clock: &dyn Clock,
+) -> bool {
     match StateFile::read(path) {
         Ok(mut state) => {
             state.lockout = Some(evidence);
@@ -49,10 +54,14 @@ pub(super) fn persist(path: &Path, evidence: Lockout, journal: &Journal, clock: 
                     error.kind(),
                     clock,
                 );
+                false
+            } else {
+                true
             }
         }
         Err(error) => {
             journal.state_file_failure("state_file_read_failed", "lockout", error.kind(), clock);
+            false
         }
     }
 }
@@ -65,8 +74,26 @@ pub(super) fn clear(path: &Path) -> std::io::Result<()> {
 }
 
 impl Core {
+    pub(super) fn retry_lockout_save(&mut self) {
+        if !self.lockout_unsaved {
+            return;
+        }
+        let Some(evidence) = self.lockout.clone() else {
+            return;
+        };
+        let saved = StateFile::read(&self.state_path).and_then(|mut state| {
+            state.lockout = Some(evidence);
+            state.save(&self.state_path)
+        });
+        if saved.is_ok() {
+            self.lockout_unsaved = false;
+            self.publish_view();
+        }
+    }
+
     pub(super) fn end_lockout(&mut self, now: Moment) {
         self.lockout = None;
+        self.lockout_unsaved = false;
         self.lifecycle.lockout_ended(now);
     }
 

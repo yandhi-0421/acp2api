@@ -521,6 +521,12 @@ fn end_lockout(language: Language) -> String {
         ),
     )
 }
+fn lockout_unsaved(language: Language) -> &'static str {
+    language.pick(
+        "acp2api: the lockout is not in the state file state.json, because the write failed. A restart of acp2api ends this lockout. acp2api tries the write again.",
+        "acp2api：锁死没有写进状态文件 state.json，因为写入失败。重启 acp2api 会结束这次锁死。acp2api 会再次尝试写入。",
+    )
+}
 fn first_tile(
     language: Language,
     view: &crate::conductor::View,
@@ -531,11 +537,15 @@ fn first_tile(
     let shade = state_shade(view.state);
     let dot = dot(state_tone(view.state));
     let state = language.state(view.state);
-    let evidence = view
+    let mut evidence = view
         .lockout_evidence
         .as_ref()
         .map(|text| format!("<p>{}</p>", escape(text)))
         .unwrap_or_default();
+    if view.lockout_unsaved {
+        let text = lockout_unsaved(language);
+        evidence.push_str(&format!(r#"<p role="status">{text}</p>"#));
+    }
     let action = if view.state == State::Lockout {
         end_lockout(language)
     } else {

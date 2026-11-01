@@ -73,6 +73,7 @@ pub(crate) struct View {
     pub(crate) queued: usize,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
     pub(crate) lockout_evidence: Option<String>,
+    pub(crate) lockout_unsaved: bool,
 }
 impl Default for View {
     fn default() -> Self {
@@ -85,6 +86,7 @@ impl Default for View {
             queued: 0,
             sign_in_wait: None,
             lockout_evidence: None,
+            lockout_unsaved: false,
         }
     }
 }
@@ -139,6 +141,7 @@ pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const SETTLE_DELAY: Moment = 200;
 struct Core {
     lockout: Option<crate::store::Lockout>,
+    lockout_unsaved: bool,
     sign_in: sign_in::SignIn,
     panel_address: String,
     state_path: PathBuf,
@@ -502,6 +505,7 @@ impl Core {
                 .lockout
                 .as_ref()
                 .map(|evidence| evidence.original_error_text.clone()),
+            lockout_unsaved: self.lockout_unsaved,
             state: self.state(),
             runtime_process: self.lifecycle.state().runtime_process(),
             places: self.work.places(),
@@ -550,6 +554,7 @@ impl Conductor {
                     RuntimeState::Serving
                 }),
                 lockout,
+                lockout_unsaved: false,
                 sign_in: sign_in::SignIn::default(),
                 panel_address,
                 state_path,
@@ -572,6 +577,7 @@ impl Conductor {
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
+                core.retry_lockout_save();
                 if core.replacement_ready() && core.lifecycle.replacement_pending() {
                     checking = core
                         .replace(

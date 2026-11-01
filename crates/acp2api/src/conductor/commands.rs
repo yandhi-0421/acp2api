@@ -81,7 +81,8 @@ impl Conductor {
                     let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(error))));
                 }
                 Command::Lockout(evidence) => {
-                    lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
+                    core.lockout_unsaved =
+                        !lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
                     core.stop_runtime(runtime, read_open).await;
                     core.lifecycle.lockout_stopped();
                     core.publish_view();

@@ -25,6 +25,7 @@ impl Core {
             retry_waits: Vec::new(),
             lifecycle: Lifecycle::new(RuntimeState::Serving),
             lockout: None,
+            lockout_unsaved: false,
             sign_in: sign_in::SignIn::default(),
             panel_address: "http://127.0.0.1:8329/".into(),
             state_path: PathBuf::new(),
