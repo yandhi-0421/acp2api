@@ -604,6 +604,7 @@ impl Conductor {
             );
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
+            let mut exit_work = None;
             loop {
                 core.retry_lockout_save();
                 if core.replacement_ready() && core.lifecycle.replacement_pending() {
@@ -787,19 +788,43 @@ impl Conductor {
                     }
                     hold = deadline(timer) => (Event::Deadline, hold),
                 };
-                core.apply(event, &mut runtime, &mut read_open, &clock, &journal)
-                    .await;
-                drop(hold);
+                let work = {
+                    let mut event_work = Some(hold);
+                    let mut applying = std::pin::pin!(core.apply(
+                        event,
+                        &mut runtime,
+                        &mut read_open,
+                        &clock,
+                        &journal
+                    ));
+                    std::future::poll_fn(|cx| {
+                        let processing = event_work
+                            .take()
+                            .unwrap_or_else(|| clock.hold(HoldKind::TurnEvent));
+                        let result = applying.as_mut().poll(cx);
+                        result.map(|()| processing)
+                    })
+                    .await
+                };
                 if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
+                    exit_work = Some(work);
                     break;
                 }
             }
             if let Some(check) = checking {
+                exit_work.take();
                 let check = check.await;
                 let _ = check.reply.send(Err(LaunchFailure::Stopped));
             }
             if let Some(runtime) = runtime {
-                runtime.stop().await;
+                let mut until_first_poll = exit_work;
+                let mut stopping = std::pin::pin!(runtime.stop());
+                std::future::poll_fn(|cx| {
+                    let result = stopping.as_mut().poll(cx);
+                    until_first_poll.take();
+                    result
+                })
+                .await;
             }
         });
         (conductor, task)

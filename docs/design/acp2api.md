@@ -339,16 +339,20 @@ Invariants and error modes:
 
 ### Runtime stdin transport
 
-- Each runtime process has one writer task that owns stdin. Commands enqueue complete ACP frames in FIFO order and never await the pipe.
+- Each runtime process has one writer task that owns stdin. Commands enqueue complete ACP frames in FIFO order. Enqueue never awaits the pipe.
 - Each frame has a 30 s deadline from enqueue, for write and flush together. Queue time counts towards that deadline.
 - The writer retains at most 128 MiB of frame bytes, including the frame in progress. This equals four frames of 32 MiB.
 - A write error, timeout, or queue overflow fails the runtime through the existing failure rule. The writer drops the pipe and backlog without retry.
-- Cancellation permits at most 30 s before runtime failure. Process stop then adds at most 5 s on macOS: 35 s in total.
-- Windows adds 0 s of process-stop grace before Job Object termination. Its cancellation bound is 30 s in total.
-- Shutdown interrupts a pending write or flush and polls pipe shutdown once. The writer join adds 0 ms of clock wait.
-- Shutdown permits 5 s of process-stop grace on macOS and 0 s on Windows. `os::PROCESS_STOP_GRACE` supplies the shared platform value.
+- At stop, cancel frames keep their enqueue deadlines. The writer interrupts a pending non-cancel write or flush and skips queued non-cancel frames.
+- If stop interrupts a non-cancel frame in progress, the writer drops the pipe and backlog. A cancel behind that frame can be lost.
+- The writer join adds at most 30 s of clock wait. After a drained queue, the writer polls pipe shutdown once.
+- On macOS, process stop permits up to 5 s of grace, then sends SIGKILL to the process group. Windows closes the Job Object with 0 s of grace. `os::PROCESS_STOP_GRACE` supplies the platform value.
+- The total clock wait for cancel and stop is at most 35 s on macOS and 30 s on Windows.
+- Lockout, restart, and replacement await stop inside the conductor. A stalled cancel can block each path for 35 s on macOS or 30 s on Windows.
 - These bounds count conductor-clock waits. Executor scheduling and OS reaping follow termination.
-- No hold spans a pending pipe operation. Holds cover ready work and failure delivery until acknowledgement or stop.
+- No hold spans a pending pipe operation. Holds cover ready work. After a write failure, work stays held until stop joins the writer.
+- Stop retains work through the first poll of process stop, except while the writer waits on a cancel write. The completed writer transfers a Hold through its join result, so the process deadline registers before that work ends.
+- Stop drains stderr while the writer joins and preserves its order for the later reader. This stderr buffer has no line or byte cap yet.
 
 ### Domain types
 

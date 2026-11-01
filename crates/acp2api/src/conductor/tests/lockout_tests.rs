@@ -1673,3 +1673,48 @@ async fn an_end_of_an_unsaved_lockout_succeeds_while_the_file_still_cannot_be_wr
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[tokio::test]
+async fn a_lockout_can_reach_the_deadline_of_a_stalled_cancel() {
+    use crate::runtime_driver::write_tests::{Launcher, Pipe, Recording, TestClock};
+    use tokio::io::AsyncWriteExt;
+    // One process, four ACP frames, two stderr lines, 16 KiB capture, five real seconds.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let (clock, mut deadlines) = TestClock::new();
+        let recording = Recording::new(16 * 1024);
+        let (stderr, mut errors) = tokio::io::duplex(1024);
+        let stops = Arc::new(AtomicUsize::new(0));
+        let replies = [
+            serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}}),
+            serde_json::json!({"jsonrpc":"2.0","id":2,"result":{"sessionId":"running","configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]}}),
+        ].iter().map(|reply| format!("{reply}\n")).collect::<String>();
+        let mut ports = crate::Ports::production();
+        ports.clock = clock.clone();
+        ports.launcher = Arc::new(Launcher(std::sync::Mutex::new(Some(crate::Launched {
+            stdin: Box::pin(Pipe(recording.clone())),
+            stdout: Box::pin(Output(std::io::Cursor::new(replies.into_bytes()))),
+            stderr: Box::pin(stderr),
+            tree: Box::new(StoppedTree(stops.clone())),
+        }))));
+        let (root, conductor, task) = check_fixture(ports, watch::channel(false).1).await;
+        assert!(conductor.model_names(Hold::empty()).await.is_ok());
+        let owner = conductor.clone();
+        let refreshing = tokio::spawn(async move { owner.owner(OwnerAction::RefreshQuota, Hold::empty()).await });
+        loop {
+            if String::from_utf8_lossy(&recording.bytes.lock().unwrap()).contains("session/prompt") { break; }
+            tokio::task::yield_now().await;
+        }
+        recording.allow(recording.bytes.lock().unwrap().len());
+        while deadlines.try_recv().is_ok() {}
+        errors.write_all(b"Antigravity SDK error processing prompt for session running\nError 403, Message: Synthetic account suspension, Status: PERMISSION_DENIED, Details: none\n").await.unwrap();
+        assert_eq!(deadlines.recv().await, Some(30_000));
+        clock.advance_to(30_000).await;
+        assert!(refreshing.await.unwrap().is_err());
+        assert!(conductor.model_names(Hold::empty()).await.is_err());
+        assert_eq!((conductor.view().state, stops.load(Ordering::SeqCst)), (State::Lockout, 1),
+            "lockout must finish a stalled cancel at its write deadline without an incoming hold freezing time");
+        drop(conductor);
+        task.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }).await.expect("lockout stalled cancel clock cap: 5 s");
+}
