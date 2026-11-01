@@ -14,6 +14,7 @@
             return Array.from(context.getImageData(0, 0, 1, 1).data);
         };
         const properties = [
+            'font-size', 'backdrop-filter', 'background-image',
             'box-shadow', 'text-shadow', 'filter', 'font-family', 'content', 'display', 'visibility', 'opacity',
             'border-top-left-radius', 'border-top-right-radius',
             'border-bottom-left-radius', 'border-bottom-right-radius',
@@ -53,6 +54,7 @@
         const nodes = elements.map((element, index) => {
             const rect = element.getBoundingClientRect();
             return {
+                parent: element.parentElement ? elements.indexOf(element.parentElement) : null,
                 index, tag: element.localName, role: element.getAttribute('role') ?? '',
                 href: element.hasAttribute('href'), visible: visible(element),
                 disabled: element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true',

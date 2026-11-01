@@ -35,6 +35,7 @@ struct Paint {
 }
 #[derive(Debug, Deserialize)]
 struct Node {
+    parent: Option<usize>,
     index: usize,
     tag: String,
     role: String,
@@ -606,4 +607,73 @@ pub fn dark_first_tile(audit: &Audit) -> Result<(), String> {
         )),
         None => Err("FR-035 rendered management panel has no first tile".into()),
     }
+}
+
+pub fn first_tile_presentation(audit: &Audit, shade: &str) -> Result<(), String> {
+    let tile = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "section")
+        .ok_or("FR-054 rendered panel needs a first tile")?;
+    let heading = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "h1")
+        .ok_or("FR-054 rendered first tile needs a state heading")?;
+    if !tile.visible || !heading.visible || px(&heading.paint.css["font-size"]) != 56. {
+        return Err(
+            "FR-054 first tile state must render visibly in 56 px type at the audit viewport"
+                .into(),
+        );
+    }
+    let mut surface = tile;
+    while surface.paint.colors["background-color"][3] == 0 {
+        if surface.paint.css["background-image"] != "none" {
+            return Err("FR-054 first tile needs a solid surface, not an image".into());
+        }
+        let Some(parent) = surface.parent else { break };
+        surface = &audit.nodes[parent];
+    }
+    let background = surface.paint.colors["background-color"];
+    let matches = surface.paint.css["background-image"] == "none"
+        && match shade {
+            "dark" => background == [39, 39, 41, 255],
+            "light" => background == WHITE || background == [245, 245, 247, 255],
+            _ => panic!("unknown scenario shade: {shade}"),
+        };
+    if !matches {
+        return Err(format!(
+            "FR-054 first tile must render {shade}; background={background:?}"
+        ));
+    }
+    Ok(())
+}
+
+pub fn variant_a_bars(audit: &Audit) -> Result<(), String> {
+    let header = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "header")
+        .ok_or("FR-054 rendered global bar is absent")?;
+    let tile = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "section")
+        .ok_or("FR-054 rendered first tile is absent")?;
+    if !header.visible || header.paint.colors["background-color"] != [0, 0, 0, 255] {
+        return Err("FR-054 global bar must render visibly in black".into());
+    }
+    if !audit.nodes.iter().any(|node| {
+        node.visible
+            && header.index < node.index
+            && node.index < tile.index
+            && node.paint.css["backdrop-filter"]
+                .split_once("blur(")
+                .is_some_and(|(_, length)| px(length.split(')').next().unwrap()) > 0.)
+    }) {
+        return Err(
+            "FR-054 a frosted bar must render between the global bar and first tile".into(),
+        );
+    }
+    Ok(())
 }
