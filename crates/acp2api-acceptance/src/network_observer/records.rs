@@ -1,70 +1,7 @@
-use super::{Attempt, Destination, LOG_CAP, RECORD_CAP};
-#[cfg(any(windows, test))]
+use super::{Attempt, LOG_CAP, RECORD_CAP};
 use serde::Deserialize;
-#[cfg(any(windows, test))]
 use std::{collections::HashMap, net::IpAddr};
 
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn macos(bytes: &[u8]) -> Result<Vec<Attempt>, String> {
-    if bytes.len() as u64 > LOG_CAP {
-        return Err("unified log exceeds 1 MiB".into());
-    }
-    let mut attempts = Vec::new();
-    for (index, line) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
-        if !line.ends_with(b"\n") {
-            break;
-        }
-        if index == RECORD_CAP {
-            return Err("unified log exceeds 4096 records".into());
-        }
-        let event: serde_json::Value =
-            serde_json::from_slice(line).map_err(|e| format!("unified log NDJSON: {e}"))?;
-        let kind = event["eventType"]
-            .as_str()
-            .ok_or("unified log lacks eventType")?;
-        if kind == "lossEvent" {
-            return Err("unified log reports lost records".into());
-        }
-        let message = event["eventMessage"]
-            .as_str()
-            .ok_or("unified log lacks eventMessage")?;
-        if !message.starts_with("Sandbox:") {
-            continue;
-        }
-        let lower = message.to_ascii_lowercase();
-        if ["dropped", "suppressed", "lost"]
-            .iter()
-            .any(|word| lower.contains(word))
-        {
-            return Err("unified log reports a record gap".into());
-        }
-        if !message.contains("network-outbound") {
-            continue;
-        }
-        let (prefix, _) = message
-            .split_once(" deny(")
-            .ok_or("unrecognized sandbox outbound record")?;
-        let (_, pid) = prefix.rsplit_once('(').ok_or("sandbox record lacks PID")?;
-        let pid = pid
-            .strip_suffix(')')
-            .ok_or("invalid sandbox PID")?
-            .parse()
-            .map_err(|_| "invalid sandbox PID")?;
-        attempts.push(Attempt {
-            pid,
-            destination: Destination::SandboxDeny,
-        });
-    }
-    Ok(attempts)
-}
-
-#[cfg(windows)]
-#[derive(Debug, Deserialize)]
-pub(super) struct Cursor {
-    pub record: u64,
-    pub time: String,
-}
-#[cfg(any(windows, test))]
 #[derive(Deserialize)]
 struct WindowsCapture {
     anchor: bool,
@@ -72,14 +9,12 @@ struct WindowsCapture {
     newest: u64,
     events: Vec<WindowsEvent>,
 }
-#[cfg(any(windows, test))]
 #[derive(Deserialize)]
 struct WindowsEvent {
     record: u64,
     id: u16,
     fields: HashMap<String, String>,
 }
-#[cfg(any(windows, test))]
 pub(super) fn windows(bytes: &[u8], start: u64) -> Result<Vec<Attempt>, String> {
     if bytes.len() as u64 > LOG_CAP {
         return Err("Security log exceeds 1 MiB".into());
@@ -123,30 +58,17 @@ pub(super) fn windows(bytes: &[u8], start: u64) -> Result<Vec<Attempt>, String> 
         let destination: IpAddr = field("DestAddress")?
             .parse()
             .map_err(|_| "invalid Security event destination")?;
-        attempts.push(Attempt {
-            pid,
-            destination: Destination::Address(destination),
-        });
+        attempts.push(Attempt { pid, destination });
     }
     Ok(attempts)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::Observation;
+    use super::super::only_loopback;
     use super::*;
     use serde_json::{Value, json};
-    // Kernel deny text recorded by the orchestrator outside Codex, 2026-11-01.
-    const DENY: &str = "Sandbox: Python(72753) deny(1) network-outbound remote:*:9";
-    fn mac(message: &str) -> Vec<u8> {
-        let mut line = serde_json::to_vec(
-            &json!({"eventType":"logEvent","processID":0,"eventMessage":message}),
-        )
-        .unwrap();
-        line.push(b'\n');
-        line
-    }
-    // Field names and values follow Microsoft's recorded 5156/5157 XML examples.
+
     fn event(record: u64, id: u16, pid: &str, address: &str) -> Value {
         json!({"record":record,"id":id,"fields":{"ProcessID":pid,"Direction":"%%14593","DestAddress":address}})
     }
@@ -157,76 +79,21 @@ mod tests {
         windows(&serde_json::to_vec(value).unwrap(), 10)
     }
     #[test]
-    fn sandbox_pid_comes_from_the_message_not_the_kernel_pid() {
-        let attempts = macos(&mac(DENY)).unwrap();
-        assert_eq!(
-            attempts,
-            vec![Attempt {
-                pid: 72753,
-                destination: Destination::SandboxDeny
-            }]
-        );
-        assert!(
-            Observation::select(72753, attempts)
-                .only_loopback()
-                .unwrap_err()
-                .starts_with("FR-046 outbound attempt")
-        );
-    }
-    #[test]
-    fn ndjson_ignores_only_the_partial_last_record() {
-        let capture = b"{\"eventType\":\"logEvent\",\"eventMessage\":\"Sandbox: Python(72753) deny(1) network-outbound remote:*:9\"}\n{\"eventType\":";
-        assert_eq!(
-            macos(capture).expect("the complete denial remains observable"),
-            vec![Attempt {
-                pid: 72753,
-                destination: Destination::SandboxDeny
-            }]
-        );
-    }
-    #[test]
-    fn log_query_diagnostics_do_not_hide_sandbox_denials() {
-        // Recorded message excerpts from the orchestrator's native log query.
-        let capture = br#"{"eventType":"logEvent","processID":0,"eventMessage":"Sandbox: Python(72753) deny(1) network-outbound remote:*:9"}
-            {"eventType":"logEvent","eventMessage":"log run noninteractively, ... args: ... eventMessage CONTAINS[c] 'network-outbound'"}
-            {"eventType":"logEvent","eventMessage":"log run noninteractively, ... args: ... eventMessage CONTAINS[c] 'network-outbound' OR eventType == 'lossEvent' OR (eventMessage BEGINSWITH 'Sandbox:' AND eventMessage CONTAINS[c] 'suppressed') OR (process == 'logd' AND (eventMessage CONTAINS[c] 'dropped' OR eventMessage CONTAINS[c] 'lost'))"}
-"#;
-        assert_eq!(
-            macos(capture).expect("log diagnostics must not invalidate sandbox evidence"),
-            vec![Attempt {
-                pid: 72753,
-                destination: Destination::SandboxDeny
-            }]
-        );
-    }
-    #[test]
-    fn fake_agent_and_other_child_denials_do_not_count_as_product_connections() {
-        assert!(
-            Observation::select(100, macos(&mac(DENY)).unwrap())
-                .only_loopback()
-                .is_ok()
-        );
+    fn other_child_connections_do_not_count_as_product_connections() {
         let capture = win(vec![
             event(11, 5157, "72753", "192.0.2.1"),
             event(12, 5156, "100", "127.0.0.1"),
         ]);
-        assert!(
-            Observation::select(100, parse(&capture).unwrap())
-                .only_loopback()
-                .is_ok()
-        );
+        assert_eq!(only_loopback(100, parse(&capture).unwrap()), Ok(()));
+        assert_eq!(only_loopback(72753, parse(&capture).unwrap()),
+            Err("FR-046 outbound attempt outside 127.0.0.1: Attempt { pid: 72753, destination: 192.0.2.1 }".into()));
     }
     #[test]
     fn both_windows_success_and_failure_audits_fail_for_the_product_pid() {
         for id in [5156, 5157] {
             let capture = win(vec![event(11, id, "0x11cc", "192.0.2.1")]);
-            let observation = Observation::select(4556, parse(&capture).unwrap());
-            assert!(
-                observation
-                    .only_loopback()
-                    .unwrap_err()
-                    .starts_with("FR-046 outbound attempt")
-            );
+            assert_eq!(only_loopback(4556, parse(&capture).unwrap()),
+                Err("FR-046 outbound attempt outside 127.0.0.1: Attempt { pid: 4556, destination: 192.0.2.1 }".into()));
         }
     }
     #[test]
@@ -237,51 +104,32 @@ mod tests {
             ("::1", false),
             ("::ffff:127.0.0.1", false),
         ] {
-            let observation = Observation::select(
+            let result = only_loopback(
                 4556,
                 parse(&win(vec![event(11, 5156, "4556", address)])).unwrap(),
             );
-            assert_eq!(observation.only_loopback().is_ok(), allowed, "{address}");
+            let expected = if allowed {
+                Ok(())
+            } else {
+                Err(format!(
+                    "FR-046 outbound attempt outside 127.0.0.1: Attempt {{ pid: 4556, destination: {address} }}"
+                ))
+            };
+            assert_eq!(result, expected, "{address}");
         }
     }
     #[test]
     fn inbound_wfp_records_are_not_outbound_attempts() {
         let mut record = event(11, 5156, "4556", "192.0.2.1");
         record["fields"]["Direction"] = json!("%%14592");
-        assert!(parse(&win(vec![record])).unwrap().is_empty());
-    }
-    #[test]
-    fn loss_and_suppression_in_unified_logs_fail_closed() {
-        for value in [
-            json!({"eventType":"lossEvent"}),
-            json!({"eventType":"logEvent","eventMessage":"Sandbox: 12 messages suppressed"}),
-            json!({"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages dropped"}),
-            json!({"eventType":"logEvent","eventMessage":"Sandbox: 3 network-outbound messages lost"}),
-        ] {
-            let mut line = serde_json::to_vec(&value).unwrap();
-            line.push(b'\n');
-            assert!(macos(&line).is_err());
-        }
-    }
-    #[test]
-    fn malformed_or_incomplete_sandbox_records_fail_closed() {
-        for message in [
-            "Sandbox: network-outbound",
-            "Sandbox: Python(?) deny(1) network-outbound",
-            "Sandbox: Python72753 deny(1) network-outbound",
-        ] {
-            assert!(macos(&mac(message)).is_err(), "{message}");
-        }
-        for bytes in [b"\n".as_slice(), b"[\n", b"{}\n"] {
-            assert!(macos(bytes).is_err());
-        }
+        assert_eq!(parse(&win(vec![record])), Ok(vec![]));
     }
     #[test]
     fn audit_loss_clear_full_service_stop_and_policy_changes_fail_closed() {
         for id in [1100, 1101, 1102, 1104, 1108, 4719] {
-            assert!(
-                parse(&win(vec![json!({"record":11,"id":id,"fields":{}})])).is_err(),
-                "{id}"
+            assert_eq!(
+                parse(&win(vec![json!({"record":11,"id":id,"fields":{}})])),
+                Err(format!("Security log/audit gap event {id}"))
             );
         }
     }
@@ -294,7 +142,11 @@ mod tests {
         ] {
             let mut capture = win(vec![]);
             capture[name] = value;
-            assert!(parse(&capture).is_err(), "{name}");
+            assert_eq!(
+                parse(&capture),
+                Err("Security log window was cleared or overwritten".into()),
+                "{name}"
+            );
         }
     }
     #[test]
@@ -304,34 +156,60 @@ mod tests {
                 .into_iter()
                 .map(|n| event(n, 5156, "4556", "127.0.0.1"))
                 .collect());
-            assert!(parse(&capture).is_err());
+            assert_eq!(
+                parse(&capture),
+                Err("Security log record order/window gap".into())
+            );
         }
     }
     #[test]
     fn malformed_windows_fields_fail_instead_of_disappearing() {
-        for (name, value) in [
-            ("ProcessID", json!("bad")),
-            ("Direction", json!("Outbound")),
-            ("DestAddress", json!("not-an-IP")),
+        for (name, value, expected) in [
+            ("ProcessID", json!("bad"), "invalid Security event PID"),
+            (
+                "Direction",
+                json!("Outbound"),
+                "unknown Security event direction",
+            ),
+            (
+                "DestAddress",
+                json!("not-an-IP"),
+                "invalid Security event destination",
+            ),
         ] {
             let mut record = event(11, 5156, "4556", "127.0.0.1");
             record["fields"][name] = value;
-            assert!(parse(&win(vec![record])).is_err(), "{name}");
+            assert_eq!(parse(&win(vec![record])), Err(expected.into()), "{name}");
         }
         for name in ["ProcessID", "Direction", "DestAddress"] {
             let mut record = event(11, 5156, "4556", "127.0.0.1");
             record["fields"].as_object_mut().unwrap().remove(name);
-            assert!(parse(&win(vec![record])).is_err(), "{name}");
+            assert_eq!(
+                parse(&win(vec![record])),
+                Err(format!("Security event lacks {name}"))
+            );
         }
-        assert!(windows(b"{", 10).is_err());
+        assert_eq!(
+            windows(b"{", 10),
+            Err("Security log JSON: EOF while parsing an object at line 1 column 1".into())
+        );
     }
     #[test]
     fn log_byte_and_record_limits_fail_instead_of_truncating() {
-        let oversized = vec![b' '; LOG_CAP as usize + 1];
-        assert!(macos(&oversized).is_err());
-        assert!(windows(&oversized, 10).is_err());
-        let events = vec![event(11, 5156, "4556", "127.0.0.1"); RECORD_CAP + 1];
-        assert!(parse(&win(events)).is_err());
-        assert!(macos(&mac(DENY).repeat(RECORD_CAP + 1)).is_err());
+        let mut oversized = serde_json::to_vec(&win(vec![])).unwrap();
+        oversized.resize(LOG_CAP as usize + 1, b' ');
+        assert_eq!(
+            windows(&oversized, 10),
+            Err("Security log exceeds 1 MiB".into())
+        );
+        let events = (11..=11 + RECORD_CAP as u64)
+            .map(|record| event(record, 5156, "4556", "127.0.0.1"))
+            .collect();
+        let mut capture = win(events);
+        capture["newest"] = json!(11 + RECORD_CAP as u64);
+        assert_eq!(
+            parse(&capture),
+            Err("Security log exceeds 4096 records".into())
+        );
     }
 }

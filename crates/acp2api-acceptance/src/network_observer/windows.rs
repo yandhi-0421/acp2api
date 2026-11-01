@@ -1,7 +1,5 @@
-use super::{
-    Attempt, output,
-    records::{self, Cursor},
-};
+use super::{Attempt, COMMAND_CAP, output, records, restore_options};
+use serde::Deserialize;
 use std::{
     fs::{File, OpenOptions},
     path::Path,
@@ -16,6 +14,13 @@ use windows_sys::{
 };
 const SUBCATEGORY: GUID = GUID::from_u128(0x0cce9226_69ae_11d9_bed3_505054503030);
 const SUBCATEGORY_ARG: &str = "/subcategory:{0CCE9226-69AE-11D9-BED3-505054503030}";
+const SUCCESS_AND_FAILURE: u32 = 3;
+
+#[derive(Debug, Deserialize)]
+struct Cursor {
+    record: u64,
+    time: String,
+}
 
 struct Audit {
     saved: Option<AUDIT_POLICY_INFORMATION>,
@@ -24,7 +29,7 @@ struct Audit {
 }
 impl std::fmt::Debug for Audit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WindowsCapture").finish_non_exhaustive()
+        f.debug_struct("Audit").finish_non_exhaustive()
     }
 }
 #[derive(Debug)]
@@ -42,8 +47,8 @@ impl Capture {
     pub fn command(&self, program: &Path) -> Command {
         Command::new(program)
     }
-    pub fn read(&self) -> Result<Vec<Attempt>, String> {
-        if query()?.AuditingInformation & 3 != 3 {
+    pub fn read(&self, pids: &[u32]) -> Result<Vec<Attempt>, String> {
+        if query()?.AuditingInformation & SUCCESS_AND_FAILURE != SUCCESS_AND_FAILURE {
             return Err("Filtering Platform Connection audit changed during observation".into());
         }
         let mut command = powershell("Read");
@@ -51,7 +56,14 @@ impl Capture {
             .arg("-Start")
             .arg(self.cursor.record.to_string())
             .arg("-Time")
-            .arg(&self.cursor.time);
+            .arg(&self.cursor.time)
+            .arg("-Pids")
+            .arg(
+                pids.iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
         records::windows(&output(command)?.stdout, self.cursor.record)
     }
     pub fn restore(&mut self) -> Result<(), String> {
@@ -67,7 +79,7 @@ impl Audit {
             .write(true)
             .open(std::env::temp_dir().join("acp2api-network-audit.lock"))
             .map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + COMMAND_CAP;
         loop {
             match lock.try_lock() {
                 Ok(()) => break,
@@ -142,7 +154,7 @@ impl Audit {
             "/failure:enable",
         ]);
         output(auditpol)?;
-        if query()?.AuditingInformation & 3 != 3 {
+        if query()?.AuditingInformation & SUCCESS_AND_FAILURE != SUCCESS_AND_FAILURE {
             return Err("Filtering Platform Connection audit did not enable".into());
         }
         let mut firewall = powershell("BlockControl");
@@ -155,10 +167,11 @@ impl Audit {
         Ok(capture)
     }
     pub fn restore(&mut self) -> Result<(), String> {
-        if let Some(saved) = self.saved.take() {
+        if let Some(mut saved) = self.saved.take() {
             let mut command = powershell("UnblockControl");
             command.arg("-Rule").arg(&self.rule);
             let firewall = output(command);
+            saved.AuditingInformation = restore_options(saved.AuditingInformation);
             let audit = unsafe { AuditSetSystemPolicy(&saved, 1) };
             if !audit {
                 return Err(format!(
@@ -167,7 +180,7 @@ impl Audit {
                 ));
             }
             firewall?;
-            if query()?.AuditingInformation != saved.AuditingInformation {
+            if restore_options(query()?.AuditingInformation) != saved.AuditingInformation {
                 return Err("restored audit policy differs from original".into());
             }
         }
@@ -226,7 +239,10 @@ mod tests {
             panic!("planted run failure");
         });
         assert!(failure.is_err());
-        assert_eq!(query().unwrap().AuditingInformation, original);
+        assert_eq!(
+            restore_options(query().unwrap().AuditingInformation),
+            restore_options(original)
+        );
         let mut check = Command::new("powershell.exe");
         check.args(["-NoProfile", "-NonInteractive", "-Command"])
             .arg(format!("$ErrorActionPreference='Stop'; try {{ Get-NetFirewallRule -Name '{rule}'; throw 'control rule survived failed run' }} catch {{ if ($_.FullyQualifiedErrorId -notlike 'CmdletizationQuery_NotFound_Name,*') {{ throw }} }}"));

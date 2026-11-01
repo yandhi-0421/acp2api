@@ -1,8 +1,10 @@
-param([string]$Operation, [long]$Start, [string]$Time, [string]$Rule, [string]$Program)
+param([string]$Operation, [long]$Start, [string]$Time, [string]$Rule, [string]$Program, [string]$Pids)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-function Read-Events([string]$Filter, [int]$Cap) {
-    $query = [System.Diagnostics.Eventing.Reader.EventLogQuery]::new('Security', [System.Diagnostics.Eventing.Reader.PathType]::LogName, $Filter)
+function Read-Events([string[]]$Filter, [int]$Cap) {
+    $selectors = $Filter | ForEach-Object { "<Select Path='Security'>$([System.Security.SecurityElement]::Escape($_))</Select>" }
+    $queryText = "<QueryList><Query Id='0'>$($selectors -join '')</Query></QueryList>"
+    $query = [System.Diagnostics.Eventing.Reader.EventLogQuery]::new($null, [System.Diagnostics.Eventing.Reader.PathType]::LogName, $queryText)
     $reader = [System.Diagnostics.Eventing.Reader.EventLogReader]::new($query)
     try {
         $count = 0
@@ -37,8 +39,16 @@ switch ($Operation) {
         $oldest = (Get-WinEvent -LogName Security -Oldest -MaxEvents 1).RecordId
         $newest = (Get-WinEvent -LogName Security -MaxEvents 1).RecordId
         $anchor = @(Read-Events "*[System[EventRecordID=$Start]]" 1)
-        $filter = "*[System[(EventID=5156 or EventID=5157 or EventID=1100 or EventID=1101 or EventID=1102 or EventID=1104 or EventID=1108 or EventID=4719) and EventRecordID > $Start and EventRecordID <= $newest]]"
-        $events = @(Read-Events $filter 4096 | Select-Object record,id,fields)
+        $pidTerms = foreach ($value in $Pids.Split(',')) {
+            $number = [uint32]$value
+            "Data[@Name='ProcessID']='$number'"
+            "Data[@Name='ProcessID']='0x$('{0:x}' -f $number)'"
+            "Data[@Name='ProcessID']='0x$('{0:X}' -f $number)'"
+        }
+        $window = "EventRecordID > $Start and EventRecordID <= $newest"
+        $connections = "*[System[(EventID=5156 or EventID=5157) and $window] and EventData[$($pidTerms -join ' or ')]]"
+        $gaps = "*[System[(EventID=1100 or EventID=1101 or EventID=1102 or EventID=1104 or EventID=1108 or EventID=4719) and $window]]"
+        $events = @(Read-Events @($connections, $gaps) 4096 | Select-Object record,id,fields)
         @{anchor = ($anchor.Count -eq 1 -and $anchor[0].time -eq $Time); oldest = $oldest; newest = $newest; events = $events} | ConvertTo-Json -Depth 6 -Compress
     }
     default { throw 'Unknown network observer operation' }

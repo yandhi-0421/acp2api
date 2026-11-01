@@ -40,10 +40,15 @@ async fn main() {
                 let address = "[::1]:9".parse().unwrap();
                 let _ = TcpStream::connect_timeout(&address, Duration::from_millis(200));
             }
+            #[cfg(target_os = "macos")]
+            "other-loopback" => {
+                let address = "127.0.0.2:9".parse().unwrap();
+                let _ = TcpStream::connect_timeout(&address, Duration::from_millis(200));
+            }
             _ => panic!("unknown control mode"),
         }
     })
     .await;
     result.expect("one connection attempt; two-second control cap");
-    println!("{}", serde_json::json!({"mode":mode,"attempts":1}));
+    println!("{}", serde_json::json!({"mode":mode}));
 }
