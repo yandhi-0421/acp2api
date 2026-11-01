@@ -71,10 +71,6 @@ pub(crate) struct View {
     pub(crate) runtime_process: RuntimeProcess,
     pub(crate) places: usize,
     pub(crate) queued: usize,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "The next panel page round reads the reset time.")
-    )]
     pub(crate) quota_reset: Option<std::time::SystemTime>,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
     pub(crate) lockout_evidence: Option<crate::store::Lockout>,

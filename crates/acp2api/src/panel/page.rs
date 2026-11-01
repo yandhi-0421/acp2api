@@ -25,6 +25,7 @@ copyKey.addEventListener('click', async () => {
         report('critical', copyKey.dataset.failed);
     }
 });"#;
+const END_LOCKOUT_PASSWORD: &str = "end-lockout-password";
 const STYLE: &str = r#"
 :root {
     --gutter:max(22px,calc((100% - 980px)/2));
@@ -84,6 +85,9 @@ p {
     padding:4px 14px;
     font-size:12px;
 }
+.global-bar .actions {
+    gap:8px;
+}
 .section-bar {
     position:sticky;
     top:0;
@@ -116,6 +120,24 @@ p {
     font-size:14px;
     white-space:nowrap;
 }
+.section-bar form {
+    margin:0;
+}
+.section-bar button,.state-link {
+    display:inline-block;
+    margin:0;
+    padding:6px 16px;
+    font-size:14px;
+    white-space:nowrap;
+}
+.state-link {
+    border:1px solid var(--action);
+    border-radius:999px;
+    text-decoration:none;
+}
+.section-bar>form,.state-link {
+    margin-left:auto;
+}
 section {
     padding:80px var(--gutter);
     scroll-margin-top:96px;
@@ -144,6 +166,19 @@ main>section:nth-of-type(even) {
 #sign-in h1 .dot {
     margin-right:14px;
 }
+#sign-in h1+p {
+    max-width:760px;
+    font-size:21px;
+    line-height:1.38;
+}
+#sign-in form {
+    max-width:480px;
+    margin-left:auto;
+    margin-right:auto;
+}
+#sign-in input {
+    scroll-margin-top:140px;
+}
 #sign-in .figures {
     display:grid;
     grid-template-columns:repeat(3,1fr);
@@ -160,6 +195,23 @@ main>section:nth-of-type(even) {
     font-size:40px;
     font-weight:600;
     line-height:1.1;
+    overflow-wrap:anywhere;
+}
+.evidence {
+    display:grid;
+    grid-template-columns:max-content minmax(0,1fr);
+    gap:8px 20px;
+    max-width:760px;
+    margin:24px auto;
+    padding:16px 20px;
+    border:1px solid #86868b;
+    border-radius:18px;
+    font-size:14px;
+    text-align:left;
+}
+.evidence dd {
+    margin:0;
+    white-space:pre-wrap;
     overflow-wrap:anywhere;
 }
 .surface {
@@ -210,6 +262,18 @@ main>section:nth-of-type(even) {
     background:#f5f5f7;
     border-bottom:1px solid var(--hairline);
     font-size:14px;
+}
+.page-footer {
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 24px;
+    padding:48px var(--gutter) 64px;
+    background:#f5f5f7;
+    border-top:1px solid var(--hairline);
+    font-size:12px;
+}
+.page-footer code {
+    font-size:12px;
 }
 .login {
     max-width:540px;
@@ -352,7 +416,7 @@ caption {
         padding-left:16px;
         padding-right:16px;
     }
-    .section-bar nav {
+    .section-bar nav,.section-bar>form,.state-link {
         margin-left:0;
     }
     section {
@@ -367,6 +431,16 @@ caption {
     #sign-in h1 {
         font-size:40px;
     }
+    #sign-in h1+p {
+        font-size:17px;
+    }
+    .evidence {
+        grid-template-columns:minmax(0,1fr);
+        gap:4px;
+    }
+    .evidence dd {
+        margin-bottom:8px;
+    }
     #sign-in .figures {
         gap:12px;
         margin-top:40px;
@@ -377,7 +451,7 @@ caption {
     .two {
         grid-template-columns:1fr;
     }
-    .line {
+    .line,.page-footer {
         padding-left:16px;
         padding-right:16px;
     }
@@ -508,16 +582,34 @@ fn sign_in_wait(
     );
     format!(r#"<p class="surface">{waits}{address}</p>{cancel}<script>{COUNTDOWN}</script>"#)
 }
+fn sign_in_entry(language: Language) -> String {
+    post_form(
+        "/manage/sign-in",
+        &submit(language.pick("Sign in with Google", "用 Google 账户登录")),
+    )
+}
+fn retry_entry(language: Language) -> String {
+    post_form("/manage/retry", &submit(language.pick("Retry", "重试")))
+}
+fn refresh_quota_entry(language: Language) -> String {
+    post_form(
+        "/manage/refresh-quota",
+        &submit(language.pick("Refresh the quota", "刷新配额")),
+    )
+}
+fn end_lockout_label(language: Language) -> &'static str {
+    language.pick(
+        "End the lockout with the management password",
+        "输入管理密码，结束锁死",
+    )
+}
 fn end_lockout(language: Language) -> String {
     post_form(
         "/manage/end-lockout",
         &format!(
-            r#"<label for="end-lockout-password">{}</label><input type="password" id="end-lockout-password" name="password" autocomplete="current-password" required>{}"#,
+            r#"<label for="{END_LOCKOUT_PASSWORD}">{}</label><input type="password" id="{END_LOCKOUT_PASSWORD}" name="password" autocomplete="current-password" required>{}"#,
             language.labels().management_password,
-            submit(language.pick(
-                "End the lockout with the management password",
-                "输入管理密码，结束锁死",
-            )),
+            submit(end_lockout_label(language)),
         ),
     )
 }
@@ -526,6 +618,59 @@ fn lockout_unsaved(language: Language) -> &'static str {
         "acp2api: the lockout is not in the state file state.json, because the write failed. A restart of acp2api ends this lockout. acp2api tries the write again.",
         "acp2api：锁死没有写进状态文件 state.json，因为写入失败。重启 acp2api 会结束这次锁死。acp2api 会再次尝试写入。",
     )
+}
+fn state_sentence(language: Language, view: &crate::conductor::View) -> Option<String> {
+    match view.state {
+        State::Running => Some(language.normal_sentence().to_owned()),
+        State::SignInRequired => Some(language.sign_in_sentence().to_owned()),
+        State::QuotaWait => view
+            .quota_reset
+            .and_then(|reset| crate::journal::timestamp(reset).ok())
+            .map(|reset| language.quota_wait_sentence(&reset)),
+        State::Lockout => view
+            .lockout_evidence
+            .as_ref()
+            .map(|evidence| language.lockout_sentence(&evidence.since)),
+        // The reason of runtime_unavailable is this sentence.
+        State::RuntimeUnavailable => None,
+    }
+}
+fn lockout_evidence(language: Language, evidence: &crate::store::Lockout) -> String {
+    let rows = [
+        (
+            language.pick("Lockout signal", "锁死信号"),
+            &evidence.signal,
+        ),
+        (language.pick("Time", "时间"), &evidence.since),
+        (
+            language.pick("Original error text", "原始错误"),
+            &evidence.original_error_text,
+        ),
+    ]
+    .map(|(label, value)| format!("<dt>{label}</dt><dd>{}</dd>", escape(value)))
+    .concat();
+    format!(r#"<dl class="evidence">{rows}</dl>"#)
+}
+fn state_action(language: Language, view: &crate::conductor::View, now: crate::Moment) -> String {
+    match (view.state, &view.sign_in_wait) {
+        (State::Lockout, _) => end_lockout(language),
+        (_, Some(wait)) => sign_in_wait(language, wait, now),
+        (State::SignInRequired, None) => sign_in_entry(language),
+        (State::RuntimeUnavailable, None) => retry_entry(language),
+        (State::QuotaWait, None) => refresh_quota_entry(language),
+        (State::Running, None) => String::new(),
+    }
+}
+fn bar_action(language: Language, view: &crate::conductor::View) -> String {
+    match (view.state, &view.sign_in_wait) {
+        (State::Lockout, _) => format!(
+            r##"<a class="state-link" href="#{END_LOCKOUT_PASSWORD}">{}</a>"##,
+            end_lockout_label(language)
+        ),
+        (State::SignInRequired, None) => sign_in_entry(language),
+        (State::RuntimeUnavailable, None) => retry_entry(language),
+        _ => String::new(),
+    }
 }
 fn first_tile(
     language: Language,
@@ -537,11 +682,12 @@ fn first_tile(
     let shade = state_shade(view.state);
     let dot = dot(state_tone(view.state));
     let state = language.state(view.state);
-    let mut paragraphs = view
-        .lockout_evidence
-        .as_ref()
-        .map(|evidence| format!("<p>{}</p>", escape(&evidence.original_error_text)))
+    let mut paragraphs = state_sentence(language, view)
+        .map(|sentence| format!("<p>{}</p>", escape(&sentence)))
         .unwrap_or_default();
+    if let Some(evidence) = &view.lockout_evidence {
+        paragraphs.push_str(&lockout_evidence(language, evidence));
+    }
     if view.lockout_unsaved {
         let text = lockout_unsaved(language);
         paragraphs.push_str(&format!(r#"<p role="status">{text}</p>"#));
@@ -550,17 +696,7 @@ fn first_tile(
         let text = escape(&language.runtime_fault(&unavailable.fault));
         paragraphs.push_str(&format!(r#"<p role="status">{text}</p>"#));
     }
-    let action = if view.state == State::Lockout {
-        end_lockout(language)
-    } else {
-        match &view.sign_in_wait {
-            Some(wait) => sign_in_wait(language, wait, now),
-            None => post_form(
-                "/manage/sign-in",
-                &submit(language.pick("Sign in with Google", "用 Google 账户登录")),
-            ),
-        }
-    };
+    let action = state_action(language, view, now);
     let places = figure(labels.places_in_use, view.places);
     let queued = figure(labels.requests_in_the_queue, view.queued);
     let build = figure(labels.build_in_use, build.unwrap_or("—"));
@@ -575,8 +711,14 @@ fn document(language: Language, bars: &str, content: &str) -> String {
         language.html_tag()
     )
 }
-fn global_bar(switch: &str) -> String {
-    format!(r#"<header class="global-bar"><strong>acp2api</strong>{switch}</header>"#)
+fn global_bar(actions: &str) -> String {
+    format!(r#"<header class="global-bar"><strong>acp2api</strong>{actions}</header>"#)
+}
+fn panel_exit(language: Language) -> String {
+    post_form(
+        "/manage/exit",
+        &submit(language.pick("Exit the panel", "退出面板")),
+    )
 }
 fn language_switch(language: Language) -> String {
     let (value, tag, label) = match language {
@@ -590,7 +732,7 @@ fn language_switch(language: Language) -> String {
         ),
     )
 }
-fn section_bar(language: Language, state: State) -> String {
+fn section_bar(language: Language, view: &crate::conductor::View) -> String {
     let Labels {
         official_runtime,
         quota,
@@ -613,11 +755,20 @@ fn section_bar(language: Language, state: State) -> String {
     .map(|(id, title)| format!(r##"<a href="#{id}">{title}</a>"##))
     .concat();
     format!(
-        r#"<div class="section-bar"><p class="panel-title">{}</p><p>{}{}</p><nav aria-label="{}">{anchors}</nav></div>"#,
+        r#"<div class="section-bar"><p class="panel-title">{}</p><p>{}{}</p><nav aria-label="{}">{anchors}</nav>{}</div>"#,
         language.pick("Management panel", "管理面板"),
-        dot(state_tone(state)),
-        language.state(state),
+        dot(state_tone(view.state)),
+        language.state(view.state),
         language.pick("Sections", "区块"),
+        bar_action(language, view),
+    )
+}
+fn page_footer(language: Language, data_folder: &std::path::Path) -> String {
+    format!(
+        r#"<footer class="page-footer"><span>acp2api {}</span><span>{}</span><code>{}</code></footer>"#,
+        env!("CARGO_PKG_VERSION"),
+        language.pick("Served only on 127.0.0.1", "只在 127.0.0.1 上提供"),
+        escape(&data_folder.display().to_string()),
     )
 }
 pub(super) fn login(language: Language, error: Option<&str>) -> String {
@@ -665,10 +816,15 @@ pub(super) struct Page<'a> {
 }
 pub(super) fn settings(page: Page<'_>) -> String {
     let language = page.language;
+    let actions = format!(
+        r#"<div class="actions">{}{}</div>"#,
+        language_switch(language),
+        panel_exit(language)
+    );
     let bars = format!(
         "{}{}",
-        global_bar(&language_switch(language)),
-        section_bar(language, page.view.state)
+        global_bar(&actions),
+        section_bar(language, page.view)
     );
     let first_tile = first_tile(
         language,
@@ -685,6 +841,7 @@ pub(super) fn settings(page: Page<'_>) -> String {
     let setup = setup_tile(&page);
     let logs = logs_tile(language, page.history, page.data_folder);
     let settings = settings_tile(&page);
+    let footer = page_footer(language, page.data_folder);
     let runtime = runtime(
         language,
         page.builds,
@@ -694,7 +851,9 @@ pub(super) fn settings(page: Page<'_>) -> String {
     document(
         language,
         &bars,
-        &format!("<main>{first_tile}{notices}{runtime}{quota}{setup}{logs}{settings}</main>"),
+        &format!(
+            "<main>{first_tile}{notices}{runtime}{quota}{setup}{logs}{settings}</main>{footer}"
+        ),
     )
 }
 
@@ -754,10 +913,7 @@ fn quota_tile(page: &Page<'_>) -> String {
                 language.pick("No quota result yet.", "还没有配额结果。")
             )
         });
-    let refresh = post_form(
-        "/manage/refresh-quota",
-        &submit(language.pick("Refresh the quota", "刷新配额")),
-    );
+    let refresh = refresh_quota_entry(language);
     let refresh_rule = language.pick("Refresh at most once every 60 s.", "每 60 秒最多刷新一次。");
     let places_title = labels.places_and_queue;
     let places = figure(labels.places_in_use, page.view.places);
@@ -1202,7 +1358,7 @@ fn runtime(
         .iter()
         .map(|version| format!("<li>{} — {release_label}</li>", escape(version)))
         .collect::<String>();
-    let retry = post_form("/manage/retry", &submit(language.pick("Retry", "重试")));
+    let retry = retry_entry(language);
     let search = post_form(
         "/manage/search",
         &submit(language.pick("Search again", "重新搜索")),
@@ -1250,6 +1406,24 @@ mod tests {
         data_folder: &Path,
         history: &crate::journal::History,
     ) -> String {
+        render_in(
+            Language::English,
+            view,
+            version,
+            source,
+            data_folder,
+            history,
+        )
+    }
+
+    fn render_in(
+        language: Language,
+        view: &crate::conductor::View,
+        version: &str,
+        source: &Path,
+        data_folder: &Path,
+        history: &crate::journal::History,
+    ) -> String {
         let settings = crate::store::Settings {
             port: 8329,
             concurrency_limit: 2,
@@ -1269,7 +1443,7 @@ mod tests {
             newer: None,
         };
         super::settings(Page {
-            language: Language::English,
+            language,
             settings: &settings,
             highest: 3,
             port: 8329,
@@ -1405,6 +1579,134 @@ mod tests {
             ],
             [true, true, true],
             "FR-054 dynamic build and folder text is HTML-escaped"
+        );
+    }
+
+    fn lockout_view() -> crate::conductor::View {
+        crate::conductor::View {
+            state: State::Lockout,
+            lockout_evidence: Some(crate::store::Lockout {
+                since: "2026-10-18T00:00:00Z".into(),
+                signal: "403 <PERMISSION_DENIED>".into(),
+                original_error_text: "Denied <b>&\"now\"".into(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_first_tile_shows_the_exact_chinese_sentence_of_each_state() {
+        let quota = crate::conductor::View {
+            state: State::QuotaWait,
+            quota_reset: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(120)),
+            ..Default::default()
+        };
+        let sign_in = crate::conductor::View {
+            state: State::SignInRequired,
+            ..Default::default()
+        };
+        for (view, sentence) in [
+            (
+                &crate::conductor::View::default(),
+                "官方运行时已就绪。请求正常转发。",
+            ),
+            (
+                &sign_in,
+                "官方运行时没有有效的登录。登录之前，acp2api 拒绝每个请求。",
+            ),
+            (
+                &quota,
+                "Google 配额已用完。1970-01-01T00:02:00Z 之前，acp2api 不启动 prompt 轮次，在本地拒绝请求。到时间后自动结束配额等待。",
+            ),
+            (
+                &lockout_view(),
+                "2026-10-18T00:00:00Z，官方运行时返回了一个可能危及 Google 账户的响应。从那时起，acp2api 不向官方运行时发送任何请求。",
+            ),
+        ] {
+            let tile = first_tile(Language::Chinese, view, 0, None);
+            assert_eq!(
+                tile.matches(sentence).count(),
+                1,
+                "FR-055 the first tile shows the PRD sentence once: {tile}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_runtime_unavailable_sentence_is_not_repeated_in_the_first_tile() {
+        let view = crate::conductor::View {
+            state: State::RuntimeUnavailable,
+            runtime_unavailable: Some(crate::messages::Unavailable {
+                fault: crate::messages::RuntimeFault::NoExecutable,
+                versions: "1.4.0".into(),
+                port: 8329,
+            }),
+            ..Default::default()
+        };
+        let tile = first_tile(Language::English, &view, 0, None);
+        assert_eq!(
+            tile.matches("acp2api found no official runtime").count(),
+            1,
+            "FR-054 one state sentence: {tile}"
+        );
+    }
+
+    #[test]
+    fn the_lockout_evidence_is_escaped_in_the_first_tile() {
+        let tile = first_tile(Language::English, &lockout_view(), 0, None);
+        assert_eq!(
+            [
+                tile.contains("<dd>403 &lt;PERMISSION_DENIED&gt;</dd>"),
+                tile.contains("<dd>Denied &lt;b&gt;&amp;&quot;now&quot;</dd>"),
+                tile.contains("<b>"),
+            ],
+            [true, true, false],
+            "FR-054 evidence is dynamic text: {tile}"
+        );
+    }
+
+    #[test]
+    fn only_a_state_that_needs_a_sign_in_offers_the_sign_in_entry() {
+        for (state, offered) in [
+            (State::Running, false),
+            (State::QuotaWait, false),
+            (State::RuntimeUnavailable, false),
+            (State::Lockout, false),
+            (State::SignInRequired, true),
+        ] {
+            let view = crate::conductor::View {
+                state,
+                ..Default::default()
+            };
+            assert_eq!(
+                first_tile(Language::English, &view, 0, None).contains("/manage/sign-in"),
+                offered,
+                "FR-039 one sign-in entry, in the state that needs it"
+            );
+            assert_eq!(
+                bar_action(Language::English, &view).contains("/manage/sign-in"),
+                offered,
+                "FR-054 the frosted bar repeats only the main action of the state"
+            );
+        }
+    }
+
+    #[test]
+    fn the_global_bar_has_the_chinese_exit_of_the_panel() {
+        let html = render_in(
+            Language::Chinese,
+            &crate::conductor::View::default(),
+            "1.4.0",
+            Path::new("source"),
+            Path::new("data"),
+            &crate::journal::History::default(),
+        );
+        let header = html.split("</header>").next().unwrap();
+        assert!(
+            header.contains(
+                r#"<form method="post" action="/manage/exit"><button type="submit">退出面板</button></form>"#
+            ),
+            "FR-009 the exit is a POST form with the PRD label: {header}"
         );
     }
 

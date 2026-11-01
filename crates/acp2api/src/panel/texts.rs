@@ -61,10 +61,6 @@ const CHINESE_LABELS: Labels = Labels {
     management_password: "管理密码",
 };
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "The next panel page round uses these sentences.")
-)]
 impl Language {
     pub(super) fn normal_sentence(self) -> &'static str {
         self.pick(
@@ -98,9 +94,6 @@ impl Language {
             ),
         }
     }
-}
-
-impl Language {
     pub(super) fn of(headers: &HeaderMap) -> Self {
         super::cookie(headers, COOKIE)
             .and_then(Self::from_code)
