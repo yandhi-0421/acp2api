@@ -125,7 +125,7 @@ FRs in scope and their modules (section "Shape" gives each module):
 
 FRs that this design does not fully design:
 
-- FR-041, the value of N: open decision OD-1. The design has the constant and the replacement rule. The three scenarios about N stay without a slice tag.
+- FR-041, the real value of N: open decision OD-1. The design has the replacement rule and the constant `SESSIONS_PER_RUNTIME_PROCESS` with the value 8. This value is temporary, and no measurement supports it.
 - SC-006: open decision OD-2. The design keeps memory low, because records hold only hashes and acp2api keeps no history text. It sets no target.
 
 Limits from the ground step:
@@ -495,7 +495,7 @@ The core has these parts. Each part is a private module with a pure interface.
 - **`places`.** The concurrency limit and one private table of work (FR-049, FR-050). Queued and occupied counts derive from its variants.
   - A request holds a place from its first ACP call to the end of its prompt turn.
   - The sign-in check, each `/usage`, and the read of the model names each hold a place.
-- **`records`.** The records and the match, the choice, and the drop of ADR-0003. The N rule of ADR-0004, with the constant `SESSIONS_PER_RUNTIME_PROCESS` (value open: OD-1).
+- **`records`.** The records and the match, the choice, and the drop of ADR-0003. The N rule of ADR-0004, with the constant `SESSIONS_PER_RUNTIME_PROCESS` (value 8, temporary: OD-1).
 - **`retry`.** The retry waits of FR-029. The key is the hash of the system prompt, the items, the tool set, and the model ID.
 - **`catalog`.** The model names (FR-012) and the resolution of the thinking level (FR-013).
   - After `initialize`, the startup sign-in check sends one `session/new`, with one place and no prompt turn.
@@ -1589,6 +1589,6 @@ It has a 60-second cap and uses the same request and log caps as the fixture.
 2. **A coordination failure while an owner still holds the account.**
    - Approved answer: FR-006 and M-28 define the failed start and its path diagnostic. The account locks remain intact.
 
-OD-1 still blocks the value of N and its three scenarios. OD-2 still blocks the targets of SC-006.
-The first build and its measurements resolve them. This design sets neither value.
+OD-1 stays open: the first release uses the temporary value N = 8, and the measurement after the release sets the real value. OD-2 still blocks the targets of SC-006, and the first build and its measurements resolve it.
+This design sets neither final value.
 Native recovery must prove that earlier runtime trees ended before cleanup. This remains part of FR-045 and SC-002, not a weaker recovery contract.

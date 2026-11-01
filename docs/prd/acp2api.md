@@ -705,7 +705,7 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
 
 - acp2api starts one runtime process at its own start. During a lockout, it starts none.
 - All ACP sessions and all prompt turns use this one runtime process. acp2api does not stop it when no request comes.
-- When the runtime process holds N ACP sessions, and a request needs one more, acp2api keeps each new request in the queue. When no prompt turn runs, it replaces the runtime process. A measurement decides N (OD-1). N is a constant, not a setting.
+- When the runtime process holds N ACP sessions, and a request needs one more, acp2api keeps each new request in the queue. When no prompt turn runs, it replaces the runtime process. In the first release, N = 8. This value is temporary, and no measurement supports it. The measurement after the release sets the real value (OD-1). N is a constant, not a setting.
 - These events are failures:
   - a start with no answer in 5 minutes;
   - an exit that acp2api did not cause;
@@ -1112,7 +1112,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 
 ## Open decisions
 
-- **OD-1 — The memory budget for N.** It affects FR-041 and SC-002. N is the number of ACP sessions after which acp2api replaces the runtime process (ADR-0004). The acceptance test on arm64 measures the memory of the runtime process and of each harness process. Then the maintainer decides the budget, and the budget gives N. N is a constant of acp2api, so a later release can change it.
+- **OD-1 — The memory budget for N.** It affects FR-041 and SC-002. N is the number of ACP sessions after which acp2api replaces the runtime process (ADR-0004). The first release uses the temporary value N = 8, which the owner chose on 2026-11-01. No measurement supports this value, so this decision stays open. After the release, the acceptance test on arm64 measures the memory of the runtime process and of each harness process ([#95]). Then the maintainer decides the budget, and the budget gives the real value of N. N is a constant of acp2api, so a later release can change it.
 - **OD-2 — The targets of SC-006.** The maintainer decides the limits of the memory and of the executable size after the first build and its measurement ([#12]).
 
 ## User journey
@@ -1164,3 +1164,4 @@ The changes to `DESIGN.md`:
 [#22]: https://github.com/yandhi-0421/acp2api/issues/22
 [#27]: https://github.com/yandhi-0421/acp2api/issues/27
 [#33]: https://github.com/yandhi-0421/acp2api/issues/33
+[#95]: https://github.com/yandhi-0421/acp2api/issues/95
