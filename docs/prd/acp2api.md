@@ -2,7 +2,7 @@
 
 **Status:** Blocked draft
 
-The blockers are OD-1 and OD-2 in "Open decisions". The first build and one measurement close both.
+The blocker is OD-2 in "Open decisions". The first build and its measurement close it.
 
 ## Summary
 
@@ -1082,7 +1082,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 - **SC-001 — Tests with a fake ACP agent.** The tests start acp2api with a fake ACP agent in place of the official runtime. They send real HTTP requests as a fake API client. They cover each FR that needs no Google account. While they run, a guard refuses each executable except the fake ACP agent. **Pass:** at the commit of the release, CI passed the tests on `macos-15`, `macos-15-intel`, `windows-latest`, and `windows-11-arm`. CI starts when the repository is public, so no release comes before that time. Until then, the maintainer runs the tests on the Mac.
 - **SC-002 — Acceptance test of each build.** A test program runs each build with a Google account of the maintainer. It runs on the Mac and in the Windows VM. It first runs the real compatibility check, and it writes the SHA-256 values for the list. It obeys the safety rules of `docs/research/2026-10-18-probe-methods-and-safety-rules.md`. The facts that it shows:
   - the tool filter, the full tool schemas with no file read, and the title `Run <tool>?`;
-  - prompt turns at the platform maximum of FR-049, and the memory of the runtime process and each harness process (arm64 only);
+  - prompt turns at the platform maximum of FR-049 (arm64 only);
   - on macOS, the stop of the harness processes after a crash of acp2api;
   - the system prompt addition with a system prompt of the size of the one of Claude Code;
   - no read of `~/.gemini` and of the parent folders of a `cwd`, and the files of the official runtime only in the runtime home;
@@ -1091,6 +1091,8 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
   - the options `model` and `thinking_level`, and the model ID of each thinking level;
   - the error text as the last chunk, with the stderr error line in the wait of 200 ms, on macOS and on Windows;
   - a second error of an ACP session after the error of a bad image.
+
+  The memory fact for the runtime process and each harness process comes from the arm64 measurement after the first release (OD-1). This fact does not block that release.
 
   **Pass:** each build on the list of the release passed its set. An arm64 build passed the full set, with no more than 25 model requests on each platform. An x64 build passed, under emulation, the compatibility check and the checks with no model request, with no more than 5 model requests. Before the first prompt, the test program showed the planned count, and the maintainer approved it.
 - **SC-003 — Client checks with a fake ACP agent.** On the Mac, real Claude Code and real Codex run against acp2api with the fake ACP agent. They run in the sandbox of the earlier checks ([#27], [#33]). The official OpenAI SDK sends one request with a stream and one request with no stream to the Chat Completions API. The checks show:

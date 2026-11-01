@@ -1,10 +1,10 @@
 # acp2api v1 design
 
-**Status:** approved design, with the measurement gaps of OD-1 and OD-2.
+**Status:** approved design, with the measurement gap of OD-2.
 
 The owner accepted the ten initial choices and all recommendations of the final review on 2026-10-18. This design incorporates both rounds.
 
-- PRD: `docs/prd/acp2api.md`, status `Blocked draft`, blockers OD-1 and OD-2.
+- PRD: `docs/prd/acp2api.md`, status `Blocked draft`, blocker OD-2. SC-002 and OD-1 define the memory measurement after the first release.
 - Feature files: `features/acp2api/`.
 - Parent issue: [yandhi-0421/acp2api#35](https://github.com/yandhi-0421/acp2api/issues/35).
 
@@ -597,10 +597,11 @@ A rejected ACP call releases the reservation before error handling, including th
 A local dispatch failure also releases its reservation. A successful call keeps its count after record expiry or `Forget`.
 Each replacement resets the count to its successful startup ACP session, or zero when startup creates none.
 
-The existing replacement path has a separate `SessionLimit` reason and a `SessionLimitWait` state.
+The replacement path derives the `SessionLimit` reason from the `SessionLimitWait` state. It stores no second limit demand.
 This state reports a runtime process that runs. It keeps the queue and uses the existing failure rule.
 The dispatcher can serve model reads, sign-in checks, and quota queries during this wait.
 Accepted requests keep their order until the replacement ends. This includes requests whose sign-in check has completed.
+At the replacement, the actor publishes the stopping process state before it stops and starts the runtime process.
 
 One predicate tests whether a connected request needs another ACP session after its retry checks pass.
 The capacity gate and record consumption use the same choice of ACP session.
@@ -613,6 +614,7 @@ The owner can start a sign-in during this state, and the same wait rule applies.
 
 Build selection continues during the limit wait. `Keep` and `Notice` answer without a stop.
 A selection that needs replacement takes over the limit demand before the actor can start a replacement.
+After a failure, the actor completes the restart before it selects the next build action.
 FR-041 holds the owner decisions on [#204](https://github.com/yandhi-0421/acp2api/issues/204).
 
 ### The runtime driver
