@@ -6,11 +6,15 @@ use crate::{
 };
 use std::{path::Path, time::SystemTime};
 
-pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<Lockout> {
+pub(super) fn load(
+    path: &Path,
+    clock: &dyn Clock,
+    journal: &Journal,
+) -> (Option<Lockout>, Option<std::io::ErrorKind>) {
     match StateFile::read(path) {
         Ok(state) => {
             // FR-035 requires a new normal state file after the owner deletes it.
-            if !path.exists()
+            let save_error = if !path.exists()
                 && let Err(error) = state.save(path)
             {
                 journal.state_file_failure(
@@ -19,8 +23,11 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
                     error.kind(),
                     clock,
                 );
-            }
-            state.lockout
+                Some(error.kind())
+            } else {
+                None
+            };
+            (state.lockout, save_error)
         }
         Err(error) => {
             let case = if error.kind() == std::io::ErrorKind::InvalidData {
@@ -29,11 +36,15 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
                 "state file cannot be read"
             };
             let diagnostic = format!("{case}: {:?}", error.kind());
-            Some(Lockout {
-                since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
-                signal: diagnostic.clone(),
-                original_error_text: diagnostic,
-            })
+            (
+                Some(Lockout {
+                    since: crate::journal::timestamp(clock.wall())
+                        .expect("clock after the Unix epoch"),
+                    signal: diagnostic.clone(),
+                    original_error_text: diagnostic,
+                }),
+                None,
+            )
         }
     }
 }

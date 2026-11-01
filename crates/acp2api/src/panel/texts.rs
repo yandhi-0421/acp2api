@@ -181,6 +181,7 @@ fn chinese_fault(fault: &RuntimeFault) -> String {
         RuntimeFault::CopyFailed { version } => {
             format!("已接受构建 {version} 的复制失败了，所以 acp2api 没有启动运行时进程。")
         }
+        RuntimeFault::StateFileNotWritable => "acp2api 无法写入状态文件 state.json".into(),
     }
 }
 

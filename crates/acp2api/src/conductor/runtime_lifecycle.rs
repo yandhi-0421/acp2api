@@ -97,6 +97,18 @@ impl Lifecycle {
         self.replacement = Some(replacement);
     }
 
+    pub(super) fn awaits_state_file(&self) -> bool {
+        matches!(
+            &self.state,
+            RuntimeState::Unavailable(reason)
+                if matches!(reason.message.fault, crate::messages::RuntimeFault::StateFileNotWritable)
+        )
+    }
+
+    pub(super) fn state_file_made(&mut self) {
+        self.state = RuntimeState::Serving;
+    }
+
     pub(super) fn lockout_stopped(&mut self) {
         self.state = RuntimeState::Stopped;
     }
@@ -581,7 +593,8 @@ impl Core {
         &mut self,
         action: crate::runtime_builds::Action,
         reply: BuildReply,
-    ) {
+        clock: &dyn Clock,
+    ) -> Vec<Command> {
         if let Some(evidence) = &self.lockout {
             let result = if matches!(action, crate::runtime_builds::Action::Initial) {
                 self.lifecycle.deferred_start = true;
@@ -594,9 +607,33 @@ impl Core {
                 ))))
             };
             let _ = reply.send(result);
-        } else {
-            self.lifecycle.changes.push_back((action, reply));
+            return Vec::new();
         }
+        if self.lifecycle.awaits_state_file() {
+            if matches!(action, crate::runtime_builds::Action::Initial) {
+                let _ = reply.send(Ok(None));
+                return Vec::new();
+            }
+            return match crate::store::StateFile::normal().save(&self.state_path) {
+                Ok(()) => {
+                    self.lifecycle
+                        .changes
+                        .push_back((crate::runtime_builds::Action::Initial, reply));
+                    self.handle(Event::StateFileMade, clock.now(), clock.wall())
+                }
+                Err(_) => {
+                    let RuntimeState::Unavailable(reason) = &self.lifecycle.state else {
+                        unreachable!()
+                    };
+                    let message =
+                        crate::messages::Message::RuntimeUnavailable(reason.message.clone());
+                    let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(message))));
+                    Vec::new()
+                }
+            };
+        }
+        self.lifecycle.changes.push_back((action, reply));
+        Vec::new()
     }
 
     pub(super) async fn next_build_change(

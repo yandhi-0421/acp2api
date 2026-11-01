@@ -13,7 +13,7 @@ use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnRequest},
     journal::StateDetail,
-    messages::OwnerMessage,
+    messages::{OwnerMessage, RuntimeFault},
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
@@ -165,6 +165,7 @@ enum Event {
         signalling_work: Option<WorkId>,
     },
     EndLockout,
+    StateFileMade,
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -357,6 +358,7 @@ impl Core {
                 self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
             }
             (None, Event::EndLockout) => self.end_lockout(now),
+            (None, Event::StateFileMade) => self.lifecycle.state_file_made(),
             (None, Event::CheckPending(request)) => {
                 self.work.add(Work::CheckQueued(*request));
             }
@@ -526,7 +528,17 @@ impl Conductor {
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
         let state_path = builds.start.data.join(crate::store::STATE_FILE);
-        let lockout = lockout::load(&state_path, clock.as_ref(), &journal);
+        let (lockout, cause) = lockout::load(&state_path, clock.as_ref(), &journal);
+        let lifecycle = Lifecycle::new(if lockout.is_some() {
+            RuntimeState::Stopped
+        } else if let Some(cause) = cause {
+            RuntimeState::Unavailable(UnavailableReason {
+                message: actor_builds.unavailable(RuntimeFault::StateFileNotWritable),
+                cause: Some(cause),
+            })
+        } else {
+            RuntimeState::Serving
+        });
         let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
@@ -548,11 +560,7 @@ impl Conductor {
                 quota_result,
                 quota: quota::QuotaState::default(),
                 retry_waits: Vec::new(),
-                lifecycle: Lifecycle::new(if lockout.is_some() {
-                    RuntimeState::Stopped
-                } else {
-                    RuntimeState::Serving
-                }),
+                lifecycle,
                 lockout,
                 lockout_unsaved: false,
                 sign_in: sign_in::SignIn::default(),
@@ -697,7 +705,17 @@ impl Conductor {
                         };
                         match work {
                             Input::Builds { action, reply, hold } => {
-                                core.build_change(action, reply);
+                                let mut commands =
+                                    core.build_change(action, reply, clock.as_ref()).into();
+                                Self::commands(
+                                    &mut core,
+                                    &mut runtime,
+                                    &mut read_open,
+                                    &clock,
+                                    &journal,
+                                    &mut commands,
+                                )
+                                .await;
                                 drop(hold);
                                 continue;
                             }

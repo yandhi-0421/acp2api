@@ -110,7 +110,7 @@ fn assert_state_file_diagnostic(folder: &std::path::Path, expected: &str) {
     let path = folder.join(crate::store::STATE_FILE);
     let clock = crate::Ports::production().clock;
     let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
-    let evidence = lockout::load(&path, clock.as_ref(), &journal).unwrap();
+    let evidence = lockout::load(&path, clock.as_ref(), &journal).0.unwrap();
     let core = Core {
         lockout: Some(evidence.clone()),
         ..Core::fixture(1)
@@ -837,7 +837,9 @@ fn the_end_of_a_lockout_restarts_the_runtime_and_clears_the_file() {
     });
     std::fs::write(&state_path, saved.to_string()).unwrap();
 
-    let evidence = lockout::load(&state_path, clock.as_ref(), &journal).unwrap();
+    let evidence = lockout::load(&state_path, clock.as_ref(), &journal)
+        .0
+        .unwrap();
     let mut core = Core {
         state_path: state_path.clone(),
         lockout: Some(evidence),
