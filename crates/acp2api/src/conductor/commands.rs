@@ -81,27 +81,37 @@ impl Conductor {
                     let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(error))));
                 }
                 Command::Lockout(evidence) => {
-                    core.lockout_unsaved =
-                        !lockout::persist(&core.state_path, evidence, journal, clock.as_ref());
+                    core.held_lockout_start(evidence, journal, clock.as_ref());
                     core.stop_runtime(runtime, read_open).await;
                     core.lifecycle.lockout_stopped();
                     core.publish_view();
                 }
-                Command::ClearLockout(reply) => match lockout::clear(&core.state_path) {
-                    Ok(()) => {
+                Command::ClearLockout(reply) => {
+                    if core.lockout_unsaved() {
                         commands.extend(core.handle(Event::EndLockout, clock.now(), clock.wall()));
                         let _ = reply.send(Ok(()));
+                    } else {
+                        match lockout::clear(&core.state_path) {
+                            Ok(()) => {
+                                commands.extend(core.handle(
+                                    Event::EndLockout,
+                                    clock.now(),
+                                    clock.wall(),
+                                ));
+                                let _ = reply.send(Ok(()));
+                            }
+                            Err(error) => {
+                                journal.state_file_failure(
+                                    "state_file_write_failed",
+                                    "lockout_end",
+                                    error.kind(),
+                                    clock.as_ref(),
+                                );
+                                let _ = reply.send(Err(OwnerMessage::LockoutEndNotSaved));
+                            }
+                        }
                     }
-                    Err(error) => {
-                        journal.state_file_failure(
-                            "state_file_write_failed",
-                            "lockout_end",
-                            error.kind(),
-                            clock.as_ref(),
-                        );
-                        let _ = reply.send(Err(OwnerMessage::LockoutEndNotSaved));
-                    }
-                },
+                }
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
                         commands.extend(core.command_failed(

@@ -50,30 +50,71 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Loaded 
     }
 }
 
-pub(super) fn persist(
-    path: &Path,
+pub(super) struct HeldLockout {
     evidence: Lockout,
-    journal: &Journal,
-    clock: &dyn Clock,
-) -> bool {
-    match StateFile::read(path) {
-        Ok(mut state) => {
-            state.lockout = Some(evidence);
-            if let Err(error) = state.save(path) {
-                journal.state_file_failure(
-                    "state_file_write_failed",
-                    "lockout",
-                    error.kind(),
-                    clock,
-                );
-                false
-            } else {
-                true
-            }
+    unsaved: bool,
+}
+
+impl HeldLockout {
+    pub(super) fn saved(evidence: Lockout) -> Self {
+        Self {
+            evidence,
+            unsaved: false,
         }
-        Err(error) => {
+    }
+
+    pub(super) fn start(
+        evidence: Lockout,
+        path: &Path,
+        journal: &Journal,
+        clock: &dyn Clock,
+    ) -> Self {
+        let unsaved = persist(path, &evidence, journal, clock);
+        Self { evidence, unsaved }
+    }
+
+    pub(super) fn evidence(&self) -> &Lockout {
+        &self.evidence
+    }
+
+    pub(super) fn unsaved(&self) -> bool {
+        self.unsaved
+    }
+
+    pub(super) fn retry_save(&mut self, path: &Path) -> bool {
+        if !self.unsaved {
+            return false;
+        }
+        if save_lockout(path, &self.evidence).is_ok() {
+            self.unsaved = false;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+enum LockoutSaveError {
+    Read(std::io::Error),
+    Write(std::io::Error),
+}
+
+fn save_lockout(path: &Path, evidence: &Lockout) -> Result<(), LockoutSaveError> {
+    let mut state = StateFile::read(path).map_err(LockoutSaveError::Read)?;
+    state.lockout = Some(evidence.clone());
+    state.save(path).map_err(LockoutSaveError::Write)
+}
+
+fn persist(path: &Path, evidence: &Lockout, journal: &Journal, clock: &dyn Clock) -> bool {
+    match save_lockout(path, evidence) {
+        Ok(()) => false,
+        Err(LockoutSaveError::Read(error)) => {
             journal.state_file_failure("state_file_read_failed", "lockout", error.kind(), clock);
             false
+        }
+        Err(LockoutSaveError::Write(error)) => {
+            journal.state_file_failure("state_file_write_failed", "lockout", error.kind(), clock);
+            true
         }
     }
 }
@@ -87,32 +128,40 @@ pub(super) fn clear(path: &Path) -> std::io::Result<()> {
 
 impl Core {
     pub(super) fn retry_lockout_save(&mut self) {
-        if !self.lockout_unsaved {
-            return;
-        }
-        let Some(evidence) = self.lockout.clone() else {
-            return;
-        };
-        let saved = StateFile::read(&self.state_path).and_then(|mut state| {
-            state.lockout = Some(evidence);
-            state.save(&self.state_path)
-        });
-        if saved.is_ok() {
-            self.lockout_unsaved = false;
+        if let Some(held) = &mut self.lockout
+            && held.retry_save(&self.state_path)
+        {
             self.publish_view();
         }
     }
 
     pub(super) fn end_lockout(&mut self, now: Moment) {
         self.lockout = None;
-        self.lockout_unsaved = false;
         self.lifecycle.lockout_ended(now);
     }
 
     pub(super) fn lockout_notice(&self) -> Option<String> {
         self.lockout
             .as_ref()
-            .map(|evidence| Message::lockout(evidence, &self.panel_address, false).to_string())
+            .map(|held| Message::lockout(held.evidence(), &self.panel_address, false).to_string())
+    }
+
+    pub(super) fn lockout_unsaved(&self) -> bool {
+        self.lockout.as_ref().is_some_and(|held| held.unsaved())
+    }
+
+    pub(super) fn held_lockout_start(
+        &mut self,
+        evidence: Lockout,
+        journal: &Journal,
+        clock: &dyn Clock,
+    ) {
+        self.lockout = Some(HeldLockout::start(
+            evidence,
+            &self.state_path,
+            journal,
+            clock,
+        ));
     }
 
     pub(super) fn upstream_error(
@@ -187,7 +236,7 @@ impl Core {
         };
         let message = Message::lockout(&evidence, &self.panel_address, false);
         let first_message = Message::lockout(&evidence, &self.panel_address, true);
-        self.lockout = Some(evidence.clone());
+        self.lockout = Some(HeldLockout::saved(evidence.clone()));
         self.sign_in.end_wait();
         let before = commands.len();
         self.end_all_work(
@@ -227,7 +276,7 @@ impl Core {
         match load(&self.state_path, clock, journal) {
             Loaded::Normal => {
                 self.lifecycle.state_file_made();
-                self.lifecycle.changes.push_back((action, reply));
+                self.lifecycle.queue(action, reply);
                 Vec::new()
             }
             Loaded::NotWritable(_) => {

@@ -142,8 +142,7 @@ pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const SETTLE_DELAY: Moment = 200;
 struct Core {
-    lockout: Option<crate::store::Lockout>,
-    lockout_unsaved: bool,
+    lockout: Option<lockout::HeldLockout>,
     sign_in: sign_in::SignIn,
     panel_address: String,
     state_path: PathBuf,
@@ -361,7 +360,7 @@ impl Core {
             }
             (None, Event::EndLockout) => self.end_lockout(now),
             (None, Event::StoredLockout(evidence)) => {
-                self.lockout = Some(evidence);
+                self.lockout = Some(lockout::HeldLockout::saved(evidence));
                 self.lifecycle.lockout_stopped();
             }
             (None, Event::CheckPending(request)) => {
@@ -511,8 +510,8 @@ impl Core {
             lockout_evidence: self
                 .lockout
                 .as_ref()
-                .map(|evidence| evidence.original_error_text.clone()),
-            lockout_unsaved: self.lockout_unsaved,
+                .map(|held| held.evidence().original_error_text.clone()),
+            lockout_unsaved: self.lockout_unsaved(),
             state: self.state(),
             runtime_process: self.lifecycle.state().runtime_process(),
             places: self.work.places(),
@@ -539,7 +538,10 @@ impl Conductor {
         let state_path = builds.start.data.join(crate::store::STATE_FILE);
         let (lockout, lifecycle_state) = match lockout::load(&state_path, clock.as_ref(), &journal)
         {
-            lockout::Loaded::Lockout(evidence) => (Some(evidence), RuntimeState::Stopped),
+            lockout::Loaded::Lockout(evidence) => (
+                Some(lockout::HeldLockout::saved(evidence)),
+                RuntimeState::Stopped,
+            ),
             lockout::Loaded::NotWritable(cause) => (
                 None,
                 RuntimeState::Unavailable(UnavailableReason {
@@ -573,7 +575,6 @@ impl Conductor {
                 retry_waits: Vec::new(),
                 lifecycle,
                 lockout,
-                lockout_unsaved: false,
                 sign_in: sign_in::SignIn::default(),
                 panel_address,
                 state_path,

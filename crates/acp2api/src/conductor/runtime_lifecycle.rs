@@ -68,7 +68,7 @@ pub(super) struct Lifecycle {
     state: RuntimeState,
     failures: VecDeque<Moment>,
     cleanup_before_start: bool,
-    pub(super) changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
+    changes: VecDeque<(crate::runtime_builds::Action, BuildReply)>,
     replacement: Option<Replacement>,
     deferred_start: bool,
 }
@@ -83,6 +83,10 @@ impl Lifecycle {
             replacement: None,
             deferred_start: false,
         }
+    }
+
+    pub(super) fn queue(&mut self, action: crate::runtime_builds::Action, reply: BuildReply) {
+        self.changes.push_back((action, reply));
     }
 
     pub(super) fn state(&self) -> &RuntimeState {
@@ -192,6 +196,10 @@ impl Lifecycle {
         reply: BuildReply,
     ) {
         self.changes.push_back((action, reply));
+    }
+
+    pub(super) fn pop_change(&mut self) -> Option<(crate::runtime_builds::Action, BuildReply)> {
+        self.changes.pop_front()
     }
 }
 
@@ -614,7 +622,7 @@ impl Core {
                 Ok(None)
             } else {
                 Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
-                    evidence,
+                    evidence.evidence(),
                     &self.panel_address,
                     false,
                 ))))
@@ -622,7 +630,7 @@ impl Core {
             let _ = reply.send(result);
             return;
         }
-        self.lifecycle.changes.push_back((action, reply));
+        self.lifecycle.queue(action, reply);
     }
 
     pub(super) async fn next_build_change(
