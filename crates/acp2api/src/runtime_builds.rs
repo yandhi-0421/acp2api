@@ -1258,7 +1258,7 @@ mod tests {
             let mut settings = crate::store::read(&config, 3).unwrap().settings;
             settings.concurrency_limit = 1;
             let journal = crate::journal::Journal::open(&root.join("logs"), ports.clock.wall()).unwrap();
-            let (conductor, task) = crate::conductor::Conductor::start(builds, ports.clock.clone(), journal.clone(), settings, config, 3);
+            let (conductor, task) = crate::conductor::Conductor::start(builds, ports.clock.clone(), journal.clone(), format!("http://127.0.0.1:{}/", settings.port), settings, config, 3);
             conductor.builds(Action::Initial, crate::Hold::empty()).await.unwrap();
             let parse = |text: &str| crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":text}]})).unwrap()).ok().unwrap().turn;
             let _a = conductor.admit(parse("A"), crate::Hold::empty(), journal.begin(crate::journal::Api::Chat, 0), crate::conductor::ResponseMode::Body).await.ok().unwrap();
@@ -1396,6 +1396,7 @@ mod tests {
                 builds,
                 ports.clock.clone(),
                 journal,
+                format!("http://127.0.0.1:{}/", settings.port),
                 settings,
                 config,
                 3,
@@ -1554,6 +1555,7 @@ mod tests {
                 builds,
                 ports.clock.clone(),
                 journal,
+                format!("http://127.0.0.1:{}/", settings.port),
                 settings,
                 config,
                 3,
@@ -1641,6 +1643,7 @@ mod tests {
                 builds.clone(),
                 ports.clock.clone(),
                 journal,
+                format!("http://127.0.0.1:{}/", settings.port),
                 settings,
                 config,
                 3,
