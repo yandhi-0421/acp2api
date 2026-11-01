@@ -7,6 +7,11 @@ use std::fs;
 #[given("the data folder denies creation of the automatic copy")]
 fn denied_copy(w: &mut World) {
     fs::create_dir_all(w.startup.data.join("logs")).unwrap();
+    fs::write(
+        w.startup.data.join("state.json"),
+        b"{\"format\":1,\"lockout\":null,\"checked_builds\":[]}",
+    )
+    .unwrap();
     w.copy_failure = Some(DeniedCopy::new(w.startup.data.clone()));
 }
 

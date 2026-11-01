@@ -85,8 +85,16 @@ impl Lifecycle {
         }
     }
 
+    pub(super) fn queue(&mut self, action: crate::runtime_builds::Action, reply: BuildReply) {
+        self.changes.push_back((action, reply));
+    }
+
     pub(super) fn state(&self) -> &RuntimeState {
         &self.state
+    }
+
+    pub(super) fn defer_start(&mut self) {
+        self.deferred_start = true;
     }
 
     pub(super) fn replacement_pending(&self) -> bool {
@@ -95,6 +103,28 @@ impl Lifecycle {
 
     pub(super) fn plan(&mut self, replacement: Replacement) {
         self.replacement = Some(replacement);
+    }
+
+    pub(super) fn state_file_reason(&self) -> Option<&crate::messages::Unavailable> {
+        match &self.state {
+            RuntimeState::Unavailable(reason)
+                if matches!(
+                    reason.message.fault,
+                    crate::messages::RuntimeFault::StateFileNotWritable
+                ) =>
+            {
+                Some(&reason.message)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn state_file_made(&mut self) {
+        if std::mem::take(&mut self.deferred_start) {
+            let (reply, _) = oneshot::channel();
+            self.changes
+                .push_back((crate::runtime_builds::Action::Initial, reply));
+        }
     }
 
     pub(super) fn lockout_stopped(&mut self) {
@@ -160,12 +190,8 @@ impl Lifecycle {
         self.replacement.as_ref()
     }
 
-    pub(super) fn queue_change(
-        &mut self,
-        action: crate::runtime_builds::Action,
-        reply: BuildReply,
-    ) {
-        self.changes.push_back((action, reply));
+    pub(super) fn pop_change(&mut self) -> Option<(crate::runtime_builds::Action, BuildReply)> {
+        self.changes.pop_front()
     }
 }
 
@@ -584,19 +610,19 @@ impl Core {
     ) {
         if let Some(evidence) = &self.lockout {
             let result = if matches!(action, crate::runtime_builds::Action::Initial) {
-                self.lifecycle.deferred_start = true;
+                self.lifecycle.defer_start();
                 Ok(None)
             } else {
                 Err(LaunchFailure::Owner(OwnerMessage::Api(Message::lockout(
-                    evidence,
+                    evidence.evidence(),
                     &self.panel_address,
                     false,
                 ))))
             };
             let _ = reply.send(result);
-        } else {
-            self.lifecycle.changes.push_back((action, reply));
+            return;
         }
+        self.lifecycle.queue(action, reply);
     }
 
     pub(super) async fn next_build_change(
@@ -610,7 +636,7 @@ impl Core {
             let mut changed = (**publish.borrow()).clone();
             match builds.select(action, &mut changed, configuration).await {
                 Err(error) => {
-                    // Only the start after a stored lockout has no reader.
+                    // Only the start after a stored lockout or after the state file is made has no reader.
                     if initial && reply.is_closed() {
                         return Some(BuildSelection::StartFailed(error));
                     }

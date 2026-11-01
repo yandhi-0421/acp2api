@@ -110,9 +110,12 @@ fn assert_state_file_diagnostic(folder: &std::path::Path, expected: &str) {
     let path = folder.join(crate::store::STATE_FILE);
     let clock = crate::Ports::production().clock;
     let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
-    let evidence = lockout::load(&path, clock.as_ref(), &journal).unwrap();
+    let evidence = match lockout::load(&path, clock.as_ref(), &journal) {
+        lockout::Loaded::Lockout(evidence) => evidence,
+        _ => panic!("expected lockout"),
+    };
     let core = Core {
-        lockout: Some(evidence.clone()),
+        lockout: Some(lockout::HeldLockout::saved(evidence.clone())),
         ..Core::fixture(1)
     };
     let response = core.refusal(0).unwrap().to_string();
@@ -399,9 +402,12 @@ fn a_stderr_failed_reply_uses_all_lockout_signals_but_only_error_channel_evidenc
                 message: "Account name%40example.com failed".into(),
             },
         );
-        let evidence = core
-            .lockout
-            .map(|evidence| (evidence.signal, evidence.original_error_text));
+        let evidence = core.lockout.as_ref().map(|held| {
+            (
+                held.evidence().signal.clone(),
+                held.evidence().original_error_text.clone(),
+            )
+        });
         let response = commands.iter().find_map(|command| match command {
             Command::Emit(_, TurnEvent::End(Err(error))) => error
                 .to_string()
@@ -443,7 +449,7 @@ async fn a_lockout_answers_the_waiting_and_queued_build_changes() {
         initial: false,
     });
     core.lifecycle
-        .queue_change(crate::runtime_builds::Action::Search, queued);
+        .queue(crate::runtime_builds::Action::Search, queued);
     let commands = core.handle(
         Event::Runtime(RuntimeEvent::UpstreamError {
             session: "running".into(),
@@ -837,10 +843,13 @@ fn the_end_of_a_lockout_restarts_the_runtime_and_clears_the_file() {
     });
     std::fs::write(&state_path, saved.to_string()).unwrap();
 
-    let evidence = lockout::load(&state_path, clock.as_ref(), &journal).unwrap();
+    let evidence = match lockout::load(&state_path, clock.as_ref(), &journal) {
+        lockout::Loaded::Lockout(evidence) => evidence,
+        _ => panic!("expected lockout"),
+    };
     let mut core = Core {
         state_path: state_path.clone(),
-        lockout: Some(evidence),
+        lockout: Some(lockout::HeldLockout::saved(evidence)),
         lifecycle: Lifecycle::new(RuntimeState::Stopped),
         ..Core::fixture(1)
     };
@@ -875,7 +884,7 @@ fn old_runtime_failures_do_not_stop_the_start_after_a_lockout() {
     core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
     core.handle(Event::RuntimeFailure, 1, std::time::UNIX_EPOCH);
     core.handle(Event::RuntimeFailure, 2, std::time::UNIX_EPOCH);
-    core.lockout = Some(evidence.clone());
+    core.lockout = Some(lockout::HeldLockout::saved(evidence.clone()));
     core.handle(
         Event::EndLockout,
         RUNTIME_FAILURE_WINDOW + 3,
@@ -891,7 +900,7 @@ fn old_runtime_failures_do_not_stop_the_start_after_a_lockout() {
         RUNTIME_FAILURE_WINDOW + 1,
         std::time::UNIX_EPOCH,
     );
-    core.lockout = Some(evidence);
+    core.lockout = Some(lockout::HeldLockout::saved(evidence));
     core.handle(
         Event::EndLockout,
         RUNTIME_FAILURE_WINDOW + 3,
@@ -921,7 +930,7 @@ async fn a_lockout_stays_when_its_end_cannot_be_written() {
     std::fs::create_dir_all(&folder_path).unwrap();
     let mut core = Core {
         state_path: folder_path,
-        lockout: Some(evidence.clone()),
+        lockout: Some(lockout::HeldLockout::saved(evidence.clone())),
         ..Core::fixture(1)
     };
     let (reply, answer) = oneshot::channel();
@@ -940,7 +949,7 @@ async fn a_lockout_stays_when_its_end_cannot_be_written() {
     let file_path = folder.join(crate::store::STATE_FILE);
     let mut core = Core {
         state_path: file_path,
-        lockout: Some(evidence),
+        lockout: Some(lockout::HeldLockout::saved(evidence)),
         ..Core::fixture(1)
     };
     let (reply, answer) = oneshot::channel();
@@ -952,5 +961,586 @@ async fn a_lockout_stays_when_its_end_cannot_be_written() {
     assert_eq!(core.state(), State::Running);
     assert!(matches!(answer.await.unwrap(), Ok(())));
 
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+fn test_environment(prefix: &str) -> (PathBuf, PathBuf, Arc<dyn Clock>, crate::journal::Journal) {
+    let folder = std::env::temp_dir().join(format!(
+        "acp2api-{prefix}-{}",
+        crate::random_hex::<12>().unwrap()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let state_path = folder.join(crate::store::STATE_FILE);
+    let clock = crate::Ports::production().clock;
+    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+    (folder, state_path, clock, journal)
+}
+
+fn unavailable_state_file_lifecycle() -> Lifecycle {
+    let mut lifecycle = Lifecycle::new(RuntimeState::Unavailable(UnavailableReason {
+        message: crate::messages::Unavailable {
+            fault: RuntimeFault::StateFileNotWritable,
+            versions: "1.4.0".into(),
+            port: 8329,
+        },
+        cause: Some(std::io::ErrorKind::PermissionDenied),
+    }));
+    lifecycle.defer_start();
+    lifecycle
+}
+
+#[tokio::test]
+async fn next_build_change_returns_the_queued_change_after_a_failed_start() {
+    let (folder, state_path, clock, journal) = test_environment("deferred-start-failed");
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    // Make official-runtime/server a directory so hashes fails on initial start
+    std::fs::create_dir_all(
+        folder
+            .join(crate::runtime_builds::COPY)
+            .join(crate::runtime_builds::SERVER),
+    )
+    .unwrap();
+
+    let mut core = Core {
+        state_path,
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+
+    let target_path = folder.join("custom-runtime");
+    let (reply, rx) = oneshot::channel();
+    let commands = core.build_input(
+        crate::runtime_builds::Action::Path(target_path),
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+    assert!(commands.is_empty());
+
+    let builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+    let (publish, _) = tokio::sync::watch::channel(Arc::new(crate::store::Settings {
+        port: 8329,
+        concurrency_limit: 1,
+        local_api_key: String::new(),
+        management_password_hash: String::new(),
+        agy_acp_server_path: None,
+    }));
+    let configuration = folder.join("config.toml");
+
+    let first = core
+        .next_build_change(&builds, &publish, &configuration)
+        .await;
+    let Some(BuildSelection::StartFailed(error)) = first else {
+        panic!("expected StartFailed");
+    };
+
+    let mut runtime = None;
+    let mut read_open = false;
+    core.deferred_start_failed(error, &mut runtime, &mut read_open, &journal, &builds)
+        .await;
+
+    let second = core
+        .next_build_change(&builds, &publish, &configuration)
+        .await;
+    assert!(
+        second.is_none(),
+        "next_build_change processes the queued change without conductor action"
+    );
+
+    let reply_result = rx.await.unwrap();
+    assert!(
+        matches!(
+            reply_result,
+            Ok(Some(crate::messages::OwnerMessage::PathWithoutHarness))
+        ),
+        "the queued action receives its reply"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_queued_search_replies_before_the_deadline_after_a_failed_deferred_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let (folder, state_path, clock, journal) = test_environment("deferred-start-failed-loop");
+    let builds = crate::runtime_builds::Builds::fixture(&folder, clock.clone());
+    let configuration = folder.join("config.toml");
+    let settings = crate::store::read(&configuration, 1).unwrap().settings;
+    assert!(!state_path.exists());
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (conductor, task) =
+        Conductor::start(builds, clock.clone(), journal, settings, configuration, 1);
+    conductor
+        .builds(crate::runtime_builds::Action::Initial, Hold::empty())
+        .await
+        .unwrap();
+
+    assert_eq!(conductor.view().state, State::RuntimeUnavailable);
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::create_dir_all(
+        folder
+            .join(crate::runtime_builds::COPY)
+            .join(crate::runtime_builds::SERVER),
+    )
+    .unwrap();
+
+    let reply = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        conductor.builds(crate::runtime_builds::Action::Search, Hold::empty()),
+    )
+    .await;
+
+    assert!(
+        reply.is_ok(),
+        "FR-040: the search reply arrives before the deadline after a deferred initial start fails"
+    );
+
+    let unavailable = conductor
+        .model_names(Hold::empty())
+        .await
+        .err()
+        .map(|error| error.message.to_string())
+        .unwrap_or_default();
+    assert!(
+        unavailable.contains("acp2api: the official runtime is unavailable:"),
+        "FR-040: the runtime remains unavailable with an FR-040 message"
+    );
+
+    drop(conductor);
+    task.await.unwrap();
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn after_a_retry_that_finds_the_state_file_normal_state_is_still_runtime_unavailable_until_runtime_ready()
+ {
+    let (folder, state_path, clock, journal) = test_environment("retry-normal");
+
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    let mut core = Core {
+        state_path,
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+
+    let (reply, _rx) = oneshot::channel();
+    let commands = core.build_input(
+        crate::runtime_builds::Action::Search,
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+    assert!(commands.is_empty());
+    assert_eq!(
+        core.state(),
+        State::RuntimeUnavailable,
+        "FR-040: after a retry that finds the state file normal, state() is still RuntimeUnavailable until runtime_ready"
+    );
+
+    core.handle(
+        Event::RuntimeReady {
+            sign_in_required: false,
+        },
+        clock.now(),
+        clock.wall(),
+    );
+    assert_eq!(
+        core.state(),
+        State::Running,
+        "FR-040: the condition ends when a start succeeds"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn a_retry_leaves_a_state_file_with_other_content_byte_for_byte_unchanged() {
+    let (folder, state_path, clock, journal) = test_environment("retry-unchanged");
+
+    let hash = "c".repeat(64);
+    let saved = serde_json::json!({
+        "format": 1,
+        "lockout": null,
+        "checked_builds": [{
+            "version": "1.7.0",
+            "platform": "macos-arm64",
+            "agy_acp_server_sha256": hash,
+            "localharness_external_sha256": hash,
+            "checked_at": "2026-10-18T12:00:00Z"
+        }]
+    });
+    let initial_bytes = serde_json::to_vec(&saved).unwrap();
+    std::fs::write(&state_path, &initial_bytes).unwrap();
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+
+    let (reply, _rx) = oneshot::channel();
+    core.build_input(
+        crate::runtime_builds::Action::Search,
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+
+    let actual_bytes = std::fs::read(&state_path).unwrap();
+    assert_eq!(
+        actual_bytes, initial_bytes,
+        "FR-035: a retry leaves a state file with other content byte for byte unchanged"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[tokio::test]
+async fn a_retry_that_finds_a_stored_lockout_gives_state_lockout_and_queues_initial_on_end() {
+    let (folder, state_path, clock, journal) = test_environment("retry-lockout");
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+    let saved = serde_json::json!({
+        "format": 1,
+        "lockout": evidence,
+        "checked_builds": []
+    });
+    std::fs::write(&state_path, saved.to_string()).unwrap();
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+
+    let (reply, rx) = oneshot::channel();
+    let _commands = core.build_input(
+        crate::runtime_builds::Action::Search,
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+
+    assert_eq!(
+        core.state(),
+        State::Lockout,
+        "FR-035: a retry that finds a stored lockout gives State::Lockout"
+    );
+    let error = rx.await.unwrap().unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            LaunchFailure::Owner(OwnerMessage::Api(crate::messages::Message::Lockout(msg)))
+                if msg.signal == "403"
+        ),
+        "FR-035: a retry that finds a stored lockout gives a lockout error in the reply"
+    );
+
+    core.handle(Event::EndLockout, clock.now(), clock.wall());
+    let queued = core.lifecycle.pop_change();
+    assert!(
+        matches!(queued, Some((crate::runtime_builds::Action::Initial, _))),
+        "FR-035: a later end queues Action::Initial"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn a_retry_with_action_path_queues_action_initial_then_that_path() {
+    let (folder, state_path, clock, journal) = test_environment("retry-path");
+
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    let mut core = Core {
+        state_path,
+        lifecycle: unavailable_state_file_lifecycle(),
+        ..Core::fixture(1)
+    };
+
+    let target_path = folder.join("custom-runtime");
+    let (reply, _rx) = oneshot::channel();
+    let commands = core.build_input(
+        crate::runtime_builds::Action::Path(target_path.clone()),
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+    assert!(commands.is_empty());
+
+    let first = core.lifecycle.pop_change();
+    let second = core.lifecycle.pop_change();
+    assert!(
+        matches!(first, Some((crate::runtime_builds::Action::Initial, _))),
+        "FR-040: a retry with Action::Path queues Action::Initial first"
+    );
+    assert!(
+        matches!(second, Some((crate::runtime_builds::Action::Path(p), _)) if p == target_path),
+        "FR-040: a retry with Action::Path queues that Path second"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_retry_with_an_unwritable_file_replies_with_the_full_m14_text() {
+    use std::os::unix::fs::PermissionsExt;
+    let (folder, state_path, clock, journal) = test_environment("retry-unwritable");
+
+    let lifecycle = unavailable_state_file_lifecycle();
+    let expected_m14 = crate::messages::Message::RuntimeUnavailable(
+        lifecycle.state_file_reason().unwrap().clone(),
+    )
+    .to_string();
+    assert!(
+        expected_m14.contains("acp2api cannot write its state file state.json"),
+        "M-14 text contains 'acp2api cannot write its state file state.json'"
+    );
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        lifecycle,
+        ..Core::fixture(1)
+    };
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let (reply, rx) = oneshot::channel();
+    let commands = core.build_input(
+        crate::runtime_builds::Action::Search,
+        reply,
+        clock.as_ref(),
+        &journal,
+    );
+    assert!(commands.is_empty());
+
+    let error = rx.await.unwrap().unwrap_err();
+    let error_text = match error {
+        LaunchFailure::Owner(OwnerMessage::Api(message)) => message.to_string(),
+        other => panic!("expected Owner Api message, got {other:?}"),
+    };
+    assert_eq!(
+        error_text, expected_m14,
+        "FR-035: a retry with an unwritable file replies with the full M-14 text that has \"acp2api cannot write its state file state.json\""
+    );
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[tokio::test]
+async fn a_read_failure_at_the_lockout_start_gives_no_notice() {
+    let (folder, state_path, clock, journal) = test_environment("read-failure-no-notice");
+
+    std::fs::write(&state_path, b"invalid json content").unwrap();
+    let Err(read_error) = crate::store::StateFile::read(&state_path) else {
+        panic!("expected read error");
+    };
+    assert_eq!(read_error.kind(), std::io::ErrorKind::InvalidData);
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        ..Core::fixture(1)
+    };
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    let mut commands = VecDeque::from([Command::Lockout(evidence)]);
+    Conductor::commands(
+        &mut core,
+        &mut None,
+        &mut false,
+        &clock,
+        &journal,
+        &mut commands,
+    )
+    .await;
+
+    assert_eq!(core.state(), State::Lockout);
+    assert!(
+        !core.view.borrow().lockout_unsaved,
+        "FR-035: a read failure at the lockout start gives no notice"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[tokio::test]
+async fn an_other_read_failure_gives_the_notice_and_a_later_retry_saves_the_lockout() {
+    let (folder, state_path, clock, journal) = test_environment("read-failure-directory");
+
+    std::fs::create_dir(&state_path).unwrap();
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        ..Core::fixture(1)
+    };
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    let mut commands = VecDeque::from([Command::Lockout(evidence)]);
+    Conductor::commands(
+        &mut core,
+        &mut None,
+        &mut false,
+        &clock,
+        &journal,
+        &mut commands,
+    )
+    .await;
+
+    assert_eq!(core.state(), State::Lockout);
+    assert!(
+        core.view.borrow().lockout_unsaved,
+        "FR-035: an other read failure gives the notice"
+    );
+
+    std::fs::remove_dir(&state_path).unwrap();
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    core.retry_lockout_save();
+
+    assert!(
+        !core.view.borrow().lockout_unsaved,
+        "FR-035: after replacing the directory with a normal file, the retry saves the lockout"
+    );
+    assert!(
+        crate::store::StateFile::read(&state_path)
+            .unwrap()
+            .lockout
+            .is_some(),
+        "FR-035: the lockout is saved in the state file"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_write_failure_gives_the_notice_and_a_later_save_clears_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let (folder, state_path, clock, journal) = test_environment("write-failure-notice");
+
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        ..Core::fixture(1)
+    };
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let mut commands = VecDeque::from([Command::Lockout(evidence)]);
+    Conductor::commands(
+        &mut core,
+        &mut None,
+        &mut false,
+        &clock,
+        &journal,
+        &mut commands,
+    )
+    .await;
+
+    assert_eq!(core.state(), State::Lockout);
+    assert!(
+        core.view.borrow().lockout_unsaved,
+        "FR-035: a write failure gives the notice"
+    );
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    core.retry_lockout_save();
+
+    assert!(
+        !core.view.borrow().lockout_unsaved,
+        "FR-035: a write failure gives the notice, and a later save clears it"
+    );
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_end_of_an_unsaved_lockout_succeeds_while_the_file_still_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let (folder, state_path, clock, journal) = test_environment("unsaved-end-succeeds");
+
+    crate::store::StateFile::normal().save(&state_path).unwrap();
+
+    let mut core = Core {
+        state_path: state_path.clone(),
+        ..Core::fixture(1)
+    };
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let mut commands = VecDeque::from([Command::Lockout(evidence)]);
+    Conductor::commands(
+        &mut core,
+        &mut None,
+        &mut false,
+        &clock,
+        &journal,
+        &mut commands,
+    )
+    .await;
+
+    assert_eq!(core.state(), State::Lockout);
+    assert!(core.view.borrow().lockout_unsaved);
+
+    let (reply, rx) = oneshot::channel();
+    let mut commands = VecDeque::from([Command::ClearLockout(reply)]);
+    Conductor::commands(
+        &mut core,
+        &mut None,
+        &mut false,
+        &clock,
+        &journal,
+        &mut commands,
+    )
+    .await;
+
+    let result = rx.await.unwrap();
+    assert!(
+        result.is_ok(),
+        "FR-035: an end of an unsaved lockout succeeds while the file still cannot be written"
+    );
+    assert_ne!(
+        core.state(),
+        State::Lockout,
+        "FR-035: an end of an unsaved lockout succeeds while the file still cannot be written"
+    );
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::remove_dir_all(folder).unwrap();
 }

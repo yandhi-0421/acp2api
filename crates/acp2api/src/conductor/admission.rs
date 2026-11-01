@@ -17,9 +17,9 @@ use tokio::sync::{mpsc, oneshot};
 
 impl Core {
     pub(super) fn refusal(&self, now: Moment) -> Option<crate::messages::Message> {
-        if let Some(evidence) = &self.lockout {
+        if let Some(held) = &self.lockout {
             return Some(crate::messages::Message::lockout(
-                evidence,
+                held.evidence(),
                 &self.panel_address,
                 false,
             ));
@@ -43,9 +43,9 @@ impl Core {
         ))
     }
     pub(super) fn owner_work_refusal(&self) -> Option<crate::messages::Message> {
-        if let Some(evidence) = &self.lockout {
+        if let Some(held) = &self.lockout {
             Some(crate::messages::Message::lockout(
-                evidence,
+                held.evidence(),
                 &self.panel_address,
                 false,
             ))

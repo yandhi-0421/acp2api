@@ -25,6 +25,7 @@ pub(crate) enum RuntimeFault {
     NotAccepted,
     RepeatedFailures,
     CopyFailed { version: String },
+    StateFileNotWritable,
 }
 impl fmt::Display for RuntimeFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -38,6 +39,9 @@ impl fmt::Display for RuntimeFault {
             }
             Self::CopyFailed { version } => {
                 write!(f, "the copy of the accepted build {version} failed")
+            }
+            Self::StateFileNotWritable => {
+                f.write_str("acp2api cannot write its state file state.json")
             }
         }
     }

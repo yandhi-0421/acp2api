@@ -521,6 +521,12 @@ fn end_lockout(language: Language) -> String {
         ),
     )
 }
+fn lockout_unsaved(language: Language) -> &'static str {
+    language.pick(
+        "acp2api: the lockout is not in the state file state.json, because the write failed. A restart of acp2api ends this lockout. acp2api tries the write again.",
+        "acp2api：锁死没有写进状态文件 state.json，因为写入失败。重启 acp2api 会结束这次锁死。acp2api 会再次尝试写入。",
+    )
+}
 fn first_tile(
     language: Language,
     view: &crate::conductor::View,
@@ -531,11 +537,19 @@ fn first_tile(
     let shade = state_shade(view.state);
     let dot = dot(state_tone(view.state));
     let state = language.state(view.state);
-    let evidence = view
+    let mut paragraphs = view
         .lockout_evidence
         .as_ref()
         .map(|text| format!("<p>{}</p>", escape(text)))
         .unwrap_or_default();
+    if view.lockout_unsaved {
+        let text = lockout_unsaved(language);
+        paragraphs.push_str(&format!(r#"<p role="status">{text}</p>"#));
+    }
+    if let Some(unavailable) = &view.runtime_unavailable {
+        let text = escape(&language.runtime_fault(&unavailable.fault));
+        paragraphs.push_str(&format!(r#"<p role="status">{text}</p>"#));
+    }
     let action = if view.state == State::Lockout {
         end_lockout(language)
     } else {
@@ -551,7 +565,7 @@ fn first_tile(
     let queued = figure(labels.requests_in_the_queue, view.queued);
     let build = figure(labels.build_in_use, build.unwrap_or("—"));
     format!(
-        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{evidence}{action}<div class="figures">{places}{queued}{build}</div></section>"#,
+        r#"<section id="{entry_id}" class="{shade}"><h1>{dot}{state}</h1>{paragraphs}{action}<div class="figures">{places}{queued}{build}</div></section>"#,
         entry_id = crate::conductor::sign_in::ENTRY_ID
     )
 }
@@ -1392,5 +1406,75 @@ mod tests {
             [true, true, true],
             "FR-054 dynamic build and folder text is HTML-escaped"
         );
+    }
+
+    #[test]
+    fn the_first_tile_renders_the_runtime_unavailable_reason_in_both_languages() {
+        use crate::messages::{RuntimeFault, Unavailable};
+        let cases = [
+            (
+                RuntimeFault::NoExecutable,
+                "acp2api found no official runtime, so it started no runtime process.",
+                "没有找到官方运行时，所以 acp2api 没有启动运行时进程。",
+            ),
+            (
+                RuntimeFault::NotAccepted,
+                "No build that acp2api found is an accepted version, so it started no runtime process.",
+                "找到的构建不是已接受版本，所以 acp2api 没有启动运行时进程。",
+            ),
+            (
+                RuntimeFault::RepeatedFailures,
+                "The runtime process failed 3 times in 10 minutes, so acp2api does not start it again by itself.",
+                "运行时进程在 10 分钟内失败了 3 次，所以 acp2api 不再自动启动它。",
+            ),
+            (
+                RuntimeFault::CopyFailed {
+                    version: "1<4".into(),
+                },
+                "The copy of the accepted build 1&lt;4 failed, so acp2api started no runtime process.",
+                "已接受构建 1&lt;4 的复制失败了，所以 acp2api 没有启动运行时进程。",
+            ),
+            (
+                RuntimeFault::StateFileNotWritable,
+                "acp2api cannot write its state file state.json, so it started no runtime process.",
+                "acp2api 无法写入状态文件 state.json，所以没有启动运行时进程。",
+            ),
+        ];
+        for (fault, english, chinese) in cases {
+            let view = crate::conductor::View {
+                state: State::RuntimeUnavailable,
+                runtime_unavailable: Some(Unavailable {
+                    fault,
+                    versions: "1.4.0".into(),
+                    port: 8329,
+                }),
+                ..Default::default()
+            };
+            for (language, sentence, m14_pointer) in [
+                (Language::English, english, "See "),
+                (Language::Chinese, chinese, "详见"),
+            ] {
+                let tile = first_tile(language, &view, 0, None);
+                assert!(
+                    tile.contains(&format!(r#"<p role="status">{sentence}</p>"#)),
+                    "FR-054 the first tile shows the PRD sentence {sentence:?}: {tile}"
+                );
+                assert!(
+                    !tile.contains(m14_pointer),
+                    "FR-054 the first tile shows no M-14 text: {tile}"
+                );
+            }
+        }
+        let running = crate::conductor::View {
+            state: State::Running,
+            runtime_unavailable: None,
+            ..Default::default()
+        };
+        for language in [Language::English, Language::Chinese] {
+            assert!(
+                !first_tile(language, &running, 0, None).contains(r#"<p role="status">"#),
+                "FR-054 the state Running has no sentence of a runtime unavailable reason"
+            );
+        }
     }
 }

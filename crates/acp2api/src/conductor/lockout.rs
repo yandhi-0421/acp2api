@@ -6,21 +6,33 @@ use crate::{
 };
 use std::{path::Path, time::SystemTime};
 
-pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<Lockout> {
+pub(super) enum Loaded {
+    Normal,
+    Lockout(Lockout),
+    NotWritable(std::io::ErrorKind),
+}
+
+pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Loaded {
     match StateFile::read(path) {
         Ok(state) => {
-            // FR-035 requires a new normal state file after the owner deletes it.
-            if !path.exists()
-                && let Err(error) = state.save(path)
-            {
-                journal.state_file_failure(
-                    "state_file_write_failed",
-                    "create",
-                    error.kind(),
-                    clock,
-                );
+            if let Some(evidence) = state.lockout {
+                Loaded::Lockout(evidence)
+            } else if !path.exists() {
+                // FR-035 requires a new normal state file after the owner deletes it.
+                if let Err(error) = state.save(path) {
+                    journal.state_file_failure(
+                        "state_file_write_failed",
+                        "create",
+                        error.kind(),
+                        clock,
+                    );
+                    Loaded::NotWritable(error.kind())
+                } else {
+                    Loaded::Normal
+                }
+            } else {
+                Loaded::Normal
             }
-            state.lockout
         }
         Err(error) => {
             let case = if error.kind() == std::io::ErrorKind::InvalidData {
@@ -29,7 +41,7 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
                 "state file cannot be read"
             };
             let diagnostic = format!("{case}: {:?}", error.kind());
-            Some(Lockout {
+            Loaded::Lockout(Lockout {
                 since: crate::journal::timestamp(clock.wall()).expect("clock after the Unix epoch"),
                 signal: diagnostic.clone(),
                 original_error_text: diagnostic,
@@ -38,21 +50,71 @@ pub(super) fn load(path: &Path, clock: &dyn Clock, journal: &Journal) -> Option<
     }
 }
 
-pub(super) fn persist(path: &Path, evidence: Lockout, journal: &Journal, clock: &dyn Clock) {
-    match StateFile::read(path) {
-        Ok(mut state) => {
-            state.lockout = Some(evidence);
-            if let Err(error) = state.save(path) {
-                journal.state_file_failure(
-                    "state_file_write_failed",
-                    "lockout",
-                    error.kind(),
-                    clock,
-                );
-            }
+pub(super) struct HeldLockout {
+    evidence: Lockout,
+    unsaved: bool,
+}
+
+impl HeldLockout {
+    pub(super) fn saved(evidence: Lockout) -> Self {
+        Self {
+            evidence,
+            unsaved: false,
         }
-        Err(error) => {
+    }
+
+    pub(super) fn start(
+        evidence: Lockout,
+        path: &Path,
+        journal: &Journal,
+        clock: &dyn Clock,
+    ) -> Self {
+        let unsaved = write_failed(path, &evidence, journal, clock);
+        Self { evidence, unsaved }
+    }
+
+    pub(super) fn evidence(&self) -> &Lockout {
+        &self.evidence
+    }
+
+    pub(super) fn unsaved(&self) -> bool {
+        self.unsaved
+    }
+
+    pub(super) fn retry_save(&mut self, path: &Path) -> bool {
+        if !self.unsaved {
+            return false;
+        }
+        if save_lockout(path, &self.evidence).is_ok() {
+            self.unsaved = false;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+enum LockoutSaveError {
+    Read(std::io::Error),
+    Write(std::io::Error),
+}
+
+fn save_lockout(path: &Path, evidence: &Lockout) -> Result<(), LockoutSaveError> {
+    let mut state = StateFile::read(path).map_err(LockoutSaveError::Read)?;
+    state.lockout = Some(evidence.clone());
+    state.save(path).map_err(LockoutSaveError::Write)
+}
+
+fn write_failed(path: &Path, evidence: &Lockout, journal: &Journal, clock: &dyn Clock) -> bool {
+    match save_lockout(path, evidence) {
+        Ok(()) => false,
+        Err(LockoutSaveError::Read(error)) => {
             journal.state_file_failure("state_file_read_failed", "lockout", error.kind(), clock);
+            error.kind() != std::io::ErrorKind::InvalidData
+        }
+        Err(LockoutSaveError::Write(error)) => {
+            journal.state_file_failure("state_file_write_failed", "lockout", error.kind(), clock);
+            true
         }
     }
 }
@@ -65,6 +127,14 @@ pub(super) fn clear(path: &Path) -> std::io::Result<()> {
 }
 
 impl Core {
+    pub(super) fn retry_lockout_save(&mut self) {
+        if let Some(held) = &mut self.lockout
+            && held.retry_save(&self.state_path)
+        {
+            self.publish_view();
+        }
+    }
+
     pub(super) fn end_lockout(&mut self, now: Moment) {
         self.lockout = None;
         self.lifecycle.lockout_ended(now);
@@ -73,7 +143,25 @@ impl Core {
     pub(super) fn lockout_notice(&self) -> Option<String> {
         self.lockout
             .as_ref()
-            .map(|evidence| Message::lockout(evidence, &self.panel_address, false).to_string())
+            .map(|held| Message::lockout(held.evidence(), &self.panel_address, false).to_string())
+    }
+
+    pub(super) fn lockout_unsaved(&self) -> bool {
+        self.lockout.as_ref().is_some_and(|held| held.unsaved())
+    }
+
+    pub(super) fn held_lockout_start(
+        &mut self,
+        evidence: Lockout,
+        journal: &Journal,
+        clock: &dyn Clock,
+    ) {
+        self.lockout = Some(HeldLockout::start(
+            evidence,
+            &self.state_path,
+            journal,
+            clock,
+        ));
     }
 
     pub(super) fn upstream_error(
@@ -148,7 +236,7 @@ impl Core {
         };
         let message = Message::lockout(&evidence, &self.panel_address, false);
         let first_message = Message::lockout(&evidence, &self.panel_address, true);
-        self.lockout = Some(evidence.clone());
+        self.lockout = Some(HeldLockout::saved(evidence.clone()));
         self.sign_in.end_wait();
         let before = commands.len();
         self.end_all_work(
@@ -171,5 +259,42 @@ impl Core {
                 .count();
         commands.insert(after_cancels, Command::Lockout(evidence));
         self.lifecycle.refuse_build_changes(&message, commands);
+    }
+
+    pub(super) fn build_input(
+        &mut self,
+        action: crate::runtime_builds::Action,
+        reply: BuildReply,
+        clock: &dyn Clock,
+        journal: &Journal,
+    ) -> Vec<Command> {
+        let Some(reason) = self.lifecycle.state_file_reason().cloned() else {
+            self.build_change(action, reply);
+            return Vec::new();
+        };
+        if matches!(action, crate::runtime_builds::Action::Initial) {
+            self.lifecycle.defer_start();
+            let _ = reply.send(Ok(None));
+            return Vec::new();
+        }
+        match load(&self.state_path, clock, journal) {
+            Loaded::Normal => {
+                self.lifecycle.state_file_made();
+                self.lifecycle.queue(action, reply);
+                Vec::new()
+            }
+            Loaded::NotWritable(_) => {
+                let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(
+                    Message::RuntimeUnavailable(reason),
+                ))));
+                Vec::new()
+            }
+            Loaded::Lockout(evidence) => {
+                let _ = reply.send(Err(LaunchFailure::Owner(OwnerMessage::Api(
+                    Message::lockout(&evidence, &self.panel_address, false),
+                ))));
+                self.handle(Event::StoredLockout(evidence), clock.now(), clock.wall())
+            }
+        }
     }
 }

@@ -619,9 +619,11 @@ During a lockout, acp2api sends no request to the official runtime.
 - acp2api shows the notice in one terminal line, and in the dark first tile of the management panel.
 - During a lockout, acp2api starts no runtime process, sends no `/usage`, and the management panel has no sign-in entry.
 - acp2api writes the lockout and its evidence into its state file: the signal, the time, and the original error text, with the redaction of FR-056.
+- When this write fails, the lockout stays in memory, and the management panel shows the notice M-30. acp2api tries the write again at each later request and at each change of state, until the write succeeds or the lockout ends.
 - A restart of acp2api does not end a lockout. acp2api reads the state file at each start.
   - When the state file exists, and acp2api cannot read it, or the file is damaged, acp2api is in lockout.
   - When no state file exists, acp2api is not in lockout, and it makes a new state file.
+  - When acp2api cannot make the new state file, it goes into the state "runtime unavailable", with the M-14 reason `acp2api cannot write its state file state.json`. It starts no runtime process until a retry can write the file.
 - Only the owner ends a lockout. The management panel shows the evidence, the owner enters the management password, and the lockout ends at once. No timer and no automatic step end it.
 - After the end, acp2api sends no test request. The next lockout signal starts a new lockout.
 - When the owner deletes the state file, the lockout ends at the next start of acp2api. acp2api does not try to stop this act.
@@ -685,7 +687,8 @@ acp2api has no runtime process that it can use, so it starts no prompt turn. It 
 - acp2api found no executable of the official runtime;
 - acp2api found only builds that are not accepted versions;
 - acp2api found an accepted build, but its automatic copy failed at a start (FR-043);
-- the runtime process had 3 failures in 10 minutes (FR-041).
+- the runtime process had 3 failures in 10 minutes (FR-041);
+- acp2api cannot make its state file (FR-035).
 
 The condition ends when a start of a runtime process succeeds. Other conditions remain until their own end. In this state, acp2api starts no runtime process by itself. These events start a new try:
 
@@ -1012,13 +1015,15 @@ The age of a log file is the time since its last modification.
 | M-27 | A last item from the assistant (a prefill) | `acp2api: a last message from the assistant (a prefill) is not supported.` |
 | M-28 | Unreadable or damaged account coordination data | `acp2api: cannot use the account coordination data at <path>.` |
 | M-29 | A session config option that the official runtime did not apply | `acp2api: the official runtime did not apply the <option> value <value>, so acp2api ended the prompt turn.` |
+| M-30 | A lockout that acp2api could not write into its state file | `acp2api: the lockout is not in the state file state.json, because the write failed. A restart of acp2api ends this lockout. acp2api tries the write again.` |
 
 The reasons of M-14 are:
 
 - `acp2api found no executable of the official runtime`;
 - `no build that acp2api found is an accepted version`;
 - `the copy of the accepted build <version> failed`;
-- `the runtime process failed 3 times in 10 minutes`.
+- `the runtime process failed 3 times in 10 minutes`;
+- `acp2api cannot write its state file state.json`.
 
 ### Texts of the management panel
 
@@ -1039,6 +1044,8 @@ The reasons of M-14 are:
 | Sentence: no executable | 没有找到官方运行时，所以 acp2api 没有启动运行时进程。 | acp2api found no official runtime, so it started no runtime process. |
 | Sentence: no accepted version | 找到的构建不是已接受版本，所以 acp2api 没有启动运行时进程。 | No build that acp2api found is an accepted version, so it started no runtime process. |
 | Sentence: 3 failures | 运行时进程在 10 分钟内失败了 3 次，所以 acp2api 不再自动启动它。 | The runtime process failed 3 times in 10 minutes, so acp2api does not start it again by itself. |
+| Sentence: failed copy | 已接受构建 <version> 的复制失败了，所以 acp2api 没有启动运行时进程。 | The copy of the accepted build <version> failed, so acp2api started no runtime process. |
+| Sentence: state file | acp2api 无法写入状态文件 state.json，所以没有启动运行时进程。 | acp2api cannot write its state file state.json, so it started no runtime process. |
 | Retry entry | 重试 | Retry |
 | Compatibility check entry | 对 <version> 做兼容性检查 | Run the compatibility check for <version> |
 | State "lockout" | 已锁死 | Lockout |

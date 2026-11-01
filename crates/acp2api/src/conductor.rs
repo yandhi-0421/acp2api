@@ -13,7 +13,7 @@ use crate::{
     Clock, Hold, HoldKind, Moment,
     conversation::{Ticket, TurnRequest},
     journal::StateDetail,
-    messages::OwnerMessage,
+    messages::{OwnerMessage, RuntimeFault},
     runtime_builds::LaunchFailure,
     runtime_driver::{Runtime, RuntimeEvent, TurnUpdate},
 };
@@ -73,6 +73,8 @@ pub(crate) struct View {
     pub(crate) queued: usize,
     pub(crate) sign_in_wait: Option<sign_in::Wait>,
     pub(crate) lockout_evidence: Option<String>,
+    pub(crate) lockout_unsaved: bool,
+    pub(crate) runtime_unavailable: Option<crate::messages::Unavailable>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -85,6 +87,8 @@ impl Default for View {
             queued: 0,
             sign_in_wait: None,
             lockout_evidence: None,
+            lockout_unsaved: false,
+            runtime_unavailable: None,
         }
     }
 }
@@ -138,7 +142,7 @@ pub(crate) const QUEUE_CAPACITY: usize = 32;
 pub(crate) const CANCEL_TIMEOUT: Moment = 30_000;
 const SETTLE_DELAY: Moment = 200;
 struct Core {
-    lockout: Option<crate::store::Lockout>,
+    lockout: Option<lockout::HeldLockout>,
     sign_in: sign_in::SignIn,
     panel_address: String,
     state_path: PathBuf,
@@ -162,6 +166,7 @@ enum Event {
         signalling_work: Option<WorkId>,
     },
     EndLockout,
+    StoredLockout(crate::store::Lockout),
     CheckPending(Box<PendingRequest>),
     Checked {
         id: WorkId,
@@ -354,6 +359,10 @@ impl Core {
                 self.start_lockout(signal, error, signalling_work, now, wall, &mut commands);
             }
             (None, Event::EndLockout) => self.end_lockout(now),
+            (None, Event::StoredLockout(evidence)) => {
+                self.lockout = Some(lockout::HeldLockout::saved(evidence));
+                self.lifecycle.lockout_stopped();
+            }
             (None, Event::CheckPending(request)) => {
                 self.work.add(Work::CheckQueued(*request));
             }
@@ -501,11 +510,16 @@ impl Core {
             lockout_evidence: self
                 .lockout
                 .as_ref()
-                .map(|evidence| evidence.original_error_text.clone()),
+                .map(|held| held.evidence().original_error_text.clone()),
+            lockout_unsaved: self.lockout_unsaved(),
             state: self.state(),
             runtime_process: self.lifecycle.state().runtime_process(),
             places: self.work.places(),
             queued: self.work.queued(),
+            runtime_unavailable: match self.lifecycle.state() {
+                RuntimeState::Unavailable(reason) => Some(reason.message.clone()),
+                _ => None,
+            },
         }));
     }
 }
@@ -522,7 +536,22 @@ impl Conductor {
         let actor_builds = builds.clone();
         let limit = settings.concurrency_limit;
         let state_path = builds.start.data.join(crate::store::STATE_FILE);
-        let lockout = lockout::load(&state_path, clock.as_ref(), &journal);
+        let (lockout, lifecycle_state) = match lockout::load(&state_path, clock.as_ref(), &journal)
+        {
+            lockout::Loaded::Lockout(evidence) => (
+                Some(lockout::HeldLockout::saved(evidence)),
+                RuntimeState::Stopped,
+            ),
+            lockout::Loaded::NotWritable(cause) => (
+                None,
+                RuntimeState::Unavailable(UnavailableReason {
+                    message: actor_builds.unavailable(RuntimeFault::StateFileNotWritable),
+                    cause: Some(cause),
+                }),
+            ),
+            lockout::Loaded::Normal => (None, RuntimeState::Serving),
+        };
+        let lifecycle = Lifecycle::new(lifecycle_state);
         let panel_address = format!("http://127.0.0.1:{}/", settings.port);
         let (view, view_watch) = watch::channel(Arc::new(View::default()));
         let (publish, settings_watch) = watch::channel(Arc::new(settings));
@@ -544,11 +573,7 @@ impl Conductor {
                 quota_result,
                 quota: quota::QuotaState::default(),
                 retry_waits: Vec::new(),
-                lifecycle: Lifecycle::new(if lockout.is_some() {
-                    RuntimeState::Stopped
-                } else {
-                    RuntimeState::Serving
-                }),
+                lifecycle,
                 lockout,
                 sign_in: sign_in::SignIn::default(),
                 panel_address,
@@ -572,6 +597,7 @@ impl Conductor {
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             loop {
+                core.retry_lockout_save();
                 if core.replacement_ready() && core.lifecycle.replacement_pending() {
                     checking = core
                         .replace(
@@ -631,6 +657,7 @@ impl Conductor {
                                 &actor_builds,
                             )
                             .await;
+                            continue;
                         }
                         None => {}
                     }
@@ -691,7 +718,23 @@ impl Conductor {
                         };
                         match work {
                             Input::Builds { action, reply, hold } => {
-                                core.build_change(action, reply);
+                                let mut commands = core
+                                    .build_input(
+                                        action,
+                                        reply,
+                                        clock.as_ref(),
+                                        &journal,
+                                    )
+                                    .into();
+                                Self::commands(
+                                    &mut core,
+                                    &mut runtime,
+                                    &mut read_open,
+                                    &clock,
+                                    &journal,
+                                    &mut commands,
+                                )
+                                .await;
                                 drop(hold);
                                 continue;
                             }

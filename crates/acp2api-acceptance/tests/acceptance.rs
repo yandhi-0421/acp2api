@@ -188,6 +188,8 @@ mod runtime_safety;
 mod server_tools;
 #[path = "steps/startup.rs"]
 mod startup;
+#[path = "steps/state_file_failure.rs"]
+mod state_file_failure;
 #[path = "steps/system_prompt_and_role_labels.rs"]
 mod system_prompt_and_role_labels;
 #[path = "steps/token_usage.rs"]
