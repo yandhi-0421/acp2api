@@ -1481,6 +1481,104 @@ With the runtime prefix `mcp_client-tools_`, each member name has at most 64 cha
 The runtime driver keeps the tools of its session, and maps the title of a permission request back to one of them with these MCP names.
 This correction adds no port, external dependency, or stored format.
 
+## Outbound connection observer (issue #138, round 2)
+
+**Decided design.** Use the OS rules and event logs around the test host process.
+The orchestrator selected this design in the round 2 brief. Keep `@wip` until native verification and the acceptance freeze.
+The release executable and the test host still call the same `acp2api::run` of ADR-0008.
+No product port, socket hook, or product behavior changes.
+
+Round 1 confused the Codex sandbox with the host environment.
+A nested `sandbox-exec` failure does not show that an unprivileged host cannot apply a profile.
+The orchestrator observed a kernel denial and its unified-log record outside Codex.
+The Windows CI job uses a GitHub-hosted runner, which [runs as administrator with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Thus the design can use its audit rights.
+
+### macOS
+
+`Observer::command` starts the test host through `sandbox-exec` with this profile:
+
+```text
+(version 1)(allow default)
+(deny network-outbound (remote ip "*:*"))
+(allow network-outbound (remote ip "127.0.0.1:*"))
+```
+
+The allow rule names the exact IPv4 address, rather than `localhost`.
+The native controls must prove that `127.0.0.1` works and `::1` produces a denial.
+The semantics of `localhost` and the exact profile remain unverified inside Codex.
+A direct socket route still reaches the kernel rule. The design does not depend on replacement libc symbols.
+
+The capture records its start time before the first control.
+After the host exits, `log show` reads the bounded window in JSON, with info, debug, and loss events enabled.
+Its end bound includes the current second in full.
+The parser reads the target PID from the sandbox message, not the kernel process ID of the log record.
+Any `network-outbound` denial for the host fails FR-046, including one that ends before traffic leaves the host.
+The message can redact the destination. The strict profile makes a denial sufficient evidence of a forbidden attempt.
+
+### Windows
+
+The observer serializes global audit changes with an OS file lock.
+It saves the exact `Filtering Platform Connection` policy through `AuditQuerySystemPolicy`.
+It enables success and failure through `auditpol`, with subcategory GUID `{0CCE9226-69AE-11D9-BED3-505054503030}`.
+The test process enables its available `SeSecurityPrivilege`; it grants no new account right.
+
+The capture records a Security-log cursor after setup.
+A PowerShell reader selects events 5156 and 5157 between that cursor and the end record.
+It reads the named XML fields, rather than localized event text.
+The Rust parser accepts decimal or prefixed hexadecimal `ProcessID` values and selects outbound records only.
+A destination other than the exact IPv4 address `127.0.0.1` fails FR-046.
+The Windows capture also requires outbound evidence for the observed PID.
+
+A temporary firewall rule blocks `192.0.2.1` for the control executable alone.
+Thus the short and failed TEST-NET controls produce audits without traffic to a remote host.
+The rule does not constrain the product executable.
+Normal completion restores the saved audit policy, verifies it, and removes the rule.
+The cleanup guard also runs during setup errors and a failed run.
+A native Windows test plants a panic and checks policy restoration and rule removal.
+Cleanup errors fail a successful run; cleanup errors during an existing failure appear in its output.
+
+The primary event schemas are [5156](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-5156) and [5157](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-5157).
+The policy functions are [AuditQuerySystemPolicy](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-auditquerysystempolicy) and [AuditSetSystemPolicy](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-auditsetsystempolicy).
+
+### Identity, evidence, and limits
+
+A short control runs before the host. A failed control runs after its exit.
+Both have separate PIDs. Their records must appear in the same capture before the host can pass.
+A bounded poll waits for those records to reach the OS log.
+Missing controls, unreadable logs, malformed records, loss reports, suppression, or output overflow fail the scenario.
+Windows also rejects a cleared or overwritten cursor, audit-drop events, log-service failures, and policy changes during the window.
+
+The final destination assertion selects only the product host PID.
+Host adapter connections to the hub count. The fake ACP agent and other child PIDs do not count.
+The kernel profile and WFP apply below std, tokio, socket2, mio, and native socket functions.
+Thus the product and its dependencies do not need a new seam.
+macOS records forbidden attempts; it does not produce an inventory of allowed connections.
+The evidence promise rests on the OS rule, the native controls, and explicit failure on an observed gap.
+
+Each control has one attempt and a two-second body limit. A parent caps its process run.
+The short control polls a tokio connection once and drops it immediately.
+The failed control uses a 200 ms std connection timeout.
+Each observer command has an eight-second limit and a 1 MiB cap for each output stream.
+Each capture has a 4096-record cap. The observation window has a 90-second limit.
+The scenario fixture sends at most nine HTTP requests and keeps the existing terminal, hub, and journal caps.
+
+### Verification gates
+
+Parser tests use the orchestrator's recorded macOS denial and Microsoft's published event fields.
+They cover PID isolation, both WFP event types, direction, exact IPv4 matching, missing fields, record order, loss, and caps.
+A separate fixture test exercises the same API, sign-in, and search actions against the real product without OS observation.
+That fixture test does not prove FR-046.
+
+`Scenario::start_network_observed` is a separate launch path in the harness, so frozen launch behavior needs no edits.
+It wraps the same test host, captures its readiness output, and uses the existing virtual time and fake ACP agent.
+All changes to frozen harness and workflow files are additions for this scenario and its native controls.
+
+The CI workflow explicitly runs the native controls and the `@issue-138` scenario on both operating systems.
+It also runs the ignored Windows cleanup test. The scenario retains `@wip` in the default suite.
+The orchestrator must run the macOS native checks outside Codex.
+Windows execution, audit restoration, profile address matching, and native log delivery remain unproven until those runs succeed.
+
 ## Open questions
 
 1. **A first start that never publishes its panel address.**

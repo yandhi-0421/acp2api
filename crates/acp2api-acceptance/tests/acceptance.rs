@@ -32,6 +32,10 @@ mod keep_alive_support;
 mod lockout;
 #[path = "support/lockout.rs"]
 mod lockout_support;
+#[path = "steps/network_observer.rs"]
+mod network_observer;
+#[path = "support/network_observer.rs"]
+mod network_support;
 #[path = "steps/panel.rs"]
 mod panel;
 #[path = "support/panel_document.rs"]
@@ -111,6 +115,7 @@ mod usage_contract;
 mod usage_steps;
 #[derive(Debug, Default, cucumber::World)]
 struct World {
+    network_observer: Option<(acp2api_acceptance::network_observer::Observer, u32)>,
     setup_logs: setup_logs_support::SetupLogs,
     errors: error_support::ErrorCases,
     panel_tiles: panel_tiles_support::TileState,
