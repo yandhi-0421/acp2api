@@ -45,6 +45,11 @@ impl From<CommandError> for Message {
 pub(crate) struct PermissionRequest {
     id: Value,
 }
+impl PermissionRequest {
+    pub(crate) fn new(id: Value) -> Self {
+        Self { id }
+    }
+}
 #[derive(Clone)]
 pub(crate) struct RuntimeStart {
     pub(crate) clock: Arc<dyn Clock>,
@@ -916,9 +921,7 @@ impl Runtime {
             let session = request.session_id.to_string();
             self.tool_calls
                 .permission(&session, &request.tool_call.tool_call_id.to_string());
-            let permission = PermissionRequest {
-                id: value["id"].clone(),
-            };
+            let permission = PermissionRequest::new(value["id"].clone());
             let update = match self.client_tool_call(&session, &request) {
                 Some(call) => TurnUpdate::Permission {
                     request: permission,
