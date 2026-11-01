@@ -854,11 +854,103 @@ fn the_end_of_a_lockout_restarts_the_runtime_and_clears_the_file() {
             .any(|command| matches!(command, Command::State(State::Running, ..)))
     );
 
-    lockout::clear(&state_path, &journal, clock.as_ref());
+    lockout::clear(&state_path).unwrap();
     let state = crate::store::StateFile::read(&state_path).unwrap();
     assert!(state.lockout.is_none());
     assert_eq!(state.checked_builds.len(), 1);
     assert_eq!(state.checked_builds[0].build.version, "1.6.0");
+
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn old_runtime_failures_do_not_stop_the_start_after_a_lockout() {
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    let mut core = Core::fixture(1);
+    core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+    core.handle(Event::RuntimeFailure, 1, std::time::UNIX_EPOCH);
+    core.handle(Event::RuntimeFailure, 2, std::time::UNIX_EPOCH);
+    core.lockout = Some(evidence.clone());
+    core.handle(
+        Event::EndLockout,
+        RUNTIME_FAILURE_WINDOW + 3,
+        std::time::UNIX_EPOCH,
+    );
+    assert_eq!(core.lifecycle.failure_count(), 0);
+
+    let mut core = Core::fixture(1);
+    core.handle(Event::RuntimeFailure, 0, std::time::UNIX_EPOCH);
+    core.handle(Event::RuntimeFailure, 1, std::time::UNIX_EPOCH);
+    core.handle(
+        Event::RuntimeFailure,
+        RUNTIME_FAILURE_WINDOW + 1,
+        std::time::UNIX_EPOCH,
+    );
+    core.lockout = Some(evidence);
+    core.handle(
+        Event::EndLockout,
+        RUNTIME_FAILURE_WINDOW + 3,
+        std::time::UNIX_EPOCH,
+    );
+    assert_eq!(core.lifecycle.failure_count(), 1);
+}
+
+#[tokio::test]
+async fn a_lockout_stays_when_its_end_cannot_be_written() {
+    let folder = std::env::temp_dir().join(format!(
+        "acp2api-lockout-stays-{}",
+        crate::random_hex::<12>().unwrap()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let clock = crate::Ports::production().clock;
+    let journal = crate::journal::Journal::open(&folder.join("logs"), clock.wall()).unwrap();
+
+    let evidence = crate::store::Lockout {
+        since: "2026-10-18T12:00:00Z".into(),
+        signal: "403".into(),
+        original_error_text: "Account suspended".into(),
+    };
+
+    // Row 1: state_path is a folder, so that the save fails
+    let folder_path = folder.join("state-is-a-folder");
+    std::fs::create_dir_all(&folder_path).unwrap();
+    let mut core = Core {
+        state_path: folder_path,
+        lockout: Some(evidence.clone()),
+        ..Core::fixture(1)
+    };
+    let (reply, answer) = oneshot::channel();
+    let mut batch = VecDeque::from([Command::ClearLockout(reply)]);
+    Conductor::commands(
+        &mut core, &mut None, &mut false, &clock, &journal, &mut batch,
+    )
+    .await;
+    assert_eq!(core.state(), State::Lockout);
+    assert!(matches!(
+        answer.await.unwrap(),
+        Err(OwnerMessage::LockoutEndNotSaved)
+    ));
+
+    // Row 2: writable path: State::Running, and Ok(())
+    let file_path = folder.join(crate::store::STATE_FILE);
+    let mut core = Core {
+        state_path: file_path,
+        lockout: Some(evidence),
+        ..Core::fixture(1)
+    };
+    let (reply, answer) = oneshot::channel();
+    let mut batch = VecDeque::from([Command::ClearLockout(reply)]);
+    Conductor::commands(
+        &mut core, &mut None, &mut false, &clock, &journal, &mut batch,
+    )
+    .await;
+    assert_eq!(core.state(), State::Running);
+    assert!(matches!(answer.await.unwrap(), Ok(())));
 
     std::fs::remove_dir_all(folder).unwrap();
 }

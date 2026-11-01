@@ -100,7 +100,9 @@ impl Lifecycle {
         self.state = RuntimeState::Stopped;
     }
 
-    pub(super) fn lockout_ended(&mut self) {
+    pub(super) fn lockout_ended(&mut self, now: Moment) {
+        self.failures
+            .retain(|at| now.saturating_sub(*at) <= RUNTIME_FAILURE_WINDOW);
         if std::mem::take(&mut self.deferred_start) {
             // The start of this process has not run, so the end runs it as a start.
             let (reply, _) = oneshot::channel();
@@ -167,7 +169,7 @@ impl Lifecycle {
 }
 
 const MAX_RUNTIME_FAILURES: usize = 3;
-const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
+pub(super) const RUNTIME_FAILURE_WINDOW: Moment = 10 * 60 * 1000;
 
 impl Core {
     pub(super) async fn replace(

@@ -390,9 +390,16 @@ async fn end_lockout(
             language.pick("The management password is wrong.", "管理密码不对。"),
         );
     }
-    match panel.act(language, OwnerAction::EndLockout).await {
+    match panel
+        .conductor
+        .owner(
+            OwnerAction::EndLockout,
+            panel.clock.hold(crate::HoldKind::TurnEvent),
+        )
+        .await
+    {
         Ok(()) => Redirect::to("/").into_response(),
-        Err(response) => response,
+        Err(message) => panel.notice(language, &message),
     }
 }
 async fn password(

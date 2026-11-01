@@ -88,6 +88,7 @@ pub(crate) enum OwnerMessage {
     NoAnswerBeforeDeadline,
     VersionDiffers,
     GeminiFolderNotFound,
+    LockoutEndNotSaved,
     /// A text from the OS or the official runtime, which stays as it is in each language.
     Diagnostic(String),
 }
@@ -135,6 +136,9 @@ impl fmt::Display for OwnerMessage {
                 f.write_str("initialize version differs from the accepted build")
             }
             Self::GeminiFolderNotFound => f.write_str("cannot locate the owner's Gemini folder"),
+            Self::LockoutEndNotSaved => {
+                f.write_str("acp2api could not write its state file, so the lockout has not ended.")
+            }
             Self::Diagnostic(text) => f.write_str(text),
         }
     }

@@ -57,24 +57,17 @@ pub(super) fn persist(path: &Path, evidence: Lockout, journal: &Journal, clock: 
     }
 }
 
-pub(super) fn clear(path: &Path, journal: &Journal, clock: &dyn Clock) {
+pub(super) fn clear(path: &Path) -> std::io::Result<()> {
     // FR-035: the end must work also on a state file that keeps the lockout because it is damaged.
     let mut state = StateFile::read(path).unwrap_or_else(|_| StateFile::normal());
     state.lockout = None;
-    if let Err(error) = state.save(path) {
-        journal.state_file_failure(
-            "state_file_write_failed",
-            "lockout_end",
-            error.kind(),
-            clock,
-        );
-    }
+    state.save(path)
 }
 
 impl Core {
-    pub(super) fn end_lockout(&mut self) {
+    pub(super) fn end_lockout(&mut self, now: Moment) {
         self.lockout = None;
-        self.lifecycle.lockout_ended();
+        self.lifecycle.lockout_ended(now);
     }
 
     pub(super) fn lockout_notice(&self) -> Option<String> {

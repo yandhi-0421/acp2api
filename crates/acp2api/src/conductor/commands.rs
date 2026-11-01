@@ -85,10 +85,21 @@ impl Conductor {
                     core.lifecycle.lockout_stopped();
                     core.publish_view();
                 }
-                Command::ClearLockout(reply) => {
-                    lockout::clear(&core.state_path, journal, clock.as_ref());
-                    let _ = reply.send(Ok(()));
-                }
+                Command::ClearLockout(reply) => match lockout::clear(&core.state_path) {
+                    Ok(()) => {
+                        commands.extend(core.handle(Event::EndLockout, clock.now(), clock.wall()));
+                        let _ = reply.send(Ok(()));
+                    }
+                    Err(error) => {
+                        journal.state_file_failure(
+                            "state_file_write_failed",
+                            "lockout_end",
+                            error.kind(),
+                            clock.as_ref(),
+                        );
+                        let _ = reply.send(Err(OwnerMessage::LockoutEndNotSaved));
+                    }
+                },
                 Command::Authenticate => {
                     if let Err(error) = runtime.as_mut().unwrap().authenticate().await {
                         commands.extend(core.command_failed(
