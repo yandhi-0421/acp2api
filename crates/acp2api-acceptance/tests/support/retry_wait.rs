@@ -50,8 +50,20 @@ pub async fn send_at(w: &mut World, call: ApiCall, at: u64) {
 }
 
 pub async fn seed(w: &mut World, plan: TurnPlan, status: u16, message: &str) {
+    // A stop result needs the FR-028 window; immediate stderr evidence does not.
+    let complete_at = if matches!(&plan.end, TurnEndPlan::Stop(_)) {
+        200
+    } else {
+        0
+    };
     w.request.plan = Some(plan);
-    send_at(w, w.retry.call(), 0).await;
+    w.scenario.time.advance_to(0).await;
+    w.retry.sent_at = 0;
+    w.request.queue_next(&w.scenario);
+    let call = w.retry.call();
+    let live = w.scenario.client().await.send(call);
+    w.scenario.time.advance_to(complete_at).await;
+    w.scenario.answer = Some(live.finish_current(&mut w.scenario.time).await);
     let answer = w.scenario.answer.as_ref().unwrap();
     assert_eq!(
         answer.status,
