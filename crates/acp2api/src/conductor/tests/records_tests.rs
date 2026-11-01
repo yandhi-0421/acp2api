@@ -386,9 +386,7 @@ fn a_failed_session_creation_still_logs_its_session_use() {
     ));
     let failed = Event::Runtime(RuntimeEvent::Prepared {
         work,
-        result: Err(crate::messages::Message::Upstream(
-            "session/new failed".into(),
-        )),
+        result: Err(crate::messages::Message::Upstream("session/new failed".into()).into()),
     });
     for command in core.handle(failed, 0, std::time::UNIX_EPOCH) {
         if let Command::Complete(completion) = command {

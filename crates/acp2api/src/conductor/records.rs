@@ -118,6 +118,14 @@ pub(super) struct Selection {
 }
 pub(super) const SESSIONS_PER_RUNTIME_PROCESS: usize = 8;
 
+#[derive(Clone, Copy)]
+enum Source {
+    Record(usize),
+    Checked,
+    Startup,
+    New,
+}
+
 #[derive(Default)]
 pub(super) struct AcpSessions {
     // Successful session/new and session/load calls plus pending preparations.
@@ -172,19 +180,40 @@ impl AcpSessions {
     pub(super) fn full(&self) -> bool {
         self.held >= SESSIONS_PER_RUNTIME_PROCESS
     }
-    pub(super) fn needs_one_more(
+    pub(super) fn at_capacity(
         &self,
         turn: &crate::conversation::TurnRequest,
         settings: &SessionSettings,
+        checked: bool,
     ) -> bool {
+        if !self.full() {
+            return false;
+        }
         let hashes = crate::conversation::record_hashes(&turn.conversation);
         let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
         let items = turn.conversation.items();
-        match select(&self.records, &hashes, tools_hash, &items) {
-            Some((index, _)) => matches!(self.records[index].location, Location::Unloaded(_)),
-            None => {
-                !(settings.system.is_none() && settings.tools.is_empty() && self.startup.is_some())
-            }
+        match self.source(&hashes, tools_hash, &items, settings, checked) {
+            Source::Record(index) => matches!(self.records[index].location, Location::Unloaded(_)),
+            Source::New => true,
+            Source::Checked | Source::Startup => false,
+        }
+    }
+    fn source(
+        &self,
+        hashes: &RecordHashes,
+        tools: ToolSetHash,
+        items: &[&Item],
+        settings: &SessionSettings,
+        checked: bool,
+    ) -> Source {
+        if let Some((index, _)) = select(&self.records, hashes, tools, items) {
+            Source::Record(index)
+        } else if checked {
+            Source::Checked
+        } else if settings.system.is_none() && settings.tools.is_empty() && self.startup.is_some() {
+            Source::Startup
+        } else {
+            Source::New
         }
     }
     pub(super) fn models_ready(&mut self, session: String) -> Option<Command> {
@@ -233,7 +262,20 @@ impl AcpSessions {
         let hashes = crate::conversation::record_hashes(&turn.conversation);
         let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
         let items = turn.conversation.items();
-        let matched = select(&self.records, &hashes, tools_hash, &items);
+        let source = self.source(
+            &hashes,
+            tools_hash,
+            &items,
+            settings,
+            checked_session.is_some(),
+        );
+        let matched = match source {
+            Source::Record(index) => Some((
+                index,
+                &items[self.records[index].record.hashes.messages.len()..],
+            )),
+            _ => None,
+        };
         let prompt = match matched {
             Some((_, new_items)) => Prompt::Continue { new_items },
             None if turn.conversation.earlier.is_empty() => Prompt::New {
@@ -244,18 +286,16 @@ impl AcpSessions {
             },
         };
         let (kind, prompt) = crate::conversation::prompt(prompt, &items);
-        let ready = match matched {
-            Some((index, _)) => {
+        let ready = match source {
+            Source::Record(index) => {
                 let record = self.records.remove(index);
                 Some((record.session, record.location))
             }
-            None if checked_session.is_some() => checked_session
+            Source::Checked => checked_session
                 .take()
                 .map(|session| (session, Location::Loaded)),
-            None if settings.system.is_none() && settings.tools.is_empty() => {
-                self.startup.take().map(|id| (id, Location::Loaded))
-            }
-            None => None,
+            Source::Startup => self.startup.take().map(|id| (id, Location::Loaded)),
+            Source::New => None,
         };
         if matched.is_some() {
             commands.extend(checked_session.map(Command::Forget));

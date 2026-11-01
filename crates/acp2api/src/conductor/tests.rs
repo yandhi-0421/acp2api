@@ -540,7 +540,7 @@ fn a_build_change_finishes_a_before_preparing_b_on_the_new_runtime() {
         .iter()
         .any(|command| matches!(command, Command::Emit(_, TurnEvent::End(Ok(_)))));
     assert!(
-        no_dispatch && ended_normally && core.replacement_ready(),
+        no_dispatch && ended_normally && core.replacement_ready(0),
         "B must wait for A to end normally before runtime replacement"
     );
     core.replaced(Some("new-runtime-startup".into()), None);

@@ -212,6 +212,16 @@ impl Core {
             );
             return false;
         }
+        if !matches!(self.lifecycle.state(), RuntimeState::Serving)
+            || self.request_needs_session_replacement(&request, checked_session.is_some(), now)
+        {
+            commands.extend(checked_session.map(Command::Forget));
+            self.work.restore(id, Work::AcceptedQueued(request));
+            if matches!(self.lifecycle.state(), RuntimeState::Serving) {
+                self.wait_for_session_limit();
+            }
+            return false;
+        }
         let settings = SessionSettings::for_turn(&request.turn);
         let (selection, selected) =
             self.sessions
@@ -330,52 +340,62 @@ impl Core {
             outcome: crate::journal::Outcome::Disconnected,
         }));
     }
-    pub(super) fn needs_session_replacement(&self) -> bool {
-        self.sessions.full()
-            && self.work.values().any(|work| match work {
-                Work::AcceptedQueued(request) if !request.reply.output.is_closed() => self
-                    .sessions
-                    .needs_one_more(&request.turn, &SessionSettings::for_turn(&request.turn)),
-                _ => false,
-            })
+    fn request_needs_session_replacement(
+        &self,
+        request: &Accepted,
+        checked: bool,
+        now: Moment,
+    ) -> bool {
+        !request.reply.output.is_closed()
+            && retry::refusal(&self.retry_waits, &request.turn, now).is_none()
+            && self.sessions.at_capacity(
+                &request.turn,
+                &SessionSettings::for_turn(&request.turn),
+                checked,
+            )
+    }
+    pub(super) fn needs_session_replacement(&self, now: Moment) -> bool {
+        self.work.values().any(|work| match work {
+            Work::AcceptedQueued(request) => {
+                self.request_needs_session_replacement(request, false, now)
+            }
+            _ => false,
+        })
     }
 
     pub(super) fn start_queued_work(&mut self, now: Moment, commands: &mut Vec<Command>) {
-        if self.lifecycle.session_limit_waiting() && !self.needs_session_replacement() {
+        if matches!(self.lifecycle.state(), RuntimeState::SessionLimitWait)
+            && !self.needs_session_replacement(now)
+        {
             self.resume_after_session_limit();
         }
         let mut places = self.work.places();
-        while self.lockout.is_none()
-            && (matches!(self.lifecycle.state(), RuntimeState::Serving)
-                || self.lifecycle.session_limit_waiting())
-            && places < usize::from(self.limit)
+        if self.lockout.is_some()
+            || !matches!(
+                self.lifecycle.state(),
+                RuntimeState::Serving | RuntimeState::SessionLimitWait
+            )
         {
-            let Some(id) = self.work.iter().find_map(|(id, work)| match work {
+            return;
+        }
+        let queued: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| match work {
                 Work::ModelsQueued(_) => Some(*id),
                 Work::CheckQueued(_) => Some(*id),
                 Work::QuotaQueued { .. } if !self.sign_in.required() => Some(*id),
                 Work::AcceptedQueued(_)
-                    if matches!(self.lifecycle.state(), RuntimeState::Serving)
-                        && !self.sign_in.required()
-                        && self.quota.wait().is_none() =>
+                    if !self.sign_in.required() && self.quota.wait().is_none() =>
                 {
                     Some(*id)
                 }
                 _ => None,
-            }) else {
+            })
+            .collect();
+        for id in queued {
+            if places >= usize::from(self.limit) {
                 break;
-            };
-            if let Work::AcceptedQueued(request) = &self.work[&id]
-                && !request.reply.output.is_closed()
-                && self.sessions.full()
-                && self
-                    .sessions
-                    .needs_one_more(&request.turn, &SessionSettings::for_turn(&request.turn))
-            {
-                self.lifecycle
-                    .plan(super::runtime_lifecycle::Replacement::SessionLimit);
-                self.wait_for_session_limit();
-                continue;
             }
             let request = match self.work.remove(&id).unwrap() {
                 Work::ModelsQueued(read) => {

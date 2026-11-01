@@ -1,5 +1,9 @@
 use super::*;
 
+mod build_wait_tests;
+mod review_tests;
+mod walk_tests;
+
 struct Fixture {
     core: Core,
     journal: crate::journal::Journal,
@@ -88,12 +92,14 @@ impl Fixture {
         let metadata = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
         self.event(Event::Runtime(RuntimeEvent::Prepared {
             work: work.into(),
-            result: result.map(|session| {
-                (
-                    session.into(),
-                    crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
-                )
-            }),
+            result: result
+                .map(|session| {
+                    (
+                        session.into(),
+                        crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
+                    )
+                })
+                .map_err(Into::into),
         }))
     }
 
@@ -185,10 +191,10 @@ fn a_disconnected_waiter_cancels_session_limit_replacement() {
                 .any(|c| matches!(c, Command::Prepare { .. })),
         "a later new ACP session still needs a replacement"
     );
-    assert!(f.core.replacement_ready());
+    assert!(f.core.replacement_ready(0));
     f.tickets.pop();
     assert!(
-        !f.core.replacement_ready(),
+        !f.core.replacement_ready(0),
         "decision 1: a closed waiter must prevent the stop before its disconnect event arrives"
     );
 }
@@ -237,12 +243,12 @@ fn session_limit_replacement_preserves_the_owners_running_sign_in_wait() {
             .wait()
             .is_some_and(|wait| wait.deadline == 600_000
                 && wait.address.as_deref() == Some("https://example.test/sign-in"))
-            && !f.core.replacement_ready(),
+            && !f.core.replacement_ready(0),
         "decision 3: replacement must preserve the owner wait, address, and deadline"
     );
     f.event(Event::Runtime(RuntimeEvent::Authenticated(Ok(()))));
     assert!(
-        f.core.replacement_ready(),
+        f.core.replacement_ready(0),
         "the replacement can proceed after sign-in ends"
     );
 }

@@ -342,7 +342,7 @@ impl Core {
                     *phase = QuotaPhase::Prompt(session.clone());
                     commands.push(Command::Usage { work, session });
                 }
-                Err(error) => self.finish_quota(id, Err(error), now, wall, commands),
+                Err(error) => self.finish_quota(id, Err(error.into_message()), now, wall, commands),
             },
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
                 self.update_quota(id, session, update, now, commands)

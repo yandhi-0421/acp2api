@@ -73,7 +73,7 @@ fn a_disconnected_sign_in_check_keeps_its_place_until_its_acp_reply() {
     let commands = core.handle(
         Event::Runtime(RuntimeEvent::Prepared {
             work: ids[0].clone(),
-            result: Err(error),
+            result: Err(error.into()),
         }),
         1,
         std::time::UNIX_EPOCH,
@@ -177,7 +177,7 @@ fn retirement_and_unavailability_end_the_sign_in_wait_in_either_order() {
                         "a wait cannot overwrite the build retirement"
                     );
                     assert!(
-                        core.replacement_ready(),
+                        core.replacement_ready(0),
                         "the existing build replacement can proceed"
                     );
                     assert!(matches!(
@@ -206,7 +206,7 @@ fn a_sign_in_replacement_waits_for_running_prompt_turns() {
         "FR-039 sign-in uses the ordinary replacement path"
     );
     assert!(
-        !core.replacement_ready(),
+        !core.replacement_ready(0),
         "FR-037 the running prompt retains its runtime"
     );
     assert!(
@@ -230,7 +230,7 @@ fn a_sign_in_replacement_waits_for_running_prompt_turns() {
         "FR-037 the running prompt ends normally"
     );
     assert!(
-        core.replacement_ready(),
+        core.replacement_ready(0),
         "FR-039 the replacement proceeds after the prompt ends"
     );
     assert!(
@@ -255,7 +255,7 @@ fn aborting_retirement_replaces_a_runtime_with_an_ended_sign_in_wait() {
         "FR-039 an aborted retirement must still stop the runtime's authenticate call"
     );
     assert!(
-        core.replacement_ready(),
+        core.replacement_ready(0),
         "the planned replacement can proceed"
     );
     assert!(
@@ -324,7 +324,7 @@ fn an_elapsed_quota_reset_completes_a_pending_sign_in_check() {
         let commands = core.handle(
             Event::Runtime(RuntimeEvent::Prepared {
                 work: checks[1].clone(),
-                result: Err(crate::messages::Message::UpstreamAcp(error)),
+                result: Err(crate::messages::Message::UpstreamAcp(error).into()),
             }),
             1,
             wall,
@@ -389,7 +389,8 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
                         serde_json::json!({"code":429,"message":"RESOURCE_EXHAUSTED"}),
                     )
                     .unwrap(),
-                )),
+                )
+                .into()),
             }),
             0,
             std::time::UNIX_EPOCH,
