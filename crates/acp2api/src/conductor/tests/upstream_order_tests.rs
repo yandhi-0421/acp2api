@@ -1,6 +1,6 @@
 use super::*;
 
-struct Turn {
+struct PromptTurn {
     core: Core,
     output: Vec<(Moment, String)>,
     queries: std::collections::BTreeSet<String>,
@@ -9,7 +9,7 @@ struct Turn {
     _tickets: [mpsc::UnboundedReceiver<(TurnEvent, Hold)>; 2],
 }
 
-impl Turn {
+impl PromptTurn {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
             "acp2api-upstream-order-{}",
@@ -145,13 +145,14 @@ impl Turn {
     }
 }
 
-impl Drop for Turn {
+impl Drop for PromptTurn {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.root).unwrap();
     }
 }
 
 mod chunk_sequences;
+mod concurrent;
 mod interleavings;
 mod quota_cases;
 mod runtime_end;

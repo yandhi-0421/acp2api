@@ -1,6 +1,5 @@
 use super::*;
 
-// Fixed sequence from the second review; no entropy or real time.
 struct Lcg(u64);
 impl Lcg {
     fn next(&mut self) -> usize {
@@ -35,8 +34,7 @@ fn deterministic_chunks_errors_and_disconnects_match_whole_text() {
         "bbbbbbbbbbbbbbbbbbbbbbbbbb",
     ];
     let mut rng = Lcg(77);
-    let (mut positive, mut negative) = (0, 0);
-    let mut r = Turn::new();
+    let mut r = PromptTurn::new();
     let journal = crate::journal::Journal::open(&r.root, std::time::UNIX_EPOCH).unwrap();
     for _ in 0..4000 {
         let mut text = String::new();
@@ -111,7 +109,5 @@ fn deterministic_chunks_errors_and_disconnects_match_whole_text() {
             want,
             "text={text:?} chunks={chunks:?} error_at={error_at} disconnect_at={disconnect_at}"
         );
-        if want { positive += 1 } else { negative += 1 }
     }
-    println!("deterministic Core cases positive={positive} negative={negative}");
 }

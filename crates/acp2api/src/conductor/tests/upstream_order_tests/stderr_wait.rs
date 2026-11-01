@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn stderr_first_preserves_text_before_the_held_error_chunk() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(503, 0);
     turn.text("Sure, ", 50);
     turn.text("503 The service is unavailable.", 100);
@@ -22,7 +22,7 @@ fn stderr_first_preserves_text_before_the_held_error_chunk() {
 
 #[test]
 fn stderr_wait_ends_at_the_prompt_end_without_another_200_ms() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(503, 10);
     turn.handle(Event::Deadline, 109);
     assert!(turn.output.is_empty(), "FR-028 must wait for unread stdout");
@@ -39,7 +39,7 @@ fn stderr_wait_ends_at_the_prompt_end_without_another_200_ms() {
 
 #[test]
 fn stderr_wait_ends_at_200_ms_even_when_stdout_never_ends() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(503, 10);
     turn.text("Sure, ", 20);
     turn.text("Synthetic failure", 30);

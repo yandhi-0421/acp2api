@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn quota_and_sign_in_errors_preserve_the_prefix_when_stderr_arrives_first() {
     for code in [429, 401] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.handle(
             Event::Runtime(RuntimeEvent::UpstreamError {
                 session: "running".into(),
@@ -33,7 +33,7 @@ fn quota_and_sign_in_errors_preserve_the_prefix_when_stderr_arrives_first() {
 
 #[test]
 fn a_quota_error_without_a_reset_time_has_the_same_stdout_wait_bound() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(429, 0);
     turn.text("Sure, ", 50);
     turn.text("Synthetic error text", 100);
@@ -60,7 +60,7 @@ fn a_quota_error_without_a_reset_time_has_the_same_stdout_wait_bound() {
 
 #[test]
 fn a_quota_query_error_is_bounded_and_checks_text_after_its_response() {
-    let (mut turn, mut answer) = Turn::quota_query();
+    let (mut turn, mut answer) = PromptTurn::quota_query();
     turn.error(400, 0);
     turn.handle(Event::Deadline, 199);
     assert!(matches!(
@@ -86,7 +86,7 @@ fn a_quota_query_error_is_bounded_and_checks_text_after_its_response() {
 }
 
 fn assert_failed_shared_quota_keeps_session(reset: bool) {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     if reset {
         turn.error(429, 0);
         turn.end(10);
@@ -142,7 +142,7 @@ fn a_failed_reset_usage_keeps_its_shared_session_until_the_turn_ends() {
 #[test]
 fn a_repeat_quota_error_at_the_deadline_cannot_complete_a_running_turn() {
     for first in [503, 429] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.error(first, 0);
         turn.text("Sure, ", 20);
         turn.text("Error text", 30);
@@ -187,7 +187,7 @@ fn a_repeat_quota_error_at_the_deadline_cannot_complete_a_running_turn() {
 
 #[test]
 fn a_usage_text_update_at_the_deadline_does_not_end_the_prompt() {
-    let (mut turn, _answer) = Turn::quota_query();
+    let (mut turn, _answer) = PromptTurn::quota_query();
     turn.error(400, 0);
     turn.text("Quota text", 200);
     let commands = turn
@@ -206,7 +206,7 @@ fn a_usage_text_update_at_the_deadline_does_not_end_the_prompt() {
 fn a_failed_usage_keeps_its_first_error_across_stderr_and_rpc_failures() {
     let mut codes = Vec::new();
     for rpc in [false, true] {
-        let (mut turn, mut answer) = Turn::quota_query();
+        let (mut turn, mut answer) = PromptTurn::quota_query();
         turn.error(503, 10);
         if rpc {
             turn.update(
@@ -239,7 +239,7 @@ fn a_failed_usage_keeps_its_first_error_across_stderr_and_rpc_failures() {
 
 #[test]
 fn a_repeated_unknown_quota_error_keeps_the_first_stdout_deadline() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(429, 0);
     turn.error(429, 199);
     assert_eq!(
@@ -255,7 +255,7 @@ fn a_repeated_unknown_quota_error_keeps_the_first_stdout_deadline() {
 #[test]
 fn a_quota_reset_query_survives_a_non_quota_error_before_stdout_ends() {
     for disconnect in [false, true] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.error(429, 0);
         turn.error(503, 20);
         if disconnect {
@@ -286,7 +286,7 @@ fn a_quota_reset_query_survives_a_non_quota_error_before_stdout_ends() {
 
 #[test]
 fn a_quota_rpc_failure_after_stderr_starts_usage_without_a_second_wait() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(429, 0);
     let commands = turn.core.handle(
         Event::Runtime(RuntimeEvent::Turn {
@@ -318,7 +318,7 @@ fn a_quota_rpc_failure_after_stderr_starts_usage_without_a_second_wait() {
 #[test]
 fn replaced_quota_error_keeps_its_reset_query_at_both_stdout_endings() {
     for rpc in [false, true] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.error(429, 0);
         turn.error(503, 20);
         let update = if rpc {
@@ -367,7 +367,7 @@ fn replaced_quota_error_keeps_its_reset_query_at_both_stdout_endings() {
 #[test]
 fn a_late_quota_error_does_not_repeat_a_retiring_usage_query() {
     for retired in [false, true] {
-        let (mut turn, _answer) = Turn::quota_query();
+        let (mut turn, _answer) = PromptTurn::quota_query();
         turn.error(400, 10);
         if retired {
             turn.handle(Event::Deadline, 210);
@@ -391,54 +391,56 @@ fn a_late_quota_error_does_not_repeat_a_retiring_usage_query() {
 
 #[test]
 fn a_queued_usage_query_keeps_its_session_after_a_late_stderr_error() {
-    let mut turn = Turn::new();
-    turn.core.catalog = None;
-    turn.core.model_names.clear();
-    let (reply, _answer) = oneshot::channel();
-    turn.error(429, 10);
-    turn.handle(Event::ReadModelNames(reply), 11);
-    turn.end(20);
-    assert_eq!(turn.core.work.values().filter(|w| matches!(w, Work::QuotaQueued { session: Some(session), .. } if session == "running")).count(), 1);
-    let commands = turn.core.handle(
-        Event::Runtime(RuntimeEvent::UpstreamError {
-            session: "running".into(),
-            error: crate::messages::HttpError {
-                code: Some(400),
-                status: "X".into(),
-                message: "late".into(),
-            },
-        }),
-        30,
-        std::time::UNIX_EPOCH,
-    );
-    assert!(
-        !commands
-            .iter()
-            .any(|c| matches!(c, Command::Forget(s) if s == "running")),
-        "the queued usage query still owns its ACP session"
-    );
-    let commands = turn.core.handle(
-        Event::Runtime(RuntimeEvent::Prepared {
-            work: "models-2".into(),
-            result: Err(crate::runtime_driver::PreparationError::Rejected(
-                crate::messages::Message::RuntimeFailed,
-            )),
-        }),
-        40,
-        std::time::UNIX_EPOCH,
-    );
-    assert_eq!(
-        commands
-            .iter()
-            .filter(|c| matches!(c, Command::Usage { session, .. } if session == "running"))
-            .count(),
-        1
-    );
+    for code in [400, 429] {
+        let mut turn = PromptTurn::new();
+        turn.core.catalog = None;
+        turn.core.model_names.clear();
+        let (reply, _answer) = oneshot::channel();
+        turn.error(429, 10);
+        turn.handle(Event::ReadModelNames(reply), 11);
+        turn.end(20);
+        assert_eq!(turn.core.work.values().filter(|w| matches!(w, Work::QuotaQueued { session: Some(session), .. } if session == "running")).count(), 1);
+        let commands = turn.core.handle(
+            Event::Runtime(RuntimeEvent::UpstreamError {
+                session: "running".into(),
+                error: crate::messages::HttpError {
+                    code: Some(code),
+                    status: "X".into(),
+                    message: "late".into(),
+                },
+            }),
+            30,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, Command::Forget(s) if s == "running")),
+            "the queued usage query still owns its ACP session"
+        );
+        let commands = turn.core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: "models-2".into(),
+                result: Err(crate::runtime_driver::PreparationError::Rejected(
+                    crate::messages::Message::RuntimeFailed,
+                )),
+            }),
+            40,
+            std::time::UNIX_EPOCH,
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|c| matches!(c, Command::Usage { session, .. } if session == "running"))
+                .count(),
+            1
+        );
+    }
 }
 
 #[test]
 fn sign_in_required_overrides_quota_at_the_stdout_wait_deadline() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(429, 0);
     turn.handle(
         Event::Runtime(RuntimeEvent::UpstreamError {

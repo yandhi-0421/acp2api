@@ -2,53 +2,113 @@ use super::*;
 
 #[test]
 fn a_process_failure_during_the_stdout_wait_preserves_the_upstream_error() {
-    for ending in ["closed", "failed", "timeout"] {
-        for (code, message) in [
-            (400, "plain"),
-            (500, "plain"),
-            (503, "plain"),
-            (429, "resets 1970-01-01T00:02:00Z"),
-            (429, "no reset time"),
-        ] {
-            let mut turn = Turn::new();
+    for rpc in [false, true] {
+        for ending in ["closed", "failed", "timeout", "expired"] {
+            for (code, message) in [
+                (400, "plain"),
+                (500, "plain"),
+                (503, "plain"),
+                (429, "resets 1970-01-01T00:02:00Z"),
+                (429, "no reset time"),
+            ] {
+                let mut turn = PromptTurn::new();
+                let error = crate::messages::HttpError {
+                    code: Some(code),
+                    status: "UNAVAILABLE".into(),
+                    message: message.into(),
+                };
+                if rpc {
+                    turn.update(
+                        TurnUpdate::Failed(crate::messages::Message::UpstreamHttp(error)),
+                        10,
+                    );
+                } else {
+                    turn.handle(
+                        Event::Runtime(RuntimeEvent::UpstreamError {
+                            session: "running".into(),
+                            error,
+                        }),
+                        10,
+                    );
+                }
+                let event = match ending {
+                    "closed" | "expired" => Event::Runtime(RuntimeEvent::Closed),
+                    "failed" => {
+                        Event::Runtime(RuntimeEvent::Failed("runtime process failed".into()))
+                    }
+                    _ => Event::RuntimeFailure,
+                };
+                turn.handle(event, if ending == "expired" { 3_600_011 } else { 60 });
+                assert!(
+                    turn.ends.iter().any(|(_, result)| match result {
+                        Err(crate::messages::Message::UpstreamHttp(error)) =>
+                            code != 429 && error.code == Some(code),
+                        Err(crate::messages::Message::QuotaWait { .. }) => code == 429,
+                        _ => false,
+                    }),
+                    "stored stderr {code} {message} must survive {ending}"
+                );
+                if code == 429 {
+                    assert!(
+                        turn.core.retry_waits.is_empty(),
+                        "quota has no conversation retry wait"
+                    );
+                } else if code != 400 {
+                    assert_eq!(turn.core.retry_waits.last().unwrap().deadline, 30_010);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn waiting_errors_follow_the_current_state_priority_at_each_ending() {
+    for (rpc, closed) in [(false, false), (false, true), (true, true)] {
+        for replacement in [401, 429] {
+            let mut turn = PromptTurn::new();
+            if rpc {
+                turn.update(
+                    TurnUpdate::Failed(crate::messages::Message::UpstreamHttp(
+                        crate::messages::HttpError {
+                            code: Some(429),
+                            status: "X".into(),
+                            message: "No reset time".into(),
+                        },
+                    )),
+                    10,
+                );
+            } else {
+                turn.error(429, 10);
+            }
             turn.handle(
                 Event::Runtime(RuntimeEvent::UpstreamError {
-                    session: "running".into(),
+                    session: "other".into(),
                     error: crate::messages::HttpError {
-                        code: Some(code),
-                        status: "UNAVAILABLE".into(),
-                        message: message.into(),
+                        code: Some(replacement),
+                        status: "X".into(),
+                        message: "resets 1970-01-01T00:02:00Z".into(),
                     },
                 }),
-                10,
+                20,
             );
-            let event = match ending {
-                "closed" => Event::Runtime(RuntimeEvent::Closed),
-                "failed" => Event::Runtime(RuntimeEvent::Failed("runtime process failed".into())),
-                _ => Event::RuntimeFailure,
-            };
-            let commands = turn.core.handle(event, 100, std::time::UNIX_EPOCH);
-            assert!(
-                commands.iter().any(|command| match command {
-                    Command::Emit(
-                        _,
-                        TurnEvent::End(Err(crate::messages::Message::UpstreamHttp(error))),
-                    ) => code != 429 && error.code == Some(code),
-                    Command::Emit(
-                        _,
-                        TurnEvent::End(Err(crate::messages::Message::QuotaWait { .. })),
-                    ) => code == 429,
-                    _ => false,
-                }),
-                "stored stderr {code} {message} must survive {ending}"
+            turn.handle(
+                if closed {
+                    Event::Runtime(RuntimeEvent::Closed)
+                } else {
+                    Event::Deadline
+                },
+                if closed { 60 } else { 210 },
             );
-            if code == 429 {
-                assert!(
-                    turn.core.retry_waits.is_empty(),
-                    "quota has no conversation retry wait"
-                );
-            } else if code != 400 {
-                assert_eq!(turn.core.retry_waits.last().unwrap().deadline, 30_010);
+            assert_eq!(turn.ends.len(), 1);
+            match &turn.ends[0].1 {
+                Err(crate::messages::Message::SignInRequired(_)) => assert_eq!(replacement, 401),
+                Err(crate::messages::Message::QuotaWait { retry_after, .. }) => {
+                    assert_eq!(replacement, 429);
+                    assert_eq!(*retry_after, 120);
+                }
+                other => panic!(
+                    "priority for rpc={rpc}, closed={closed}, replacement={replacement}: {other:?}"
+                ),
             }
         }
     }
@@ -57,7 +117,7 @@ fn a_process_failure_during_the_stdout_wait_preserves_the_upstream_error() {
 #[test]
 fn stop_and_lockout_still_override_a_pending_upstream_error() {
     for lockout in [false, true] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.error(503, 0);
         let event = if lockout {
             Event::Runtime(RuntimeEvent::UpstreamError {
@@ -87,67 +147,105 @@ fn stop_and_lockout_still_override_a_pending_upstream_error() {
 
 #[test]
 fn a_quota_error_while_a_known_session_loads_does_not_start_a_prompt_cancel_timer() {
-    let mut turn = Turn::new();
-    let id = turn.core.work.by_session("running").unwrap();
-    let active = turn.core.work.remove(&id).unwrap().into_active().unwrap();
-    let request_id = active.request.id.clone();
-    let parsed = crate::dialect::CHAT
-        .parse(br#"{"model":"m","messages":[{"role":"user","content":"First"}]}"#)
-        .ok()
-        .unwrap()
-        .turn;
-    let preparing = Active::new(
-        Accepted {
-            turn: parsed,
-            model: crate::catalog::SelectedModel {
+    for ending in [
+        "prepared",
+        "repeat",
+        "disconnect",
+        "closed",
+        "failed",
+        "expired",
+    ] {
+        let mut turn = PromptTurn::new();
+        let id = turn.core.work.by_session("running").unwrap();
+        let active = turn.core.work.remove(&id).unwrap().into_active().unwrap();
+        let request_id = active.request.id.clone();
+        let parsed = crate::dialect::CHAT
+            .parse(br#"{"model":"m","messages":[{"role":"user","content":"First"}]}"#)
+            .ok()
+            .unwrap()
+            .turn;
+        let preparing = Active::new(
+            Accepted {
+                turn: parsed,
+                model: crate::catalog::SelectedModel {
+                    model: "m".into(),
+                    level: None,
+                    level_from_name: false,
+                },
+                request: active.request,
+                reply: active.reply,
+            },
+            Some("running".into()),
+            request::Start::Prepare(crate::conversation::PromptRequest {
+                blocks: Vec::new(),
                 model: "m".into(),
                 level: None,
-                level_from_name: false,
-            },
-            request: active.request,
-            reply: active.reply,
-        },
-        Some("running".into()),
-        request::Start::Prepare(crate::conversation::PromptRequest {
-            blocks: Vec::new(),
-            model: "m".into(),
-            level: None,
-        }),
-        active.record,
-        active.kind,
-    );
-    turn.core.work.restore(id, Work::AcceptedWorking(preparing));
-    turn.error(429, 10);
-    let commands = turn
-        .core
-        .handle(Event::Deadline, 210, std::time::UNIX_EPOCH);
-    assert!(
-        !commands
-            .iter()
-            .any(|command| matches!(command, Command::Cancel(_))),
-        "F6 session/load is not a running prompt with a 200 ms cancel bound"
-    );
-    let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
-    let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
-    turn.handle(
-        Event::Runtime(RuntimeEvent::Prepared {
-            work: request_id,
-            result: Ok(("running".into(), catalog)),
-        }),
-        500,
-    );
-    turn.handle(Event::Deadline, 500);
-    assert!(
-        !turn.core.sessions.cancellation_due(30_210),
-        "F6 a completed load leaves no stale cancellation"
-    );
-    turn.handle(Event::Deadline, 30_210);
-    assert!(matches!(turn.core.lifecycle.state(), RuntimeState::Serving));
+            }),
+            active.record,
+            active.kind,
+        );
+        turn.core.work.restore(id, Work::AcceptedWorking(preparing));
+        turn.error(429, 10);
+        if ending == "repeat" {
+            turn.error(429, 20);
+        }
+        if ending == "disconnect" {
+            let commands = turn.core.handle(
+                Event::Disconnected(request_id.clone()),
+                20,
+                std::time::UNIX_EPOCH,
+            );
+            assert!(
+                !commands.iter().any(|c| matches!(c, Command::Cancel(_))),
+                "a pending session/load has no prompt turn to cancel"
+            );
+        }
+        if matches!(ending, "closed" | "failed" | "expired") {
+            turn.handle(
+                if ending != "failed" {
+                    Event::Runtime(RuntimeEvent::Closed)
+                } else {
+                    Event::Runtime(RuntimeEvent::Failed("gone".into()))
+                },
+                if ending == "expired" { 3_600_011 } else { 20 },
+            );
+            assert!(matches!(
+                &turn.ends[..],
+                [(_, Err(crate::messages::Message::QuotaWait { .. }))]
+            ));
+            continue;
+        }
+        let commands = turn
+            .core
+            .handle(Event::Deadline, 230, std::time::UNIX_EPOCH);
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, Command::Cancel(_))),
+            "F6 session/load is not a running prompt with a 200 ms cancel bound"
+        );
+        let options = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&options, std::time::UNIX_EPOCH).unwrap();
+        turn.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: request_id,
+                result: Ok(("running".into(), catalog)),
+            }),
+            500,
+        );
+        turn.handle(Event::Deadline, 500);
+        assert!(
+            !turn.core.sessions.cancellation_due(30_230),
+            "F6 a completed load leaves no stale cancellation"
+        );
+        turn.handle(Event::Deadline, 30_230);
+        assert!(matches!(turn.core.lifecycle.state(), RuntimeState::Serving));
+    }
 }
 
 #[test]
 fn a_failed_usage_cancel_has_a_thirty_second_runtime_failure_bound() {
-    let (mut turn, _answer) = Turn::quota_query();
+    let (mut turn, _answer) = PromptTurn::quota_query();
     turn.error(400, 0);
     let expired = turn
         .core
@@ -175,10 +273,10 @@ fn pending_403_is_confirmed_by_each_runtime_process_ending() {
         for path in ["waiting", "retiring", "usage", "quota-retiring"] {
             for ending in ["closed", "failed", "timeout"] {
                 let (mut turn, _answer) = if path.contains("usage") || path == "quota-retiring" {
-                    let (turn, answer) = Turn::quota_query();
+                    let (turn, answer) = PromptTurn::quota_query();
                     (turn, Some(answer))
                 } else {
-                    (Turn::new(), None)
+                    (PromptTurn::new(), None)
                 };
                 turn.text(text, 5);
                 turn.error(500, 10);
@@ -216,7 +314,7 @@ fn pending_403_is_confirmed_by_each_runtime_process_ending() {
 
 #[test]
 fn a_runtime_failure_discards_an_ended_disconnected_summary() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.text("Terms of Service", 10);
     turn.end(20);
     turn.disconnect(30);
@@ -230,7 +328,7 @@ fn a_runtime_failure_discards_an_ended_disconnected_summary() {
 
 #[test]
 fn lockout_cancels_a_usage_prompt_that_is_in_its_error_wait() {
-    let (mut turn, _answer) = Turn::quota_query();
+    let (mut turn, _answer) = PromptTurn::quota_query();
     turn.error(400, 10);
     let commands = turn.core.handle(
         Event::Runtime(RuntimeEvent::Turn {

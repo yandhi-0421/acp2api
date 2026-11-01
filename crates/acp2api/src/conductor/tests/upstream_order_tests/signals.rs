@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn late_reply_text_starts_lockout_during_the_stderr_wait() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(400, 0);
     turn.text("Your account violates the Terms of ", 50);
     turn.text("Service.", 100);
@@ -14,7 +14,7 @@ fn late_reply_text_starts_lockout_during_the_stderr_wait() {
 
 #[test]
 fn late_reply_text_starts_lockout_after_the_response_ended() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(400, 0);
     turn.handle(Event::Deadline, 200);
     assert_eq!(
@@ -32,7 +32,7 @@ fn late_reply_text_starts_lockout_after_the_response_ended() {
 
 #[test]
 fn a_cut_suffix_does_not_turn_order_1403_into_a_lockout_signal() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(400, 0);
     turn.text("Order 1403 is shipped to", 20);
     assert!(turn.core.lockout.is_none());
@@ -48,7 +48,7 @@ fn a_cut_suffix_does_not_turn_order_1403_into_a_lockout_signal() {
 #[test]
 fn an_unfinished_403_token_waits_for_the_next_chunk_or_the_turn_end() {
     for continuation in [Some("50 items"), Some(" items"), None] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.error(400, 0);
         turn.text("Total 403", 20);
         assert!(
@@ -72,7 +72,7 @@ fn an_unfinished_403_token_waits_for_the_next_chunk_or_the_turn_end() {
 fn failed_reply_signals_survive_a_disconnect_before_the_error() {
     let mut locked = Vec::new();
     for disconnect_first in [false, true] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         if disconnect_first {
             turn.disconnect(10);
         }
@@ -92,7 +92,7 @@ fn failed_reply_signals_survive_a_disconnect_before_the_error() {
 
 #[test]
 fn failed_reply_signals_include_text_discarded_after_a_client_tool_call() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.tool(10);
     turn.text("Terms of Service", 20);
     turn.error(400, 30);
@@ -104,7 +104,7 @@ fn failed_reply_signals_include_text_discarded_after_a_client_tool_call() {
 
 #[test]
 fn a_repeated_error_does_not_reset_a_split_failed_reply_signal() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.tool(0);
     turn.error(400, 10);
     turn.text("Terms of ", 20);
@@ -118,7 +118,7 @@ fn a_repeated_error_does_not_reset_a_split_failed_reply_signal() {
 
 #[test]
 fn the_longest_lockout_signal_can_cross_a_chunk_after_sixteen_bytes() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(400, 0);
     turn.text("PERMISSION_DENIE", 10);
     assert!(turn.core.lockout.is_none());
@@ -131,7 +131,7 @@ fn the_longest_lockout_signal_can_cross_a_chunk_after_sixteen_bytes() {
 
 #[test]
 fn a_reply_suffix_cuts_multibyte_text_at_a_character_boundary() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.error(400, 0);
     turn.text(&format!("{}safe", "界".repeat(8)), 10);
     assert!(turn.core.lockout.is_none());
@@ -145,7 +145,7 @@ fn a_reply_suffix_cuts_multibyte_text_at_a_character_boundary() {
 
 #[test]
 fn a_lockout_signal_can_start_before_the_stderr_error_and_finish_after_it() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.text("Terms of ", 10);
     turn.error(400, 20);
     assert!(turn.core.lockout.is_none());
@@ -160,7 +160,7 @@ fn a_lockout_signal_can_start_before_the_stderr_error_and_finish_after_it() {
 fn disconnected_ended_reply_evidence_expires_and_does_not_cross_runtime_replacement() {
     let mut locked = Vec::new();
     for (error_at, replacement) in [(219, false), (220, false), (221, false), (219, true)] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.text("Terms of Service", 10);
         turn.end(20);
         turn.disconnect(30);
@@ -179,7 +179,7 @@ fn disconnected_ended_reply_evidence_expires_and_does_not_cross_runtime_replacem
 
 #[test]
 fn pre_error_text_survives_a_known_quota_rpc_failure() {
-    let mut turn = Turn::new();
+    let mut turn = PromptTurn::new();
     turn.text("Terms of Service", 5);
     let error = crate::messages::HttpError {
         code: Some(429),
@@ -207,7 +207,7 @@ fn pre_error_text_survives_a_known_quota_rpc_failure() {
 #[test]
 fn a_confirmed_signal_survives_more_text_before_the_stderr_error() {
     for signal in ["403 ", "PERMISSION_DENIED", "Terms of Service"] {
-        let mut turn = Turn::new();
+        let mut turn = PromptTurn::new();
         turn.text(signal, 1);
         turn.text(" more than seventeen bytes of ordinary text", 2);
         turn.text(" and another chunk", 3);

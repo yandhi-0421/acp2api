@@ -1,4 +1,3 @@
-// Fixed corpus and seed from the second review.
 use super::*;
 struct Lcg(u64);
 impl Lcg {
@@ -75,7 +74,6 @@ fn old(message: &str) -> Option<&'static str> {
 #[test]
 fn deterministic_chunk_splits_keep_the_status_token_rules() {
     let mut rng = Lcg(0x203);
-    let (mut runs, mut positives, mut names_differ) = (0u64, 0u64, 0u64);
     let mut bad: Vec<String> = Vec::new();
     for _ in 0..2_000 {
         let mut text = String::new();
@@ -108,7 +106,6 @@ fn deterministic_chunk_splits_keep_the_status_token_rules() {
                 assert!(s.tail.len() <= 17, "tail bound");
             }
             let end = s.observe("", true);
-            runs += 1;
             if early.is_some() && whole.is_none() {
                 bad.push(format!("EARLY FALSE {text:?} {chunks:?}"));
             }
@@ -117,17 +114,10 @@ fn deterministic_chunk_splits_keep_the_status_token_rules() {
                     "DIFF whole={whole:?} stream={end:?} {text:?} {chunks:?}"
                 ));
             }
-            if whole.is_some() {
-                positives += 1;
-                if end != whole {
-                    names_differ += 1;
-                }
-            }
         }
         if bad.len() >= 5 {
             break;
         }
     }
-    println!("rr fuzz runs={runs} positives={positives} signal_name_differs={names_differ}");
     assert!(bad.is_empty(), "{bad:#?}");
 }
