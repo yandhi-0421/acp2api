@@ -51,15 +51,3 @@ pub async fn signal(w: &mut World, plan: TurnPlan) {
     );
     assert!(prompts.last().unwrap().text.contains(MARKER));
 }
-
-pub async fn rendered(w: &mut World) -> &acp2api_acceptance::panel_visual::Audit {
-    if w.panel_rendered.is_none() {
-        let html = document::html(w.panel.answer.as_ref().unwrap());
-        w.panel_rendered = Some(
-            acp2api_acceptance::panel_visual::render(&html, &w.scenario.root.path, false)
-                .await
-                .expect("BLOCKED: Chrome must render the first tile"),
-        );
-    }
-    w.panel_rendered.as_ref().unwrap()
-}

@@ -1,5 +1,6 @@
 use crate::{
-    World, panel_document as document, panel_states_support as support, places_support as queue,
+    World, panel_document as document, panel_language_visual::rendered,
+    panel_states_support as support, places_support as queue,
 };
 use acp2api_acceptance::{build_fixture, panel_visual};
 use cucumber::{given, then, when};
@@ -14,31 +15,8 @@ async fn open_session(w: &mut World) {
 async fn exit(w: &mut World) {
     let cookies = w.panel.owner("B1").cookies.clone();
     assert!(!cookies.is_empty(), "the browser has a panel session");
-    w.panel.owner("exit-replay").cookies = cookies.clone();
-    let cookie = cookies
-        .iter()
-        .map(|(name, value)| format!("{name}={value}"))
-        .collect::<Vec<_>>()
-        .join("; ");
-    let origin = format!("http://{}", w.panel.address);
-    let call = w
-        .panel
-        .owner("B1")
-        .client
-        .send(acp2api_acceptance::client::ApiCall {
-            method: "POST".into(),
-            path: "/manage/exit".into(),
-            body: json!({}),
-            headers: vec![
-                ("cookie".into(), cookie),
-                ("origin".into(), origin),
-                (
-                    "content-type".into(),
-                    "application/x-www-form-urlencoded".into(),
-                ),
-            ],
-        });
-    let answer = call.finish_current(&mut w.panel.time()).await;
+    w.panel.owner("exit-replay").cookies = cookies;
+    let answer = w.panel.submit("B1", "/manage/exit", json!({})).await;
     assert_eq!(answer.status, 303, "FR-009 the panel exit succeeds");
     w.panel.owner("B1").remember(&answer);
     w.panel.answer = Some(answer);
@@ -251,15 +229,9 @@ async fn parts(w: &mut World, step: &cucumber::gherkin::Step) {
         .next()
         .expect("FR-054 global bar");
     assert!(
-        [
-            "Exit the panel",
-            "Exit panel",
-            "Exit",
-            "Sign out",
-            "Log out"
-        ]
-        .iter()
-        .any(|label| support::entry(header.content, label)),
+        ["Exit the panel", "退出面板"]
+            .iter()
+            .any(|label| support::entry(header.content, label)),
         "FR-054 global bar needs the exit of the panel"
     );
     assert!(
@@ -326,11 +298,11 @@ async fn parts(w: &mut World, step: &cucumber::gherkin::Step) {
         html.find(footer.content).unwrap() > html.rfind("</section>").unwrap(),
         "FR-054 footer follows the last tile"
     );
-    panel_visual::variant_a_bars(support::rendered(w).await).unwrap();
+    panel_visual::variant_a_bars(rendered(w).await).unwrap();
 }
 
 #[then(expr = "the first tile shows {string} in large type")]
-fn heading(w: &mut World, expected: String) {
+async fn heading(w: &mut World, expected: String) {
     let html = document::html(w.panel.answer.as_ref().unwrap());
     let actual = document::elements(support::first_tile(&html), "h1")
         .next()
@@ -340,7 +312,7 @@ fn heading(w: &mut World, expected: String) {
         Some(expected.as_str()),
         "FR-054 first tile state heading"
     );
-    // The final shade step checks the rendered 56 px type and the surface together.
+    panel_visual::first_tile_heading(rendered(w).await).unwrap();
 }
 
 #[then(expr = "the first tile shows the sentence {string}")]
@@ -360,7 +332,7 @@ fn sentence(w: &mut World, expected: String) {
 
 #[then(regex = r"^the first tile is (light|dark)$")]
 async fn state_shade(w: &mut World, shade: String) {
-    panel_visual::first_tile_presentation(support::rendered(w).await, &shade).unwrap();
+    panel_visual::first_tile_presentation(rendered(w).await, &shade).unwrap();
 }
 
 #[then(expr = "the first tile has the action {string}")]
@@ -375,11 +347,30 @@ fn action(w: &mut World, expected: String) {
 #[then("the first tile shows the signal, the time, and the original error text of the lockout")]
 fn shown_evidence(w: &mut World) {
     let html = document::html(w.panel.answer.as_ref().unwrap());
-    let first = document::visible(support::first_tile(&html));
-    for expected in ["403", crate::lockout_support::SINCE, support::ERROR] {
+    let evidence = document::elements(support::first_tile(&html), "dl")
+        .find(|list| {
+            document::attribute(list.tag, "class")
+                .is_some_and(|classes| classes.split_whitespace().any(|class| class == "evidence"))
+        })
+        .expect("FR-054 the first tile has a lockout evidence list");
+    let rows: Vec<_> = document::elements(evidence.content, "dt")
+        .zip(document::elements(evidence.content, "dd"))
+        .map(|(label, value)| {
+            (
+                document::visible(label.content),
+                document::visible(value.content),
+            )
+        })
+        .collect();
+    for (label, expected) in [
+        ("Lockout signal", "403"),
+        ("Time", crate::lockout_support::SINCE),
+        ("Original error text", support::ERROR),
+    ] {
         assert!(
-            first.contains(expected),
-            "FR-054 first tile needs lockout evidence: {expected}"
+            rows.iter()
+                .any(|(actual_label, value)| actual_label == label && value.contains(expected)),
+            "FR-054 lockout evidence row {label} needs its own value: {expected}"
         );
     }
 }

@@ -620,22 +620,30 @@ pub fn dark_first_tile(audit: &Audit) -> Result<(), String> {
     }
 }
 
+pub fn first_tile_heading(audit: &Audit) -> Result<(), String> {
+    let heading = audit
+        .nodes
+        .iter()
+        .find(|node| node.tag == "h1")
+        .ok_or("FR-054 rendered first tile needs a state heading")?;
+    if !heading.visible || px(&heading.paint.css["font-size"]) != 56. {
+        return Err(
+            "FR-054 first tile state must render visibly in 56 px type at the audit viewport"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 pub fn first_tile_presentation(audit: &Audit, shade: &str) -> Result<(), String> {
     let tile = audit
         .nodes
         .iter()
         .find(|node| node.tag == "section")
         .ok_or("FR-054 rendered panel needs a first tile")?;
-    let heading = audit
-        .nodes
-        .iter()
-        .find(|node| node.tag == "h1")
-        .ok_or("FR-054 rendered first tile needs a state heading")?;
-    if !tile.visible || !heading.visible || px(&heading.paint.css["font-size"]) != 56. {
-        return Err(
-            "FR-054 first tile state must render visibly in 56 px type at the audit viewport"
-                .into(),
-        );
+    first_tile_heading(audit)?;
+    if !tile.visible {
+        return Err("FR-054 first tile must render visibly".into());
     }
     let mut surface = tile;
     while surface.paint.colors["background-color"][3] == 0 {
