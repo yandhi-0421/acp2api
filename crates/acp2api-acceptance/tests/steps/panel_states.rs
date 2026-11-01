@@ -5,6 +5,69 @@ use acp2api_acceptance::{build_fixture, panel_visual};
 use cucumber::{given, then, when};
 use serde_json::json;
 
+#[given("the owner opens the management panel with a panel session")]
+async fn open_session(w: &mut World) {
+    w.panel.answer = Some(queue::view(w).await);
+}
+
+#[when("the owner exits the management panel")]
+async fn exit(w: &mut World) {
+    let cookies = w.panel.owner("B1").cookies.clone();
+    assert!(!cookies.is_empty(), "the browser has a panel session");
+    w.panel.owner("exit-replay").cookies = cookies.clone();
+    let cookie = cookies
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let origin = format!("http://{}", w.panel.address);
+    let call = w
+        .panel
+        .owner("B1")
+        .client
+        .send(acp2api_acceptance::client::ApiCall {
+            method: "POST".into(),
+            path: "/manage/exit".into(),
+            body: json!({}),
+            headers: vec![
+                ("cookie".into(), cookie),
+                ("origin".into(), origin),
+                (
+                    "content-type".into(),
+                    "application/x-www-form-urlencoded".into(),
+                ),
+            ],
+        });
+    let answer = call.finish_current(&mut w.panel.time()).await;
+    assert_eq!(answer.status, 303, "FR-009 the panel exit succeeds");
+    w.panel.owner("B1").remember(&answer);
+    w.panel.answer = Some(answer);
+}
+
+#[then("the management panel asks for the management password")]
+async fn password_after_exit(w: &mut World) {
+    let answer = w.panel.page("B1").await;
+    assert_eq!(answer.status, 200);
+    let html = document::html(&answer);
+    assert!(html.contains("action=\"/manage/login\""));
+    assert!(html.contains("autocomplete=\"current-password\""));
+    assert!(!html.contains("id=\"local-api-key\""));
+}
+
+#[then("the old panel session cookie gives no access to the management panel")]
+async fn replay_after_exit(w: &mut World) {
+    let answer = w.panel.page("exit-replay").await;
+    assert_eq!(answer.status, 200);
+    let html = document::html(&answer);
+    assert!(html.contains("autocomplete=\"current-password\""));
+    assert!(!html.contains("id=\"local-api-key\""));
+    let action = w
+        .panel
+        .submit("exit-replay", "/manage/language", json!({"language": "en"}))
+        .await;
+    assert_eq!(action.status, 401, "the ended session cannot act as owner");
+}
+
 #[given("the owner started the sign-in")]
 async fn signing_in(w: &mut World) {
     crate::sign_in_support::start(w).await;
