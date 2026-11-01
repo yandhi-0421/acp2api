@@ -2,7 +2,7 @@
 Feature: Runtime process
   acp2api starts one runtime process, and all ACP sessions and all prompt turns use it.
   After 3 failures in 10 minutes, acp2api is in the state "runtime unavailable" until a new try succeeds.
-  N is the number of ACP sessions after which acp2api replaces the runtime process. OD-1 of the PRD decides its value.
+  N is the number of ACP sessions after which acp2api replaces the runtime process. FR-041 gives its temporary value, and OD-1 of the PRD decides its real value.
   In a quoted message, a value in angle brackets is a value that acp2api fills in, as the section "Message texts" of the PRD gives.
 
   @FR-040 @issue-131
@@ -72,27 +72,96 @@ Feature: Runtime process
     When 60 minutes pass with no request
     Then the same runtime process still runs
 
-  @FR-041 @wip
+  @FR-041 @issue-204
   Scenario: With N ACP sessions, a request that needs a new ACP session waits until acp2api replaces the runtime process
     Given the runtime process holds N ACP sessions
     And one prompt turn runs
     When a request comes that needs a new ACP session
-    Then the request waits in the queue
+    Then that request waits in the queue
     When the prompt turn that runs ends
     Then acp2api replaces the runtime process
     And the request gets its response from the new runtime process
 
-  @FR-041 @wip
+  @FR-041 @issue-204
   Scenario: With N ACP sessions, a request that continues an ACP session runs at once
     Given the runtime process holds N ACP sessions
     When a request comes that continues one of these ACP sessions
     Then the prompt turn of the request starts at once in the same runtime process
 
-  @FR-041 @wip
+  @FR-041 @issue-204
   Scenario: With fewer than N ACP sessions, a request that needs a new ACP session runs at once
     Given the runtime process holds N minus 1 ACP sessions
     When a request comes that needs a new ACP session
     Then the prompt turn of the request starts at once in the same runtime process
+
+  @FR-041 @issue-204
+  Scenario: An ACP session stays in the count after acp2api drops its record, and acp2api replaces an idle runtime process at once
+    Given the runtime process holds N ACP sessions
+    When 24 hours pass with no request
+    And a request comes that needs a new ACP session
+    Then acp2api replaces the runtime process
+    And the request gets its response from the new runtime process
+
+  @FR-041 @issue-204
+  Scenario: The replacement waits for the end of each prompt turn that runs
+    Given the runtime process holds N ACP sessions
+    And two prompt turns run in these ACP sessions
+    When a request comes that needs a new ACP session
+    And the first prompt turn ends
+    Then that request waits in the queue
+    And the same runtime process still runs
+    When the second prompt turn ends
+    Then acp2api replaces the runtime process
+    And the request gets its response from the new runtime process
+
+  @FR-041 @issue-204
+  Scenario: While a replacement waits, a request that continues an ACP session also waits, and the order of arrival stays
+    Given the runtime process holds N ACP sessions
+    And one prompt turn runs
+    When a request comes that needs a new ACP session
+    And a request comes that continues one of these ACP sessions
+    Then each of these requests waits in the queue
+    When the prompt turn that runs ends
+    Then acp2api replaces the runtime process
+    And the two requests get their responses from the new runtime process in the order of arrival
+    And the official runtime gets "session/load" for the continued ACP session in the new runtime process
+
+  @FR-041 @issue-204
+  Scenario: After a replacement, the count of ACP sessions starts again
+    Given the runtime process holds N ACP sessions
+    When a request comes that needs a new ACP session
+    Then acp2api replaces the runtime process
+    And the request gets its response from the new runtime process
+    When requests of new conversations bring the new runtime process to N ACP sessions
+    Then each of these prompt turns ran in the new runtime process
+    When a request comes that needs a new ACP session
+    Then acp2api replaces the runtime process
+    And the request gets its response from the new runtime process
+
+  @FR-041 @issue-204
+  Scenario: A session/load is one more ACP session of the new runtime process
+    Given the runtime process holds N ACP sessions
+    When a request comes that needs a new ACP session
+    Then acp2api replaces the runtime process
+    And the request gets its response from the new runtime process
+    When requests of new conversations bring the new runtime process to N minus 1 ACP sessions
+    And a request comes that continues an ACP session of the earlier runtime process
+    Then the official runtime gets "session/load" for the continued ACP session in the same runtime process
+    And the prompt turn of the request starts at once in the same runtime process
+    When a request comes that continues an ACP session of the earlier runtime process
+    Then acp2api replaces the runtime process
+    And the official runtime gets "session/load" for the continued ACP session in the new runtime process
+    And the request gets its response from the new runtime process
+
+  @FR-041 @issue-204
+  Scenario: A failed start in a replacement follows the failure rule, and the request stays in the queue
+    Given the runtime process holds N ACP sessions
+    And the start of the replacement gives no answer
+    When a request comes that needs a new ACP session
+    Then acp2api replaces the runtime process
+    When 5 minutes pass after the start of the replacement
+    Then acp2api starts one more runtime process at once
+    And the request gets its response from the new runtime process
 
   @FR-041 @issue-63
   Scenario: An exit that acp2api did not cause ends each prompt turn of the runtime process

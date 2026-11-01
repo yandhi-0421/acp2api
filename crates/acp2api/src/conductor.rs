@@ -258,7 +258,7 @@ impl Core {
             OwnerAction::SignIn => {
                 if self.lockout.is_some()
                     || self.sign_in.wait().is_some()
-                    || !matches!(self.lifecycle.state(), RuntimeState::Serving)
+                    || !self.lifecycle.state().is_serving()
                 {
                     let _ = reply.send(Err(OwnerMessage::SignInCannotStart));
                     return Vec::new();
@@ -329,6 +329,15 @@ impl Core {
         }
         let previous = self.state();
         let mut commands = Vec::new();
+        if matches!(
+            &event,
+            Event::Runtime(RuntimeEvent::Prepared {
+                result: Err(crate::runtime_driver::PreparationError::Rejected(_)),
+                ..
+            })
+        ) {
+            self.sessions.preparation_failed();
+        }
         let upstream_error = self.upstream_error(&mut event, now, &mut commands);
         self.retry_waits.retain(|wait| wait.deadline > now);
         self.quota.expire(now);
@@ -439,7 +448,14 @@ impl Core {
                 }
             }
             (None, Event::Runtime(RuntimeEvent::Prepared { work, result })) => {
-                self.runtime_prepared(work_id, work, result, now, wall, &mut commands);
+                self.runtime_prepared(
+                    work_id,
+                    work,
+                    result.map_err(crate::runtime_driver::PreparationError::into_message),
+                    now,
+                    wall,
+                    &mut commands,
+                );
             }
             (None, Event::Runtime(RuntimeEvent::Retired { session })) => {
                 self.sessions.cancel_ended(&session);
@@ -608,38 +624,8 @@ impl Conductor {
             let mut exit_work = None;
             loop {
                 core.retry_lockout_save();
-                if core.replacement_ready() && core.lifecycle.replacement_pending() {
-                    checking = core
-                        .replace(
-                            &mut runtime,
-                            &mut read_open,
-                            &clock,
-                            &journal,
-                            &actor_builds,
-                            &publish,
-                        )
-                        .await;
-                    if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
-                        break;
-                    }
-                }
-                if core.lockout.is_none()
-                    && matches!(core.lifecycle.state(), RuntimeState::Restarting)
-                    && !core.lifecycle.replacement_pending()
+                if checking.is_none() && !matches!(core.lifecycle.state(), RuntimeState::Restarting)
                 {
-                    core.restart(
-                        &mut runtime,
-                        &mut read_open,
-                        &clock,
-                        &journal,
-                        &actor_builds,
-                    )
-                    .await;
-                    if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
-                        break;
-                    }
-                }
-                if !core.lifecycle.replacement_pending() && checking.is_none() {
                     match core
                         .next_build_change(&actor_builds, &publish, &configuration)
                         .await
@@ -671,9 +657,6 @@ impl Conductor {
                         }
                         None => {}
                     }
-                    if core.lifecycle.replacement_pending() && core.replacement_ready() {
-                        continue;
-                    }
                     if !core.lifecycle.replacement_pending()
                         && matches!(core.lifecycle.state(), RuntimeState::Retiring { .. })
                     {
@@ -686,6 +669,39 @@ impl Conductor {
                         )
                         .await;
                     }
+                }
+                if core.lifecycle.replacement_pending() && core.replacement_ready(clock.now()) {
+                    checking = core
+                        .replace(
+                            &mut runtime,
+                            &mut read_open,
+                            &clock,
+                            &journal,
+                            &actor_builds,
+                            &publish,
+                        )
+                        .await;
+                    if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
+                        break;
+                    }
+                    continue;
+                }
+                if core.lockout.is_none()
+                    && matches!(core.lifecycle.state(), RuntimeState::Restarting)
+                    && !core.lifecycle.replacement_pending()
+                {
+                    core.restart(
+                        &mut runtime,
+                        &mut read_open,
+                        &clock,
+                        &journal,
+                        &actor_builds,
+                    )
+                    .await;
+                    if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
+                        break;
+                    }
+                    continue;
                 }
                 let connected: Vec<_> = core
                     .work

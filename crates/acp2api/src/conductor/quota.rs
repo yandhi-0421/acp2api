@@ -345,7 +345,7 @@ impl Core {
                     *phase = QuotaPhase::Prompt(session.clone());
                     commands.push(Command::Usage { work, session });
                 }
-                Err(error) => self.finish_quota(id, Err(error), now, wall, commands),
+                Err(error) => self.finish_quota(id, Err(error.into_message()), now, wall, commands),
             },
             Event::Runtime(RuntimeEvent::Turn { session, update }) => {
                 self.update_quota(id, session, update, now, commands);
@@ -657,14 +657,14 @@ impl Core {
             });
             QuotaPhase::Prompt(session)
         } else {
-            commands.push(Command::Prepare {
-                work: query.work.clone(),
-                settings: SessionSettings {
+            commands.push(self.sessions.prepare(
+                query.work.clone(),
+                SessionSettings {
                     tools: Vec::new(),
                     system: None,
                 },
-                load: None,
-            });
+                None,
+            ));
             QuotaPhase::Preparing
         };
         self.work.restore(

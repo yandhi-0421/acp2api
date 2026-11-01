@@ -212,6 +212,16 @@ impl Core {
             );
             return false;
         }
+        if !matches!(self.lifecycle.state(), RuntimeState::Serving)
+            || self.request_needs_session_replacement(&request, checked_session.is_some(), now)
+        {
+            commands.extend(checked_session.map(Command::Forget));
+            self.work.restore(id, Work::AcceptedQueued(request));
+            if matches!(self.lifecycle.state(), RuntimeState::Serving) {
+                self.wait_for_session_limit();
+            }
+            return false;
+        }
         let settings = SessionSettings::for_turn(&request.turn);
         let (selection, selected) =
             self.sessions
@@ -239,19 +249,15 @@ impl Core {
                 (Some(id), request::Start::Prompt(now))
             }
             Some((session, records::Location::Unloaded(cwd))) => {
-                commands.push(Command::Prepare {
+                commands.push(self.sessions.prepare(
                     work,
-                    settings: settings.clone(),
-                    load: Some((session.clone(), cwd)),
-                });
+                    settings.clone(),
+                    Some((session.clone(), cwd)),
+                ));
                 (Some(session), request::Start::Prepare(prompt))
             }
             None => {
-                commands.push(Command::Prepare {
-                    work,
-                    settings: settings.clone(),
-                    load: None,
-                });
+                commands.push(self.sessions.prepare(work, settings.clone(), None));
                 (None, request::Start::Prepare(prompt))
             }
         };
@@ -334,13 +340,43 @@ impl Core {
             outcome: crate::journal::Outcome::Disconnected,
         }));
     }
+    fn request_needs_session_replacement(
+        &self,
+        request: &Accepted,
+        checked: bool,
+        now: Moment,
+    ) -> bool {
+        !request.reply.output.is_closed()
+            && self.sessions.at_capacity(
+                &request.turn,
+                &SessionSettings::for_turn(&request.turn),
+                checked,
+            )
+            && retry::refusal(&self.retry_waits, &request.turn, now).is_none()
+    }
+    pub(super) fn needs_session_replacement(&self, now: Moment) -> bool {
+        self.work.values().any(|work| match work {
+            Work::AcceptedQueued(request) => {
+                self.request_needs_session_replacement(request, false, now)
+            }
+            _ => false,
+        })
+    }
+
     pub(super) fn start_queued_work(&mut self, now: Moment, commands: &mut Vec<Command>) {
-        let mut places = self.work.places();
-        while self.lockout.is_none()
-            && matches!(self.lifecycle.state(), RuntimeState::Serving)
-            && places < usize::from(self.limit)
+        if matches!(self.lifecycle.state(), RuntimeState::SessionLimitWait)
+            && !self.needs_session_replacement(now)
         {
-            let Some(id) = self.work.iter().find_map(|(id, work)| match work {
+            self.resume_after_session_limit();
+        }
+        let mut places = self.work.places();
+        if self.lockout.is_some() || !self.lifecycle.state().is_serving() {
+            return;
+        }
+        let queued: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| match work {
                 Work::ModelsQueued(_) => Some(*id),
                 Work::CheckQueued(_) => Some(*id),
                 Work::QuotaQueued { .. } if !self.sign_in.required() => Some(*id),
@@ -350,29 +386,32 @@ impl Core {
                     Some(*id)
                 }
                 _ => None,
-            }) else {
+            })
+            .collect();
+        for id in queued {
+            if places >= usize::from(self.limit) {
                 break;
-            };
+            }
             let request = match self.work.remove(&id).unwrap() {
                 Work::ModelsQueued(read) => {
-                    commands.push(Command::Prepare {
-                        work: read.work.clone(),
-                        settings: SessionSettings {
+                    commands.push(self.sessions.prepare(
+                        read.work.clone(),
+                        SessionSettings {
                             tools: Vec::new(),
                             system: None,
                         },
-                        load: None,
-                    });
+                        None,
+                    ));
                     self.work.restore(id, Work::ModelsReading(read));
                     places += 1;
                     continue;
                 }
                 Work::CheckQueued(request) => {
-                    commands.push(Command::Prepare {
-                        work: request.request.id.clone(),
-                        settings: SessionSettings::for_turn(&request.turn),
-                        load: None,
-                    });
+                    commands.push(self.sessions.prepare(
+                        request.request.id.clone(),
+                        SessionSettings::for_turn(&request.turn),
+                        None,
+                    ));
                     self.work.restore(id, Work::Checking(request));
                     places += 1;
                     continue;

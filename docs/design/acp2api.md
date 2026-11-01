@@ -1,10 +1,10 @@
 # acp2api v1 design
 
-**Status:** approved design, with the measurement gaps of OD-1 and OD-2.
+**Status:** approved design, with the measurement gap of OD-2.
 
 The owner accepted the ten initial choices and all recommendations of the final review on 2026-10-18. This design incorporates both rounds.
 
-- PRD: `docs/prd/acp2api.md`, status `Blocked draft`, blockers OD-1 and OD-2.
+- PRD: `docs/prd/acp2api.md`, status `Blocked draft`, blocker OD-2. SC-002 and OD-1 define the memory measurement after the first release.
 - Feature files: `features/acp2api/`.
 - Parent issue: [yandhi-0421/acp2api#35](https://github.com/yandhi-0421/acp2api/issues/35).
 
@@ -125,7 +125,7 @@ FRs in scope and their modules (section "Shape" gives each module):
 
 FRs that this design does not fully design:
 
-- FR-041, the value of N: open decision OD-1. The design has the constant and the replacement rule. The three scenarios about N stay without a slice tag.
+- FR-041, the real value of N: open decision OD-1. The design has the replacement rule and the constant `SESSIONS_PER_RUNTIME_PROCESS` with the value 8. This value is temporary, and no measurement supports it.
 - SC-006: open decision OD-2. The design keeps memory low, because records hold only hashes and acp2api keeps no history text. It sets no target.
 
 Limits from the ground step:
@@ -495,7 +495,7 @@ The core has these parts. Each part is a private module with a pure interface.
 - **`places`.** The concurrency limit and one private table of work (FR-049, FR-050). Queued and occupied counts derive from its variants.
   - A request holds a place from its first ACP call to the end of its prompt turn.
   - The sign-in check, each `/usage`, and the read of the model names each hold a place.
-- **`records`.** The records and the match, the choice, and the drop of ADR-0003. The N rule of ADR-0004, with the constant `SESSIONS_PER_RUNTIME_PROCESS` (value open: OD-1).
+- **`records`.** The records and the match, the choice, and the drop of ADR-0003. The N rule of ADR-0004, with the constant `SESSIONS_PER_RUNTIME_PROCESS` (value 8, temporary: OD-1).
 - **`retry`.** The retry waits of FR-029. The key is the hash of the system prompt, the items, the tool set, and the model ID.
 - **`catalog`.** The model names (FR-012) and the resolution of the thinking level (FR-013).
   - After `initialize`, the startup sign-in check sends one `session/new`, with one place and no prompt turn.
@@ -600,6 +600,37 @@ Only an accepted stream has a keep-alive timer. Its first deadline starts at acc
 
 The conductor uses the accepted variants, `Retiring`, and `QuotaRetiring`.
 The records of ADR-0003 describe idle ACP sessions outside that table.
+
+#### ACP sessions in each runtime process
+
+`AcpSessions` owns a count separate from its records and the tool cache of the runtime driver.
+Its `prepare` method reserves one ACP session before the dispatcher selects more work.
+Both `session/new` and `session/load` use that method, including model reads, sign-in checks, and quota queries.
+
+A rejected ACP call releases the reservation before error handling, including the quota path.
+`PreparationError` distinguishes a rejection from an unusable successful response. A successful response keeps its count despite a missing ID or invalid catalog.
+A local dispatch failure also releases its reservation. A successful call keeps its count after record expiry or `Forget`.
+Each replacement resets the count to its successful startup ACP session, or zero when startup creates none.
+
+The replacement path derives the `SessionLimit` reason from the `SessionLimitWait` state. It stores no second limit demand.
+This state reports a runtime process that runs. It keeps the queue and uses the existing failure rule.
+The dispatcher can serve model reads, sign-in checks, and quota queries during this wait.
+Accepted requests keep their order until the replacement ends. This includes requests whose sign-in check has completed.
+At the replacement, the actor publishes the stopping process state before it stops and starts the runtime process.
+
+One predicate tests whether a connected request needs another ACP session after its retry checks pass.
+The capacity gate and record consumption use the same choice of ACP session.
+The dispatcher evaluates that gate after retry refusals and before each request starts, including a request with a completed sign-in check.
+Replacement readiness tests occupied places before it hashes queued requests.
+
+The dispatcher withdraws this reason when capacity returns or no connected queued request needs another ACP session.
+It preserves the owner sign-in wait. An explicit cancel or timeout changes the reason to `SignIn`.
+The owner can start a sign-in during this state, and the same wait rule applies.
+
+Build selection continues during the limit wait. `Keep` and `Notice` answer without a stop.
+A selection that needs replacement takes over the limit demand before the actor can start a replacement.
+After a failure, the actor completes the restart before it selects the next build action.
+FR-041 holds the owner decisions on [#204](https://github.com/yandhi-0421/acp2api/issues/204).
 
 ### The runtime driver
 
@@ -1604,6 +1635,6 @@ It has a 60-second cap and uses the same request and log caps as the fixture.
 2. **A coordination failure while an owner still holds the account.**
    - Approved answer: FR-006 and M-28 define the failed start and its path diagnostic. The account locks remain intact.
 
-OD-1 still blocks the value of N and its three scenarios. OD-2 still blocks the targets of SC-006.
-The first build and its measurements resolve them. This design sets neither value.
+OD-1 stays open: the first release uses the temporary value N = 8, and the measurement after the release sets the real value. OD-2 still blocks the targets of SC-006, and the first build and its measurements resolve it.
+This design sets neither final value.
 Native recovery must prove that earlier runtime trees ended before cleanup. This remains part of FR-045 and SC-002, not a weaker recovery contract.

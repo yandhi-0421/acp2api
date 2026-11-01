@@ -119,8 +119,21 @@ pub(super) struct Selection {
     pub(super) ready: Option<(String, Location)>,
     pub(super) record: RequestRecord,
 }
+pub(super) const SESSIONS_PER_RUNTIME_PROCESS: usize = 8;
+
+#[derive(Clone, Copy)]
+enum Source {
+    Record(usize),
+    Checked,
+    Startup,
+    New,
+}
+
 #[derive(Default)]
 pub(super) struct AcpSessions {
+    // Successful session/new and session/load calls plus pending preparations.
+    // Forgetting a record does not close its ACP session in the runtime process.
+    held: usize,
     records: Vec<Record>,
     startup: Option<String>,
     use_sequence: u64,
@@ -168,7 +181,63 @@ impl AcpSessions {
     }
     pub(super) fn replaced(&mut self, startup: Option<String>) {
         self.settled_replies.clear();
+        self.held = usize::from(startup.is_some());
         self.startup = startup;
+    }
+    pub(super) fn prepare(
+        &mut self,
+        work: String,
+        settings: SessionSettings,
+        load: Option<(String, std::path::PathBuf)>,
+    ) -> Command {
+        self.held += 1;
+        Command::Prepare {
+            work,
+            settings,
+            load,
+        }
+    }
+    pub(super) fn preparation_failed(&mut self) {
+        self.held -= 1;
+    }
+    pub(super) fn full(&self) -> bool {
+        self.held >= SESSIONS_PER_RUNTIME_PROCESS
+    }
+    pub(super) fn at_capacity(
+        &self,
+        turn: &crate::conversation::TurnRequest,
+        settings: &SessionSettings,
+        checked: bool,
+    ) -> bool {
+        if !self.full() {
+            return false;
+        }
+        let hashes = crate::conversation::record_hashes(&turn.conversation);
+        let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
+        let items = turn.conversation.items();
+        match self.source(&hashes, tools_hash, &items, settings, checked) {
+            Source::Record(index) => matches!(self.records[index].location, Location::Unloaded(_)),
+            Source::New => true,
+            Source::Checked | Source::Startup => false,
+        }
+    }
+    fn source(
+        &self,
+        hashes: &RecordHashes,
+        tools: ToolSetHash,
+        items: &[&Item],
+        settings: &SessionSettings,
+        checked: bool,
+    ) -> Source {
+        if let Some((index, _)) = select(&self.records, hashes, tools, items) {
+            Source::Record(index)
+        } else if checked {
+            Source::Checked
+        } else if settings.system.is_none() && settings.tools.is_empty() && self.startup.is_some() {
+            Source::Startup
+        } else {
+            Source::New
+        }
     }
     pub(super) fn models_ready(&mut self, session: String) -> Option<Command> {
         self.startup.replace(session).map(Command::Forget)
@@ -217,7 +286,20 @@ impl AcpSessions {
         let hashes = crate::conversation::record_hashes(&turn.conversation);
         let tools_hash = crate::conversation::tool_set_hash(&settings.tools);
         let items = turn.conversation.items();
-        let matched = select(&self.records, &hashes, tools_hash, &items);
+        let source = self.source(
+            &hashes,
+            tools_hash,
+            &items,
+            settings,
+            checked_session.is_some(),
+        );
+        let matched = match source {
+            Source::Record(index) => Some((
+                index,
+                &items[self.records[index].record.hashes.messages.len()..],
+            )),
+            _ => None,
+        };
         let prompt = match matched {
             Some((_, new_items)) => Prompt::Continue { new_items },
             None if turn.conversation.earlier.is_empty() => Prompt::New {
@@ -228,18 +310,16 @@ impl AcpSessions {
             },
         };
         let (kind, prompt) = crate::conversation::prompt(prompt, &items);
-        let ready = match matched {
-            Some((index, _)) => {
+        let ready = match source {
+            Source::Record(index) => {
                 let record = self.records.remove(index);
                 Some((record.session, record.location))
             }
-            None if checked_session.is_some() => checked_session
+            Source::Checked => checked_session
                 .take()
                 .map(|session| (session, Location::Loaded)),
-            None if settings.system.is_none() && settings.tools.is_empty() => {
-                self.startup.take().map(|id| (id, Location::Loaded))
-            }
-            None => None,
+            Source::Startup => self.startup.take().map(|id| (id, Location::Loaded)),
+            Source::New => None,
         };
         if matched.is_some() {
             commands.extend(checked_session.map(Command::Forget));
@@ -342,6 +422,11 @@ impl AcpSessions {
         use_sequence: u64,
     ) -> Self {
         Self {
+            held: records
+                .iter()
+                .filter(|record| matches!(record.location, Location::Loaded))
+                .count()
+                + usize::from(startup.is_some()),
             records,
             startup,
             use_sequence,

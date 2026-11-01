@@ -13,6 +13,7 @@ pub(super) type BuildReply = oneshot::Sender<Result<Option<OwnerMessage>, Launch
 
 pub(super) enum Replacement {
     SignIn,
+    SessionLimit,
     Build {
         reply: BuildReply,
         source: Option<SelectedBuild>,
@@ -47,6 +48,7 @@ pub(super) struct UnavailableReason {
 pub(super) enum RuntimeState {
     Stopped,
     Serving,
+    SessionLimitWait,
     Retiring { sign_in_wait_ended: bool },
     Restarting,
     Unavailable(UnavailableReason),
@@ -54,9 +56,20 @@ pub(super) enum RuntimeState {
 }
 
 impl RuntimeState {
+    pub(super) fn is_serving(&self) -> bool {
+        match self {
+            Self::Serving | Self::SessionLimitWait => true,
+            Self::Stopped
+            | Self::Retiring { .. }
+            | Self::Restarting
+            | Self::Unavailable(_)
+            | Self::Stopping => false,
+        }
+    }
+
     pub(super) fn runtime_process(&self) -> RuntimeProcess {
         match self {
-            Self::Serving => RuntimeProcess::Running,
+            Self::Serving | Self::SessionLimitWait => RuntimeProcess::Running,
             Self::Retiring { .. } => RuntimeProcess::Stopping,
             Self::Restarting => RuntimeProcess::Starting,
             Self::Stopped | Self::Unavailable(_) | Self::Stopping => RuntimeProcess::Stopped,
@@ -98,7 +111,7 @@ impl Lifecycle {
     }
 
     pub(super) fn replacement_pending(&self) -> bool {
-        self.replacement.is_some()
+        self.replacement.is_some() || matches!(self.state, RuntimeState::SessionLimitWait)
     }
 
     pub(super) fn plan(&mut self, replacement: Replacement) {
@@ -158,7 +171,7 @@ impl Lifecycle {
                         error: message.clone(),
                     });
                 }
-                Replacement::SignIn => {}
+                Replacement::SignIn | Replacement::SessionLimit => {}
             }
         }
         commands.extend(
@@ -208,7 +221,20 @@ impl Core {
         builds: &crate::runtime_builds::Builds,
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) -> Option<CompatibilityCheck> {
-        let (reply, source, initial) = match self.lifecycle.replacement.take().unwrap() {
+        let replacement = self.lifecycle.replacement.take().or_else(|| {
+            matches!(self.lifecycle.state, RuntimeState::SessionLimitWait)
+                .then_some(Replacement::SessionLimit)
+        });
+        let (reply, source, initial) = match replacement.unwrap() {
+            Replacement::SessionLimit => {
+                self.lifecycle.state = RuntimeState::Retiring {
+                    sign_in_wait_ended: false,
+                };
+                self.publish_view();
+                self.restart(runtime, read_open, clock, journal, builds)
+                    .await;
+                return None;
+            }
             Replacement::SignIn => {
                 self.restart(runtime, read_open, clock, journal, builds)
                     .await;
@@ -504,15 +530,19 @@ impl Core {
         self.replaced(None, None);
     }
 
-    pub(super) fn replacement_ready(&self) -> bool {
-        self.lockout.is_none()
-            && matches!(
-                self.lifecycle.state,
-                RuntimeState::Retiring { .. }
-                    | RuntimeState::Restarting
-                    | RuntimeState::Unavailable(_)
-            )
-            && !self.work.values().any(Work::occupies_place)
+    pub(super) fn replacement_ready(&self, now: Moment) -> bool {
+        if self.work.values().any(Work::occupies_place) || self.lockout.is_some() {
+            return false;
+        }
+        match self.lifecycle.state {
+            RuntimeState::SessionLimitWait => {
+                self.sign_in.wait().is_none() && self.needs_session_replacement(now)
+            }
+            RuntimeState::Retiring { .. }
+            | RuntimeState::Restarting
+            | RuntimeState::Unavailable(_) => true,
+            RuntimeState::Serving | RuntimeState::Stopped | RuntimeState::Stopping => false,
+        }
     }
 
     pub(super) fn replaced(
@@ -542,7 +572,10 @@ impl Core {
         commands: &mut Vec<Command>,
     ) {
         self.sign_in.end_wait();
-        if matches!(self.lifecycle.replacement, Some(Replacement::SignIn)) {
+        if matches!(
+            self.lifecycle.replacement,
+            Some(Replacement::SignIn | Replacement::SessionLimit)
+        ) {
             self.lifecycle.replacement = None;
         }
         let error = crate::messages::Message::RuntimeUnavailable(reason.message.clone());
@@ -575,6 +608,10 @@ impl Core {
         }
     }
 
+    pub(super) fn wait_for_session_limit(&mut self) {
+        self.lifecycle.state = RuntimeState::SessionLimitWait;
+    }
+
     pub(super) fn resume_runtime(&mut self) {
         if matches!(
             self.lifecycle.state,
@@ -586,6 +623,12 @@ impl Core {
                 .replacement
                 .get_or_insert(Replacement::SignIn);
         } else {
+            self.lifecycle.state = RuntimeState::Serving;
+        }
+    }
+
+    pub(super) fn resume_after_session_limit(&mut self) {
+        if matches!(self.lifecycle.state, RuntimeState::SessionLimitWait) {
             self.lifecycle.state = RuntimeState::Serving;
         }
     }
@@ -639,6 +682,9 @@ impl Core {
         publish: &watch::Sender<Arc<crate::store::Settings>>,
         configuration: &std::path::Path,
     ) -> Option<BuildSelection> {
+        if self.lifecycle.replacement.is_some() {
+            return None;
+        }
         while let Some((action, reply)) = self.lifecycle.changes.pop_front() {
             let initial = matches!(action, crate::runtime_builds::Action::Initial);
             let mut changed = (**publish.borrow()).clone();
@@ -689,13 +735,11 @@ impl Core {
 
     pub(super) fn sign_in_wait_ended(&mut self) {
         self.sign_in.end_wait();
-        if matches!(self.lifecycle.state, RuntimeState::Serving) {
+        if self.lifecycle.state.is_serving() {
             self.lifecycle.state = RuntimeState::Retiring {
                 sign_in_wait_ended: true,
             };
-            self.lifecycle
-                .replacement
-                .get_or_insert(Replacement::SignIn);
+            self.lifecycle.replacement = Some(Replacement::SignIn);
         }
     }
 

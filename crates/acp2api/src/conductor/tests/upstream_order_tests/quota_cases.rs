@@ -420,7 +420,9 @@ fn a_queued_usage_query_keeps_its_session_after_a_late_stderr_error() {
     let commands = turn.core.handle(
         Event::Runtime(RuntimeEvent::Prepared {
             work: "models-2".into(),
-            result: Err(crate::messages::Message::RuntimeFailed),
+            result: Err(crate::runtime_driver::PreparationError::Rejected(
+                crate::messages::Message::RuntimeFailed,
+            )),
         }),
         40,
         std::time::UNIX_EPOCH,

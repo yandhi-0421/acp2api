@@ -12,7 +12,7 @@ acp2api runs all ACP sessions in one runtime process. It starts the runtime proc
   1. It keeps each new request in the queue.
   2. When no prompt turn runs, it stops the runtime process.
   3. It starts a new runtime process.
-- **The value of N.** A measurement of the memory of the harness processes decides N. N is a constant, not a setting of the user.
+- **The value of N.** The first release uses a temporary value (FR-041). A measurement of the memory of the harness processes decides the real value (OD-1). N is a constant, not a setting of the user.
 - **Failure.** Each of these events is one failure:
   - a failed start;
   - an exit that acp2api did not cause;
