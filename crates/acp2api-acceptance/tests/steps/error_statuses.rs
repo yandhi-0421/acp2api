@@ -8,6 +8,7 @@ use cucumber::{given, then, when};
 #[given("acp2api is in lockout")]
 #[given("acp2api is in the state \"lockout\"")]
 async fn locked(w: &mut World) {
+    queue::start(w).await;
     lockout::send_signal(w, lockout::SIGNAL).await;
 }
 
