@@ -282,7 +282,10 @@ pub(super) async fn failed_copies_after_crash(seed: u64) -> usize {
         barrier(&conductor).await;
         launcher.crash.notify_one();
         for action in actions {
-            assert!(action.await.is_err(), "the broken build copy must fail");
+            assert!(
+                matches!(action.await, Err(error) if !matches!(error, LaunchFailure::Stopped)),
+                "the broken build copy must fail without Stopped"
+            );
         }
         assert!(end_of(&mut holding).await.is_err());
         let later = end_of(&mut ask(&conductor, "after").await).await;
@@ -324,7 +327,7 @@ async fn failed_build_takeover_keeps_the_limit_waiter_and_replaces_once() {
             assert_eq!(conductor.view().runtime_process, RuntimeProcess::Stopping);
             assert!(futures_util::poll!(owner.as_mut()).is_pending());
             launcher.release.notify_one();
-            owner.await.is_err()
+            matches!(owner.await, Err(error) if !matches!(error, LaunchFailure::Stopped))
         };
         ended(&mut holding).await;
         ended(&mut waiting).await;
