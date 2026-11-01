@@ -9,22 +9,13 @@ const M_30: &str = "acp2api: the lockout is not in the state file state.json, be
 async fn cannot_write_state_file(w: &mut World) {
     w.scenario.start().await;
     let path = lockout_support::state_path(w);
-    if !path.exists() {
-        fs::write(&path, r#"{"format":1,"lockout":null,"checked_builds":[]}"#).unwrap();
-    }
-    if path.is_file() {
-        fs::remove_file(&path).unwrap();
-    }
-    fs::create_dir_all(&path).unwrap();
-    fs::write(path.join("file"), b"block").unwrap();
+    fs::write(&path, r#"{"format":1,"lockout":null,"checked_builds":[]}"#).unwrap();
+    cannot_make_state_file(w);
 }
 
 #[when("acp2api can write the state file")]
 fn can_write_state_file(w: &mut World) {
-    let path = lockout_support::state_path(w);
-    if path.is_dir() {
-        fs::remove_dir_all(&path).unwrap();
-    }
+    w.lockout.restore();
 }
 
 #[given("a lockout signal started a lockout")]
@@ -83,12 +74,12 @@ async fn stopped_no_state_file(w: &mut World) {
         .seed(&w.scenario.hub, &acp2api_acceptance::Setup::normal());
     let scenario_data = w.scenario.root.path.join("data");
     let _ = fs::create_dir_all(scenario_data.join("logs"));
-    let scenario_state = scenario_data.join("state.json");
-    if scenario_state.exists() {
-        if scenario_state.is_dir() {
-            let _ = fs::remove_dir_all(&scenario_state);
+    let path = lockout_support::state_path(w);
+    if path.exists() {
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
         } else {
-            let _ = fs::remove_file(&scenario_state);
+            let _ = fs::remove_file(&path);
         }
     }
 }
@@ -115,26 +106,8 @@ fn cannot_make_state_file(w: &mut World) {
             status.success(),
             "icacls denies new files in the data folder"
         );
-        w.end_lockout.denied = Some(data_dir);
+        w.lockout.denied = Some(data_dir);
     }
-}
-
-#[allow(clippy::disallowed_methods)]
-pub fn restore_denied(w: &mut World) {
-    #[cfg(windows)]
-    if let Some(dir) = w.end_lockout.denied.take() {
-        let status = std::process::Command::new("icacls")
-            .arg(&dir)
-            .args(["/remove:d", "*S-1-1-0"])
-            .status()
-            .unwrap();
-        assert!(
-            status.success(),
-            "icacls removes denial of new files in the data folder"
-        );
-    }
-    #[cfg(not(windows))]
-    let _ = w.end_lockout.denied.take();
 }
 
 #[given("the owner started acp2api")]
@@ -146,7 +119,6 @@ async fn owner_started_acp2api(w: &mut World) {
 #[when("acp2api can make the state file")]
 fn can_make_state_file(w: &mut World) {
     w.lockout.restore();
-    restore_denied(w);
 }
 
 #[then("the management panel names the state file state.json")]
@@ -171,6 +143,22 @@ fn starts_no_runtime_process(w: &mut World) {
     assert!(
         launches.is_empty(),
         "FR-035 acp2api starts no runtime process when state file cannot be made: {launches:?}"
+    );
+}
+
+#[then("acp2api started a runtime process")]
+fn started_runtime_process(w: &mut World) {
+    let launches: Vec<_> = w
+        .scenario
+        .fake()
+        .record()
+        .entries
+        .into_iter()
+        .filter(|e| e.event["kind"] == "launch")
+        .collect();
+    assert!(
+        !launches.is_empty(),
+        "FR-040 acp2api started a runtime process: {launches:?}"
     );
 }
 

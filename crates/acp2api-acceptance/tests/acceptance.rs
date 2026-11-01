@@ -263,7 +263,6 @@ async fn run() {
             Box::pin(async move {
                 if let Some(world) = world {
                     world.lockout.restore();
-                    state_file_failure::restore_denied(world);
                     runtime_continuation::cleanup(world);
                     runtime_support::cleanup(world).await;
                     places_support::cleanup(world).await;

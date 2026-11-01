@@ -206,6 +206,7 @@ Feature: Lockout
     And the owner asks for a retry in the management panel
     Then acp2api is in the normal state at once
     And the data folder holds a new state file
+    And acp2api started a runtime process
 
   @FR-035 @issue-70
   Scenario: The deletion of the state file ends a lockout

@@ -69,7 +69,7 @@ impl HeldLockout {
         journal: &Journal,
         clock: &dyn Clock,
     ) -> Self {
-        let unsaved = persist(path, &evidence, journal, clock);
+        let unsaved = write_failed(path, &evidence, journal, clock);
         Self { evidence, unsaved }
     }
 
@@ -105,7 +105,7 @@ fn save_lockout(path: &Path, evidence: &Lockout) -> Result<(), LockoutSaveError>
     state.save(path).map_err(LockoutSaveError::Write)
 }
 
-fn persist(path: &Path, evidence: &Lockout, journal: &Journal, clock: &dyn Clock) -> bool {
+fn write_failed(path: &Path, evidence: &Lockout, journal: &Journal, clock: &dyn Clock) -> bool {
     match save_lockout(path, evidence) {
         Ok(()) => false,
         Err(LockoutSaveError::Read(error)) => {

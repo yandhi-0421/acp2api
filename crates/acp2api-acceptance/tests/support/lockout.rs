@@ -13,16 +13,32 @@ pub struct LockoutState {
     pub unreadable: Option<(PathBuf, std::fs::Permissions)>,
     #[cfg(windows)]
     pub unreadable: Option<std::fs::File>,
+    #[cfg(windows)]
+    pub denied: Option<PathBuf>,
 }
 
 impl LockoutState {
+    #[allow(clippy::disallowed_methods)]
     pub fn restore(&mut self) {
         #[cfg(unix)]
         if let Some((path, permissions)) = self.unreadable.take() {
             std::fs::set_permissions(path, permissions).unwrap();
         }
         #[cfg(windows)]
-        self.unreadable.take();
+        {
+            self.unreadable.take();
+            if let Some(dir) = self.denied.take() {
+                let status = std::process::Command::new("icacls")
+                    .arg(&dir)
+                    .args(["/remove:d", "*S-1-1-0"])
+                    .status()
+                    .unwrap();
+                assert!(
+                    status.success(),
+                    "icacls removes denial of new files in the data folder"
+                );
+            }
+        }
     }
 }
 
