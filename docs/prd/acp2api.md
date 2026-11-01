@@ -687,7 +687,8 @@ acp2api has no runtime process that it can use, so it starts no prompt turn. It 
 - acp2api found no executable of the official runtime;
 - acp2api found only builds that are not accepted versions;
 - acp2api found an accepted build, but its automatic copy failed at a start (FR-043);
-- the runtime process had 3 failures in 10 minutes (FR-041).
+- the runtime process had 3 failures in 10 minutes (FR-041);
+- acp2api cannot make its state file (FR-035).
 
 The condition ends when a start of a runtime process succeeds. Other conditions remain until their own end. In this state, acp2api starts no runtime process by itself. These events start a new try:
 
@@ -1043,6 +1044,8 @@ The reasons of M-14 are:
 | Sentence: no executable | 没有找到官方运行时，所以 acp2api 没有启动运行时进程。 | acp2api found no official runtime, so it started no runtime process. |
 | Sentence: no accepted version | 找到的构建不是已接受版本，所以 acp2api 没有启动运行时进程。 | No build that acp2api found is an accepted version, so it started no runtime process. |
 | Sentence: 3 failures | 运行时进程在 10 分钟内失败了 3 次，所以 acp2api 不再自动启动它。 | The runtime process failed 3 times in 10 minutes, so acp2api does not start it again by itself. |
+| Sentence: failed copy | 已接受构建 <version> 的复制失败了，所以 acp2api 没有启动运行时进程。 | The copy of the accepted build <version> failed, so acp2api started no runtime process. |
+| Sentence: state file | acp2api 无法写入状态文件 state.json，所以没有启动运行时进程。 | acp2api cannot write its state file state.json, so it started no runtime process. |
 | Retry entry | 重试 | Retry |
 | Compatibility check entry | 对 <version> 做兼容性检查 | Run the compatibility check for <version> |
 | State "lockout" | 已锁死 | Lockout |
