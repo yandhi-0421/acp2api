@@ -4,12 +4,13 @@ Each API request carries the full conversation, but an ACP session keeps its own
 
 ## Rules
 
-- **Record.** The record of an ACP session holds a hash of each item that the ACP session holds, in the form that the API client sees.
+- **Record.** A record holds the exact hashes of its request items and the comparison data of its last reply.
   - The items are the system prompt, each text, each image, each tool call, and each tool result. A tool call has its call ID, its name, and its arguments.
   - The system prompt is the first item. Thus a change of the system prompt stops the match.
   - A field or a block that acp2api ignores is not part of a hash. Examples are `cache_control`, a `thinking` block, a `reasoning` item, and a `tool_addition` block.
   - Each hash reads the exact text, also its white space.
   - The record also holds a hash of the set of client tools: the names, the descriptions, and the schemas.
+  - The last reply holds a hash of the clean form of its text, when present. For a tool call, it holds the call ID and tool name in plain text.
 - **Last reply.** The last reply of a record is the reply of the last prompt turn of the ACP session. It has a text, a tool call, or both. Only for this reply, the comparison is not exact:
   - **Last tool call.** acp2api compares the call ID and the name. It does not compare the arguments.
   - **Last reply text.** acp2api compares the clean form of the two texts. The clean form keeps the indentation and the white space inside a line. To make the clean form, acp2api does these steps in this order:
@@ -62,7 +63,7 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - In the probe of `docs/research/2026-11-01-client-history-white-space-probe.md`, the collapse gave no extra match on tool arguments. The hash reads the JSON text, and there a newline in a string is the two characters `\n`.
 - An API client can send reply text back in a clean form. A reply of only white space can go away. Apart from that case, the probe found three changes of assistant text: a removed CR, removed white space at a line end, and a trim. Indentation and spaces inside a line did not change. Thus the clean form holds these three changes and no other change.
 - After the first return, the API client keeps its own form. In the probe, that form was stable in each later request. Thus the rule for the last reply is not necessary for an earlier item.
-- Two ACP sessions with the same record hold the same conversation. Thus either one gives the same result.
+- Two ACP sessions with matching records can differ in the last reply within the permitted comparison rules. Thus either eligible ACP session can continue the request.
 - After a cut at a stop sequence, the ACP session holds text that the API client never got. An example is a line in the voice of the user. The input tokens must show the conversation of the request ([Which token usage does acp2api report to each API?](https://github.com/yandhi-0421/acp2api/issues/20), decision 6).
 - A wait for an ACP session gives no match. When its prompt turn ends, the ACP session holds one more reply.
 - The official runtime reads the tools of an MCP server at the first prompt turn of an ACP session (ADR-0002). In the captures of Claude Code 2.1.299, each main request had 29 client tools. Each other request to `/v1/messages` had one message, and no tool or only the server tool `web_search`. Thus it was a separate conversation.
@@ -96,6 +97,6 @@ Each API request carries the full conversation, but an ACP session keeps its own
 - An API client can change the arguments of the last tool call on purpose. It can also change only the white space that the clean form removes. acp2api does not see these changes.
 - A change of white space in each other item costs one rebuild. This also applies to the system prompt and to the set of client tools.
 - A reply of only white space has an empty clean form. When an API client removes such a reply, the item is absent, and the match stops.
-- The records hold no text. Thus acp2api cannot do a rebuild from `previous_response_id`, `item_reference`, or `conversation`, and it keeps their rejection.
+- The records hold no message text or tool arguments. A last tool call keeps its ID and name in plain text. Thus acp2api cannot do a rebuild from `previous_response_id`, `item_reference`, or `conversation`, and it keeps their rejection.
 
 Evidence: the grilling of [Which ACP session does acp2api use for each API request?](https://github.com/yandhi-0421/acp2api/issues/10); the grilling of [How does the system prompt of a request reach the model?](https://github.com/yandhi-0421/acp2api/issues/23), for the `system` and `developer` messages; the grilling of [What does acp2api return for `thinking` blocks and `reasoning` items?](https://github.com/yandhi-0421/acp2api/issues/24) and [What does acp2api do with each server tool that Claude Code sends?](https://github.com/yandhi-0421/acp2api/issues/28), for the blocks that acp2api ignores; the Claude Code gateway guide, section "Automatic retry and error forwarding" ([link](https://code.claude.com/docs/en/llm-gateway-protocol.md)); F3, F6, F8, F9, and F12 of [Probe the official runtime on macOS with a test MCP server and an empty `cwd`](https://github.com/yandhi-0421/acp2api/issues/8); W3 of [Probe the official runtime on Windows 11 ARM in a VM](https://github.com/yandhi-0421/acp2api/issues/16); `docs/research/captures/2026-10-17-claude-code-check/runs.json`, runs `p7-tui` and `p10-tui-search`, the last role of each main request, and the `toolCount` of the main requests of runs `p2-pdf`, `p3-search`, and `p10-tui-search`; `blocks.json` in the same directory, `messageRolesAfterPdfRead`; section 3.3 of `docs/research/2026-10-15-official-runtime-acp-probe.md`; sections 5 and 7 of `docs/research/2026-10-15-official-runtime-probe-p.md`; sections 4, 5, and 6 of `docs/research/2026-11-01-client-history-white-space-probe.md`, with its captures in `docs/research/captures/2026-11-01-history-white-space/`; and the decisions of the owner and the product run in [Claude Code rewrites tool arguments, which can stop each continuation](https://github.com/yandhi-0421/acp2api/issues/218).

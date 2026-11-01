@@ -400,7 +400,8 @@ The model gets the conversation of each request one time, with no item that the 
 - A request that changes only the arguments of the last tool call sends only its tool result, in the same ACP session. The number of ACP sessions does not change.
 - A request with another call ID or another name for the last tool call gives a new ACP session.
 - A request can change the last reply text only by a removed CR, removed white space at a line end, or a trim. That request sends only its new items, in the same ACP session. The number of ACP sessions does not change.
-- A request with changed indentation or changed spaces inside a line gives a new ACP session. This applies to the last reply text and to each other item.
+- A trim can hide changed indentation at the start of the last reply text, including its first line. Changed indentation elsewhere, or changed inner spaces, gives a new ACP session. Each other item requires exact white space.
+- A reply of only white space that the API client removes stops the match and gives a new ACP session.
 - After a match with one of these changes, a further change of that item in a later request gives a new ACP session.
 - No response holds a notice of a rebuild, and the log has one rebuild line for each rebuild.
 

@@ -126,7 +126,7 @@ FRs in scope and their modules (section "Shape" gives each module):
 FRs that this design does not fully design:
 
 - FR-041, the real value of N: open decision OD-1. The design has the replacement rule and the constant `SESSIONS_PER_RUNTIME_PROCESS` with the value 8. This value is temporary, and no measurement supports it.
-- SC-006: open decision OD-2. The design keeps memory low, because records hold only hashes and acp2api keeps no history text. It sets no target.
+- SC-006: open decision OD-2. The design limits record memory to hashes, plus the last call ID and tool name in plain text. It keeps no message text or tool arguments. It sets no target.
 
 Limits from the ground step:
 
@@ -388,7 +388,7 @@ pub fn prompt(kind: SessionUse, items: &[Item]) -> Vec<PromptBlock>;   // FR-016
 pub fn system_prompt_addition(system: &[SystemPart]) -> Option<String>; // FR-019
 pub fn record_hashes(conversation: &Conversation) -> Vec<ItemHash>;    // ADR-0003
 pub fn tool_set_hash(tools: &ClientTools) -> ToolSetHash;              // ADR-0003
-pub fn clean_form(text: &str) -> String;                               // ADR-0003, "Last reply"
+pub fn clean_reply_hash(text: &str) -> ItemHash;                               // ADR-0003, "Last reply"
 pub fn estimate_tokens(text: &str) -> u64;                             // FR-025
 pub fn input_tokens(conversation: &Conversation, tool_text: &str) -> u64; // FR-025: full normalized input, not only new items
 ```
@@ -1548,7 +1548,7 @@ ADR-0003 and FR-021 hold the rule. This section gives its shape. Issue #218 buil
 - `continues_after` does not change. It reads the items after the last reply.
 - After a match, `select` builds the next `RequestRecord` from the request, as it does now. Thus that record holds the form of the API client, and only the new reply is a `LastReply`.
 - `retry` keeps `RecordHashes::is_continued_by`. Its hashes hold no reply, so its comparison stays exact.
-- `dialect::Encoding::new` makes the call ID now, and the conductor does not see that value. The record and the response must hold the same call ID. The build gives that value one owner.
+- `Active::finish` creates the call ID before it writes the record. It calls `dialect::call_identifier` for the prefix and random identifier. The record and the response receive that same ID.
 
 `features/acp2api/conversation-continuation.feature` holds the scenarios with the tag `@issue-218`.
 
