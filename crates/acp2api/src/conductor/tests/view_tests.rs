@@ -5,8 +5,16 @@ fn the_panel_receives_the_effective_quota_reset_until_the_wait_expires() {
     let mut core = Core::fixture(2);
     assert!(core.view.borrow().quota_reset.is_none());
     for (now, reset, message) in [
-        (10_000, "1970-01-01T00:02:00Z", "resets 1970-01-01T00:02:00Z"),
-        (11_000, "1970-01-01T00:03:00Z", "resets 1970-01-01T00:03:00Z"),
+        (
+            10_000,
+            "1970-01-01T00:02:00Z",
+            "resets 1970-01-01T00:02:00Z",
+        ),
+        (
+            11_000,
+            "1970-01-01T00:03:00Z",
+            "resets 1970-01-01T00:03:00Z",
+        ),
     ] {
         core.handle(
             Event::Runtime(RuntimeEvent::UpstreamError {
@@ -33,7 +41,10 @@ fn the_panel_receives_the_effective_quota_reset_until_the_wait_expires() {
         std::time::UNIX_EPOCH + std::time::Duration::from_secs(180),
     );
     assert_eq!(
-        (core.view.borrow().state, serde_json::to_value(&core.view.borrow().quota_reset).unwrap()),
+        (
+            core.view.borrow().state,
+            serde_json::to_value(&core.view.borrow().quota_reset).unwrap()
+        ),
         (State::Running, serde_json::Value::Null),
         "FR-054 clears the reset time when the quota wait ends"
     );
