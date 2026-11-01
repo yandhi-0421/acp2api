@@ -658,9 +658,9 @@ After a quota signal, acp2api starts no prompt turn until the reset time. With n
 
 A quota wait, the state "sign-in required", and the state "runtime unavailable" end the requests in the queue at their start. Each such request gets the error of that state. The prompt turns that run continue to their end. Only a lockout cancels them (FR-035).
 
-A prompt turn that stderr marks as failed has the separate wait of FR-028. If that prompt turn does not end within the wait, acp2api cancels it. This cancel keeps the failed prompt turn bounded.
-
 This includes a request before acceptance: it gets an HTTP error, not a stream event. An accepted streamed request gets a stream error. An error for a condition that is already active does not flush the queue again. When conditions overlap, the priority above selects the error.
+
+A prompt turn that stderr marks as failed has the separate wait of FR-028. If that prompt turn does not end within the wait, acp2api cancels it. This cancel keeps the failed prompt turn bounded.
 
 **Pass:** two requests wait in the queue, and one prompt turn runs. A quota signal then ends the two requests with 429, and the prompt turn ends normally.
 
@@ -723,6 +723,7 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
   - an ACP write to a live runtime process that does not end in 30 s;
   - more than 128 MiB of ACP writes that wait for the runtime process.
 - After a failure, each prompt turn of the runtime process ends with the 503 row of FR-033 and message M-20. acp2api starts a new runtime process at once. After 3 failures in 10 minutes, acp2api goes into the state "runtime unavailable" (FR-040).
+- During the FR-028 wait, a prompt turn keeps its stored error when the runtime process ends, also for 429 with no reset time.
 
 **Pass:**
 

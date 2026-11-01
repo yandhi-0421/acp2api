@@ -519,7 +519,7 @@ The core has these parts. Each part is a private module with a pure interface.
   The signal check also covers text after the response ends, for API requests and `/usage` prompts.
 
   It precedes text filters and survives a disconnect or a repeated error.
-  A possible 403 signal at a chunk end waits for more text or the prompt turn end.
+  A possible 403 signal at a chunk end waits for more text, the prompt turn end, or the runtime process end.
 
   An ended disconnected prompt turn retains its signal evidence through the FR-028 window.
   That evidence holds no place. A replacement of the runtime process discards it.
