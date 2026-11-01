@@ -45,11 +45,6 @@ impl PreparationError {
         }
     }
 }
-impl From<Message> for PreparationError {
-    fn from(error: Message) -> Self {
-        Self::Rejected(error)
-    }
-}
 impl From<String> for CommandError {
     fn from(error: String) -> Self {
         Self::Session(Message::Upstream(error))
@@ -1037,7 +1032,7 @@ impl Runtime {
     ) -> Result<(String, crate::catalog::Catalog), PreparationError> {
         let response = value
             .get("result")
-            .ok_or_else(|| PreparationError::from(acp_error(&value["error"])))?;
+            .ok_or_else(|| PreparationError::Rejected(acp_error(&value["error"])))?;
         (|| {
             let session = match loaded {
                 Some(id) => id,

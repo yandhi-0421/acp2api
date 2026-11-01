@@ -99,7 +99,7 @@ impl Fixture {
                         crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
                     )
                 })
-                .map_err(Into::into),
+                .map_err(crate::runtime_driver::PreparationError::Rejected),
         }))
     }
 

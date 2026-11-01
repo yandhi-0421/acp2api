@@ -56,6 +56,17 @@ pub(super) enum RuntimeState {
 }
 
 impl RuntimeState {
+    pub(super) fn is_serving(&self) -> bool {
+        match self {
+            Self::Serving | Self::SessionLimitWait => true,
+            Self::Stopped
+            | Self::Retiring { .. }
+            | Self::Restarting
+            | Self::Unavailable(_)
+            | Self::Stopping => false,
+        }
+    }
+
     pub(super) fn runtime_process(&self) -> RuntimeProcess {
         match self {
             Self::Serving | Self::SessionLimitWait => RuntimeProcess::Running,
@@ -100,7 +111,7 @@ impl Lifecycle {
     }
 
     pub(super) fn replacement_pending(&self) -> bool {
-        self.replacement.is_some()
+        self.replacement.is_some() || matches!(self.state, RuntimeState::SessionLimitWait)
     }
 
     pub(super) fn plan(&mut self, replacement: Replacement) {
@@ -210,8 +221,21 @@ impl Core {
         builds: &crate::runtime_builds::Builds,
         publish: &watch::Sender<Arc<crate::store::Settings>>,
     ) -> Option<CompatibilityCheck> {
-        let (reply, source, initial) = match self.lifecycle.replacement.take().unwrap() {
-            Replacement::SignIn | Replacement::SessionLimit => {
+        let replacement = self.lifecycle.replacement.take().or_else(|| {
+            matches!(self.lifecycle.state, RuntimeState::SessionLimitWait)
+                .then_some(Replacement::SessionLimit)
+        });
+        let (reply, source, initial) = match replacement.unwrap() {
+            Replacement::SessionLimit => {
+                self.lifecycle.state = RuntimeState::Retiring {
+                    sign_in_wait_ended: false,
+                };
+                self.publish_view();
+                self.restart(runtime, read_open, clock, journal, builds)
+                    .await;
+                return None;
+            }
+            Replacement::SignIn => {
                 self.restart(runtime, read_open, clock, journal, builds)
                     .await;
                 return None;
@@ -585,7 +609,6 @@ impl Core {
     }
 
     pub(super) fn wait_for_session_limit(&mut self) {
-        self.lifecycle.replacement = Some(Replacement::SessionLimit);
         self.lifecycle.state = RuntimeState::SessionLimitWait;
     }
 
@@ -606,7 +629,6 @@ impl Core {
 
     pub(super) fn resume_after_session_limit(&mut self) {
         if matches!(self.lifecycle.state, RuntimeState::SessionLimitWait) {
-            self.lifecycle.replacement = None;
             self.lifecycle.state = RuntimeState::Serving;
         }
     }
@@ -652,6 +674,9 @@ impl Core {
         publish: &watch::Sender<Arc<crate::store::Settings>>,
         configuration: &std::path::Path,
     ) -> Option<BuildSelection> {
+        if self.lifecycle.replacement.is_some() {
+            return None;
+        }
         while let Some((action, reply)) = self.lifecycle.changes.pop_front() {
             let initial = matches!(action, crate::runtime_builds::Action::Initial);
             let mut changed = (**publish.borrow()).clone();
@@ -702,10 +727,7 @@ impl Core {
 
     pub(super) fn sign_in_wait_ended(&mut self) {
         self.sign_in.end_wait();
-        if matches!(
-            self.lifecycle.state,
-            RuntimeState::Serving | RuntimeState::SessionLimitWait
-        ) {
+        if self.lifecycle.state.is_serving() {
             self.lifecycle.state = RuntimeState::Retiring {
                 sign_in_wait_ended: true,
             };

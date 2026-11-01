@@ -136,7 +136,7 @@ impl Walk {
             4 if !self.queued_or_working.is_empty() => {
                 let at = self.roll(self.queued_or_working.len());
                 let work = self.queued_or_working.remove(at);
-                // The actor sends Disconnected only for live work with a reply (conductor.rs:695).
+                // The actor sends Disconnected only for live work with a reply.
                 let live = f
                     .core
                     .work
@@ -156,10 +156,7 @@ impl Walk {
                 if f.core.sign_in.wait().is_some() {
                     let commands = f.event(Event::EndSignInWait);
                     self.note(f, &commands);
-                } else if matches!(
-                    f.core.lifecycle.state(),
-                    RuntimeState::Serving | RuntimeState::SessionLimitWait
-                ) {
+                } else if f.core.lifecycle.state().is_serving() {
                     self.sign_ins += 1;
                     let commands = f.event(Event::StartSignIn);
                     self.note(f, &commands);
@@ -251,8 +248,8 @@ impl Fixture {
     }
 }
 
-#[test]
-fn fixed_seed_walk_preserves_session_capacity_and_queue_progress() {
+#[tokio::test]
+async fn fixed_seed_walk_preserves_session_capacity_and_queue_progress() {
     let (mut total_replacements, mut total_steps, mut sign_ins, mut lockouts, mut checks) =
         (0, 0, 0, 0, 0);
     for seed in 1..=128u64 {
@@ -290,4 +287,10 @@ fn fixed_seed_walk_preserves_session_capacity_and_queue_progress() {
     assert_eq!(total_steps, 30_720);
     assert!(sign_ins > 100 && lockouts > 100 && checks > 100);
     assert!(total_replacements > 100, "the walk must reach the limit");
+    let mut build_actions = 0;
+    for seed in 1..=4 {
+        build_actions += build_wait_tests::failed_copies_after_crash(seed).await;
+    }
+    println!("actor walk: seeds=4 build_actions={build_actions} runtime_failures=4");
+    assert_eq!(build_actions, 10);
 }

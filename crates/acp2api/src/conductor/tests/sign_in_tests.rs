@@ -73,7 +73,7 @@ fn a_disconnected_sign_in_check_keeps_its_place_until_its_acp_reply() {
     let commands = core.handle(
         Event::Runtime(RuntimeEvent::Prepared {
             work: ids[0].clone(),
-            result: Err(error.into()),
+            result: Err(crate::runtime_driver::PreparationError::Rejected(error)),
         }),
         1,
         std::time::UNIX_EPOCH,
@@ -324,7 +324,9 @@ fn an_elapsed_quota_reset_completes_a_pending_sign_in_check() {
         let commands = core.handle(
             Event::Runtime(RuntimeEvent::Prepared {
                 work: checks[1].clone(),
-                result: Err(crate::messages::Message::UpstreamAcp(error).into()),
+                result: Err(crate::runtime_driver::PreparationError::Rejected(
+                    crate::messages::Message::UpstreamAcp(error),
+                )),
             }),
             1,
             wall,
@@ -384,13 +386,14 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
         let commands = core.handle(
             Event::Runtime(RuntimeEvent::Prepared {
                 work: work.clone(),
-                result: Err(crate::messages::Message::UpstreamAcp(
-                    serde_json::from_value(
-                        serde_json::json!({"code":429,"message":"RESOURCE_EXHAUSTED"}),
-                    )
-                    .unwrap(),
-                )
-                .into()),
+                result: Err(crate::runtime_driver::PreparationError::Rejected(
+                    crate::messages::Message::UpstreamAcp(
+                        serde_json::from_value(
+                            serde_json::json!({"code":429,"message":"RESOURCE_EXHAUSTED"}),
+                        )
+                        .unwrap(),
+                    ),
+                )),
             }),
             0,
             std::time::UNIX_EPOCH,

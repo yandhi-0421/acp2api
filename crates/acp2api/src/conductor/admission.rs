@@ -347,12 +347,12 @@ impl Core {
         now: Moment,
     ) -> bool {
         !request.reply.output.is_closed()
-            && retry::refusal(&self.retry_waits, &request.turn, now).is_none()
             && self.sessions.at_capacity(
                 &request.turn,
                 &SessionSettings::for_turn(&request.turn),
                 checked,
             )
+            && retry::refusal(&self.retry_waits, &request.turn, now).is_none()
     }
     pub(super) fn needs_session_replacement(&self, now: Moment) -> bool {
         self.work.values().any(|work| match work {
@@ -370,12 +370,7 @@ impl Core {
             self.resume_after_session_limit();
         }
         let mut places = self.work.places();
-        if self.lockout.is_some()
-            || !matches!(
-                self.lifecycle.state(),
-                RuntimeState::Serving | RuntimeState::SessionLimitWait
-            )
-        {
+        if self.lockout.is_some() || !self.lifecycle.state().is_serving() {
             return;
         }
         let queued: Vec<_> = self

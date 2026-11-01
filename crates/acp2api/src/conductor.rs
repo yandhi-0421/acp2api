@@ -258,10 +258,7 @@ impl Core {
             OwnerAction::SignIn => {
                 if self.lockout.is_some()
                     || self.sign_in.wait().is_some()
-                    || !matches!(
-                        self.lifecycle.state(),
-                        RuntimeState::Serving | RuntimeState::SessionLimitWait
-                    )
+                    || !self.lifecycle.state().is_serving()
                 {
                     let _ = reply.send(Err(OwnerMessage::SignInCannotStart));
                     return Vec::new();
@@ -626,9 +623,7 @@ impl Conductor {
             let mut exit_work = None;
             loop {
                 core.retry_lockout_save();
-                if checking.is_none()
-                    && (!core.lifecycle.replacement_pending()
-                        || matches!(core.lifecycle.state(), RuntimeState::SessionLimitWait))
+                if checking.is_none() && !matches!(core.lifecycle.state(), RuntimeState::Restarting)
                 {
                     match core
                         .next_build_change(&actor_builds, &publish, &configuration)
@@ -705,6 +700,7 @@ impl Conductor {
                     if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
                         break;
                     }
+                    continue;
                 }
                 let connected: Vec<_> = core
                     .work
