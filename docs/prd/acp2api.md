@@ -738,9 +738,26 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
   - an exit that acp2api did not cause;
   - a prompt turn that does not end 30 s after its cancel.
   - an ACP write to a live runtime process that does not end in 30 s;
-  - more than 128 MiB of ACP writes that wait for the runtime process.
+  - more than 128 MiB of ACP writes that wait for the runtime process;
+  - a non-prompt ACP call that passes its time limit.
 - For a prompt turn without a stored FR-028 error, a runtime process failure gives the 503 row of FR-033 and message M-20. acp2api starts a new runtime process at once. After 3 failures in 10 minutes, acp2api goes into the state "runtime unavailable" (FR-040).
 - During an FR-028 wait, stored quota errors follow FR-037 at every end; other stored errors keep their own rows.
+- A non-prompt ACP call has a time limit of 5 minutes ([#211](https://github.com/yandhi-0421/acp2api/issues/211)). This value matches a start with no answer, and no measurement of a hang supports it. The slowest answers in the probes are 16.2 s for `session/load` and 29.3 s for `session/new`.
+  - The limit applies to each `session/new` and each `session/load` after the start of a runtime process, and to each `/usage`. Thus it applies to requests, sign-in checks, model reads, and quota queries.
+  - The time starts when acp2api sends the call. A wait in the queue does not count. A disconnect of the API client does not stop the time.
+  - The answer ends the call. `/usage` ends at the end of its prompt turn, and an update gives it no more time.
+  - These calls have their own bounds, so the limit does not apply to them:
+    - `initialize` and the `session/new` of a start: the start limit above;
+    - `authenticate`: the sign-in wait of FR-039;
+    - `session/set_config_option`: FR-051 and the cancel limit above, because the call is part of a prompt turn;
+    - each call of a compatibility check: 5 minutes for each answer. That limit fails the check (FR-044), and it is not a failure of the runtime process.
+- When a non-prompt ACP call passes its time limit, each caller of that call gets one of these results:
+  - A request with a `session/new` or a `session/load` gets the 503 row and M-20.
+  - A request with a sign-in check gets the 503 row and M-20, as an HTTP error before acceptance. This is not a failed check of FR-038, because the official runtime gave no sign-in error.
+  - The owner gets M-20 in the management panel for a model read or a refresh of the quota.
+  - A request that waits for the `/usage` of its reset time gets the 503 row and M-20. The quota wait continues with the 60 minutes of FR-036.
+  - A request that waits for the `/usage` after the stop reason `refusal` gets the 503 row and M-20. No quota wait starts.
+- Each failure keeps the requests in the queue, unless it gives the state "runtime unavailable". These requests run in the new runtime process.
 
 **Pass:**
 
@@ -748,6 +765,7 @@ The condition ends when a start of a runtime process succeeds. Other conditions 
 - With N ACP sessions, the next request that needs a new ACP session waits, then gets its response from a new runtime process.
 - Three exits of the fake ACP agent in 10 minutes give the state "runtime unavailable".
 - Three runtime processes that stop reading stdin in 10 minutes give the state "runtime unavailable".
+- A `session/new`, a `session/load`, and a `/usage` with no answer in 5 minutes each give a new runtime process, and a request in the queue then gets its response. An answer just under 5 minutes gives no failure.
 
 #### FR-042 — Search for the official runtime
 
@@ -843,7 +861,7 @@ acp2api gives the official runtime the client name `acp2api`, the title `acp2api
 - New work obtains a place only when the occupied count is below the new limit.
 - A request holds a place from its first call to the official runtime to the end of its prompt turn.
 - In the state "sign-in required", the sign-in check of a request holds a place.
-- When no prompt starts, the place remains occupied until that request's outstanding ACP call ends or the runtime process ends.
+- When no prompt starts, the place remains occupied until that request's outstanding ACP call ends or the runtime process ends. The time limit of FR-041 bounds this wait.
 - Each `/usage` holds a place.
 - The start of a runtime process holds no place.
 - A platform can fail the acceptance test with 3 prompt turns at the same time. Then the highest value on that platform is the highest value that passed. The release notes name it, and the management panel of that platform offers no higher value. A higher value in the configuration file stops the start with message M-26.
@@ -855,14 +873,14 @@ acp2api gives the official runtime the client name `acp2api`, the title `acp2api
 
 - The other requests wait in the queue, in the order of arrival.
 - Requests before a required sign-in check and accepted requests share one queue and its cap. Before acceptance, a request sends no keep-alive event.
-- A request waits with no time limit while its API client stays connected.
+- A request in the queue waits with no time limit while its API client stays connected. The time limit of FR-041 starts only when acp2api sends the ACP call of the request.
 - The queue holds no more than 32 requests. acp2api refuses each request after that at once, with the full-queue row of FR-033 and message M-17.
 
 **Pass:** requests start in the order of arrival. With 32 requests in the queue, the next request gets 529 or 503 with `retry-after: 10`.
 
 #### FR-051 — A prompt turn with no update
 
-When a prompt turn gets no update for 5 minutes, acp2api cancels it. It ends the response with the 503 row of FR-033 and message M-19.
+When a prompt turn gets no update for 5 minutes, acp2api cancels it. It ends the response with the 503 row of FR-033 and message M-19. `/usage` follows the time limit of FR-041, not this rule.
 
 **Pass:** a fake prompt turn with no update for 5 minutes ends with that error, and the official runtime gets a cancel.
 

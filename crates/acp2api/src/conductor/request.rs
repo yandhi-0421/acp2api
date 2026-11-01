@@ -985,7 +985,7 @@ impl Core {
         now: Moment,
         commands: &mut Vec<Command>,
     ) {
-        self.sessions.clear_cancels();
+        self.sessions.clear_deadlines();
         for work in self.work.values() {
             if let Work::QuotaWorking {
                 phase: QuotaPhase::Prompt(session) | QuotaPhase::FailedPrompt { session, .. },

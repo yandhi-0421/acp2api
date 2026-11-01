@@ -55,9 +55,11 @@ fn main() -> ExitCode {
     send(&writer, &hello);
     let stop_stdin = Arc::new(Mutex::new(None::<(String, std::net::SocketAddr)>));
     let children = Arc::new(Mutex::new(Vec::<std::process::Child>::new()));
+    let stdin_end_line = Arc::new(Mutex::new(None::<String>));
     if !harness {
         let writer = writer.clone();
         let children = children.clone();
+        let stdin_end_line = stdin_end_line.clone();
         let stop_stdin = stop_stdin.clone();
         thread::spawn(move || {
             let stdin = std::io::stdin();
@@ -107,6 +109,11 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            if let Some(line) = stdin_end_line.lock().unwrap().take() {
+                send(&writer, &json!({"op":"StdinEndAnswer"}));
+                let mut out = std::io::stdout().lock();
+                let _ = writeln!(out, "{line}").and_then(|()| out.flush());
+            }
             if cfg!(not(windows)) {
                 for child in children.lock().unwrap().iter_mut() {
                     let _ = child.kill();
@@ -150,6 +157,12 @@ fn main() -> ExitCode {
                     .unwrap();
                 assert!(notify.ip().is_loopback(), "stdin observer must be local");
                 *stop_stdin.lock().unwrap() = Some((needle.into(), notify));
+            }
+            "AnswerAtStdinEnd" => {
+                let line = command["line"].as_str().expect("late answer line");
+                assert!(line.len() <= 64 * 1024, "late answer cap: 64 KiB");
+                *stdin_end_line.lock().unwrap() = Some(line.into());
+                send(&writer, &json!({"op":"StdinEndArmed"}));
             }
             "KeepToken" => {
                 let token = command["token"].as_str().expect("synthetic token");
