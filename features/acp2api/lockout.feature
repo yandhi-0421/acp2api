@@ -144,6 +144,15 @@ Feature: Lockout
     Then acp2api is in the normal state at once
     And the next request runs
 
+  @FR-035 @issue-73
+  Scenario: The owner ends a lockout that a restart kept
+    Given acp2api is in lockout since a lockout signal
+    When the owner restarts acp2api
+    And the owner opens the management panel
+    And the owner ends the lockout with the management password
+    Then acp2api is in the normal state at once
+    And the next request runs
+
   @FR-009 @FR-035 @issue-73
   Scenario: An open panel session does not end a lockout without the management password
     Given acp2api is in lockout since a lockout signal
