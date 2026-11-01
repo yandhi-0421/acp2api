@@ -16,6 +16,7 @@ mod request_tests;
 mod retry_tests;
 mod runtime_lifecycle_tests;
 mod sign_in_tests;
+mod upstream_order_tests;
 mod view_tests;
 impl Core {
     fn fixture(limit: u8) -> Self {
