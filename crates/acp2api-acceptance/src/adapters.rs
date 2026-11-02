@@ -201,6 +201,9 @@ impl ProcessTree for GuardedTree {
         Box::pin(async move {
             self.link
                 .call(json!({"op":"process_stop","process":self.process}));
+            // Windows waits on OS handles; unlike Unix stop, it has no virtual grace.
+            #[cfg(windows)]
+            let _stopping = clock.hold(HoldKind::TurnEvent);
             self.inner.stop(clock).await;
         })
     }
@@ -382,5 +385,55 @@ mod stop_tests {
         })
         .await
         .expect("stop subscription cap: 5 seconds");
+    }
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settle_waits_for_a_real_process_stop_before_allowing_the_replacement() {
+        use crate::{hub::Hub, setup::random_hex, timeline::TimeLine};
+        struct WaitingTree {
+            entered: Arc<tokio::sync::Notify>,
+            release: Arc<tokio::sync::Notify>,
+        }
+        impl ProcessTree for WaitingTree {
+            fn pid(&self) -> u32 {
+                std::process::id()
+            }
+            fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+                Box::pin(std::future::pending())
+            }
+            fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+                Box::pin(async move {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                })
+            }
+        }
+        // One fake control connection, no ACP requests, five real seconds; hub capture caps apply.
+        tokio::time::timeout(crate::real_limit(Duration::from_secs(5)), async {
+            let hub = Hub::new(random_hex(24));
+            let link = HubLink::new(&hub);
+            let mut socket = std::net::TcpStream::connect(&hub.address).unwrap();
+            socket.set_read_timeout(Some(crate::real_limit(Duration::from_secs(3)))).unwrap();
+            socket.set_write_timeout(Some(crate::real_limit(Duration::from_secs(3)))).unwrap();
+            crate::hub::send(&mut socket, &json!({"op":"Hello","token":hub.token,"role":"server","label":"stop-wait","pid":0})).unwrap();
+            let mut fake = std::io::BufReader::new(socket);
+            let mut reply = String::new();
+            fake.read_line(&mut reply).unwrap();
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let tree = Box::new(GuardedTree { inner: Box::new(WaitingTree { entered: entered.clone(), release: release.clone() }), link, process: 0 });
+            let mut time = TimeLine::new(hub.clone());
+            time.clone().settle().await;
+            let stopping = tokio::spawn(tree.stop(Arc::new(HarnessClock::new(HubLink::new(&hub)))));
+            entered.notified().await;
+            let mut settling = Box::pin(time.settle());
+            let settled_early = tokio::time::timeout(Duration::from_millis(100), &mut settling).await.is_ok();
+            release.notify_one();
+            stopping.await.unwrap();
+            if !settled_early { settling.await; }
+            assert!(hub.counts().balanced(), "settle resumes after the stop finishes");
+            hub.close();
+            assert!(!settled_early, "settlement must wait for the real process stop before allowing replacement work to register");
+        }).await.expect("real process stop cap: 5 s");
     }
 }

@@ -132,7 +132,7 @@ pub fn status(w: &World, name: &str) -> Option<u16> {
         .status()
 }
 pub async fn answer(w: &mut World, name: &str) -> Answer {
-    take(w, name).finish(&mut w.scenario.time).await
+    take(w, name).finish_current(&mut w.scenario.time).await
 }
 pub async fn exit(w: &mut World) {
     let before = servers(w).len();

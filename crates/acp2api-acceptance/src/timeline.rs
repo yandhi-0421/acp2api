@@ -6,17 +6,22 @@ use std::time::Instant;
 #[derive(Clone, Debug)]
 pub struct TimeLine {
     pub hub: Hub,
+    drain: HubLink,
 }
 impl TimeLine {
     pub fn new(hub: Hub) -> Self {
-        Self { hub }
+        Self {
+            drain: HubLink::new(&hub),
+            hub,
+        }
     }
     pub async fn settle(&mut self) {
         self.settle_timers(Vec::new()).await;
     }
     async fn settle_timers(&mut self, timers: Vec<u64>) {
         let hub = self.hub.clone();
-        tokio::task::spawn_blocking(move || settle_blocking(&hub, &timers))
+        let drain = self.drain.clone();
+        tokio::task::spawn_blocking(move || settle_blocking(&hub, &drain, &timers))
             .await
             .unwrap();
     }
@@ -79,9 +84,8 @@ impl TimeLine {
         }
     }
 }
-fn settle_blocking(hub: &Hub, timers: &[u64]) {
+fn settle_blocking(hub: &Hub, link: &HubLink, timers: &[u64]) {
     let deadline = Instant::now() + real_limit(SETTLE_CAP);
-    let link = HubLink::new(hub);
     let mut previous = None;
     let mut drained_and_waited = false;
     loop {
@@ -123,5 +127,27 @@ fn settle_blocking(hub: &Hub, timers: &[u64]) {
     let mut state = hub.shared.0.lock().unwrap();
     for id in timers {
         state.completed_timers.remove(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn repeated_settle_reuses_one_hub_connection_across_timeline_clones() {
+        tokio::time::timeout(real_limit(Duration::from_secs(3)), async {
+            let hub = Hub::new("local-settle-connection-test".into());
+            let time = TimeLine::new(hub.clone());
+            for _ in 0..4 {
+                time.clone().settle().await;
+            }
+            let connections = hub.shared.0.lock().unwrap().connections.len();
+            hub.close();
+            assert_eq!(connections, 1, "four settles share one TCP connection");
+        })
+        .await
+        .expect("four settles; 3 s run cap; existing hub record cap");
     }
 }

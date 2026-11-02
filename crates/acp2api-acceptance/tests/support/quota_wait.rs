@@ -1,6 +1,6 @@
 use crate::World;
 use acp2api_acceptance::{
-    TurnPlan, TurnStep,
+    TurnEndPlan, TurnPlan, TurnStep,
     client::{ApiCall, Call},
     endpoint_check,
 };
@@ -43,8 +43,29 @@ pub async fn begin(w: &mut World, call: ApiCall) -> Call {
 }
 
 pub async fn send(w: &mut World, call: ApiCall) {
+    let needs_window = w.request.plan.as_ref().is_none_or(|plan| {
+        matches!(
+            &plan.end,
+            TurnEndPlan::Stop(_) | TurnEndPlan::RpcError { .. }
+        ) && !plan.steps.iter().any(|step| match step {
+            TurnStep::ErrorLine {
+                code,
+                status,
+                message,
+            } => {
+                !((matches!(*code, 402 | 429) || status == "RESOURCE_EXHAUSTED")
+                    && !message.contains("resets "))
+            }
+            TurnStep::Stderr(_) => true,
+            _ => false,
+        })
+    });
+    let prompts = w.scenario.fake().record().prompts().len();
     let live = begin(w, call).await;
-    w.scenario.answer = Some(live.finish(&mut w.scenario.time).await);
+    if needs_window && w.scenario.fake().record().prompts().len() > prompts {
+        w.scenario.time.advance_to(w.scenario.hub.now() + 200).await;
+    }
+    w.scenario.answer = Some(live.finish_current(&mut w.scenario.time).await);
 }
 
 pub async fn seed(w: &mut World, reset: bool) {
@@ -79,7 +100,8 @@ pub fn ready(w: &mut World) {
 pub async fn usage(w: &mut World, text: &str) {
     w.scenario.fake().next_usage(TurnPlan::new().chunk(text));
     let live = w.quota.seed.take().expect("deferred quota signal");
-    let answer = live.finish(&mut w.scenario.time).await;
+    w.scenario.time.advance_to(w.quota.since + 200).await;
+    let answer = live.finish_current(&mut w.scenario.time).await;
     assert!(
         matches!(answer.status, 429 | 502),
         "seed reaches the upstream error path"

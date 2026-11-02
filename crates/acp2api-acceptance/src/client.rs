@@ -549,22 +549,17 @@ impl tokio::io::AsyncRead for CountSocket {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let before = buf.filled().len();
+        let hub = self.hub.clone();
+        let mut state = hub.shared.0.lock().unwrap();
         let result = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
         if let std::task::Poll::Ready(Ok(())) = result {
             let n = buf.filled().len() - before;
-            if let Some(socket) = self
-                .hub
-                .shared
-                .0
-                .lock()
-                .unwrap()
-                .client_sockets
-                .get_mut(&self.id)
-            {
+            if let Some(socket) = state.client_sockets.get_mut(&self.id) {
                 socket.read += n as u64;
             }
-            self.hub.shared.1.notify_all();
+            hub.shared.1.notify_all();
         }
+        drop(state);
         result
     }
 }
@@ -618,7 +613,6 @@ impl hyper::body::Body for ObservedBody<'_> {
 }
 
 /// Duplicate a socket without giving child processes ownership of it.
-#[allow(clippy::disallowed_methods)]
 pub fn duplicate_stream(stream: &std::net::TcpStream) -> std::io::Result<std::net::TcpStream> {
     let duplicate = stream.try_clone()?;
     #[cfg(windows)]

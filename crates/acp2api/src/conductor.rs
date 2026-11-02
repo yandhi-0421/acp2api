@@ -649,6 +649,7 @@ impl Conductor {
             let mut checking: Option<CompatibilityCheck> = None;
             let mut stopped = actor_builds.start.stopped.clone();
             let mut exit_work = None;
+            let mut next_wait_work = None;
             loop {
                 core.retry_lockout_save();
                 if checking.is_none() && !matches!(core.lifecycle.state(), RuntimeState::Restarting)
@@ -698,16 +699,18 @@ impl Conductor {
                     }
                 }
                 if core.lifecycle.replacement_pending() && core.replacement_ready(clock.now()) {
-                    checking = core
-                        .replace(
+                    checking = until_first_poll(
+                        &mut next_wait_work,
+                        core.replace(
                             &mut runtime,
                             &mut read_open,
                             &clock,
                             &journal,
                             &actor_builds,
                             &publish,
-                        )
-                        .await;
+                        ),
+                    )
+                    .await;
                     if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
                         break;
                     }
@@ -717,12 +720,15 @@ impl Conductor {
                     && matches!(core.lifecycle.state(), RuntimeState::Restarting)
                     && !core.lifecycle.replacement_pending()
                 {
-                    core.restart(
-                        &mut runtime,
-                        &mut read_open,
-                        &clock,
-                        &journal,
-                        &actor_builds,
+                    until_first_poll(
+                        &mut next_wait_work,
+                        core.restart(
+                            &mut runtime,
+                            &mut read_open,
+                            &clock,
+                            &journal,
+                            &actor_builds,
+                        ),
                     )
                     .await;
                     if matches!(core.lifecycle.state(), RuntimeState::Stopping) {
@@ -749,6 +755,8 @@ impl Conductor {
                     })
                     .collect();
                 let timer = core.next_deadline().map(|at| clock.sleep_until(at));
+                // Publish the next wait before releasing the preceding event's work.
+                next_wait_work.take();
                 let (event, hold) = tokio::select! {
                     biased;
                     Ok(()) = async { stopped.wait_for(|stopped| *stopped).await.map(|_| ()) } => {
@@ -788,7 +796,7 @@ impl Conductor {
                                     &mut commands,
                                 )
                                 .await;
-                                drop(hold);
+                                next_wait_work = Some(hold);
                                 continue;
                             }
                             Input::Models { reply, hold } => {
@@ -797,7 +805,7 @@ impl Conductor {
                                     error
                                 });
                                 let _ = reply.send(result);
-                                drop(hold);
+                                next_wait_work = Some(hold);
                                 continue;
                             }
                             Input::Owner { action, reply, hold } => {
@@ -811,7 +819,7 @@ impl Conductor {
                                     &mut commands,
                                 )
                                 .await;
-                                drop(hold);
+                                next_wait_work = Some(hold);
                                 continue;
                             }
                             Input::Turn(work) => {
@@ -854,6 +862,7 @@ impl Conductor {
                     exit_work = Some(work);
                     break;
                 }
+                next_wait_work = Some(work);
             }
             if let Some(check) = checking {
                 exit_work.take();
@@ -961,6 +970,18 @@ impl Conductor {
             .map_err(stopped)?;
         result.await.map_err(stopped)?
     }
+}
+async fn until_first_poll<T>(
+    work: &mut Option<Hold>,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|cx| {
+        let result = future.as_mut().poll(cx);
+        work.take();
+        result
+    })
+    .await
 }
 async fn first_closed<T>(outputs: &[(String, mpsc::UnboundedSender<T>)]) -> String {
     let waits = outputs.iter().map(|(id, output)| {
