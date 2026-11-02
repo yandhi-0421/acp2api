@@ -564,7 +564,7 @@ fn forgets(commands: &[Command], session: &str) -> usize {
         .count()
 }
 
-fn reset_query_survives_state(unavailable: bool, detached: bool) {
+fn reset_query_survives_state(unavailable: bool, detached: bool, replace_before_sign_in: bool) {
     let mut fixture = Fixture::new();
     fixture.occupy_waiter();
     let request = fixture.core.work[&0].key().to_owned();
@@ -593,7 +593,7 @@ fn reset_query_survives_state(unavailable: bool, detached: bool) {
         assert_eq!(
             forgets(&commands, "running"),
             0,
-            "the detached query still owns its ACP session"
+            "the blocking state alone emits no release for the detached query"
         );
     } else {
         assert!(match fixture.errors(&commands).as_slice() {
@@ -615,13 +615,22 @@ fn reset_query_survives_state(unavailable: bool, detached: bool) {
         "the retained query cannot start in the blocking state"
     );
     commands.extend(blocked);
+    let replaced = unavailable || replace_before_sign_in;
+    if replaced {
+        fixture.core.replaced(None, None);
+        let metadata = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let catalog = crate::catalog::Catalog::decode(&metadata, UNIX_EPOCH).unwrap();
+        fixture.core.replaced(Some("new-1".into()), Some(catalog));
+    }
     let mut resumed = fixture.event(
         Event::RuntimeReady {
             sign_in_required: false,
         },
         500,
     );
-    let session = if detached {
+    let session = if replaced {
+        "new-1"
+    } else if detached {
         "running"
     } else {
         let work = resumed
@@ -639,15 +648,17 @@ fn reset_query_survives_state(unavailable: bool, detached: bool) {
         resumed.extend(fixture.prepare(work, "reset-query", 501));
         "reset-query"
     };
+    let usage_sessions: Vec<_> = resumed
+        .iter()
+        .filter_map(|command| match command {
+            Command::Usage { session, .. } => Some(session.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        resumed
-            .iter()
-            .filter(
-                |command| matches!(command, Command::Usage { session: used, .. } if used == session)
-            )
-            .count(),
-        1,
-        "FR-036 sends /usage after the state clears"
+        usage_sessions,
+        [session],
+        "FR-036 sends /usage on the current process's ACP session after the state clears"
     );
     commands.extend(resumed);
     commands.extend(fixture.usage_result(session, 502));
@@ -657,7 +668,16 @@ fn reset_query_survives_state(unavailable: bool, detached: bool) {
         "the actual /usage reset replaces the 60-minute fallback"
     );
     assert_eq!(fixture.places_and_queued(), (0, 0));
-    assert_eq!(forgets(&commands, "running"), 1);
+    assert_eq!(
+        forgets(&commands, "running"),
+        usize::from(!detached || !replaced),
+        "the old process's session needs no Forget after replacement"
+    );
+    assert_eq!(
+        forgets(&commands, session),
+        1,
+        "the query releases the current process's ACP session once"
+    );
     assert_eq!(
         commands
             .iter()
@@ -679,22 +699,27 @@ fn reset_query_survives_state(unavailable: bool, detached: bool) {
 
 #[test]
 fn sign_in_required_keeps_a_reset_query_after_ending_its_response() {
-    reset_query_survives_state(false, false);
+    reset_query_survives_state(false, false, false);
 }
 
 #[test]
 fn runtime_unavailable_keeps_a_reset_query_after_ending_its_response() {
-    reset_query_survives_state(true, false);
+    reset_query_survives_state(true, false, false);
 }
 
 #[test]
 fn sign_in_required_keeps_a_detached_reset_query() {
-    reset_query_survives_state(false, true);
+    reset_query_survives_state(false, true, false);
 }
 
 #[test]
 fn runtime_unavailable_keeps_a_detached_reset_query() {
-    reset_query_survives_state(true, true);
+    reset_query_survives_state(true, true, false);
+}
+
+#[test]
+fn sign_in_required_keeps_a_detached_reset_query_across_a_runtime_replacement() {
+    reset_query_survives_state(false, true, true);
 }
 
 fn queued_owner_refresh_ends_on_state(unavailable: bool) {
