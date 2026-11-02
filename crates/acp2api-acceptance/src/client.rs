@@ -619,7 +619,20 @@ impl hyper::body::Body for ObservedBody<'_> {
 
 /// Duplicate a socket without giving child processes ownership of it.
 pub fn duplicate_stream(stream: &std::net::TcpStream) -> std::io::Result<std::net::TcpStream> {
-    stream.try_clone()
+    let duplicate = stream.try_clone()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+        // SAFETY: duplicate owns this live socket throughout the call.
+        if unsafe { SetHandleInformation(duplicate.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) }
+            == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(duplicate)
 }
 
 #[cfg(test)]
