@@ -1,7 +1,8 @@
 use super::{
-    Accepted, Command, Core, Event, PendingRequest, QUEUE_CAPACITY, ResponseMode, RuntimeState,
-    TurnWork, Work, WorkId,
+    Accepted, Command, Core, Event, Failure, PendingRequest, QUEUE_CAPACITY, ResponseMode,
+    RuntimeState, TurnWork, Work, WorkId,
     keep_alive::KEEP_ALIVE_INTERVAL,
+    quota::{QuotaPurpose, QuotaQuery},
     records, request,
     request::Active,
     retry,
@@ -363,7 +364,62 @@ impl Core {
         })
     }
 
+    pub(super) fn refuse_queued_quota(&mut self, now: Moment, commands: &mut Vec<Command>) {
+        let error = self
+            .refusal(now)
+            .expect("a blocked quota query has a refusal");
+        let queries: Vec<_> = self
+            .work
+            .iter()
+            .filter_map(|(id, work)| match work {
+                Work::QuotaQueued { query, .. }
+                    if matches!(query.purpose, QuotaPurpose::Refresh(_))
+                        || work.reply().is_some() =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect();
+        for id in queries {
+            let Work::QuotaQueued { query, session } = self.work.remove(&id).unwrap() else {
+                unreachable!()
+            };
+            let retained = match &query.purpose {
+                QuotaPurpose::Reset { wait, model, .. } => Some(QuotaQuery {
+                    work: query.work.clone(),
+                    purpose: QuotaPurpose::Reset {
+                        wait: wait.clone(),
+                        model: model.clone(),
+                        response: None,
+                    },
+                }),
+                _ => None,
+            };
+            self.complete_quota(
+                query,
+                session,
+                Err(Failure::at(error.clone(), now)),
+                now,
+                commands,
+            );
+            if let Some(query) = retained {
+                self.work.restore(
+                    id,
+                    Work::QuotaQueued {
+                        query,
+                        session: None,
+                    },
+                );
+            }
+        }
+    }
+
     pub(super) fn start_queued_work(&mut self, now: Moment, commands: &mut Vec<Command>) {
+        if self.sign_in.required() || matches!(self.lifecycle.state(), RuntimeState::Unavailable(_))
+        {
+            self.refuse_queued_quota(now, commands);
+        }
         if matches!(self.lifecycle.state(), RuntimeState::SessionLimitWait)
             && !self.needs_session_replacement(now)
         {

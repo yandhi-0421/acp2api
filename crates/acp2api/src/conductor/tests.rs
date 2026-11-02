@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 mod acp_call_limit_tests;
 mod admission_tests;
 mod lockout_tests;
+mod queued_quota_tests;
 mod quota_tests;
 mod records_tests;
 mod request_tests;

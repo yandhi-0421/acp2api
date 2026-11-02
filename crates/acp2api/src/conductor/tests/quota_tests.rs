@@ -768,7 +768,7 @@ fn a_stderr_deadline_cancel_keeps_the_pending_quota_reset_query() {
 }
 
 #[test]
-fn runtime_unavailable_ends_each_kind_of_queued_quota_query() {
+fn runtime_unavailable_ends_each_kind_of_queued_quota_response() {
     let folder = std::env::temp_dir().join(format!(
         "acp2api-queued-quota-{}",
         crate::random_hex::<12>().unwrap()
@@ -828,7 +828,7 @@ fn runtime_unavailable_ends_each_kind_of_queued_quota_query() {
     std::fs::remove_dir_all(folder).unwrap();
     assert_eq!(
         observed,
-        [(2, false, true), (2, false, true), (1, false, true)],
+        [(2, true, true), (2, false, true), (1, false, true)],
         "queued Reset/Refusal replies get M-14 and the queued owner action gets an error"
     );
 }
