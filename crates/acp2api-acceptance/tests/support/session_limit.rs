@@ -248,11 +248,12 @@ pub fn has_prompt(w: &World, request: &Live) -> bool {
 /// Opens the gate of a prompt turn and reads its complete response.
 pub async fn complete(w: &mut World, request: &mut Live) {
     w.scenario.fake().open_gate(&request.gate);
+    w.scenario.time.advance_to(w.scenario.hub.now() + 200).await;
     let answer = request
         .call
         .take()
         .unwrap()
-        .finish(&mut w.scenario.time)
+        .finish_current(&mut w.scenario.time)
         .await;
     assert_eq!(
         answer.status, 200,
