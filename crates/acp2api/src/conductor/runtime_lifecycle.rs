@@ -550,6 +550,11 @@ impl Core {
         session: Option<String>,
         catalog: Option<crate::catalog::Catalog>,
     ) {
+        for work in self.work.values_mut() {
+            if let Work::QuotaQueued { session, .. } = work {
+                *session = None;
+            }
+        }
         self.sessions.replaced(session);
         self.catalog = catalog;
     }
