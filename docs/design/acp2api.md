@@ -321,7 +321,7 @@ pub struct Environment { pub account_root: PathBuf, pub home: Option<PathBuf>, p
 
 Invariants and error modes:
 
-- `run` returns only after the process tree of the runtime process has stopped. A start error (M-24, M-25, M-26) writes one terminal line and returns a non-zero exit code.
+- `run` returns only after the process tree of the runtime process has stopped, except at the provisional Windows stop limit below. A process that cannot run may remain after that limit. A start error (M-24, M-25, M-26) writes one terminal line and returns a non-zero exit code.
 - `Environment::from_process` is the only code that reads the environment variables of the platform:
   - `HOME` on macOS, and `LOCALAPPDATA` on Windows, because FR-003 names the data folders with them;
   - `TMPDIR` on macOS, or `TEMP` and `TMP` on Windows;
@@ -330,7 +330,8 @@ Invariants and error modes:
   A start with an absent required variable fails with one terminal line.
 - The same factory resolves `account_root` through native account APIs. It never derives that value from an environment override.
 - The test host supplies an isolated `account_root` as a value. This adds no port and no release option.
-- `ProcessTree::stop` on macOS closes stdin, waits 5 s on the clock, and kills the process group. On Windows, it closes the Job Object at once (ADR-0004).
+- `ProcessTree::stop` on macOS closes stdin, waits 5 s on the clock, and kills the process group. On Windows, it opens synchronization handles for the listed Job Object members before termination. It terminates the job and waits for each process handle to be signaled. It repeats this sequence until the member list is empty and the active count is zero, within the stop limit. It then closes the Job Object (ADR-0004).
+- On Windows, an OS fault during stop writes one stderr line and returns; the conductor continues. A Job stop error skips the root process wait.
 - `LaunchError::Refused` and `LaunchError::Io` are both a failed start of the runtime process (FR-041).
 - A `ConcurrencyLimit` is 1 to 3. The parse of the configuration file also compares it with `highest_concurrency_limit` (FR-049).
 - In production, `hold` returns an empty `Hold`. `sleep_until` waits to the deadline and returns an empty `Hold`.
@@ -346,10 +347,10 @@ Invariants and error modes:
 - At stop, cancel frames keep their enqueue deadlines. The writer interrupts a pending non-cancel write or flush and skips queued non-cancel frames.
 - If stop interrupts a non-cancel frame in progress, the writer drops the pipe and backlog. A cancel behind that frame can be lost.
 - The writer join adds at most 30 s of clock wait. After a drained queue, the writer polls pipe shutdown once.
-- On macOS, process stop permits up to 5 s of grace, then sends SIGKILL to the process group. Windows closes the Job Object with 0 s of grace. `os::PROCESS_STOP_GRACE` supplies the platform value.
+- On macOS, process stop permits up to 5 s of grace, then sends SIGKILL to the process group. Windows terminates the Job Object with 0 s of grace. `os::PROCESS_STOP_GRACE` supplies the platform value.
 - The total clock wait for cancel and stop is at most 35 s on macOS and 30 s on Windows.
-- Lockout, restart, and replacement await stop inside the conductor. A stalled cancel can block each path for 35 s on macOS or 30 s on Windows.
-- These bounds count conductor-clock waits. Executor scheduling and OS reaping follow termination.
+- Lockout, restart, and replacement await stop inside the conductor. A stalled cancel can block each path for the clock wait above, plus the OS wait below.
+- These bounds count conductor-clock waits. Windows also bounds the OS stop by 30 s of real time. This value is provisional, with no measurement. At the limit, acp2api reports the error on stderr and returns from stop. A process that cannot run may then overlap the new runtime process. Executor scheduling and OS reaping follow termination.
 - No hold spans a pending pipe operation. Holds cover ready work. After a write failure, work stays held until stop joins the writer.
 - Stop retains work through the first poll of process stop, except while the writer waits on a cancel write. The completed writer transfers a Hold through its join result, so the process deadline registers before that work ends.
 - Stop drains stderr while the writer joins and preserves its order for the later reader. This stderr buffer has no line or byte cap yet.

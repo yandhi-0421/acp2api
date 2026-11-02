@@ -6,7 +6,7 @@ use std::{
 };
 use tokio::process::Command;
 
-/// Clock grace before forced process-tree termination; Windows closes its Job Object at once.
+/// Clock grace before forced process-tree termination; Windows starts Job Object termination at once.
 pub const PROCESS_STOP_GRACE: Moment = if cfg!(windows) { 0 } else { 5_000 };
 
 pub struct SystemClock {
@@ -93,8 +93,13 @@ impl ProcessTree for OsTree {
         Box::pin(async move {
             #[cfg(windows)]
             {
-                drop(self.job);
-                let _ = self.child.wait().await;
+                if let Err(error) = self.job.stop().await {
+                    eprintln!("acp2api: cannot stop the runtime process tree: {error}");
+                    return;
+                }
+                if let Err(error) = self.child.wait().await {
+                    eprintln!("acp2api: cannot wait for the runtime process: {error}");
+                }
                 let _ = clock;
             }
             #[cfg(unix)]
@@ -251,8 +256,112 @@ pub(crate) fn private_file(path: &std::path::Path) -> io::Result<std::fs::File> 
 #[cfg(windows)]
 pub(crate) use windows::{private_folder, process_tree_ended, validate_private};
 
+#[cfg(any(windows, test))]
+fn wait_for_processes(
+    limit: Duration,
+    mut processes_ended: impl FnMut(Instant) -> io::Result<bool>,
+) -> io::Result<()> {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        let ended = processes_ended(deadline)?;
+        if Instant::now() >= deadline {
+            break;
+        }
+        if ended {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("runtime process tree did not stop within {limit:?}"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        io,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn process_stop_propagates_query_error() {
+        let result = super::wait_for_processes(Duration::from_secs(1), |_| {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "job query denied",
+            ))
+        });
+        assert_eq!(
+            result.err().map(|error| (error.kind(), error.to_string())),
+            Some((io::ErrorKind::PermissionDenied, "job query denied".into()))
+        );
+    }
+
+    #[test]
+    fn process_stop_waits_until_every_process_ends() {
+        let mut ended = [false, false, true].into_iter();
+        let result = super::wait_for_processes(Duration::from_secs(1), |_| {
+            ended
+                .next()
+                .ok_or_else(|| io::Error::other("query sequence exhausted"))
+        });
+        assert_eq!(
+            (result.map_err(|error| error.kind()), ended.next()),
+            (Ok(()), None)
+        );
+    }
+
+    #[test]
+    fn process_stop_times_out_without_an_exit() {
+        let limit = Duration::from_millis(10);
+        let started = Instant::now();
+        let result = super::wait_for_processes(limit, |_| {
+            // Keep a missing-timeout mutation finite without reporting an exit.
+            if started.elapsed() >= Duration::from_secs(2) {
+                return Err(io::Error::other("process count query safety cap"));
+            }
+            Ok(false)
+        });
+        assert_eq!(
+            (
+                result.err().map(|error| error.kind()),
+                started.elapsed() >= limit
+            ),
+            (Some(io::ErrorKind::TimedOut), true)
+        );
+    }
+
+    #[test]
+    fn process_stop_shares_one_deadline_between_passes() {
+        let mut deadlines = Vec::new();
+        let result = super::wait_for_processes(Duration::from_secs(1), |deadline| {
+            deadlines.push(deadline);
+            Ok(deadlines.len() == 2)
+        });
+        assert_eq!(
+            (
+                result.map_err(|error| error.kind()),
+                deadlines.len(),
+                deadlines.first() == deadlines.last()
+            ),
+            (Ok(()), 2, true)
+        );
+    }
+
+    #[test]
+    fn process_stop_rejects_completion_after_deadline() {
+        let result = super::wait_for_processes(Duration::from_millis(2), |_| {
+            std::thread::sleep(Duration::from_millis(5));
+            Ok(true)
+        });
+        assert_eq!(
+            result.err().map(|error| error.kind()),
+            Some(io::ErrorKind::TimedOut)
+        );
+    }
+
     #[test]
     fn release_facts_parse() {
         let facts = super::CompiledReleaseFacts::default();
