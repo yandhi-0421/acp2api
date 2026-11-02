@@ -14,7 +14,7 @@ The archived [probe source](captures/2026-11-02-windows-socket-inheritance/inher
 | `TcpStream` duplicate | `inherit=1` |
 | No child, duplicate | EOF after 0 ms |
 | Child, no duplicate | EOF after 0 ms |
-| Child starts while the duplicate is open | EOF after 8116 ms, when the child ended |
+| Child starts while the duplicate is open | reset after 8116 ms, when the child ended (`Err(10054 ConnectionReset)`) |
 | Child starts after the duplicate closed | EOF after 0 ms |
 | Listener | `inherit=0` |
 | `TcpListener` duplicate | `inherit=1` |
@@ -24,7 +24,7 @@ The archived [probe source](captures/2026-11-02-windows-socket-inheritance/inher
 
 The probe binds sockets on loopback. It reads the handle flags with `GetHandleInformation`.
 The stream cases vary the duplicate, the child, and the order of the duplicate close.
-The server measures the time from the parent closes to EOF.
+The probe measures the delay between the final close in the parent and the server read result.
 The listener case also checks sockets accepted from each listener.
 
 The source makes seven connections and starts three child commands.
@@ -41,12 +41,12 @@ A new product request completed in 3 ms, with no gap in the product heartbeat.
 These observations rule out a stalled product for that failure.
 
 The fake API client duplicates its socket in `crates/acp2api-acceptance/src/client.rs`.
-A child that starts while that duplicate is open can retain the socket and delay EOF.
+A child that starts while that duplicate is open can retain the socket and delay the server read result.
 Product startup also duplicates its listener in `crates/acp2api/src/startup.rs`.
-A live runtime process can then retain the port after an abnormal product exit.
+A child inherits the listener and keeps the port while it lives.
 The accepted sockets in the probe did not have the inherit flag.
 
-## Remaining interval
+## Race window
 
 The duplicate and `SetHandleInformation` are separate operations.
 A concurrent child start in that short interval can still inherit the socket.
