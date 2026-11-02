@@ -27,7 +27,7 @@ for path in paths:
         match = matches[0]
         source = source[:match.start()] + re.sub(r"[^\n]", " ", match[0]) + source[match.end():]
         seen.add(path)
-    for match in re.finditer(r"\btry_clone\b", source):
+    for match in re.finditer(r"\btry_clone\w*", source):
         line = source.count("\n", 0, match.start()) + 1
         violations.append(f"{path}:{line}: use a safe socket duplicate helper")
 if seen != helpers.keys():
