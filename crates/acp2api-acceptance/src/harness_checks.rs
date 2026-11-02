@@ -667,9 +667,14 @@ async fn guard_refuses_unknown_bytes_and_tracks_fake_descendants() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn os_stop_ends_descendants_after_the_root_exits() {
     use sha2::{Digest, Sha256};
-    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::System::{
-        JobObjects::OpenJobObjectW, SystemServices::JOB_OBJECT_QUERY,
+        JobObjects::{
+            IsProcessInJob, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            JobObjectBasicAccountingInformation, OpenJobObjectW, QueryInformationJobObject,
+        },
+        SystemServices::JOB_OBJECT_QUERY,
+        Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
     };
 
     // Three fake processes, two commands, no API requests. Each fake has an
@@ -737,6 +742,21 @@ async fn os_stop_ends_descendants_after_the_root_exits() {
         let handle = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) };
         assert!(!handle.is_null(), "open the runtime job for observation");
         let observer = unsafe { OwnedHandle::from_raw_handle(handle) };
+        for pid in &descendants {
+            let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, *pid) };
+            assert!(!process.is_null(), "open descendant {pid} for job membership");
+            let process = unsafe { OwnedHandle::from_raw_handle(process) };
+            let mut in_job = 0;
+            assert_ne!(
+                unsafe {
+                    IsProcessInJob(process.as_raw_handle(), observer.as_raw_handle(), &mut in_job)
+                },
+                0,
+                "query descendant {pid} job membership: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_ne!(in_job, 0, "descendant {pid} must belong to the observed job");
+        }
         s.hub.command("normal", json!({"op":"Exit","code":0}));
         child.tree.exited().await;
         child
@@ -744,6 +764,21 @@ async fn os_stop_ends_descendants_after_the_root_exits() {
             .stop(std::sync::Arc::new(acp2api::os::SystemClock::default()))
             .await;
         let running_after_stop: Vec<_> = descendants.iter().map(|pid| setup::alive(*pid)).collect();
+        let active_after_stop = unsafe {
+            let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+            if QueryInformationJobObject(
+                observer.as_raw_handle(),
+                JobObjectBasicAccountingInformation,
+                (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                std::mem::size_of_val(&info) as u32,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(info.ActiveProcesses)
+            }
+        };
 
         // Capture the result before cleanup. Also clean up a red run, where
         // closing the observer is what finally terminates the descendants.
@@ -758,7 +793,7 @@ async fn os_stop_ends_descendants_after_the_root_exits() {
         assert_eq!(
             running_after_stop,
             vec![false; 2],
-            "ProcessTree::stop must end every descendant before it returns"
+            "ProcessTree::stop must end every descendant before it returns; active processes: {active_after_stop:?}"
         );
     })
     .await
