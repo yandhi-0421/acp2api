@@ -1,4 +1,4 @@
-use crate::{Scenario, TurnPlan, client::ApiCall, content_check, journal_check, system_check};
+use crate::{Scenario, TurnPlan, client::ApiCall, journal_check, system_check};
 use serde_json::{Value, json};
 pub const NEUTRAL: &str = "The text below is the earlier part of this conversation. Continue the conversation as the assistant from its last item.";
 pub use crate::system_check::message;
@@ -20,7 +20,9 @@ pub async fn send(s: &mut Scenario, call: ApiCall, reply: &str) {
     let completed = journal_check::request_records(s).len();
     s.fake()
         .next_prompt(TurnPlan::new().chunk(reply).end("end_turn"));
-    content_check::send(s, call).await;
+    let live = s.client().await.send(call);
+    s.time.advance_to(s.hub.now() + 200).await;
+    s.answer = Some(live.finish_current(&mut s.time).await);
     assert_eq!(
         s.answer.as_ref().unwrap().status,
         200,
