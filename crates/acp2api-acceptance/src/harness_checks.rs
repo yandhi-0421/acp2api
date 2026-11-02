@@ -663,6 +663,142 @@ async fn guard_refuses_unknown_bytes_and_tracks_fake_descendants() {
     s.hub.close();
     s.root.cleanup();
 }
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn os_stop_ends_descendants_after_the_root_exits() {
+    use sha2::{Digest, Sha256};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::{
+        JobObjects::{
+            IsProcessInJob, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            JobObjectBasicAccountingInformation, OpenJobObjectW, QueryInformationJobObject,
+        },
+        SystemServices::JOB_OBJECT_QUERY,
+        Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+
+    // Three fake processes, two commands, no API requests. Each fake has an
+    // eight-command cap and a 10 s run cap; the hub caps its log at 16 MiB.
+    tokio::time::timeout(real_limit(Duration::from_secs(15)), async {
+        let s = world();
+        let run = s.root.seed(&s.hub, &Setup::normal());
+        let folder = s.root.path.join("data/official-runtime");
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(folder.join("localharness_external.exe"))
+                .unwrap(),
+            "line_cap = 8\nrun_ms = 10000"
+        )
+        .unwrap();
+        let temp = s.root.path.join("runtime-temp");
+        std::fs::create_dir(&temp).unwrap();
+        let launcher = GuardedLauncher::new(&run.fake_program, run.hub);
+        let mut child = launcher
+            .launch(LaunchSpec {
+                program: folder.join("agy_acp_server.exe"),
+                args: vec![],
+                env_set: vec![],
+                cwd: s.root.path.clone(),
+                own_temp: Some(temp.clone()),
+            })
+            .unwrap();
+        let deadline = Instant::now() + real_limit(Duration::from_secs(2));
+        wait_for(&s.hub, deadline, || {
+            s.hub.entries().iter().any(|e| e.event["kind"] == "hello")
+        })
+        .await;
+        s.hub
+            .command("normal", json!({"op":"StartHarness","count":2}));
+        wait_for(&s.hub, deadline, || {
+            s.hub
+                .entries()
+                .iter()
+                .filter(|e| e.event["kind"] == "hello")
+                .count()
+                == 3
+        })
+        .await;
+        let descendants: Vec<_> = s
+            .hub
+            .entries()
+            .iter()
+            .filter(|e| e.event["kind"] == "hello" && e.event["hello"]["role"] == "harness")
+            .map(|e| e.event["hello"]["pid"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(descendants.len(), 2);
+        assert!(descendants.iter().all(|pid| setup::alive(*pid)));
+
+        // A recovery observer can open the named job. Retain that handle so
+        // closing the launcher's handle cannot stand in for a completed stop.
+        let hash: String = Sha256::digest(temp.as_os_str().as_encoded_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let name: Vec<u16> = format!("Global\\acp2api-{hash}")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let handle = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) };
+        assert!(!handle.is_null(), "open the runtime job for observation");
+        let observer = unsafe { OwnedHandle::from_raw_handle(handle) };
+        for pid in &descendants {
+            let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, *pid) };
+            assert!(!process.is_null(), "open descendant {pid} for job membership");
+            let process = unsafe { OwnedHandle::from_raw_handle(process) };
+            let mut in_job = 0;
+            assert_ne!(
+                unsafe {
+                    IsProcessInJob(process.as_raw_handle(), observer.as_raw_handle(), &mut in_job)
+                },
+                0,
+                "query descendant {pid} job membership: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_ne!(in_job, 0, "descendant {pid} must belong to the observed job");
+        }
+        s.hub.command("normal", json!({"op":"Exit","code":0}));
+        child.tree.exited().await;
+        child
+            .tree
+            .stop(std::sync::Arc::new(acp2api::os::SystemClock::default()))
+            .await;
+        let running_after_stop: Vec<_> = descendants.iter().map(|pid| setup::alive(*pid)).collect();
+        let active_after_stop = unsafe {
+            let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+            if QueryInformationJobObject(
+                observer.as_raw_handle(),
+                JobObjectBasicAccountingInformation,
+                (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                std::mem::size_of_val(&info) as u32,
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(info.ActiveProcesses)
+            }
+        };
+
+        // Capture the result before cleanup. Also clean up a red run, where
+        // closing the observer is what finally terminates the descendants.
+        drop(observer);
+        let deadline = Instant::now() + real_limit(Duration::from_secs(2));
+        wait_for(&s.hub, deadline, || {
+            descendants.iter().all(|pid| !setup::alive(*pid))
+        })
+        .await;
+        s.hub.close();
+        s.root.cleanup();
+        assert_eq!(
+            running_after_stop,
+            vec![false; 2],
+            "ProcessTree::stop must end every descendant before it returns; active processes: {active_after_stop:?}"
+        );
+    })
+    .await
+    .expect("process stop cap: 15 s, three fake processes, two commands");
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fake_enforces_line_and_duration_caps_without_files() {
     for (caps, exit) in [("line_cap = 3\nrun_ms = 2000\n", 70), ("run_ms = 80\n", 71)] {

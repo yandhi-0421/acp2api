@@ -1,16 +1,29 @@
-use std::{io, path::PathBuf, ptr};
+use std::{
+    io,
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    path::PathBuf,
+    ptr,
+    time::{Duration, Instant},
+};
 use windows_sys::Win32::{
-    Foundation::CloseHandle,
+    Foundation::{CloseHandle, ERROR_MORE_DATA, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::{
         Com::CoTaskMemFree,
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+            JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
+        Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
     },
     UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath},
 };
+
+// Provisional limit for #230; no measurement supports this value.
+const PROCESS_STOP_LIMIT: Duration = Duration::from_secs(30);
+
 pub(super) struct Job(usize);
 impl Job {
     pub(super) fn assign(
@@ -48,6 +61,103 @@ impl Job {
             Ok(job)
         }
     }
+
+    pub(super) async fn stop(self) -> io::Result<()> {
+        // Accounting alone does not prove that process handles are signaled.
+        tokio::task::spawn_blocking(move || {
+            let job = self;
+            let mut first_termination = true;
+            super::wait_for_processes(PROCESS_STOP_LIMIT, |deadline| {
+                // Pin each process object before termination can remove its ID.
+                let processes = process_ids(job.0 as _, deadline)?
+                    .into_iter()
+                    .map(|pid| {
+                        stop_time_left(deadline)?;
+                        let pid = u32::try_from(pid).map_err(io::Error::other)?;
+                        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                        if handle.is_null() {
+                            Err(io::Error::last_os_error())
+                        } else {
+                            Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+                        }
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
+                // A repeat on dying members is undocumented; only the first
+                // termination result is checked. All queries and waits are checked.
+                stop_time_left(deadline)?;
+                let terminated = unsafe { TerminateJobObject(job.0 as _, 1) };
+                if first_termination && terminated == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                first_termination = false;
+                for process in &processes {
+                    loop {
+                        let remaining = stop_time_left(deadline)?;
+                        let millis = remaining.as_millis().min(10) as u32;
+                        match unsafe { WaitForSingleObject(process.as_raw_handle(), millis) } {
+                            WAIT_OBJECT_0 => break,
+                            WAIT_TIMEOUT => continue,
+                            _ => return Err(io::Error::last_os_error()),
+                        }
+                    }
+                }
+                // Require a later empty snapshot; every nonempty one gets pinned above.
+                Ok(processes.is_empty() && active_processes(job.0 as _)? == 0)
+            })
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+}
+fn stop_time_left(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "runtime process tree stop timed out",
+            )
+        })
+}
+fn process_ids(job: HANDLE, deadline: Instant) -> io::Result<Vec<usize>> {
+    let header = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList)
+        / std::mem::size_of::<usize>();
+    let mut capacity = 64;
+    // At most eight queries and 8192 IDs (64 KiB on 64-bit Windows).
+    for _ in 0..8 {
+        stop_time_left(deadline)?;
+        let mut buffer = vec![0usize; header + capacity];
+        let result = unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectBasicProcessIdList,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * std::mem::size_of::<usize>()) as u32,
+                ptr::null_mut(),
+            )
+        };
+        if result == 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
+                return Err(error);
+            }
+        } else {
+            let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+            let count = info.NumberOfProcessIdsInList as usize;
+            if count > capacity {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid job process count",
+                ));
+            }
+            if count >= info.NumberOfAssignedProcesses as usize {
+                return Ok(buffer[header..header + count].to_vec());
+            }
+        }
+        capacity *= 2;
+    }
+    Err(io::Error::from_raw_os_error(ERROR_MORE_DATA as i32))
 }
 impl Drop for Job {
     fn drop(&mut self) {
@@ -207,11 +317,7 @@ fn job_name(path: &std::path::Path) -> Vec<u16> {
 pub(crate) fn process_tree_ended(path: &std::path::Path) -> bool {
     use windows_sys::Win32::System::SystemServices::JOB_OBJECT_QUERY;
     use windows_sys::Win32::{
-        Foundation::ERROR_FILE_NOT_FOUND,
-        System::JobObjects::{
-            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
-            OpenJobObjectW, QueryInformationJobObject,
-        },
+        Foundation::ERROR_FILE_NOT_FOUND, System::JobObjects::OpenJobObjectW,
     };
     unsafe {
         let name = job_name(path);
@@ -219,17 +325,26 @@ pub(crate) fn process_tree_ended(path: &std::path::Path) -> bool {
         if handle.is_null() {
             return io::Error::last_os_error().raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32);
         }
+        let ended = active_processes(handle).is_ok_and(|active| active == 0);
+        CloseHandle(handle);
+        ended
+    }
+}
+fn active_processes(handle: HANDLE) -> io::Result<u32> {
+    unsafe {
         let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
-        let ended = QueryInformationJobObject(
+        if QueryInformationJobObject(
             handle,
             JobObjectBasicAccountingInformation,
             (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
             std::mem::size_of_val(&info) as u32,
             ptr::null_mut(),
-        ) != 0
-            && info.ActiveProcesses == 0;
-        CloseHandle(handle);
-        ended
+        ) == 0
+        {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(info.ActiveProcesses)
+        }
     }
 }
 fn resume(pid: u32) -> io::Result<()> {
