@@ -192,7 +192,7 @@ async fn builtin_error_cancels_only_its_active_session_while_another_prompt_comp
         "POST /v1/messages",
         "offending parallel conversation",
     ));
-    let error = bad.finish(&mut s.time).await;
+    let error = bad.finish_current(&mut s.time).await;
     safety::error(&error, "parallel_builtin");
     let prompts = s.fake().record().prompts();
     assert_eq!(prompts.len(), 2);
