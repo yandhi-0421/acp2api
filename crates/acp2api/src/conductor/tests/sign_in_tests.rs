@@ -405,8 +405,8 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
         );
         assert_eq!(
             (core.view.borrow().places, core.view.borrow().queued),
-            (0, 0),
-            "FR-036 keeps the fallback while FR-037 releases the blocked reset query"
+            (0, 1),
+            "FR-036: the reset query uses the shared queue"
         );
         assert!(
             core.work.by_request(&work).is_none(),
@@ -426,6 +426,33 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
                 "FR-037 the higher-priority sign-in condition selects the error"
             );
         }
+        let resumed = core.handle(
+            Event::RuntimeReady {
+                sign_in_required: false,
+            },
+            1,
+            std::time::UNIX_EPOCH,
+        );
+        let query = resumed
+            .into_iter()
+            .find_map(|command| match command {
+                Command::Prepare { work, .. } => Some(work),
+                _ => None,
+            })
+            .expect("FR-036 dispatches the queued reset query after sign-in");
+        let metadata = serde_json::json!({"configOptions":[{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]});
+        let commands = core.handle(
+            Event::Runtime(RuntimeEvent::Prepared {
+                work: query,
+                result: Ok((
+                    "quota-query".into(),
+                    crate::catalog::Catalog::decode(&metadata, std::time::UNIX_EPOCH).unwrap(),
+                )),
+            }),
+            2,
+            std::time::UNIX_EPOCH,
+        );
+        assert!(commands.iter().any(|command| matches!(command, Command::Usage { session, .. } if session == "quota-query")), "FR-036 queries the reset time despite the quota wait");
     }
     std::fs::remove_dir_all(folder).unwrap();
 }
