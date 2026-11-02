@@ -203,6 +203,7 @@ async fn sibling_finishes(w: &mut World, b: String) {
         "B remains live after A ends within 30 s"
     );
     w.scenario.fake().open_gate(&format!("runtime-{b}"));
+    w.scenario.time.advance_to(w.scenario.hub.now() + 200).await;
     let answer = process::answer(w, &b).await;
     assert_eq!(answer.status, 200);
     assert_eq!(answer.json()["content"][0]["text"], format!("reply {b}"));
