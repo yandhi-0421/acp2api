@@ -240,7 +240,9 @@ impl Hub {
         stream
             .set_read_timeout(Some(real_limit(Duration::from_secs(300))))
             .unwrap();
-        let writer = Arc::new(Mutex::new(stream.try_clone().unwrap()));
+        let writer = Arc::new(Mutex::new(
+            crate::client::duplicate_stream(&stream).unwrap(),
+        ));
 
         let mut reader = BufReader::new(stream);
         let mut role = String::new();
@@ -288,7 +290,7 @@ impl Hub {
                         .lock()
                         .unwrap()
                         .connections
-                        .push(reader.get_ref().try_clone().unwrap());
+                        .push(crate::client::duplicate_stream(reader.get_ref()).unwrap());
                 }
                 label = message["label"].as_str().unwrap_or("normal").to_owned();
             }
