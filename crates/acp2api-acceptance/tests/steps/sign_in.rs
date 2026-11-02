@@ -375,11 +375,11 @@ async fn serialized(w: &mut World, b: String, a: String) {
     );
 }
 
-#[when("330 s pass")]
+#[when("299 s pass")]
 async fn long_wait(w: &mut World) {
     w.scenario
         .time
-        .advance_to(w.scenario.hub.now() + 330_000)
+        .advance_to(w.scenario.hub.now() + 299_000)
         .await;
 }
 

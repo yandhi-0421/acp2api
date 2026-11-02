@@ -1714,7 +1714,12 @@ async fn a_lockout_can_reach_the_deadline_of_a_stalled_cancel() {
         recording.allow(recording.bytes.lock().unwrap().len());
         while deadlines.try_recv().is_ok() {}
         errors.write_all(b"Antigravity SDK error processing prompt for session running\nError 403, Message: Synthetic account suspension, Status: PERMISSION_DENIED, Details: none\n").await.unwrap();
-        assert_eq!(deadlines.recv().await, Some(30_000));
+        loop {
+            let deadline = deadlines.recv().await;
+            if deadline == Some(300_000) { continue; } // The /usage call limit can be armed before stderr is handled.
+            assert_eq!(deadline, Some(30_000));
+            break;
+        }
         clock.advance_to(30_000).await;
         assert!(refreshing.await.unwrap().is_err());
         assert!(conductor.model_names(Hold::empty()).await.is_err());

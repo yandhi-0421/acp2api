@@ -205,6 +205,143 @@ Feature: Runtime process
     When three runtime processes stop reading stdin at 0 minutes, 4 minutes, and 9 minutes
     Then acp2api is in the state "runtime unavailable" with the reason "the runtime process failed 3 times in 10 minutes"
 
+  @FR-041 @issue-211
+  Scenario Outline: A non-prompt ACP call with no answer in 5 minutes is a failure
+    Given <call> gives no answer
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And <caller> gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." <form>
+
+    Examples:
+      | call                            | caller         | form                                 |
+      | the "session/new" of a request  | the API client | with the 503 row                     |
+      | the "session/load" of a request | the API client | with the 503 row                     |
+      | the sign-in check of a request  | the API client | with the 503 row and no stream event |
+      | the model read of the owner     | the owner      | in the management panel              |
+      | the "/usage" of a quota refresh | the owner      | in the management panel              |
+
+  @FR-041 @issue-211
+  Scenario Outline: A non-prompt ACP call that answers just under 5 minutes is no failure
+    Given <call> holds its answer
+    When that call answers 1 ms before 5 minutes pass, and 1 minute more passes
+    Then the caller of that call gets its normal result
+    And acp2api starts no new runtime process
+
+    Examples:
+      | call                            |
+      | the "session/new" of a request  |
+      | the "session/load" of a request |
+      | the sign-in check of a request  |
+      | the model read of the owner     |
+      | the "/usage" of a quota refresh |
+
+  @FR-041 @FR-036 @issue-211
+  Scenario: A "/usage" for a reset time with no answer in 5 minutes keeps the quota wait of 60 minutes
+    Given the "/usage" for the reset time of a request gives no answer
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the API client gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+    And the next request gets the quota message with "retry-after" for the 60 minutes after the quota signal
+
+  @FR-041 @FR-034 @issue-211
+  Scenario: A "/usage" after the stop reason refusal with no answer in 5 minutes starts no quota wait
+    Given the "/usage" after the stop reason "refusal" of a request gives no answer
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the API client gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+    And the next request gets HTTP 200
+
+  @FR-041 @issue-211
+  Scenario: An update gives a "/usage" no more time
+    Given the "/usage" of a quota refresh sends an update after 4 minutes and does not end
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the owner gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." in the management panel
+
+  @FR-041 @FR-050 @issue-211
+  Scenario: The time limit starts when acp2api sends the call, not when the request comes
+    Given the concurrency limit is 1
+    And a prompt turn with updates runs
+    And a request that needs a "session/new" with no answer waits in the queue
+    When the prompt turn with updates ends 6 minutes after that request came
+    And 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the API client gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+
+  @FR-041 @issue-211
+  Scenario: A failure at the time limit ends each other prompt turn of the runtime process
+    Given a prompt turn with updates runs
+    And the "session/new" of a request gives no answer
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the API client gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+    And the prompt turn with updates gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+
+  @FR-041 @FR-049 @issue-211
+  Scenario: After a failure at the time limit, a request in the queue gets its response from the new runtime process
+    Given the concurrency limit is 1
+    And the "session/new" of a request gives no answer
+    And another request waits in the queue
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the API client gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+    And the request in the queue gets its response from the new runtime process
+
+  @FR-041 @issue-211
+  Scenario: A failure at the time limit ends the wait for a replacement at N ACP sessions
+    Given the runtime process holds N minus 1 ACP sessions
+    And the "session/new" of a request gives no answer
+    When a request comes that needs a new ACP session
+    Then that request waits in the queue
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the API client gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+    And the request gets its response from the new runtime process
+
+  @FR-041 @FR-040 @issue-211
+  Scenario Outline: A failure at the time limit counts toward the 3 failures in 10 minutes
+    Given acp2api is in the normal state
+    When a "session/new" passes the time limit at 5 minutes
+    And the runtime process exits with no cause from acp2api at 7 minutes
+    And a "session/new" passes the time limit at <last> minutes
+    Then <result>
+
+    Examples:
+      | last | result                                                                                                            |
+      | 12   | acp2api is in the state "runtime unavailable" with the reason "the runtime process failed 3 times in 10 minutes" |
+      | 16   | acp2api started a new runtime process after each failure                                                          |
+
+  @FR-041 @issue-211
+  Scenario Outline: A disconnect of the API client does not stop the time limit
+    Given <call> gives no answer
+    And the API client of that call disconnected
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+
+    Examples:
+      | call                           |
+      | the "session/new" of a request |
+      | the sign-in check of a request |
+
+  @FR-041 @issue-211
+  Scenario: A late answer of the replaced runtime process has no effect
+    Given the "session/new" of a request gives no answer
+    And that runtime process writes the answer of that call when acp2api stops it
+    When 5 minutes pass after acp2api sends that call
+    Then acp2api replaces the runtime process at once
+    And the API client gets the message "acp2api: the runtime process failed, so acp2api ended the prompt turn." with the 503 row
+    And the next request gets HTTP 200
+    And no ACP call uses the ACP session of the late answer
+
+  @FR-041 @FR-051 @issue-211
+  Scenario: A "session/set_config_option" with no answer follows the no-update rule and the cancel limit
+    Given the "session/set_config_option" of a prompt turn gives no answer
+    When 5 minutes pass after acp2api sends that call
+    Then the API client gets the message "acp2api: the official runtime sent no update for 5 minutes, so acp2api cancelled the prompt turn." with the 503 row
+    And acp2api starts no new runtime process
+    When 30 s pass after that message
+    Then acp2api replaces the runtime process at once
+
   @FR-045 @issue-63
   Scenario: At its exit, acp2api ends each request with a prompt turn and each request in the queue with M-15
     Given the concurrency limit is 1

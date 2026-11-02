@@ -8,6 +8,7 @@ use crate::{BoxFuture, ProcessTree, conversation::TurnEvent};
 use agent_client_protocol_schema::v1::StopReason;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
+mod acp_call_limit_tests;
 mod admission_tests;
 mod lockout_tests;
 mod quota_tests;

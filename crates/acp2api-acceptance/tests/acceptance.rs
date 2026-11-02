@@ -2,6 +2,10 @@ use acp2api_acceptance::Scenario;
 use cucumber::{World as _, event::ScenarioFinished};
 #[path = "steps/account_ownership.rs"]
 mod account_ownership;
+#[path = "steps/acp_call_limit.rs"]
+mod acp_call_limit;
+#[path = "support/acp_call_limit.rs"]
+mod acp_call_limit_support;
 #[path = "support/runtime_builds.rs"]
 mod build_support;
 #[path = "steps/compatibility_check.rs"]
@@ -141,6 +145,7 @@ struct World {
     queries: query_support::QueryState,
     process: runtime_support::ProcessState,
     limit: session_limit_support::LimitState,
+    call_limit: acp_call_limit_support::CallLimitState,
     reload: runtime_continuation::ReloadState,
     account: acp2api_acceptance::account_check::AccountState,
     builds: build_support::BuildState,
@@ -285,6 +290,7 @@ async fn run() {
                     runtime_continuation::cleanup(world);
                     runtime_support::cleanup(world).await;
                     session_limit_support::cleanup(world).await;
+                    acp_call_limit_support::cleanup(world).await;
                     places_support::cleanup(world).await;
                     world
                         .scenario

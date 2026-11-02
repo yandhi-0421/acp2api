@@ -391,7 +391,7 @@ fn a_quota_error_while_a_known_session_loads_does_not_start_a_prompt_cancel_time
         );
         turn.handle(Event::Deadline, 500);
         assert!(
-            !turn.core.sessions.cancellation_due(30_230),
+            !turn.core.sessions.runtime_failure_due(30_230),
             "a completed load leaves no stale cancellation"
         );
         turn.handle(Event::Deadline, 30_230);

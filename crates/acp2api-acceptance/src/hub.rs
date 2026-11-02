@@ -359,6 +359,18 @@ impl Hub {
                     self.shared.1.notify_all();
                     continue;
                 }
+                "StdinEndArmed" => {
+                    state.record(json!({"kind":"stdin-end-armed"}));
+                    self.shared.1.notify_all();
+                    continue;
+                }
+                // The fake writes this line by itself, so the count of output grows here.
+                "StdinEndAnswer" => {
+                    state.process_io[process.expect("fake Hello precedes its answer")].ordered += 1;
+                    state.record(json!({"kind":"stdin-end-answer"}));
+                    self.shared.1.notify_all();
+                    continue;
+                }
                 "hold" => {
                     let kind = message["kind"].as_str().unwrap_or("");
                     let add = message["add"].as_bool().unwrap_or(false);

@@ -570,7 +570,7 @@ A lower limit preserves occupied entries. A completed sign-in check can continue
 | New stop condition | End queued requests under FR-037; use the effective priority in the PRD. |
 | End of a condition | Clear only that condition and evaluate pending work again. |
 | Disconnect while queued | Remove that request. |
-| Disconnect during an ACP call | Discard its reply route; retain a retiring entry until the call or process ends. |
+| Disconnect during an ACP call | Discard its reply route; retain a retiring entry until the call or process ends. The time limit of the call continues. |
 
 A request retains its own required check after another request clears sign-in required. A passed check can still yield a quota refusal.
 Current-generation check results take effect in conductor event order. An operation ID prevents duplicate completion; the runtime generation rejects retired results.
@@ -633,6 +633,23 @@ Build selection continues during the limit wait. `Keep` and `Notice` answer with
 A selection that needs replacement takes over the limit demand before the actor can start a replacement.
 After a failure, the actor completes the restart before it selects the next build action.
 FR-041 holds the owner decisions on [#204](https://github.com/yandhi-0421/acp2api/issues/204).
+
+#### Time limit of a non-prompt ACP call
+
+FR-041 holds the rule and its value. `AcpSessions` holds the deadlines, next to the deadlines of its cancels. This limit ends a hang in `Checking`, `ModelsReading`, `QuotaWorking`, the `Preparing` phase of `AcceptedWorking`, and `Retiring`. Before #211, these entries had no deadline, so each one could hold a place until a restart.
+
+- `prepare` starts `session/new` and `session/load`, so it records one deadline for the key of the work. Each site that makes `Command::Usage` records a deadline too.
+- `Work::key` stays the same when a disconnect changes an entry to `Retiring`. Thus a disconnect keeps the deadline.
+- `Prepared`, `StartFailed`, and the end of the `/usage` prompt turn remove the deadline. A quota query that needs a new ACP session has two calls, so each call gets its own 5 minutes.
+- `next_deadline` includes these deadlines. When one is due, `handle` changes `Event::Deadline` to `Event::RuntimeFailure`, as it does for a cancel. Thus the existing failure path ends each entry that holds a place, counts one failure, keeps the queue, and starts the new runtime process.
+- A failure leaves `SessionLimitWait`, so a hang cannot stop dispatch in that wait.
+- `runtime_failed`, `replaced`, and `end_all_work` clear these deadlines, because each runtime process has its own calls.
+- A `Reset` query or a `Refusal` query that holds a response gives M-20, as at an exit of the runtime process. The quota wait of a `Reset` query stays.
+- The replacement stops the runtime process and drops its stdout. A late answer thus reaches no entry and no record.
+
+The time limit keeps the calls of `Runtime::start` and of the compatibility check out of its scope, because both already have `RuntimeStart::before_deadline`. The sign-in wait and the update deadline of FR-051 also stay as they are.
+
+Each failure of this limit needs a call that started after the earlier failure. Thus three such failures span at least 10 minutes and two starts. With a hang in each runtime process, each failure gives one M-20. They reach the state "runtime unavailable" only when another failure comes between them.
 
 ### The runtime driver
 
