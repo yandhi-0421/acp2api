@@ -309,7 +309,7 @@ impl ApiClient {
             s.client_sockets.insert(
                 id,
                 crate::hub::ClientSocket {
-                    socket: stream.try_clone().map_err(|e| e.to_string())?,
+                    socket: duplicate_stream(&stream).map_err(|e| e.to_string())?,
                     read: 0,
                     consumed: 0,
                 },
@@ -617,6 +617,11 @@ impl hyper::body::Body for ObservedBody<'_> {
     }
 }
 
+/// Duplicate a socket without giving child processes ownership of it.
+pub fn duplicate_stream(stream: &std::net::TcpStream) -> std::io::Result<std::net::TcpStream> {
+    stream.try_clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,5 +770,103 @@ second"
             server.await.unwrap();
             hub.close();
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+#[allow(clippy::disallowed_methods)]
+mod socket_inheritance_tests {
+    use std::{
+        net::TcpListener,
+        os::windows::io::AsRawSocket,
+        process::{Child, Command, Stdio},
+        time::{Duration, Instant},
+    };
+    use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+
+    // One child, no requests or output, and an eight-second limit even after a failed parent test.
+    #[test]
+    #[ignore = "only the socket inheritance regression starts this child"]
+    fn socket_holder() {
+        std::thread::sleep(Duration::from_secs(8));
+    }
+
+    struct Holder(Child);
+    impl Holder {
+        fn start() -> Self {
+            Self(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "client::socket_inheritance_tests::socket_holder",
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            )
+        }
+        fn assert_alive(&mut self) {
+            assert!(
+                self.0.try_wait().unwrap().is_none(),
+                "socket holder is alive"
+            );
+        }
+    }
+    impl Drop for Holder {
+        fn drop(&mut self) {
+            self.0.kill().expect("kill socket holder");
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while self.0.try_wait().expect("reap socket holder").is_none() {
+                assert!(Instant::now() < deadline, "socket holder cleanup cap: 2 s");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[test]
+    fn a_child_cannot_delay_eof_after_both_stream_handles_close() {
+        use std::{io::Read, net::TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let client =
+            TcpStream::connect_timeout(&listener.local_addr().unwrap(), Duration::from_secs(1))
+                .unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(900)))
+            .unwrap();
+        let duplicate = super::duplicate_stream(&client).unwrap();
+        let mut flags = 0;
+        // SAFETY: duplicate owns this live socket; flags points to a writable DWORD.
+        assert_ne!(
+            unsafe { GetHandleInformation(duplicate.as_raw_socket() as _, &mut flags) },
+            0
+        );
+        let mut child = Holder::start();
+        child.assert_alive();
+        let closed = Instant::now();
+        drop(duplicate);
+        drop(client);
+        let mut byte = [0];
+        assert_eq!(
+            server
+                .read(&mut byte)
+                .expect("EOF must arrive while the child is alive"),
+            0
+        );
+        assert!(
+            closed.elapsed() < Duration::from_secs(1),
+            "EOF arrives in under 1 s"
+        );
+        child.assert_alive();
+        assert_eq!(
+            flags & HANDLE_FLAG_INHERIT,
+            0,
+            "duplicate cannot be inherited"
+        );
     }
 }

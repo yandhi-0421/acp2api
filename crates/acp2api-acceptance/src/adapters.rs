@@ -36,7 +36,7 @@ impl Clock for HarnessClock {
             .link
             .connect(json!({"op":"wait","id":id}))
             .expect("timer registration");
-        let socket = reader.get_ref().try_clone().unwrap();
+        let socket = crate::client::duplicate_stream(reader.get_ref()).unwrap();
         let link = self.link.clone();
         let (send, recv) = tokio::sync::oneshot::channel();
         std::thread::spawn(move || {

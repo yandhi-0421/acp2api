@@ -101,9 +101,7 @@ pub(crate) async fn start(
     );
     let retained_listener = listener.into_std().map_err(|error| error.to_string())?;
     let listener = tokio::net::TcpListener::from_std(
-        retained_listener
-            .try_clone()
-            .map_err(|error| error.to_string())?,
+        duplicate_listener(&retained_listener).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
     account.publish(&panel)?;
@@ -729,3 +727,87 @@ mod lifecycle_tests {
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod panel_links_tests;
+
+fn duplicate_listener(listener: &std::net::TcpListener) -> io::Result<std::net::TcpListener> {
+    listener.try_clone()
+}
+
+#[cfg(all(test, windows))]
+#[allow(clippy::disallowed_methods)]
+mod socket_inheritance_tests {
+    use std::{
+        net::TcpListener,
+        os::windows::io::AsRawSocket,
+        process::{Child, Command, Stdio},
+        time::{Duration, Instant},
+    };
+    use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+
+    // One child, no requests or output, and an eight-second limit even after a failed parent test.
+    #[test]
+    #[ignore = "only the socket inheritance regression starts this child"]
+    fn socket_holder() {
+        std::thread::sleep(Duration::from_secs(8));
+    }
+
+    struct Holder(Child);
+    impl Holder {
+        fn start() -> Self {
+            Self(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "startup::socket_inheritance_tests::socket_holder",
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            )
+        }
+        fn assert_alive(&mut self) {
+            assert!(
+                self.0.try_wait().unwrap().is_none(),
+                "socket holder is alive"
+            );
+        }
+    }
+    impl Drop for Holder {
+        fn drop(&mut self) {
+            self.0.kill().expect("kill socket holder");
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while self.0.try_wait().expect("reap socket holder").is_none() {
+                assert!(Instant::now() < deadline, "socket holder cleanup cap: 2 s");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[test]
+    fn a_child_cannot_keep_the_duplicate_listener_port() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let duplicate = super::duplicate_listener(&listener).unwrap();
+        let mut flags = 0;
+        // SAFETY: duplicate owns this live socket; flags points to a writable DWORD.
+        assert_ne!(
+            unsafe { GetHandleInformation(duplicate.as_raw_socket() as _, &mut flags) },
+            0
+        );
+        let mut child = Holder::start();
+        child.assert_alive();
+        drop(duplicate);
+        drop(listener);
+        let rebound =
+            TcpListener::bind(address).expect("a live child must not retain the listener port");
+        child.assert_alive();
+        assert_eq!(rebound.local_addr().unwrap(), address);
+        assert_eq!(
+            flags & HANDLE_FLAG_INHERIT,
+            0,
+            "duplicate cannot be inherited"
+        );
+    }
+}
