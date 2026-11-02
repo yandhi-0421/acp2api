@@ -21,6 +21,8 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
+      - name: Check socket duplicate helpers
+        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} .github/check_socket_clones.py
       - run: rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt
       - run: cargo +1.96.0 build --workspace --locked
       - run: cargo +1.96.0 test --workspace --locked --no-fail-fast
