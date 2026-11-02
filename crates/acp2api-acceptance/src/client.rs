@@ -844,7 +844,6 @@ mod socket_inheritance_tests {
         use std::{io::Read, net::TcpStream};
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
         let client =
             TcpStream::connect_timeout(&listener.local_addr().unwrap(), Duration::from_secs(1))
                 .unwrap();
