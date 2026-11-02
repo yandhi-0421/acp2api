@@ -201,6 +201,9 @@ impl ProcessTree for GuardedTree {
         Box::pin(async move {
             self.link
                 .call(json!({"op":"process_stop","process":self.process}));
+            // Windows waits on OS handles; unlike Unix stop, it has no virtual grace.
+            #[cfg(windows)]
+            let _stopping = clock.hold(HoldKind::TurnEvent);
             self.inner.stop(clock).await;
         })
     }
