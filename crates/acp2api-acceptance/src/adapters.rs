@@ -55,15 +55,21 @@ impl Clock for HarnessClock {
     }
     fn hold(&self, kind: HoldKind) -> Hold {
         let kind = format!("{kind:?}");
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let trace_hold = format!(
+            "{}:{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
         let link = self.link.clone();
-        let reply = link.call(json!({"op":"hold","kind":kind,"add":true,"reader":reader_id()}));
+        let reply = link.call(json!({"op":"hold","kind":kind,"add":true,"reader":reader_id(),"trace_hold":trace_hold}));
         if let Some(error) = reply["error"].as_str() {
             panic!("{error}");
         }
         // The conductor can drop a line's hold in a different task from its reader.
         let process = reply["process"].clone();
         Hold::on_drop(move || {
-            link.call(json!({"op":"hold","kind":kind,"add":false,"process":process}));
+            link.call(json!({"op":"hold","kind":kind,"add":false,"process":process,"reader":reader_id(),"trace_hold":trace_hold}));
         })
     }
 }
@@ -163,6 +169,7 @@ impl ProcessLauncher for GuardedLauncher {
             .as_u64()
             .expect("fake process registration");
         launched.stdin = Box::pin(CountWrite {
+            trace_pending: false,
             inner: launched.stdin,
             link: self.link.clone(),
             process,
@@ -205,6 +212,10 @@ impl ProcessTree for GuardedTree {
             #[cfg(windows)]
             let _stopping = clock.hold(HoldKind::TurnEvent);
             self.inner.stop(clock).await;
+            if std::env::var_os("ACP2API_TRACE_230").is_some() {
+                self.link
+                    .call(json!({"op":"trace_230_stop_done","process":self.process}));
+            }
         })
     }
 }
@@ -242,6 +253,7 @@ impl AsyncRead for CountRead {
     }
 }
 struct CountWrite {
+    trace_pending: bool,
     inner: ProcessWrite,
     link: HubLink,
     process: u64,
@@ -253,11 +265,18 @@ impl AsyncWrite for CountWrite {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let result = self.inner.as_mut().poll_write(cx, buf);
+        if std::env::var_os("ACP2API_TRACE_230").is_some() {
+            if result.is_pending() && !self.trace_pending {
+                self.link
+                    .call(json!({"op":"trace_230","process":self.process,"reader":reader_id()}));
+            }
+            self.trace_pending = result.is_pending();
+        }
         if let Poll::Ready(Ok(n)) = result {
             let lines = buf[..n].iter().filter(|b| **b == b'\n').count();
             if lines > 0 {
                 self.link.call(
-                    json!({"op":"io","direction":"stdin","lines":lines,"process":self.process}),
+                    json!({"op":"io","direction":"stdin","lines":lines,"process":self.process,"reader":reader_id()}),
                 );
             }
         }

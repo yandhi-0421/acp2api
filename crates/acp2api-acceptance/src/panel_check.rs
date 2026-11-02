@@ -104,10 +104,18 @@ impl Panel {
         }
     }
     async fn acquire_cookie(&mut self, name: &str, password: &str) -> bool {
+        self.hub
+            .as_ref()
+            .unwrap()
+            .trace_230_phase("panel", "login-begin");
         let call = self
             .owner(name)
             .submit("/manage/login", json!({"password":password}));
         let answer = call.finish_current(&mut self.time()).await;
+        self.hub
+            .as_ref()
+            .unwrap()
+            .trace_230_phase("panel", "login-done");
         self.owner(name).remember(&answer);
         let opened = answer.headers.contains_key("set-cookie");
         self.login_answer = Some(answer);
@@ -134,8 +142,17 @@ impl Panel {
         page
     }
     pub async fn page(&mut self, name: &str) -> Answer {
+        self.hub
+            .as_ref()
+            .unwrap()
+            .trace_230_phase("panel", "get-begin");
         let call = self.owner(name).page();
-        call.finish_current(&mut self.time()).await
+        let answer = call.finish_current(&mut self.time()).await;
+        self.hub
+            .as_ref()
+            .unwrap()
+            .trace_230_phase("panel", "get-done");
+        answer
     }
     pub async fn submit(&mut self, name: &str, path: &str, body: Value) -> Answer {
         let call = self.owner(name).submit(path, body);

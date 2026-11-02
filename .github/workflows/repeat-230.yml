@@ -1,0 +1,47 @@
+name: Repeat the workspace check on Windows with the trace of 230
+on:
+  push:
+    branches: [probe/230-repeat3]
+jobs:
+  runs:
+    runs-on: windows-latest
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_HTTP_MULTIPLEXING: false
+      CARGO_NET_RETRY: 10
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      ACP2API_TRACE_230: 1
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo +1.96.0 build --workspace --locked
+      - name: Runs of the workspace command
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force trace | Out-Null
+          $failed = 0
+          foreach ($run in 1..7) {
+            cargo +1.96.0 test --workspace --locked --no-fail-fast 2>&1 | Tee-Object -FilePath "trace/raw-$run.log" | Select-String -Pattern 'scenarios \(' -SimpleMatch:$false
+            if ($LASTEXITCODE -ne 0) {
+              $failed++
+              Move-Item "trace/raw-$run.log" "trace/failed-$run.log"
+              "run $run failed"
+            } else {
+              Remove-Item "trace/raw-$run.log"
+            }
+          }
+          "failed runs: $failed of 7"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repeat3-230-${{ matrix.shard }}
+          path: trace/
+          retention-days: 7
+          if-no-files-found: ignore

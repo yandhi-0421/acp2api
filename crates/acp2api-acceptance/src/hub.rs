@@ -110,8 +110,25 @@ pub(crate) struct State {
     pub ready: bool,
     pub terminal_bytes: usize,
     pub next_sleep: u64,
+    trace_connections: HashMap<String, u64>,
+    trace_ops: HashMap<String, u64>,
+    trace_events: std::collections::VecDeque<Value>,
+    trace_sequence: u64,
+    trace_started: Instant,
+    trace_holds: HashMap<String, Value>,
 }
 impl State {
+    pub(crate) fn trace_230_event(&mut self, event: Value) {
+        if std::env::var_os("ACP2API_TRACE_230").is_none() {
+            return;
+        }
+        self.trace_sequence += 1;
+        if self.trace_events.len() == 1024 {
+            self.trace_events.pop_front();
+        }
+        self.trace_events.push_back(json!({"seq":self.trace_sequence,"real_us":self.trace_started.elapsed().as_micros(),"now":self.now,"event":event,"holds":self.counts.holds,"processes":self.process_io.len(),"sleepers":self.sleepers.len(),"external":self.external.keys().collect::<Vec<_>>()}));
+    }
+
     pub(crate) fn record(&mut self, event: Value) {
         let bytes = event.to_string().len();
         if self.entries.len() >= EVENT_CAP || self.bytes + bytes > RECORD_CAP {
@@ -162,6 +179,7 @@ impl State {
 #[derive(Clone)]
 pub struct Hub {
     pub address: String,
+    pub(crate) trace_settle_stage: Arc<std::sync::atomic::AtomicU8>,
     pub token: String,
     pub(crate) shared: Arc<(Mutex<State>, Condvar)>,
     alive: Arc<AtomicBool>,
@@ -205,10 +223,17 @@ impl Hub {
                 ready: false,
                 terminal_bytes: 0,
                 next_sleep: 0,
+                trace_connections: HashMap::new(),
+                trace_ops: HashMap::new(),
+                trace_events: std::collections::VecDeque::new(),
+                trace_sequence: 0,
+                trace_started: Instant::now(),
+                trace_holds: HashMap::new(),
             }),
             Condvar::new(),
         ));
         let hub = Self {
+            trace_settle_stage: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             address,
             token,
             shared,
@@ -277,6 +302,17 @@ impl Hub {
                     pid = message["pid"].as_u64().expect("fake Hello PID");
                 }
                 role = message["role"].as_str().unwrap_or("rpc").to_owned();
+                if std::env::var_os("ACP2API_TRACE_230").is_some() {
+                    let class = format!("{}:{}", role, message["op"].as_str().unwrap_or("?"));
+                    *self
+                        .shared
+                        .0
+                        .lock()
+                        .unwrap()
+                        .trace_connections
+                        .entry(class)
+                        .or_default() += 1;
+                }
                 if role == "server" {
                     let mut state = self.shared.0.lock().unwrap();
                     let id = state.process_io.len();
@@ -295,6 +331,12 @@ impl Hub {
                 label = message["label"].as_str().unwrap_or("normal").to_owned();
             }
             let mut state = self.shared.0.lock().unwrap();
+            if std::env::var_os("ACP2API_TRACE_230").is_some() {
+                *state
+                    .trace_ops
+                    .entry(message["op"].as_str().unwrap_or("?").to_owned())
+                    .or_default() += 1;
+            }
             let result = match message["op"].as_str().unwrap_or("") {
                 "Hello" => {
                     #[cfg(windows)]
@@ -330,6 +372,7 @@ impl Hub {
                     }
                     let mut redacted = message.clone();
                     redacted.as_object_mut().unwrap().remove("token");
+                    state.trace_230_event(json!({"op":"Hello","role":role,"process":process}));
                     state.record(json!({"kind":"hello","hello":redacted}));
                     json!({"ok":true})
                 }
@@ -337,6 +380,7 @@ impl Hub {
                     if let Some(line) = message["line"].as_str() {
                         match serde_json::from_str::<Value>(line) {
                             Ok(value) => {
+                                state.trace_230_event(json!({"op":"Got","method":value["method"].as_str().map(|s|s.chars().take(48).collect::<String>()),"id":value["id"].as_u64(),"process":process}));
                                 let mut redacted = value.clone();
                                 redact(&mut redacted);
                                 state.record(json!({"kind":"got","line":redacted.to_string()}));
@@ -407,6 +451,15 @@ impl Hub {
                                 state.counts.mcp_finished += 1;
                             }
                         }
+                        if std::env::var_os("ACP2API_TRACE_230").is_some() {
+                            let id = message["trace_hold"].as_str().unwrap_or("unknown");
+                            if add && state.trace_holds.len() < 256 {
+                                state.trace_holds.insert(id.into(), json!({"id":id,"kind":kind,"reader":reader,"process":line_process}));
+                            } else if !add {
+                                state.trace_holds.remove(id);
+                            }
+                            state.trace_230_event(json!({"op":"hold","add":add,"kind":kind,"id":id,"reader":reader,"process":message["process"],"line_process":line_process}));
+                        }
                         json!({"now":state.now,"process":line_process})
                     }
                 }
@@ -421,9 +474,17 @@ impl Hub {
                             .last_read_process_by_task
                             .insert(message["reader"].as_str().unwrap().to_owned(), process);
                     }
+                    state.trace_230_event(json!({"op":"io","direction":message["direction"],"lines":n,"process":process,"reader":message["reader"]}));
+                    json!({"ok":true})
+                }
+                "trace_230" => {
+                    state.trace_230_event(json!({"op":"write-pending","process":message["process"],"reader":message["reader"]}));
                     json!({"ok":true})
                 }
                 "process" => {
+                    state.trace_230_event(
+                        json!({"op":"process-register-begin","pid":message["pid"]}),
+                    );
                     let pid = message["pid"].as_u64().expect("fake process PID");
                     let (registered, timeout) = self
                         .shared
@@ -439,15 +500,31 @@ impl Hub {
                         state.failure = Some(message.clone());
                         json!({"error":message})
                     } else {
-                        json!({"process":state.pending_processes.remove(&pid).unwrap()})
+                        let process = state.pending_processes.remove(&pid).unwrap();
+                        state.trace_230_event(
+                            json!({"op":"process-register-done","process":process}),
+                        );
+                        json!({"process":process})
                     }
                 }
                 "process_stop" => {
                     let process = message["process"].as_u64().unwrap() as usize;
                     state.process_io[process].stop_requested = true;
+                    state.trace_230_event(json!({"op":"process-stop","process":process}));
                     json!({"ok":true})
                 }
-                "now" | "drain" => json!({"now":state.now}),
+                "trace_230_stop_done" => {
+                    state.trace_230_event(
+                        json!({"op":"process-stop-done","process":message["process"]}),
+                    );
+                    json!({"ok":true})
+                }
+                "now" | "drain" => {
+                    if message["op"] == "now" {
+                        state.trace_230_event(json!({"op":"now","reader":message["trace_task"]}));
+                    }
+                    json!({"now":state.now})
+                }
                 "sleep" => {
                     state.next_sleep += 1;
                     let id = state.next_sleep;
@@ -460,6 +537,7 @@ impl Hub {
                             writer: None,
                         },
                     );
+                    state.trace_230_event(json!({"op":"sleep","id":id,"at":at,"requested_at":message["at"],"reader":message["trace_task"]}));
                     json!({"id":id,"now":state.now})
                 }
                 "wait" => {
@@ -481,11 +559,17 @@ impl Hub {
                         sleeper.task = Some(message["task"].as_str().unwrap().to_owned());
                         state.counts.revision += 1;
                     }
+                    state.trace_230_event(
+                        json!({"op":"sleep-waiting","id":id,"reader":message["task"]}),
+                    );
                     json!({"ok":true})
                 }
                 "sleep_delivered" => {
                     let id = message["id"].as_u64().unwrap();
                     state.sleepers.remove(&id);
+                    state.trace_230_event(
+                        json!({"op":"sleep-delivered","id":id,"reader":message["trace_task"]}),
+                    );
                     json!({"ok":true})
                 }
                 "sleep_done" => {
@@ -498,6 +582,9 @@ impl Hub {
                     }
                     state.wake_pending.retain(|x| *x != id);
                     state.counts.wake_pending = state.wake_pending.len() as u64;
+                    state.trace_230_event(
+                        json!({"op":"sleep-done","id":id,"reader":message["trace_task"]}),
+                    );
                     json!({"ok":true})
                 }
                 "stop_wait" => {
@@ -514,6 +601,8 @@ impl Hub {
                     continue;
                 }
                 "launch" => {
+                    state
+                        .trace_230_event(json!({"op":"launch-begin","allowed":message["allowed"]}));
                     state.record(json!({"kind":"launch","allowed":message["allowed"],"program":message["program"]}));
                     json!({"ok":true})
                 }
@@ -557,11 +646,89 @@ impl Hub {
             .clone()
             .expect("an API request precedes its prompt assertion")
     }
+    pub fn trace_230_history(&self) -> Value {
+        let Ok(s) = self.shared.0.try_lock() else {
+            return json!({"hub":self.address,"lock_busy":true});
+        };
+        json!({"hub":self.address,"seq":s.trace_sequence,"recent":s.trace_events})
+    }
+    pub fn trace_230_settled(&self, counts: Counts) {
+        if std::env::var_os("ACP2API_TRACE_230").is_some() {
+            let mut state = self.shared.0.lock().unwrap();
+            let actual = format!("{:?}", Self::counts_for(&state));
+            state.trace_230_event(json!({"op":"settle-return","observed_counts":format!("{counts:?}"),"current_counts":actual}));
+        }
+    }
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Bounded temporary diagnostics use wall time"
+    )]
+    pub fn trace_230_watch(&self, scope: &'static str) -> Option<Trace230Watch> {
+        std::env::var_os("ACP2API_TRACE_230")?;
+        let done = Arc::new(AtomicBool::new(false));
+        let watching = done.clone();
+        let hub = self.clone();
+        let started = Instant::now();
+        trace_230_line(json!({"scope":scope,"phase":"begin","snapshot":self.trace_230_snapshot()}));
+        thread::spawn(move || {
+            let mut previous = None;
+            for second in 1..=105 {
+                thread::sleep(Duration::from_secs(1));
+                if watching.load(Ordering::Relaxed) {
+                    return;
+                }
+                let snapshot = hub.trace_230_snapshot();
+                let sequence = snapshot["seq"].as_u64();
+                let history = if second >= 5 && sequence.is_some() && sequence != previous {
+                    hub.trace_230_history()
+                } else {
+                    Value::Null
+                };
+                if second >= 5 {
+                    previous = sequence;
+                }
+                trace_230_line(
+                    json!({"scope":scope,"phase":"watch","second":second,"snapshot":snapshot,"history":history}),
+                );
+            }
+        });
+        Some(Trace230Watch {
+            done,
+            hub: self.clone(),
+            scope,
+            started,
+        })
+    }
+    pub fn trace_230_phase(&self, scope: &str, phase: &str) {
+        if std::env::var_os("ACP2API_TRACE_230").is_some() {
+            self.shared
+                .0
+                .lock()
+                .unwrap()
+                .trace_230_event(json!({"op":"fixture-phase","scope":scope,"phase":phase}));
+            trace_230_line(json!({"scope":scope,"phase":phase,"hub":self.address}));
+        }
+    }
+    pub fn trace_230_snapshot(&self) -> Value {
+        let Ok(s) = self.shared.0.try_lock() else {
+            return json!({"hub":self.address,"lock_busy":true,"settle_stage":self.trace_settle_stage.load(Ordering::Relaxed)});
+        };
+        let mut sleepers: Vec<_> = s
+            .sleepers
+            .iter()
+            .map(|(id, v)| json!({"id":id,"at":v.at,"task":v.task,"writer":v.writer.is_some()}))
+            .collect();
+        sleepers.sort_by_key(|v| v["id"].as_u64());
+        json!({"hub":self.address,"now":s.now,"settle_stage":self.trace_settle_stage.load(Ordering::Relaxed),"ops":s.trace_ops,"connections":s.trace_connections,"seq":s.trace_sequence,"counts":format!("{:?}",Self::counts_for(&s)),"raw_counts":format!("{:?}",s.counts),"active_holds":s.trace_holds.values().collect::<Vec<_>>(),"process_io":s.process_io.iter().map(|p|json!({"stdin_written":p.stdin_written,"stdin_got":p.stdin_got,"ordered":p.ordered,"read":p.read,"processed":p.processed,"stop":p.stop_requested,"ended":p.ended})).collect::<Vec<_>>(),"sleepers":sleepers,"external":s.external.keys().collect::<Vec<_>>(),"wake_pending":s.wake_pending,"completed_timers":s.completed_timers,"clients":s.client_sockets.iter().map(|(id,v)|json!({"id":id,"read":v.read,"consumed":v.consumed})).collect::<Vec<_>>()})
+    }
     pub fn now(&self) -> u64 {
         self.shared.0.lock().unwrap().now
     }
     pub fn counts(&self) -> Counts {
         let s = self.shared.0.lock().unwrap();
+        Self::counts_for(&s)
+    }
+    fn counts_for(s: &State) -> Counts {
         let mut counts = s.counts;
         for process in &s.process_io {
             counts.stdin_written += process.stdin_written;
@@ -639,8 +806,15 @@ impl Hub {
         self.shared.1.notify_all();
     }
     pub fn close(&self) {
-        self.alive.store(false, Ordering::SeqCst);
+        let first_close = self.alive.swap(false, Ordering::SeqCst);
         let s = self.shared.0.lock().unwrap();
+        if first_close && std::env::var_os("ACP2API_TRACE_230").is_some() {
+            let line = format!(
+                "[TRACE-230-HUB] {}\n",
+                json!({"hub":self.address,"connections":s.trace_connections,"ops":s.trace_ops,"sleeps":s.next_sleep})
+            );
+            std::io::stderr().lock().write_all(line.as_bytes()).unwrap();
+        }
         for writer in s.sleepers.values().filter_map(|s| s.writer.as_ref()) {
             let _ = writer.lock().unwrap().shutdown(Shutdown::Both);
         }
@@ -687,19 +861,26 @@ impl HubLink {
         Ok(BufReader::new(stream))
     }
     pub fn call(&self, mut message: Value) -> Value {
+        let trace = Trace230Rpc::begin(&self.address, &message);
+        if std::env::var_os("ACP2API_TRACE_230").is_some() {
+            message["trace_task"] = json!(trace_230_task());
+        }
         message["token"] = json!(self.token);
         message["role"] = json!("rpc_stream");
         let mut connection = self.connection.lock().unwrap();
+        if let Some(t) = &trace {
+            t.stage.store(2, Ordering::Relaxed);
+        }
         let result = (|| -> std::io::Result<String> {
             let mut reader = match connection.take() {
                 Some(reader) => reader,
                 None => BufReader::new(self.open()?),
             };
-            let mut result = Self::exchange(&mut reader, &message);
+            let mut result = Self::exchange(&mut reader, &message, trace.as_ref());
             if result.is_err() {
                 drop(reader);
                 reader = BufReader::new(self.open()?);
-                result = Self::exchange(&mut reader, &message);
+                result = Self::exchange(&mut reader, &message, trace.as_ref());
             }
             if result.is_ok() {
                 *connection = Some(reader);
@@ -709,8 +890,18 @@ impl HubLink {
         drop(connection);
         serde_json::from_str(&result.expect("hub RPC response")).expect("hub RPC JSON")
     }
-    fn exchange(reader: &mut BufReader<TcpStream>, message: &Value) -> std::io::Result<String> {
+    fn exchange(
+        reader: &mut BufReader<TcpStream>,
+        message: &Value,
+        trace: Option<&Trace230Rpc>,
+    ) -> std::io::Result<String> {
+        if let Some(t) = trace {
+            t.stage.store(3, Ordering::Relaxed);
+        }
         send(reader.get_mut(), message)?;
+        if let Some(t) = trace {
+            t.stage.store(4, Ordering::Relaxed);
+        }
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
             return Err(std::io::ErrorKind::UnexpectedEof.into());
@@ -819,6 +1010,110 @@ pub(crate) fn pause_rpc_after(
         publication,
         release,
         peer,
+    }
+}
+
+pub struct Trace230Watch {
+    done: Arc<AtomicBool>,
+    hub: Hub,
+    scope: &'static str,
+    started: Instant,
+}
+impl Drop for Trace230Watch {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::Relaxed);
+        trace_230_line(
+            json!({"scope":self.scope,"phase":"end","real_us":self.started.elapsed().as_micros(),"snapshot":self.hub.trace_230_snapshot(),"history":if self.started.elapsed() >= Duration::from_secs(5) { self.hub.trace_230_history() } else { Value::Null }}),
+        );
+    }
+}
+pub(crate) fn trace_230_line(value: Value) {
+    let line = format!("[TRACE-230-STATE] {value}\n");
+    static BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    const CAP: usize = 4 * 1024 * 1024;
+    let used = BYTES.fetch_add(line.len(), Ordering::Relaxed);
+    if used + line.len() <= CAP {
+        std::io::stderr().lock().write_all(line.as_bytes()).unwrap();
+    } else if used < CAP {
+        eprintln!("[TRACE-230-CAP] state trace cap: 4 MiB");
+    }
+}
+
+pub(crate) fn trace_230_task() -> String {
+    let task = tokio::task::try_id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| format!("thread:{:?}", thread::current().id()));
+    format!("{}:{task}", std::process::id())
+}
+struct Trace230Rpc {
+    id: u64,
+    stage: Arc<std::sync::atomic::AtomicU8>,
+}
+struct Trace230RpcEntry {
+    details: Value,
+    started: Instant,
+    stage: Arc<std::sync::atomic::AtomicU8>,
+    samples: u8,
+}
+static TRACE_230_RPC: std::sync::OnceLock<Mutex<HashMap<u64, Trace230RpcEntry>>> =
+    std::sync::OnceLock::new();
+impl Trace230Rpc {
+    fn begin(address: &str, message: &Value) -> Option<Self> {
+        std::env::var_os("ACP2API_TRACE_230")?;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let active = TRACE_230_RPC.get_or_init(|| {
+            thread::spawn(|| {
+                for _ in 0..900 {
+                    thread::sleep(Duration::from_secs(1));
+                    let Some(active) = TRACE_230_RPC.get() else { continue };
+                    let Ok(mut calls) = active.try_lock() else { continue };
+                    let mut rows = Vec::new();
+                    for (id, call) in calls.iter_mut() {
+                        if call.started.elapsed() >= Duration::from_secs(1) && call.samples < 105 {
+                            call.samples += 1;
+                            rows.push(json!({"scope":"rpc","phase":"watch","call_id":id,"details":call.details,"age_ms":call.started.elapsed().as_millis(),"stage":call.stage.load(Ordering::Relaxed)}));
+                        }
+                    }
+                    drop(calls);
+                    for row in rows { trace_230_line(row); }
+                }
+            });
+            Mutex::new(HashMap::new())
+        });
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let stage = Arc::new(std::sync::atomic::AtomicU8::new(1));
+        let mut calls = active.lock().unwrap();
+        if calls.len() == 256 {
+            return None;
+        }
+        // Deliberately whitelist fields: never serialize the authenticated message.
+        let details = json!({"hub":address,"reader":trace_230_task(),"op":message["op"],"kind":message["kind"],"add":message["add"],"timer":message["id"],"at":message["at"]});
+        calls.insert(
+            id,
+            Trace230RpcEntry {
+                details,
+                started: Instant::now(),
+                stage: stage.clone(),
+                samples: 0,
+            },
+        );
+        Some(Self { id, stage })
+    }
+}
+impl Drop for Trace230Rpc {
+    fn drop(&mut self) {
+        if let Some(call) = TRACE_230_RPC
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .remove(&self.id)
+            && call.started.elapsed() >= Duration::from_secs(1)
+        {
+            trace_230_line(
+                json!({"scope":"rpc","phase":"end","call_id":self.id,"details":call.details,"age_ms":call.started.elapsed().as_millis(),"stage":self.stage.load(Ordering::Relaxed)}),
+            );
+        }
     }
 }
 

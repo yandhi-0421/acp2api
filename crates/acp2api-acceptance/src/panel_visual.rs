@@ -88,7 +88,9 @@ impl Drop for Tree {
 }
 
 pub async fn render(html: &str, root: &Path, dark: bool) -> Result<Audit, String> {
+    let trace = ChromeTrace::begin(root);
     let _single = CHROME.lock().await;
+    let _owner = trace.as_ref().map(ChromeTrace::acquire);
     #[cfg(target_os = "macos")]
     let chrome = Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
     #[cfg(target_os = "windows")]
@@ -134,6 +136,9 @@ pub async fn render(html: &str, root: &Path, dark: bool) -> Result<Audit, String
     );
     args.push(page.as_os_str().to_owned());
     let start = Instant::now();
+    if let Some(t) = &trace {
+        t.phase("launch-begin", 0);
+    }
     let launched = OsLauncher
         .launch(LaunchSpec {
             program: chrome.into(),
@@ -143,20 +148,58 @@ pub async fn render(html: &str, root: &Path, dark: bool) -> Result<Audit, String
             own_temp: None,
         })
         .map_err(|error| format!("Chrome audit launch failed: {error:?}"))?;
+    if let Some(t) = &trace {
+        t.phase("launched", launched.tree.pid());
+    }
     drop(launched.stdin);
     let mut tree = Tree {
         pid: launched.tree.pid(),
         child: Some(launched.tree),
     };
+    let pid = tree.pid;
     let capture = async {
         tokio::try_join!(
-            read_capped(launched.stdout),
-            read_capped(launched.stderr),
-            async { Ok::<_, String>(tree.child.as_mut().unwrap().exited().await) },
+            async {
+                let result = read_capped(launched.stdout).await;
+                if let Some(t) = &trace {
+                    t.phase("stdout-done", pid);
+                }
+                result
+            },
+            async {
+                let result = read_capped(launched.stderr).await;
+                if let Some(t) = &trace {
+                    t.phase("stderr-done", pid);
+                }
+                result
+            },
+            async {
+                let status = tree.child.as_mut().unwrap().exited().await;
+                if let Some(t) = &trace {
+                    t.phase("exited", pid);
+                }
+                Ok::<_, String>(status)
+            },
         )
     };
     let result = tokio::time::timeout(crate::real_limit(Duration::from_secs(30)), capture).await;
+    if let Some(t) = &trace {
+        t.phase(
+            if result.is_err() {
+                "capture-timeout"
+            } else {
+                "capture-done"
+            },
+            tree.pid,
+        );
+    }
+    if let Some(t) = &trace {
+        t.phase("stop-begin", tree.pid);
+    }
     tree.stop().await;
+    if let Some(t) = &trace {
+        t.phase("stop-done", 0);
+    }
     let (stdout, stderr, status) = result
         .map_err(|_| "Chrome audit exceeded real_limit(30 s); process tree stopped".to_owned())??;
     eprintln!(
@@ -695,4 +738,72 @@ pub fn variant_a_bars(audit: &Audit) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+static TRACE_CHROME_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+struct ChromeTrace {
+    id: u64,
+    root: String,
+    started: Instant,
+    state: Arc<std::sync::Mutex<serde_json::Value>>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+}
+struct ChromeTraceOwner;
+impl ChromeTrace {
+    fn begin(root: &Path) -> Option<Self> {
+        std::env::var_os("ACP2API_TRACE_230")?;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = root.file_name()?.to_string_lossy().into_owned();
+        let state = Arc::new(std::sync::Mutex::new(
+            serde_json::json!({"queued":true,"pid":0}),
+        ));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let trace = Self {
+            id,
+            root,
+            started: Instant::now(),
+            state,
+            done,
+        };
+        trace.phase("queued", 0);
+        let (state, done, root) = (trace.state.clone(), trace.done.clone(), trace.root.clone());
+        std::thread::spawn(move || {
+            for second in 1..=105 {
+                std::thread::sleep(Duration::from_secs(1));
+                if done.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let facts = state.lock().unwrap().clone();
+                crate::hub::trace_230_line(
+                    serde_json::json!({"scope":"chrome","phase":"watch","render_id":id,"root":root,"second":second,"owner":TRACE_CHROME_OWNER.load(std::sync::atomic::Ordering::Relaxed),"state":facts}),
+                );
+            }
+        });
+        Some(trace)
+    }
+    fn acquire(&self) -> ChromeTraceOwner {
+        TRACE_CHROME_OWNER.store(self.id, std::sync::atomic::Ordering::Relaxed);
+        self.phase("acquired", 0);
+        ChromeTraceOwner
+    }
+    fn phase(&self, phase: &str, pid: u32) {
+        self.state.lock().unwrap()[phase] = serde_json::json!(self.started.elapsed().as_millis());
+        self.state.lock().unwrap()["pid"] = serde_json::json!(pid);
+        crate::hub::trace_230_line(
+            serde_json::json!({"scope":"chrome","phase":phase,"render_id":self.id,"root":self.root,"real_us":self.started.elapsed().as_micros(),"pid":pid,"owner":TRACE_CHROME_OWNER.load(std::sync::atomic::Ordering::Relaxed)}),
+        );
+    }
+}
+impl Drop for ChromeTraceOwner {
+    fn drop(&mut self) {
+        TRACE_CHROME_OWNER.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+impl Drop for ChromeTrace {
+    fn drop(&mut self) {
+        self.done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let pid = self.state.lock().unwrap()["pid"].as_u64().unwrap_or(0) as u32;
+        self.phase("end-or-cancelled", pid);
+    }
 }

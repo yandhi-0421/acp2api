@@ -89,9 +89,17 @@ impl Scenario {
         self.spawn_host(&[], format!("127.0.0.1:{port}"), key).await;
     }
     pub fn launch_host(&mut self, env: &[(&str, PathBuf)], run: &Path) -> &Child {
+        if std::env::var_os("ACP2API_TRACE_230").is_some() {
+            crate::hub::trace_230_line(
+                serde_json::json!({"scope":"scenario","phase":"bind","hub":self.hub.address,"root":self.root.path.file_name().unwrap().to_string_lossy()}),
+            );
+        }
         let mut command = Command::new(binary("acp2api-test-host"));
         command.env_clear();
         command.env(TIME_FACTOR_ENV, time_factor().to_string());
+        if let Some(trace) = std::env::var_os("ACP2API_TRACE_230") {
+            command.env("ACP2API_TRACE_230", trace);
+        }
         #[cfg(windows)]
         command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         let mut host = command
@@ -118,7 +126,15 @@ impl Scenario {
                         .read_until(b'\n', &mut line)
                     {
                         Ok(0) | Err(_) => break,
-                        Ok(_) => hub.terminal(&line),
+                        Ok(_) => {
+                            if let Some(json) = line.strip_prefix(b"[TRACE-230-STATE] ")
+                                && let Ok(value) = serde_json::from_slice(json)
+                            {
+                                crate::hub::trace_230_line(value);
+                            } else {
+                                hub.terminal(&line);
+                            }
+                        }
                     }
                 }
             });

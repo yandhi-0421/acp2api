@@ -16,12 +16,19 @@ pub fn call(messages: Value, system: Option<&str>, tools: Value) -> ApiCall {
     call
 }
 pub async fn send(s: &mut Scenario, call: ApiCall, reply: &str) {
+    let _trace_watch = s.hub.trace_230_watch("conversation");
     s.start().await;
     let completed = journal_check::request_records(s).len();
     s.fake()
         .next_prompt(TurnPlan::new().chunk(reply).end("end_turn"));
     let live = s.client().await.send(call);
     s.time.advance_to(s.hub.now() + 200).await;
+    if std::env::var_os("ACP2API_TRACE_230").is_some() {
+        eprintln!(
+            "[TRACE-230-CONVERSATION] phase=at-completion snapshot={}",
+            s.hub.trace_230_snapshot()
+        );
+    }
     s.answer = Some(live.finish_current(&mut s.time).await);
     assert_eq!(
         s.answer.as_ref().unwrap().status,

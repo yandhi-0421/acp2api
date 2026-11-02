@@ -44,6 +44,8 @@ impl TimeLine {
                 .unwrap_or(target);
             let has_external_inputs = {
                 let mut s = self.hub.shared.0.lock().unwrap();
+                let from = s.now;
+                s.trace_230_event(json!({"op":"advance","from":from,"to":at,"target":target}));
                 s.now = at;
                 let due: Vec<_> = s.external.range(..=at).map(|(at, _)| *at).collect();
                 let has_external_inputs = !due.is_empty();
@@ -92,6 +94,8 @@ fn settle_blocking(hub: &Hub, link: &HubLink, timers: &[u64]) {
         if let Some(failure) = hub.failure() {
             panic!("{failure}");
         }
+        hub.trace_settle_stage
+            .store(1, std::sync::atomic::Ordering::Relaxed);
         let counts = hub.counts();
         let unchanged = previous == Some(counts);
         // Completion plus a confirmed new wait from the same task is a processing barrier.
@@ -109,10 +113,15 @@ fn settle_blocking(hub: &Hub, link: &HubLink, timers: &[u64]) {
             && unchanged
             && (drained_and_waited || rearmed && hub.counts() == counts)
         {
+            hub.trace_230_settled(counts);
             break;
         }
         previous = Some(counts);
+        hub.trace_settle_stage
+            .store(2, std::sync::atomic::Ordering::Relaxed);
         let _ = link.call(json!({"op":"drain"}));
+        hub.trace_settle_stage
+            .store(3, std::sync::atomic::Ordering::Relaxed);
         if Instant::now() >= deadline {
             panic!(
                 "settle {} s cap: open channels {counts:?}",
@@ -121,9 +130,13 @@ fn settle_blocking(hub: &Hub, link: &HubLink, timers: &[u64]) {
         }
         drained_and_waited = timers.is_empty() || unchanged && (!rearmed || !counts.balanced());
         if drained_and_waited {
+            hub.trace_settle_stage
+                .store(4, std::sync::atomic::Ordering::Relaxed);
             hub.wait_change(deadline);
         }
     }
+    hub.trace_settle_stage
+        .store(0, std::sync::atomic::Ordering::Relaxed);
     let mut state = hub.shared.0.lock().unwrap();
     for id in timers {
         state.completed_timers.remove(id);

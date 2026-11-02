@@ -808,6 +808,7 @@ fn turn_schedule(
     if at <= s.now {
         dispatch(s, event);
     } else {
+        s.trace_230_event(json!({"op":"fake-external-register","at":at}));
         s.external.entry(at).or_default().push(event);
     }
 }

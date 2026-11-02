@@ -34,7 +34,14 @@ async fn terminal_notice(w: &mut World) {
 
 #[then(expr = "the first tile of the management panel is dark and shows the state {string}")]
 async fn dark_tile(w: &mut World, state: String) {
+    let _trace = w.scenario.hub.trace_230_watch("lockout-panel");
+    w.scenario
+        .hub
+        .trace_230_phase("lockout-panel", "page-begin");
     let html = support::page(w).await;
+    w.scenario
+        .hub
+        .trace_230_phase("lockout-panel", "page-ready");
     let first = document::elements(&html, "section")
         .next()
         .expect("first tile");
@@ -46,9 +53,15 @@ async fn dark_tile(w: &mut World, state: String) {
         state,
         "FR-035 first tile state"
     );
+    w.scenario
+        .hub
+        .trace_230_phase("lockout-panel", "chrome-begin");
     let audit = acp2api_acceptance::panel_visual::render(&html, &w.scenario.root.path, false)
         .await
         .expect("Chrome renders the locked management panel");
+    w.scenario
+        .hub
+        .trace_230_phase("lockout-panel", "chrome-ready");
     acp2api_acceptance::panel_visual::dark_first_tile(&audit).unwrap();
 }
 
