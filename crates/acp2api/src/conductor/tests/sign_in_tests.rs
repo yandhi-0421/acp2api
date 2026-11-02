@@ -403,11 +403,10 @@ fn a_quota_signal_without_a_reset_in_a_sign_in_check_uses_the_fallback() {
             3_600_000,
             "FR-036 no reset time uses the 60-minute fallback"
         );
-        assert!(
-            core.work
-                .values()
-                .any(|w| matches!(w, Work::QuotaQueued { .. })),
-            "FR-036 the reset query uses the shared queue"
+        assert_eq!(
+            (core.view.borrow().places, core.view.borrow().queued),
+            (0, 0),
+            "FR-036 keeps the fallback while FR-037 releases the blocked reset query"
         );
         assert!(
             core.work.by_request(&work).is_none(),
