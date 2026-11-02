@@ -742,3 +742,124 @@ async fn exit_keeps_work_until_the_runtime_stop_is_first_polled() {
         std::fs::remove_dir_all(root).unwrap();
     }).await.expect("actor exit handoff cap: 5 s");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_completed_prompt_keeps_virtual_time_until_its_settlement_timer_is_registered() {
+    use crate::{
+        BoxFuture, Launched, ProcessTree,
+        runtime_driver::write_tests::{Launcher, TestClock},
+    };
+    use std::{
+        sync::{
+            Condvar, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    struct GatedClock {
+        clock: Arc<TestClock>,
+        entered: tokio::sync::Notify,
+        release: (Mutex<bool>, Condvar),
+        gated: AtomicBool,
+    }
+    impl Clock for GatedClock {
+        fn now(&self) -> Moment {
+            self.clock.now()
+        }
+        fn wall(&self) -> std::time::SystemTime {
+            self.clock.wall()
+        }
+        fn hold(&self, kind: HoldKind) -> Hold {
+            self.clock.hold(kind)
+        }
+        fn sleep_until(&self, at: Moment) -> BoxFuture<'static, Hold> {
+            if at == 200 && !self.gated.swap(true, Ordering::SeqCst) {
+                self.entered.notify_one();
+                let (released, timeout) = self
+                    .release
+                    .1
+                    .wait_timeout_while(
+                        self.release.0.lock().unwrap(),
+                        Duration::from_secs(3),
+                        |released| !*released,
+                    )
+                    .unwrap();
+                assert!(
+                    *released && !timeout.timed_out(),
+                    "timer construction gate cap: 3 s"
+                );
+            }
+            self.clock.sleep_until(at)
+        }
+    }
+    struct Tree;
+    impl ProcessTree for Tree {
+        fn pid(&self) -> u32 {
+            std::process::id()
+        }
+        fn exited(&mut self) -> BoxFuture<'_, std::process::ExitStatus> {
+            Box::pin(std::future::pending())
+        }
+        fn stop(self: Box<Self>, _: Arc<dyn Clock>) -> BoxFuture<'static, ()> {
+            Box::pin(async {})
+        }
+    }
+    // One API request, one process, eight ACP frames under 64 KiB, five real seconds.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (clock, _deadlines) = TestClock::new();
+        let gated = Arc::new(GatedClock { clock: clock.clone(), entered: tokio::sync::Notify::new(), release: (Mutex::new(false), Condvar::new()), gated: AtomicBool::new(false) });
+        let (product, agent) = tokio::io::duplex(65536);
+        let (stdout, stdin) = tokio::io::split(product);
+        let agent = tokio::spawn(async move {
+            let (input, mut output) = tokio::io::split(agent);
+            let mut input = tokio::io::BufReader::new(input);
+            for _ in 0..8 {
+                let mut bytes = Vec::new();
+                if (&mut input).take(65537).read_until(b'\n', &mut bytes).await.unwrap() == 0 { return; }
+                assert!(bytes.len() <= 65536, "ACP capture cap: 64 KiB per frame");
+                let request: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                let options = serde_json::json!([{"id":"model","name":"Model","type":"select","currentValue":"m","options":[{"value":"m","name":"M"}]}]);
+                let result = match request["method"].as_str().unwrap() {
+                    "initialize" => serde_json::json!({"protocolVersion":1,"agentInfo":{"version":"1.4.0"}}),
+                    "session/new" => serde_json::json!({"sessionId":format!("session-{}", request["id"]),"configOptions":options}),
+                    "session/set_config_option" => serde_json::json!({"configOptions":options}),
+                    "session/prompt" => {
+                        let chunk = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":request["params"]["sessionId"],"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hi."}}}});
+                        output.write_all(format!("{chunk}\n").as_bytes()).await.unwrap();
+                        serde_json::json!({"stopReason":"end_turn"})
+                    },
+                    method => panic!("unexpected ACP method: {method}"),
+                };
+                let reply = serde_json::json!({"jsonrpc":"2.0","id":request["id"],"result":result});
+                output.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            }
+            panic!("ACP request cap: eight frames");
+        });
+        let mut ports = crate::Ports::production();
+        ports.clock = gated.clone();
+        ports.launcher = Arc::new(Launcher(Mutex::new(Some(Launched { stdin: Box::pin(stdin), stdout: Box::pin(stdout), stderr: Box::pin(tokio::io::empty()), tree: Box::new(Tree) }))));
+        let (stop, stopped) = watch::channel(false);
+        let (root, conductor, task) = check_fixture(ports, stopped).await;
+        let turn = crate::dialect::CHAT.parse(&serde_json::to_vec(&serde_json::json!({"model":"m","messages":[{"role":"user","content":"Hello"}]})).unwrap()).ok().unwrap().turn;
+        let mut ticket = conductor.admit(turn, gated.hold(HoldKind::HttpRequest), conductor.journal.begin(crate::journal::Api::Chat, 0), ResponseMode::Body).await.ok().unwrap();
+        drop(ticket.hold);
+        gated.entered.notified().await;
+        let mut advancing = Box::pin(clock.advance_to(200));
+        let advanced_early = tokio::time::timeout(Duration::from_millis(100), &mut advancing).await.is_ok();
+        *gated.release.0.lock().unwrap() = true;
+        gated.release.1.notify_all();
+        if !advanced_early { advancing.await; }
+        let mut completed = false;
+        while let Some((event, _hold)) = ticket.events.recv().await {
+            if let TurnEvent::End(result) = event { completed = result.is_ok(); break; }
+        }
+        stop.send_replace(true);
+        drop(conductor);
+        task.await.unwrap();
+        agent.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(!advanced_early, "settlement must wait for the completed prompt's next timer registration");
+        assert!(completed, "the prompt completes at its 200 ms settlement deadline");
+    }).await.expect("prompt timer handoff cap: 5 s");
+}
