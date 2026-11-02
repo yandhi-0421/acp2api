@@ -5,8 +5,9 @@ use windows_sys::Win32::{
         Com::CoTaskMemFree,
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
     },
     UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath},
@@ -47,6 +48,37 @@ impl Job {
             resume(child.id().expect("new suspended process"))?;
             Ok(job)
         }
+    }
+
+    pub(super) async fn stop(self) -> io::Result<()> {
+        // Termination is asynchronous; retain the job until every member exits.
+        tokio::task::spawn_blocking(move || {
+            let job = self;
+            unsafe {
+                if TerminateJobObject(job.0 as _, 1) == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                loop {
+                    let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+                    if QueryInformationJobObject(
+                        job.0 as _,
+                        JobObjectBasicAccountingInformation,
+                        (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                        std::mem::size_of_val(&info) as u32,
+                        ptr::null_mut(),
+                    ) == 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if info.ActiveProcesses == 0 {
+                        return Ok(());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        })
+        .await
+        .expect("Windows job stop worker")
     }
 }
 impl Drop for Job {

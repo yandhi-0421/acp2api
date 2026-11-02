@@ -6,7 +6,7 @@ use std::{
 };
 use tokio::process::Command;
 
-/// Clock grace before forced process-tree termination; Windows closes its Job Object at once.
+/// Clock grace before forced process-tree termination; Windows starts Job Object termination at once.
 pub const PROCESS_STOP_GRACE: Moment = if cfg!(windows) { 0 } else { 5_000 };
 
 pub struct SystemClock {
@@ -93,8 +93,8 @@ impl ProcessTree for OsTree {
         Box::pin(async move {
             #[cfg(windows)]
             {
-                drop(self.job);
-                let _ = self.child.wait().await;
+                self.job.stop().await.expect("stop runtime process tree");
+                self.child.wait().await.expect("wait child");
                 let _ = clock;
             }
             #[cfg(unix)]

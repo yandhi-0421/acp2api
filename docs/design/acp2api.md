@@ -330,7 +330,7 @@ Invariants and error modes:
   A start with an absent required variable fails with one terminal line.
 - The same factory resolves `account_root` through native account APIs. It never derives that value from an environment override.
 - The test host supplies an isolated `account_root` as a value. This adds no port and no release option.
-- `ProcessTree::stop` on macOS closes stdin, waits 5 s on the clock, and kills the process group. On Windows, it closes the Job Object at once (ADR-0004).
+- `ProcessTree::stop` on macOS closes stdin, waits 5 s on the clock, and kills the process group. On Windows, it terminates the Job Object, waits for zero active processes, then closes it (ADR-0004).
 - `LaunchError::Refused` and `LaunchError::Io` are both a failed start of the runtime process (FR-041).
 - A `ConcurrencyLimit` is 1 to 3. The parse of the configuration file also compares it with `highest_concurrency_limit` (FR-049).
 - In production, `hold` returns an empty `Hold`. `sleep_until` waits to the deadline and returns an empty `Hold`.
