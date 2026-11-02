@@ -364,6 +364,20 @@ impl Core {
     }
 
     pub(super) fn start_queued_work(&mut self, now: Moment, commands: &mut Vec<Command>) {
+        if self.sign_in.required() || matches!(self.lifecycle.state(), RuntimeState::Unavailable(_))
+        {
+            let queries: Vec<_> = self
+                .work
+                .iter()
+                .filter_map(|(id, work)| matches!(work, Work::QuotaQueued { .. }).then_some(*id))
+                .collect();
+            for id in queries {
+                let error = self
+                    .refusal(now)
+                    .expect("a blocked quota query has a refusal");
+                self.finish(id, Err(super::Failure::at(error, now)), now, commands);
+            }
+        }
         if matches!(self.lifecycle.state(), RuntimeState::SessionLimitWait)
             && !self.needs_session_replacement(now)
         {
