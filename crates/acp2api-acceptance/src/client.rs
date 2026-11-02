@@ -618,6 +618,7 @@ impl hyper::body::Body for ObservedBody<'_> {
 }
 
 /// Duplicate a socket without giving child processes ownership of it.
+#[allow(clippy::disallowed_methods)]
 pub fn duplicate_stream(stream: &std::net::TcpStream) -> std::io::Result<std::net::TcpStream> {
     let duplicate = stream.try_clone()?;
     #[cfg(windows)]

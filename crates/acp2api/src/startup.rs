@@ -195,6 +195,24 @@ pub(crate) async fn launch(
     Ok(child)
 }
 
+#[allow(clippy::disallowed_methods)]
+fn duplicate_listener(listener: &std::net::TcpListener) -> io::Result<std::net::TcpListener> {
+    let duplicate = listener.try_clone()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+        // SAFETY: duplicate owns this live socket throughout the call.
+        if unsafe { SetHandleInformation(duplicate.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) }
+            == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(duplicate)
+}
+
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod lifecycle_tests {
@@ -727,23 +745,6 @@ mod lifecycle_tests {
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]
 mod panel_links_tests;
-
-fn duplicate_listener(listener: &std::net::TcpListener) -> io::Result<std::net::TcpListener> {
-    let duplicate = listener.try_clone()?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawSocket;
-        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
-
-        // SAFETY: duplicate owns this live socket throughout the call.
-        if unsafe { SetHandleInformation(duplicate.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) }
-            == 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    Ok(duplicate)
-}
 
 #[cfg(all(test, windows))]
 #[allow(clippy::disallowed_methods)]

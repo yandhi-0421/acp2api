@@ -1,4 +1,6 @@
 disallowed-methods = [
+  { path = "std::net::TcpStream::try_clone", reason = "Socket duplicates must clear HANDLE_FLAG_INHERIT on Windows (#223)." },
+  { path = "std::net::TcpListener::try_clone", reason = "Socket duplicates must clear HANDLE_FLAG_INHERIT on Windows (#223)." },
   { path = "std::process::Command::new", reason = "Start programs only in os adapters." },
   { path = "tokio::process::Command::new", reason = "Start programs only in os adapters." },
   { path = "std::net::TcpStream::connect", reason = "Product networking uses only the official runtime." },
