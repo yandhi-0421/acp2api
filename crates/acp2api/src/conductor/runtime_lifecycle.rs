@@ -1,4 +1,4 @@
-use super::{Command, Core, Event, Failure, RuntimeProcess, Work};
+use super::{Command, Core, Event, RuntimeProcess, Work};
 use crate::{
     Clock, HoldKind, Moment,
     compatibility_check::Failure as CheckFailure,
@@ -585,14 +585,7 @@ impl Core {
             error.clone(),
             commands,
         );
-        let queries: Vec<_> = self
-            .work
-            .iter()
-            .filter_map(|(id, work)| matches!(work, Work::QuotaQueued { .. }).then_some(*id))
-            .collect();
-        for id in queries {
-            self.finish(id, Err(Failure::at(error.clone(), now)), now, commands);
-        }
+        self.refuse_queued_quota(now, commands);
     }
 
     pub(super) fn retire_runtime(&mut self) {
