@@ -1156,9 +1156,9 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
   - the size of the archive: 5,000,000 bytes;
   - the peak resident memory of the acp2api process: 64 MiB (67,108,864 bytes).
 
-  The memory limit applies to two workloads. The first workload is a first start with an empty data folder, until five seconds after the management panel address. The second workload starts with a saved configuration: two concurrent streams, a replacement of the runtime process, and then one more stream. The evidence source for the sizes is the release workflow. The evidence source for the memory is a measurement on each target.
+  The memory limit applies to two workloads. The first workload is a first start with an empty data folder, until five seconds after the management panel address. The second workload starts with a saved configuration: two concurrent streams, an exit of the runtime process and its replacement, and then one more stream. The evidence source for the sizes is the release workflow. The evidence source for the memory is a measurement on each target.
 
-  The first measurement, on 2026-11-02, found executables of 5.25 to 6.42 MB and archives of 2.15 to 2.42 MB. Its peak resident memory was about 25 MiB on a first start and 8 MiB or less in the second workload. It measured the memory only on macOS arm64. The owner set the limits on 2026-11-04.
+  The first measurement, on 2026-11-02, found executables of 5.25 to 6.42 MB and archives of 2.15 to 2.42 MB. Its peak resident memory was about 25 MiB on a first start and 8 MiB or less in the second workload. It measured the memory only on macOS arm64, in a test host that links the same library as the release executable. The owner set the limits on 2026-11-04.
 
 ## Assumptions
 
