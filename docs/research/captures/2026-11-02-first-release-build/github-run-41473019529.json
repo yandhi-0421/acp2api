@@ -1,0 +1,40 @@
+{
+  "databaseId": 41473019529,
+  "headSha": "7b54d7498b0a39390c35624890cf8be97a6f8144",
+  "event": "push",
+  "headBranch": "probe/56-dry-run",
+  "conclusion": "failure",
+  "url": "https://github.com/yandhi-0421/acp2api/actions/runs/41473019529",
+  "jobs": [
+    {
+      "name": "build (macos-15-intel, x86_64-apple-darwin)",
+      "conclusion": "failure",
+      "version_check": "failure"
+    },
+    {
+      "name": "build (macos-latest, aarch64-apple-darwin)",
+      "conclusion": "failure",
+      "version_check": "failure"
+    },
+    {
+      "name": "build (windows-latest, x86_64-pc-windows-msvc)",
+      "conclusion": "failure",
+      "version_check": "failure"
+    },
+    {
+      "name": "build (windows-11-arm, aarch64-pc-windows-msvc)",
+      "conclusion": "failure",
+      "version_check": "failure"
+    },
+    {
+      "name": "checksums",
+      "conclusion": "skipped",
+      "version_check": null
+    },
+    {
+      "name": "draft",
+      "conclusion": "skipped",
+      "version_check": null
+    }
+  ]
+}

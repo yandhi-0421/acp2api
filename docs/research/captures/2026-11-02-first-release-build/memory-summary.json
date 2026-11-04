@@ -1,0 +1,44 @@
+{
+  "startup": {
+    "steady_min_bytes": 5890048,
+    "steady_max_bytes": 6029312,
+    "peak_max_bytes": 6029312,
+    "samples": 15
+  },
+  "ready": {
+    "steady_min_bytes": 6291456,
+    "steady_max_bytes": 6340608,
+    "peak_max_bytes": 6340608,
+    "samples": 57
+  },
+  "idle": {
+    "steady_min_bytes": 6291456,
+    "steady_max_bytes": 6340608,
+    "peak_max_bytes": 6340608,
+    "samples": 277
+  },
+  "streams": {
+    "steady_min_bytes": 7487488,
+    "steady_max_bytes": 7569408,
+    "peak_max_bytes": 7569408,
+    "samples": 179
+  },
+  "after_streams": {
+    "steady_min_bytes": 7553024,
+    "steady_max_bytes": 7569408,
+    "peak_max_bytes": 7634944,
+    "samples": 111
+  },
+  "replacement": {
+    "steady_min_bytes": 7716864,
+    "steady_max_bytes": 7766016,
+    "peak_max_bytes": 7782400,
+    "samples": 124
+  },
+  "recovered": {
+    "steady_min_bytes": 7733248,
+    "steady_max_bytes": 7798784,
+    "peak_max_bytes": 7798784,
+    "samples": 168
+  }
+}

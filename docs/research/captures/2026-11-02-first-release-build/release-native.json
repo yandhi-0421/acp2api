@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "acp2api",
+    "--bin",
+    "acp2api",
+    "--target",
+    "aarch64-apple-darwin"
+  ],
+  "exit_code": 0,
+  "seconds": 25.899,
+  "timeout_seconds": 900.0,
+  "log_cap_bytes": 4194304,
+  "log_bytes": 3519,
+  "stopped_by": null
+}

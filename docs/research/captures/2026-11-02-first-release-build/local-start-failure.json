@@ -1,0 +1,5 @@
+{
+  "exit_code": 1,
+  "terminal": "acp2api: cannot use the account coordination data at ~/Library/Application Support/acp2api-account.",
+  "source": "native-archive-start-diagnostic.log from the local measurement"
+}

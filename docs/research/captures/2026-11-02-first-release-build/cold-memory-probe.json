@@ -1,0 +1,12 @@
+{
+  "command": [
+    "python3",
+    "~/acp2api-build/56-round1/cold_start.py"
+  ],
+  "exit_code": 0,
+  "seconds": 6.121,
+  "timeout_seconds": 45.0,
+  "log_cap_bytes": 4194304,
+  "log_bytes": 294,
+  "stopped_by": null
+}

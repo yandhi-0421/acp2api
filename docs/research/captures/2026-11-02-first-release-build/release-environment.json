@@ -1,0 +1,12 @@
+{
+  "command": [
+    "python3",
+    "-"
+  ],
+  "exit_code": 0,
+  "seconds": 0.022,
+  "timeout_seconds": 15.0,
+  "log_cap_bytes": 4194304,
+  "log_bytes": 42,
+  "stopped_by": null
+}
