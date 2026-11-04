@@ -33,7 +33,7 @@ def version():
     value = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", value):
         raise ValueError("the workspace version must be safe for an archive name")
-    if os.environ.get("GITHUB_EVENT_NAME") == "push":
+    if os.environ.get("GITHUB_REF", "").startswith("refs/tags/"):
         if os.environ.get("GITHUB_REF") != f"refs/tags/v{value}":
             raise ValueError("the tag must match v<workspace version>")
     return value
@@ -168,16 +168,23 @@ def gh(*args):
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True, timeout=60).stdout
 
 
+def github_release(repo, tag):
+    pages = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/releases"))
+    return next((item for page in pages for item in page if item["tag_name"] == tag), None)
+
+
 def draft():
-    if os.environ.get("GITHUB_EVENT_NAME") != "push":
+    if os.environ.get("GITHUB_EVENT_NAME") != "push" or not os.environ.get("GITHUB_REF", "").startswith("refs/tags/"):
         raise ValueError("only a tag push can create a draft release")
-    if (DIST / "SHA256SUMS").read_text() != checksums():
+    sums = checksums()
+    if (DIST / "SHA256SUMS").read_text() != sums:
         raise ValueError("SHA256SUMS does not match the archives")
+    digests = {name: "sha256:" + digest for digest, name in (line.split("  ", 1) for line in sums.splitlines())}
+    digests["SHA256SUMS"] = "sha256:" + hashlib.sha256((DIST / "SHA256SUMS").read_bytes()).hexdigest()
     tag = "v" + version()
     repo = os.environ["GITHUB_REPOSITORY"]
     # Listing drafts avoids treating an authentication or network error as a missing release.
-    releases = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/releases"))
-    existing = next((item for page in releases for item in page if item["tag_name"] == tag), None)
+    existing = github_release(repo, tag)
     if existing and not existing["draft"]:
         raise ValueError("refuse to change a published release")
     files = [str(path) for path in sorted(DIST.iterdir())]
@@ -186,9 +193,12 @@ def draft():
     else:
         gh("release", "create", tag, *files, "--draft", "--verify-tag", "--repo", repo,
            "--title", f"acp2api {version()}", "--notes", "The owner reviews and publishes this draft.")
-    result = json.loads(gh("release", "view", tag, "--repo", repo, "--json", "isDraft,assets"))
-    if not result["isDraft"] or {a["name"] for a in result["assets"]} != {Path(p).name for p in files}:
+    result = github_release(repo, tag)
+    if result is None or not result["draft"] or len(result["assets"]) != 5 or {a["name"] for a in result["assets"]} != set(digests):
         raise ValueError("the release must remain a draft with exactly five assets")
+    for asset in result["assets"]:
+        if asset.get("digest") != digests[asset["name"]]:
+            raise ValueError(f"the uploaded asset digest does not match: {asset['name']}")
     print(f"Draft {tag}: four archives and SHA256SUMS; the owner publishes it.")
 
 
