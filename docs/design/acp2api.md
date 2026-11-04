@@ -1,10 +1,10 @@
 # acp2api v1 design
 
-**Status:** approved design, with the measurement gap of OD-2.
+**Status:** approved design.
 
 The owner accepted the ten initial choices and all recommendations of the final review on 2026-10-18. This design incorporates both rounds.
 
-- PRD: `docs/prd/acp2api.md`, status `Blocked draft`, blocker OD-2. SC-002 and OD-1 define the memory measurement after the first release.
+- PRD: `docs/prd/acp2api.md`, status `Draft`. SC-002 and OD-1 define the memory measurement after the first release.
 - Feature files: `features/acp2api/`.
 - Parent issue: [yandhi-0421/acp2api#35](https://github.com/yandhi-0421/acp2api/issues/35).
 
@@ -126,7 +126,7 @@ FRs in scope and their modules (section "Shape" gives each module):
 FRs that this design does not fully design:
 
 - FR-041, the real value of N: open decision OD-1. The design has the replacement rule and the constant `SESSIONS_PER_RUNTIME_PROCESS` with the value 8. This value is temporary, and no measurement supports it.
-- SC-006: open decision OD-2. The design limits record memory to hashes, plus the last call ID and tool name in plain text. It keeps no message text or tool arguments. It sets no target.
+- SC-006: the PRD sets the limits. The design limits record memory to hashes, plus the last call ID and tool name in plain text. It keeps no message text or tool arguments.
 
 Limits from the ground step:
 
@@ -1674,6 +1674,6 @@ It has a 60-second cap and uses the same request and log caps as the fixture.
 2. **A coordination failure while an owner still holds the account.**
    - Approved answer: FR-006 and M-28 define the failed start and its path diagnostic. The account locks remain intact.
 
-OD-1 stays open: the first release uses the temporary value N = 8, and the measurement after the release sets the real value. OD-2 still blocks the targets of SC-006, and the first build and its measurements resolve it.
-This design sets neither final value.
+OD-1 stays open: the first release uses the temporary value N = 8, and the measurement after the release sets the real value.
+This design sets no final value of N.
 Native recovery must prove that earlier runtime trees ended before cleanup. This remains part of FR-045 and SC-002, not a weaker recovery contract.
