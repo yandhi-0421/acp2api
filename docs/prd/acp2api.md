@@ -1,8 +1,6 @@
 # acp2api v1 product requirements document
 
-**Status:** Blocked draft
-
-The blocker is OD-2 in "Open decisions". The first build and its measurement close it.
+**Status:** Draft
 
 ## Summary
 
@@ -1153,7 +1151,14 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
   - the stop and a restart.
 
   Only when a JetBrains IDE can install the official runtime from the ACP Registry with no paid plan, the checklist gets a step for it. Else the release notes say that the search of the JetBrains folders depends on the reports of owners. **Pass:** each step passed on both platforms.
-- **SC-006 — Little memory and little disk space.** acp2api uses little memory and little disk space ([#12]). The known values: the copy of the official runtime takes about 400 MB on macOS and about 220 MB on Windows arm64 (ADR-0006). That copy is outside the control of acp2api. **Pass:** measurement gap. The population, the targets, and the initial values of the memory of acp2api and of the size of its executable are open (OD-2). The evidence source is a measurement of the first build.
+- **SC-006 — Little memory and little disk space.** acp2api uses little memory and little disk space ([#12]). The copy of the official runtime takes about 400 MB on macOS and about 220 MB on Windows arm64 (ADR-0006). That copy and the runtime processes are outside the control of acp2api, so the limits below do not include them. **Pass:** each of these values is at or below its limit, for each of the four targets of FR-001:
+  - the size of the release executable: 10,000,000 bytes;
+  - the size of the archive: 5,000,000 bytes;
+  - the peak resident memory of the acp2api process: 64 MiB (67,108,864 bytes).
+
+  The memory limit applies to two workloads. The first workload is a first start with an empty data folder, until five seconds after the management panel address. The second workload starts with a saved configuration: two concurrent streams, an exit of the runtime process and its replacement, and then one more stream. The evidence source for the sizes is the release workflow. The evidence source for the memory is a measurement on each target.
+
+  The first measurement, on 2026-11-02, found executables of 5.25 to 6.42 MB and archives of 2.15 to 2.42 MB. Its peak resident memory was about 25 MiB on a first start and 8 MiB or less in the second workload. It measured the memory only on macOS arm64, in a test host that links the same library as the release executable. The owner set the limits on 2026-11-04.
 
 ## Assumptions
 
@@ -1164,7 +1169,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 ## Open decisions
 
 - **OD-1 — The memory budget for N.** It affects FR-041 and SC-002. N is the number of ACP sessions after which acp2api replaces the runtime process (ADR-0004). The first release uses the temporary value N = 8, which the owner chose on 2026-11-01. No measurement supports this value, so this decision stays open. After the release, the acceptance test on arm64 measures the memory of the runtime process and of each harness process ([#95]). Then the maintainer decides the budget, and the budget gives the real value of N. N is a constant of acp2api, so a later release can change it.
-- **OD-2 — The targets of SC-006.** The maintainer decides the limits of the memory and of the executable size after the first build and its measurement ([#12]).
+- **OD-2 — Closed:** the owner set the limits of SC-006 on 2026-11-04, after the first measurement ([#12]).
 
 ## User journey
 
