@@ -1,0 +1,18 @@
+{
+  "measurement-host": {
+    "bytes": 6271424,
+    "sha256": "5dc23b5f189c4ff05876ad2b39ea93982847c50f4b224381a8a05341cc577e41"
+  },
+  "measurement-host.rs": {
+    "bytes": 272,
+    "sha256": "cabee366ec4e21400d4e14d3c7a4d6ac481084eceb8b99d39d30e072208de696"
+  },
+  "probe.rs": {
+    "bytes": 6115,
+    "sha256": "c1c1b0a4a856ddad5c9f6b98456a8b51f63800ae5de15fab776bf2d03041dcf2"
+  },
+  "libacp2api-6a8a465d590cba84.rlib": {
+    "bytes": 10361448,
+    "sha256": "a47d265cbf8ae68c5f1137ab093289161aad9ea009c34c64709fab6039c4d00e"
+  }
+}

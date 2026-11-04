@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python3",
+    ".github/release.py",
+    "start",
+    "aarch64-apple-darwin"
+  ],
+  "exit_code": 1,
+  "seconds": 0.303,
+  "timeout_seconds": 90.0,
+  "log_cap_bytes": 4194304,
+  "log_bytes": 500,
+  "stopped_by": null
+}

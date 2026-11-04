@@ -1,0 +1,13 @@
+{
+  "command": [
+    "sh",
+    "-c",
+    "rustc --edition=2024 -C opt-level=3 ~/acp2api-build/56-round1/measurement-host.rs -o ~/acp2api-build/56-round1/measurement-host -L dependency=~/acp2api-build/target-56/aarch64-apple-darwin/release/deps -L dependency=~/acp2api-build/target-56/release/deps --extern acp2api=$(find ~/acp2api-build/target-56/aarch64-apple-darwin/release/deps -name \"libacp2api-*.rlib\" | head -1) && rustc --edition=2024 ~/acp2api-build/56-round1/probe.rs -o ~/acp2api-build/56-round1/probe -L dependency=~/acp2api-build/target-56/debug/deps --extern acp2api_acceptance=~/acp2api-build/target-56/debug/libacp2api_acceptance.rlib --extern serde_json=$(find ~/acp2api-build/target-56/debug/deps -name \"libserde_json-*.rlib\" | head -1)"
+  ],
+  "exit_code": 0,
+  "seconds": 1.511,
+  "timeout_seconds": 60.0,
+  "log_cap_bytes": 4194304,
+  "log_bytes": 0,
+  "stopped_by": null
+}

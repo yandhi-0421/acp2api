@@ -1,0 +1,16 @@
+[
+  {
+    "target": "aarch64-apple-darwin",
+    "executable_bytes": 5929728,
+    "archive_bytes": 2334666,
+    "executable_sha256": "8c022c4d233418d94e0a141f73141b68a54466963ffc4375ee46d3e46e5fe063",
+    "archive_sha256": "85b6169f778ac7ae008be5dff184e48a282c2aff1be56d9721a8d4fd0e185a2d"
+  },
+  {
+    "target": "x86_64-apple-darwin",
+    "executable_bytes": 6142556,
+    "archive_bytes": 2423683,
+    "executable_sha256": "a54e36da7a8d21d98d0dea4de25e626592ff6a5c892ac527581cf024df500013",
+    "archive_sha256": "79bc57ddce78f228f35d45f87b7f582314ed05cae95ba8e4cbd2dff28fafff78"
+  }
+]

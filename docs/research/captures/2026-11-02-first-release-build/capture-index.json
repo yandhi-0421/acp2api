@@ -1,0 +1,33 @@
+{
+  "origin": "Local measurement evidence and read-only GitHub run data.",
+  "adapted_sources": [
+    "run.py",
+    "reproduce_memory.py"
+  ],
+  "adaptation": "The wrappers use ACP56_PROBE_OUTPUT for new files. The probe logic and measured values have no changes.",
+  "files": {
+    "cold-memory-probe.json": "b647549484494c656e9050eec8afd04cd5f3f6ae45fcf5ba95cc952bd783e16f",
+    "cold-memory.json": "529911629546e15a69f17f916cadcc5de7322d59f98e2de43b709a96c2119271",
+    "cold_start.py": "7261d06370b79bb32bfbe5940607645ac7f575c1e9c9e8f1ff78990806c2bf92",
+    "github-run-41473019529.json": "5e871e5581b50d2c035d812c7222ac198cb6854d046e4e4a4b5ca24b62d5800e",
+    "github-run-41473254093.json": "e940fb9b22a803f711e2155aeeb2d546326e5a67b52705603728ce21d9114b2e",
+    "local-start-failure.json": "db4458f6593acf173eb1af90879c3700de49f284eb0d365361a04160c0b4b0b9",
+    "measure-compile-ready.json": "550241ef0a33e33d1812f0eda0d58e9d6f5e0b47e9097aebd09d2b863f71a291",
+    "measure.py": "6889e8590c6c1e1b9881b654cc249bccfafa9512c6b14faabcf318ff24bcc4c2",
+    "measurement-host.rs": "cabee366ec4e21400d4e14d3c7a4d6ac481084eceb8b99d39d30e072208de696",
+    "measurement-identity.json": "9acf4aaa5c6eeff5e1a3879f01228b5d8ef2b839ff050fde2bf330c7ddefe8ee",
+    "memory-1.json": "a245f28b8c34e1f947a0b236e1fc1627399a46aca856aa16a6638f5fb2d15693",
+    "memory-2.json": "376a7d4066758ffb2f1e01beec6cdd710b9fe0d09b4fa01daa934a4700a82d2c",
+    "memory-3.json": "c0b63eafff8fb8f323fdea18538c2a67ba408c3a2e0557c9cfe6b080d15d6ee5",
+    "memory-repeats.json": "11fca70a875c0a6e7ed8f165048534edba693e5d34861eac3dc710ca95944318",
+    "memory-summary.json": "6e4aa1b754303db7fe680d299e676dd8b7ba21a221bf790280b5b3377288f6ca",
+    "native-archive-start-diagnostic.json": "b6575b2ce228cd7f97e6e941e796537be23860cc6414c303bce839c66178d7e5",
+    "probe.rs": "c1c1b0a4a856ddad5c9f6b98456a8b51f63800ae5de15fab776bf2d03041dcf2",
+    "release-environment.json": "1d8047f2dd652c2cdc49e7df6accde18d31e6c0d13402eac76c84894e5cb9858",
+    "release-macos-x64.json": "883edd7721a5d0b5bd018c62ae66ad5584f8daa02ffe9e5c7d21f4086219d35f",
+    "release-native.json": "ff46373383852bcd85789d7857169f619f94272863bbad87152f989d3beaa1c1",
+    "reproduce_memory.py": "a97f890ac2592600feb3be14e1d28e415103f3935591fcef86ded9717895cda3",
+    "run.py": "0baf12f2d463abad2c8b31443dd99ef66644152fa7b86ef985b1f902a4f6a0be",
+    "sizes.json": "e220051393c226272b3b13daf2c2f4ebbc06ff70c0864c083a25b88f7b54b080"
+  }
+}

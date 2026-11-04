@@ -1,0 +1,23 @@
+{
+  "command": [
+    "env",
+    "RUSTUP_HOME=~/acp2api-build/56-round1/rustup",
+    "RUSTUP_TOOLCHAIN=stable",
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "acp2api",
+    "--bin",
+    "acp2api",
+    "--target",
+    "x86_64-apple-darwin"
+  ],
+  "exit_code": 0,
+  "seconds": 21.011,
+  "timeout_seconds": 900.0,
+  "log_cap_bytes": 4194304,
+  "log_bytes": 2755,
+  "stopped_by": null
+}

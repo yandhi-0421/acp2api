@@ -1,0 +1,64 @@
+{
+  "databaseId": 41473254093,
+  "headSha": "fa0584a48ebf6cbbde2a28bd50ff772e233a0bae",
+  "event": "push",
+  "headBranch": "probe/56-dry-run",
+  "conclusion": "success",
+  "url": "https://github.com/yandhi-0421/acp2api/actions/runs/41473254093",
+  "startedAt": "2026-11-02T15:36:30Z",
+  "updatedAt": "2026-11-02T15:44:10Z",
+  "targets": [
+    {
+      "target": "x86_64-apple-darwin",
+      "runner_label": "macos-15-intel",
+      "runner_image": "macos-15",
+      "executable_bytes": 6136772,
+      "archive_bytes": 2421133,
+      "archive_name": "acp2api-0.1.0-x86_64-apple-darwin.tar.gz",
+      "start_line": "acp2api: 0.1.0: management panel at http://127.0.0.1:49183/",
+      "job_url": "https://github.com/yandhi-0421/acp2api/actions/runs/41473254093/job/125372057625",
+      "archive_check": "success",
+      "start_check": "success"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runner_label": "windows-latest",
+      "runner_image": "windows-2025-vs2026",
+      "executable_bytes": 6424064,
+      "archive_bytes": 2348498,
+      "archive_name": "acp2api-0.1.0-x86_64-pc-windows-msvc.zip",
+      "start_line": "acp2api: 0.1.0: management panel at http://127.0.0.1:54709/",
+      "job_url": "https://github.com/yandhi-0421/acp2api/actions/runs/41473254093/job/125372058020",
+      "archive_check": "success",
+      "start_check": "success"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runner_label": "macos-latest",
+      "runner_image": "macos-26-arm64",
+      "executable_bytes": 5929728,
+      "archive_bytes": 2334575,
+      "archive_name": "acp2api-0.1.0-aarch64-apple-darwin.tar.gz",
+      "start_line": "acp2api: 0.1.0: management panel at http://127.0.0.1:49180/",
+      "job_url": "https://github.com/yandhi-0421/acp2api/actions/runs/41473254093/job/125372058030",
+      "archive_check": "success",
+      "start_check": "success"
+    },
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "runner_label": "windows-11-arm",
+      "runner_image": "windows-11-vs2026-arm64",
+      "executable_bytes": 5250560,
+      "archive_bytes": 2148319,
+      "archive_name": "acp2api-0.1.0-aarch64-pc-windows-msvc.zip",
+      "start_line": "acp2api: 0.1.0: management panel at http://127.0.0.1:59829/",
+      "job_url": "https://github.com/yandhi-0421/acp2api/actions/runs/41473254093/job/125372058270",
+      "archive_check": "success",
+      "start_check": "success"
+    }
+  ],
+  "checksums": "success",
+  "checksums_line": "SHA256SUMS: four archives checked",
+  "draft": "skipped",
+  "probe_difference": "The probe permits branch pushes and limits the version check to tag refs."
+}

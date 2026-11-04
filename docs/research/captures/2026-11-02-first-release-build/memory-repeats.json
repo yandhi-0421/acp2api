@@ -1,0 +1,13 @@
+{
+  "command": [
+    "sh",
+    "-c",
+    "python3 ~/acp2api-build/56-round1/measure.py memory-1.json && python3 ~/acp2api-build/56-round1/measure.py memory-2.json && python3 ~/acp2api-build/56-round1/measure.py memory-3.json"
+  ],
+  "exit_code": 0,
+  "seconds": 51.875,
+  "timeout_seconds": 240.0,
+  "log_cap_bytes": 4194304,
+  "log_bytes": 4908,
+  "stopped_by": null
+}

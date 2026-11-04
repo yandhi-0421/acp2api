@@ -1,0 +1,13 @@
+{
+  "files_scanned": 23,
+  "unredacted_hits": 0,
+  "patterns": {
+    "home_path": 0,
+    "user_name": 0,
+    "encoded_email": 0,
+    "at_sign": 0,
+    "gmail": 0,
+    "private_key": 0,
+    "service_token": 0
+  }
+}
