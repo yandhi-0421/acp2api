@@ -1136,13 +1136,12 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
   **Pass:** each build on the list of the release passed its set. A build on a computer with the architecture of its platform passed the full set, with no more than 25 model requests on each platform. A build under emulation on a computer of another architecture passed the compatibility check and the checks with no model request, with no more than 5 model requests. Before the first prompt, the test program showed the planned count, and the maintainer approved it. For the computer of the tester, the maintainer approved the count before the start.
 - **SC-003 — Client checks with a fake ACP agent.** On the Mac, real Claude Code and real Codex run against acp2api with the fake ACP agent. They run in the sandbox of the earlier checks ([#27], [#33]). The official OpenAI SDK sends one request with a stream and one request with no stream to the Chat Completions API. The checks show:
   - the first text of the attribution block of Claude Code;
-  - the `Input tag` message, and the advisor tool with a model name of acp2api;
   - the keep-alive events in a long pause;
   - `output_config.effort` in the requests of Claude Code, and the change of the thinking level after `/effort`;
-  - with a lockout in a synthetic state file, and in the state "sign-in required", both API clients stop with no retry and show the message;
+  - with a lockout in a synthetic state file, and in the state "sign-in required", both API clients stop and show the message, and no prompt turn starts. Claude Code can send the request again once with a capability removed, and acp2api refuses it too;
   - a temporary upstream error gives a retry after 30 s, not before;
   - the next requests of Claude Code after an `error` event in print mode, in interactive mode, and in a subagent, with the retry wait;
-  - a request of Claude Code with no stream that takes more than 300 s.
+  - a request of Claude Code with no stream that takes more than 300 s. This check records the result. Claude Code closes the request at 300 s and sends it again ([#243]). The release notes state this limit.
 
   **Pass:** each check passes with the versions of Claude Code and Codex that the release names. These are the newest versions at the time of the release. No request goes to Google, Anthropic, or OpenAI.
 - **SC-004 — A short task with the real official runtime.** A fixed task in a small test repository needs at least 5 client tool calls: a read of a file, an edit, and a command. In the middle of the task, the maintainer or the tester restarts acp2api, so that the task does a rebuild. Codex edits a file with an `apply_patch` command through its `exec_command` tool. **Pass:** in each run, the result files are the same as the expected files, and no reply text holds a tool call as text. A fixed list of patterns finds such text. Each release has 1 run for each of Claude Code and Codex on the Mac, and 1 run for each on the Windows computer of the tester. The first release has 3 runs for each API client on the Mac.
@@ -1224,3 +1223,4 @@ The changes to `DESIGN.md`:
 [#27]: https://github.com/yandhi-0421/acp2api/issues/27
 [#33]: https://github.com/yandhi-0421/acp2api/issues/33
 [#95]: https://github.com/yandhi-0421/acp2api/issues/95
+[#243]: https://github.com/yandhi-0421/acp2api/issues/243
