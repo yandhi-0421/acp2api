@@ -864,7 +864,7 @@ acp2api gives the official runtime the client name `acp2api`, the title `acp2api
 - Each `/usage` holds a place.
 - The start of a runtime process holds no place.
 - A platform can fail the acceptance test with 3 prompt turns at the same time. Then the highest value on that platform is the highest value that passed. The release notes name it, and the management panel of that platform offers no higher value. A higher value in the configuration file stops the start with message M-26.
-- The platform maximum must be at least 1. An arm64 release passes SC-002 at its declared maximum, even when that maximum is below 3.
+- The platform maximum must be at least 1. A build on a computer with the architecture of its platform passes SC-002 at its declared maximum, even when that maximum is below 3.
 
 **Pass:** with the limit 2 and 3 requests, the official runtime gets no call for the third request until one of the first two ends. A change to 3 lets the third request start at once.
 
@@ -1119,9 +1119,9 @@ A build that is not an accepted version has no verified version before its compa
 SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]).
 
 - **SC-001 — Tests with a fake ACP agent.** The tests start acp2api with a fake ACP agent in place of the official runtime. They send real HTTP requests as a fake API client. They cover each FR that needs no Google account. While they run, a guard refuses each executable except the fake ACP agent. **Pass:** at the commit of the release, CI passed the tests on `macos-15`, `macos-15-intel`, `windows-latest`, and `windows-11-arm`. CI starts when the repository is public, so no release comes before that time. Until then, the maintainer runs the tests on the Mac.
-- **SC-002 — Acceptance test of each build.** A test program runs each build. On the Mac, it uses a Google account of the maintainer. On Windows, the tester runs it on a real Windows computer, with the Google account of the tester. It first runs the real compatibility check, and it writes the SHA-256 values for the list. It obeys the safety rules of `docs/research/2026-10-18-probe-methods-and-safety-rules.md`. The facts that it shows:
+- **SC-002 — Acceptance test of each build.** A test program runs each build. On the Mac, it uses a Google account of the maintainer. On Windows, the tester runs it on a real Windows computer, with the Google account of the tester. For the other Windows architecture, the maintainer runs it in the Windows VM. It first runs the real compatibility check, and it writes the SHA-256 values for the list. It obeys the safety rules of `docs/research/2026-10-18-probe-methods-and-safety-rules.md`. The facts that it shows:
   - the tool filter, the full tool schemas with no file read, and the title `Run <tool>?`;
-  - prompt turns at the platform maximum of FR-049 (only with no emulation);
+  - prompt turns at the platform maximum of FR-049 (only on a computer with the architecture of the build);
   - on macOS, the stop of the harness processes after a crash of acp2api;
   - the system prompt addition with a system prompt of the size of the one of Claude Code;
   - no read of `~/.gemini` and of the parent folders of a `cwd`, and the files of the official runtime only in the runtime home;
@@ -1133,7 +1133,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 
   The memory fact for the runtime process and each harness process comes from the arm64 measurement after the first release (OD-1). This fact does not block that release.
 
-  **Pass:** each build on the list of the release passed its set. A build that runs with no emulation passed the full set, with no more than 25 model requests on each platform. A build under emulation passed the compatibility check and the checks with no model request, with no more than 5 model requests. Before the first prompt, the test program showed the planned count, and the maintainer approved it.
+  **Pass:** each build on the list of the release passed its set. A build on a computer with the architecture of its platform passed the full set, with no more than 25 model requests on each platform. A build under emulation on a computer of another architecture passed the compatibility check and the checks with no model request, with no more than 5 model requests. Before the first prompt, the test program showed the planned count, and the maintainer approved it. For the computer of the tester, the maintainer approved the count before the start.
 - **SC-003 — Client checks with a fake ACP agent.** On the Mac, real Claude Code and real Codex run against acp2api with the fake ACP agent. They run in the sandbox of the earlier checks ([#27], [#33]). The official OpenAI SDK sends one request with a stream and one request with no stream to the Chat Completions API. The checks show:
   - the first text of the attribution block of Claude Code;
   - the `Input tag` message, and the advisor tool with a model name of acp2api;
@@ -1184,7 +1184,9 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 
 ### Platforms
 
-v1 supports Windows and macOS, with the four targets of FR-001. The project has no Windows computer. Before a release, the tester runs the Windows checks on a real Windows computer, so they cover only the architecture of that computer. On the Mac, the x64 builds run only under emulation ([#17]). The owner chose the real computer on 2026-11-05, because the timing of a VM is not the timing of a real computer (ADR-0004).
+v1 supports Windows and macOS, with the four targets of FR-001. The project has no real Windows computer. Before a release, the tester runs the Windows checks on a real Windows computer. The facts of time come from that computer. For the other Windows architecture, the maintainer runs the acceptance test in the Windows VM on the arm64 Mac. On the Mac, the x64 builds run only under emulation ([#17]).
+
+The maintainer chose the real computer on 2026-11-05, because the timing of a VM is not the timing of a real computer (ADR-0004).
 
 ### Visual rules of the management panel
 
