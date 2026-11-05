@@ -1,0 +1,7 @@
+{
+  "passed": 1,
+  "failed": 0,
+  "checks": [
+    "Responses input_text retains the measured Codex main request"
+  ]
+}

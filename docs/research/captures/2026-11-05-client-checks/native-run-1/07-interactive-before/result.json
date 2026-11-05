@@ -1,0 +1,19 @@
+{
+  "check": "07-interactive-before",
+  "client": "claude",
+  "scenario": "before",
+  "seconds_cap": 120,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "FAIL",
+  "dry_run": false,
+  "error": "scratch folder cap: 128 MiB",
+  "client_exit": null,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 2.686,
+  "requests": 3,
+  "proxy_refusals": 3,
+  "safety_failures": []
+}

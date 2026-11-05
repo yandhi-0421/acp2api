@@ -1,0 +1,67 @@
+[
+  {
+    "check": "02-advisor",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "03-codex-keep-alive",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "04-effort",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "05-claude-lockout",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "05-codex-lockout",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "05-claude-sign-in",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "05-codex-sign-in",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "06-codex-retry",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "07-print-after",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "07-interactive-before",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "07-interactive-after",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "07-subagent",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "08-nonstream-310s",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  }
+]

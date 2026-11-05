@@ -1,0 +1,21 @@
+{
+  "check": "08-nonstream-310s",
+  "client": "claude",
+  "scenario": "nonstream",
+  "seconds_cap": 390,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 310,
+  "status": "FAIL",
+  "dry_run": false,
+  "error": "original non-stream request 3 disconnected after 300.037s; client timeout header 300; replacement IDs [4]",
+  "error_type": "AssertionError",
+  "failure_line": "runner.py:550",
+  "client_exit": 0,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 332.494,
+  "requests": 4,
+  "proxy_refusals": 15,
+  "safety_failures": []
+}

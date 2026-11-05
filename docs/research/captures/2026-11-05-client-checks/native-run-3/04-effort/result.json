@@ -1,0 +1,27 @@
+{
+  "check": "04-effort",
+  "client": "claude",
+  "scenario": "normal",
+  "seconds_cap": 90,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "output_config_efforts": [
+      "low",
+      "high"
+    ],
+    "actions": [
+      "/effort high"
+    ]
+  },
+  "client_exit": null,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 5.143,
+  "requests": 4,
+  "proxy_refusals": 5,
+  "safety_failures": []
+}

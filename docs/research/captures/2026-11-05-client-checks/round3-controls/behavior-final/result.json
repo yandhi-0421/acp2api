@@ -1,0 +1,9 @@
+{
+  "passed": 3,
+  "failed": 0,
+  "checks": [
+    "parent completion cannot end the child check; a resumed child can",
+    "Responses input_text retains the measured Codex main request",
+    "effort confirmation completes before the next user prompt"
+  ]
+}

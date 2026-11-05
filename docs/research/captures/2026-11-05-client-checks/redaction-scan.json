@@ -1,0 +1,9 @@
+{
+  "files_scanned": 122,
+  "unredacted_personal_data_hits": 0,
+  "credential_hits": 0,
+  "client_instruction_needles": 163,
+  "client_instruction_hits": 0,
+  "before_files_with_prompt_text": 81,
+  "command": "python3 -B ~/acp2api-build/239-round5/verify-evidence.py --working-tree"
+}

@@ -1,0 +1,21 @@
+{
+  "check": "07-subagent",
+  "client": "claude",
+  "scenario": "subagent",
+  "seconds_cap": 150,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "FAIL",
+  "dry_run": false,
+  "error": "no successful retry after the error",
+  "error_type": "AssertionError",
+  "failure_line": "runner.py:572",
+  "client_exit": null,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 3.751,
+  "requests": 5,
+  "proxy_refusals": 3,
+  "safety_failures": []
+}

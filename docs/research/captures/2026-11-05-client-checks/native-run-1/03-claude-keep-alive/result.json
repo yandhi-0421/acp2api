@@ -1,0 +1,23 @@
+{
+  "check": "03-claude-keep-alive",
+  "client": "claude",
+  "scenario": "pause",
+  "seconds_cap": 390,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 330,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "duration": 330.24994633399183,
+    "keep_alive_count": 22,
+    "max_event_gap": 15.0034945840016
+  },
+  "client_exit": 0,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 331.463,
+  "requests": 1,
+  "proxy_refusals": 14,
+  "safety_failures": []
+}

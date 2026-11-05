@@ -1,0 +1,25 @@
+{
+  "check": "01-attribution",
+  "client": "claude",
+  "scenario": "normal",
+  "seconds_cap": 90,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "first_attribution_text": {
+      "sha256": "a84eb8d9773f67e2825e58985810e00c094599607b55f407d07889f3263c9cdd",
+      "bytes": 74
+    },
+    "removed_from_acp": true
+  },
+  "client_exit": 0,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 2.166,
+  "requests": 1,
+  "proxy_refusals": 1,
+  "safety_failures": []
+}

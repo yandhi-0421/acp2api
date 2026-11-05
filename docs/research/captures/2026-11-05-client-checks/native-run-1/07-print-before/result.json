@@ -1,0 +1,23 @@
+{
+  "check": "07-print-before",
+  "client": "claude",
+  "scenario": "before",
+  "seconds_cap": 120,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "retry_gap_seconds": 30.02136408298975,
+    "main_request_count": 3,
+    "actions": []
+  },
+  "client_exit": 0,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 31.463,
+  "requests": 3,
+  "proxy_refusals": 6,
+  "safety_failures": []
+}

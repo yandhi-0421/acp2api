@@ -1,0 +1,7 @@
+{
+  "passed": 1,
+  "failed": 0,
+  "checks": [
+    "parent completion cannot end the child check; a resumed child can"
+  ]
+}

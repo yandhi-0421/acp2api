@@ -1,0 +1,19 @@
+{
+  "check": "08-nonstream-310s",
+  "client": "claude",
+  "scenario": "nonstream",
+  "seconds_cap": 390,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 310,
+  "status": "FAIL",
+  "dry_run": false,
+  "error": "run wall timeout",
+  "client_exit": null,
+  "host_exit_before_cleanup": 71,
+  "host_graceful_exit": 71,
+  "seconds": 390.764,
+  "requests": 4,
+  "proxy_refusals": 24,
+  "safety_failures": []
+}

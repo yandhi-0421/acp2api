@@ -1,0 +1,23 @@
+{
+  "check": "03-codex-keep-alive",
+  "client": "codex",
+  "scenario": "pause",
+  "seconds_cap": 390,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 330,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "duration": 330.24322195898276,
+    "keep_alive_count": 23,
+    "max_event_gap": 15.003352208004799
+  },
+  "client_exit": 0,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 331.928,
+  "requests": 1,
+  "proxy_refusals": 4,
+  "safety_failures": []
+}

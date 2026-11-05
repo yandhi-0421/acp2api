@@ -1,0 +1,98 @@
+{
+  "executable": "~/Library/Application Support/Claude/claude-code/2.1.309/5af865b9901c/claude.app/Contents/MacOS/claude",
+  "sha256": "40fa5522dc98b3b85d7122c1159b900891107ef6c198e3c8d0fd222586c13e31",
+  "input_cap_bytes": 536870912,
+  "http_request_cap": 0,
+  "timeout_seconds": 60,
+  "log_cap_bytes": 4194304,
+  "help": {
+    "byte_offset": 97508700,
+    "text": {
+      "sha256": "be0c6378612bc8c2ac1b79e9a3c701ea49252cdf11ded91c38c6ae5eb73b767a",
+      "bytes": 80
+    }
+  },
+  "functions": [
+    {
+      "name": "UFt",
+      "byte_offset": 225687102,
+      "source": {
+        "sha256": "0c091507fbd454db0d40bc72d8a3f301d371af95ea780d9ac399ab0a1cace287",
+        "bytes": 117
+      }
+    },
+    {
+      "name": "xC",
+      "byte_offset": 225687219,
+      "source": {
+        "sha256": "0b448171a4da9842452594360853072da181b796ec4a24b79e66d8e1cb1c2741",
+        "bytes": 155
+      }
+    },
+    {
+      "name": "Dc",
+      "byte_offset": 225687374,
+      "source": {
+        "sha256": "23c1524a26bfa9e2239bd8301a9f4f94916235d9060e451495dff95fb68ac96e",
+        "bytes": 68
+      }
+    },
+    {
+      "name": "Ki",
+      "byte_offset": 225687451,
+      "source": {
+        "sha256": "e9c6f3702a884232dd614ce05fdb5ee45dedd22d59418598dffdef4b2dc832c2",
+        "bytes": 50
+      }
+    },
+    {
+      "name": "Yq",
+      "byte_offset": 225687636,
+      "source": {
+        "sha256": "2a9b7bff593a5d95d44b1da192419808538651a46bfa01dc6f992867c32667ee",
+        "bytes": 54
+      }
+    },
+    {
+      "name": "Pm",
+      "byte_offset": 225687838,
+      "source": {
+        "sha256": "bd0af8bde23ea730dd84c0d3ae0c66085e659098df12d8f35744d37ace3b893f",
+        "bytes": 69
+      }
+    },
+    {
+      "name": "Jge",
+      "byte_offset": 225687907,
+      "source": {
+        "sha256": "dfda0e7db4cf4530e269a135ff24eaefac4732db827edf24ade77070f4d6a666",
+        "bytes": 79
+      }
+    },
+    {
+      "name": "Uke",
+      "byte_offset": 225688366,
+      "source": {
+        "sha256": "22d4f44926b43061a302e898fd7edcfe2b45d920154366fe3c34468557e5922f",
+        "bytes": 102
+      }
+    }
+  ],
+  "startup_guard": {
+    "byte_offset": 237924766,
+    "source": {
+      "sha256": "d3b99dde3cd68c321cf8a15b68e94563dbb8c22a38e5b29ade58bc8360beedd6",
+      "bytes": 260
+    }
+  },
+  "warning": {
+    "byte_offset": 225688930,
+    "source": {
+      "sha256": "c366507547404c73a9216afe4dc6cc8f4a0ff270720aa733ba59647fdac47c9a",
+      "bytes": 196
+    }
+  },
+  "finding": "The default startup main-model rank guard runs before advisor-value validation. Changing only the advisor value cannot bypass it.",
+  "experimental_route": "The bundle explicitly names CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL=1. Dc makes Yq, Pm and Uke accept unranked models; Jge still checks model availability and consent.",
+  "native_experimental_acceptance": "pending; no Claude Code process or model request ran in this inspection"
+}

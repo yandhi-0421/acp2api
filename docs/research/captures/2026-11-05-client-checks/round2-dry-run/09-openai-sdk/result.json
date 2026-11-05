@@ -1,0 +1,21 @@
+{
+  "check": "09-openai-sdk",
+  "client": "sdk",
+  "scenario": "normal",
+  "seconds_cap": 90,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "DRY-PASS",
+  "dry_run": true,
+  "details": {
+    "sdk_requests": 2
+  },
+  "client_exit": 0,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 2.004,
+  "requests": 2,
+  "proxy_refusals": 0,
+  "safety_failures": []
+}

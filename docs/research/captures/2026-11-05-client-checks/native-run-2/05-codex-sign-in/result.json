@@ -1,0 +1,21 @@
+{
+  "check": "05-codex-sign-in",
+  "client": "codex",
+  "scenario": "sign-in",
+  "seconds_cap": 45,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "main_request_count": 1
+  },
+  "client_exit": 1,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 1.583,
+  "requests": 1,
+  "proxy_refusals": 2,
+  "safety_failures": []
+}

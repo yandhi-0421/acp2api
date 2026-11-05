@@ -1,0 +1,17 @@
+[
+  {
+    "check": "02-advisor-experimental",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "04-effort",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  },
+  {
+    "check": "07-subagent",
+    "status": "BLOCKED",
+    "error": "sandbox-exec unavailable or outbound control failed"
+  }
+]
