@@ -32,6 +32,7 @@ acp2api decreases the chance that Google finds its use. It does not make the use
   - Codex, through the OpenAI Responses API;
   - a Chat Completions client, for example SillyTavern or the OpenAI SDK. acp2api follows the meaning of the OpenAI fields, with no rule for one API client.
 - **The maintainer.** The person who releases acp2api. The maintainer runs the release gate, and puts each build that passed the acceptance test on the list of a release.
+- **The tester.** A person that the maintainer asks to run the Windows checks of the release gate on their own Windows computer, with their own Google account. No document of the project names the tester.
 
 The access protection of acp2api stops web pages, other accounts of the computer, and mistakes. It does not try to stop the API clients on the same computer. These API clients can start acp2api and read its configuration file ([#7]).
 
@@ -1118,9 +1119,9 @@ A build that is not an accepted version has no verified version before its compa
 SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]).
 
 - **SC-001 — Tests with a fake ACP agent.** The tests start acp2api with a fake ACP agent in place of the official runtime. They send real HTTP requests as a fake API client. They cover each FR that needs no Google account. While they run, a guard refuses each executable except the fake ACP agent. **Pass:** at the commit of the release, CI passed the tests on `macos-15`, `macos-15-intel`, `windows-latest`, and `windows-11-arm`. CI starts when the repository is public, so no release comes before that time. Until then, the maintainer runs the tests on the Mac.
-- **SC-002 — Acceptance test of each build.** A test program runs each build with a Google account of the maintainer. It runs on the Mac and in the Windows VM. It first runs the real compatibility check, and it writes the SHA-256 values for the list. It obeys the safety rules of `docs/research/2026-10-18-probe-methods-and-safety-rules.md`. The facts that it shows:
+- **SC-002 — Acceptance test of each build.** A test program runs each build. On the Mac, it uses a Google account of the maintainer. On Windows, the tester runs it on a real Windows computer, with the Google account of the tester. It first runs the real compatibility check, and it writes the SHA-256 values for the list. It obeys the safety rules of `docs/research/2026-10-18-probe-methods-and-safety-rules.md`. The facts that it shows:
   - the tool filter, the full tool schemas with no file read, and the title `Run <tool>?`;
-  - prompt turns at the platform maximum of FR-049 (arm64 only);
+  - prompt turns at the platform maximum of FR-049 (only with no emulation);
   - on macOS, the stop of the harness processes after a crash of acp2api;
   - the system prompt addition with a system prompt of the size of the one of Claude Code;
   - no read of `~/.gemini` and of the parent folders of a `cwd`, and the files of the official runtime only in the runtime home;
@@ -1132,7 +1133,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 
   The memory fact for the runtime process and each harness process comes from the arm64 measurement after the first release (OD-1). This fact does not block that release.
 
-  **Pass:** each build on the list of the release passed its set. An arm64 build passed the full set, with no more than 25 model requests on each platform. An x64 build passed, under emulation, the compatibility check and the checks with no model request, with no more than 5 model requests. Before the first prompt, the test program showed the planned count, and the maintainer approved it.
+  **Pass:** each build on the list of the release passed its set. A build that runs with no emulation passed the full set, with no more than 25 model requests on each platform. A build under emulation passed the compatibility check and the checks with no model request, with no more than 5 model requests. Before the first prompt, the test program showed the planned count, and the maintainer approved it.
 - **SC-003 — Client checks with a fake ACP agent.** On the Mac, real Claude Code and real Codex run against acp2api with the fake ACP agent. They run in the sandbox of the earlier checks ([#27], [#33]). The official OpenAI SDK sends one request with a stream and one request with no stream to the Chat Completions API. The checks show:
   - the first text of the attribution block of Claude Code;
   - the `Input tag` message, and the advisor tool with a model name of acp2api;
@@ -1144,8 +1145,8 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
   - a request of Claude Code with no stream that takes more than 300 s.
 
   **Pass:** each check passes with the versions of Claude Code and Codex that the release names. These are the newest versions at the time of the release. No request goes to Google, Anthropic, or OpenAI.
-- **SC-004 — A short task with the real official runtime.** A fixed task in a small test repository needs at least 5 client tool calls: a read of a file, an edit, and a command. In the middle of the task, the maintainer restarts acp2api, so that the task does a rebuild. Codex edits a file with an `apply_patch` command through its `exec_command` tool. **Pass:** in each run, the result files are the same as the expected files, and no reply text holds a tool call as text. A fixed list of patterns finds such text. Each release has 1 run for each of Claude Code and Codex on the Mac, and 1 run for each in the Windows VM. The first release has 3 runs for each API client on the Mac.
-- **SC-005 — Release checklist.** The maintainer does the manual steps with the archives of the release candidate, on the Mac and in the Windows VM:
+- **SC-004 — A short task with the real official runtime.** A fixed task in a small test repository needs at least 5 client tool calls: a read of a file, an edit, and a command. In the middle of the task, the maintainer or the tester restarts acp2api, so that the task does a rebuild. Codex edits a file with an `apply_patch` command through its `exec_command` tool. **Pass:** in each run, the result files are the same as the expected files, and no reply text holds a tool call as text. A fixed list of patterns finds such text. Each release has 1 run for each of Claude Code and Codex on the Mac, and 1 run for each on the Windows computer of the tester. The first release has 3 runs for each API client on the Mac.
+- **SC-005 — Release checklist.** The maintainer on the Mac, and the tester on their Windows computer, do the manual steps with the archives of the release candidate:
   - the install from the archive, the first start, the management panel, and the sign-in;
   - the search for the official runtime that Zed installed;
   - the stop and a restart.
@@ -1183,7 +1184,7 @@ SC-001 to SC-005 are the release gate. A release needs a pass of all five ([#17]
 
 ### Platforms
 
-v1 supports Windows and macOS, with the four targets of FR-001. The only Windows computer of the project is a VM on an arm64 Mac. Thus the x64 builds run only under emulation before a release ([#17]).
+v1 supports Windows and macOS, with the four targets of FR-001. The project has no Windows computer. Before a release, the tester runs the Windows checks on a real Windows computer, so they cover only the architecture of that computer. On the Mac, the x64 builds run only under emulation ([#17]). The owner chose the real computer on 2026-11-05, because the timing of a VM is not the timing of a real computer (ADR-0004).
 
 ### Visual rules of the management panel
 

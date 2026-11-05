@@ -1079,7 +1079,7 @@ agy_acp_server_sha256 = "<64 hex>"
 localharness_external_sha256 = "<64 hex>"
 ```
 
-The release workflow writes this file from the result of the acceptance test (SC-002). `include_str!` puts it into the executable. A unit test parses it.
+The acceptance test program writes this file from its result (SC-002). A pull request commits it before the tag of the release. `include_str!` puts it into the executable. A unit test parses it.
 
 ### Decided values
 
