@@ -1,0 +1,30 @@
+{
+  "check": "07-interactive-after",
+  "client": "claude",
+  "scenario": "after",
+  "seconds_cap": 120,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "retry_gap_seconds": 30.209728082991205,
+    "main_request_count": 3,
+    "actions": [
+      "follow-up in retry wait"
+    ]
+  },
+  "client_exit": null,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 33.595,
+  "requests": 5,
+  "proxy_refusals": 12,
+  "safety_failures": [],
+  "recorded_status": "PASS",
+  "recorded_error": null,
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "evaluation_kind": "behavior",
+  "evaluation_reason": "The behavior rule is unchanged; the original result applies."
+}

@@ -1,0 +1,16 @@
+{
+  "files_scanned": 56,
+  "local_links": 60,
+  "personal_data_hits": 0,
+  "credential_hits": 0,
+  "client_instruction_hits": 0,
+  "prompt_signatures": 158,
+  "latest": {
+    "total": 17,
+    "passed": 17,
+    "failed": 0,
+    "behavior_checks": 16,
+    "records": 1
+  },
+  "raw_fingerprints_verified": 1925
+}

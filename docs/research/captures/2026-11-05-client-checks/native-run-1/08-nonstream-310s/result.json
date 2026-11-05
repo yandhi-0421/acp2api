@@ -1,0 +1,41 @@
+{
+  "check": "08-nonstream-310s",
+  "client": "claude",
+  "scenario": "nonstream",
+  "seconds_cap": 390,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 310,
+  "status": "PASS",
+  "dry_run": false,
+  "client_exit": null,
+  "host_exit_before_cleanup": 71,
+  "host_graceful_exit": 71,
+  "seconds": 390.764,
+  "requests": 4,
+  "proxy_refusals": 24,
+  "safety_failures": [],
+  "recorded_status": "FAIL",
+  "recorded_error": "run wall timeout",
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "evaluation_kind": "record",
+  "evaluation_reason": "The retained observation satisfies the revised SC-003 rule.",
+  "details": {
+    "observation": "record",
+    "original_request_id": 3,
+    "started": 30.70433066599071,
+    "original_status": null,
+    "ended": null,
+    "disconnected_at": 330.70826837496134,
+    "duration_seconds": 300.0039377089706,
+    "timeout_header": "300",
+    "replacement_requests": [
+      {
+        "id": 4,
+        "at": 331.837885749992,
+        "status": null,
+        "ended": null
+      }
+    ]
+  }
+}

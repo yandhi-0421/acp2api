@@ -1,0 +1,28 @@
+{
+  "check": "06-claude-retry",
+  "client": "claude",
+  "scenario": "temporary",
+  "seconds_cap": 120,
+  "request_cap": 32,
+  "log_cap_bytes": 4194304,
+  "pause_seconds": 0,
+  "status": "PASS",
+  "dry_run": false,
+  "details": {
+    "retry_gap_seconds": 30.02131904102862,
+    "main_request_count": 3,
+    "actions": []
+  },
+  "client_exit": 0,
+  "host_exit_before_cleanup": null,
+  "host_graceful_exit": 0,
+  "seconds": 31.504,
+  "requests": 3,
+  "proxy_refusals": 6,
+  "safety_failures": [],
+  "recorded_status": "PASS",
+  "recorded_error": null,
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "evaluation_kind": "behavior",
+  "evaluation_reason": "The behavior rule is unchanged; the original result applies."
+}

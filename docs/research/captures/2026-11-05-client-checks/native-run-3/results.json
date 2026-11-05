@@ -1,0 +1,62 @@
+[
+  {
+    "check": "04-effort",
+    "client": "claude",
+    "scenario": "normal",
+    "seconds_cap": 90,
+    "request_cap": 32,
+    "log_cap_bytes": 4194304,
+    "pause_seconds": 0,
+    "status": "PASS",
+    "dry_run": false,
+    "details": {
+      "output_config_efforts": [
+        "low",
+        "high"
+      ],
+      "actions": [
+        "/effort high"
+      ]
+    },
+    "client_exit": null,
+    "host_exit_before_cleanup": null,
+    "host_graceful_exit": 0,
+    "seconds": 5.143,
+    "requests": 4,
+    "proxy_refusals": 5,
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
+  },
+  {
+    "check": "07-subagent",
+    "client": "claude",
+    "scenario": "subagent",
+    "seconds_cap": 150,
+    "request_cap": 32,
+    "log_cap_bytes": 4194304,
+    "pause_seconds": 0,
+    "status": "PASS",
+    "dry_run": false,
+    "details": {
+      "retry_gap_seconds": 30.01622900000075,
+      "main_request_count": 7,
+      "actions": []
+    },
+    "client_exit": null,
+    "host_exit_before_cleanup": null,
+    "host_graceful_exit": 0,
+    "seconds": 34.124,
+    "requests": 8,
+    "proxy_refusals": 12,
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
+  }
+]
