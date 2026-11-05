@@ -19,5 +19,10 @@
   "seconds": 31.182,
   "requests": 2,
   "proxy_refusals": 4,
-  "safety_failures": []
+  "safety_failures": [],
+  "recorded_status": "PASS",
+  "recorded_error": null,
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "evaluation_kind": "behavior",
+  "evaluation_reason": "The behavior rule is unchanged; the original result applies."
 }

@@ -1,7 +1,0 @@
-{
-  "passed": 1,
-  "failed": 0,
-  "checks": [
-    "effort confirmation completes before the next user prompt"
-  ]
-}

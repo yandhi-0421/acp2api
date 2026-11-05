@@ -1,0 +1,136 @@
+{
+  "review_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "native_rerun": false,
+  "dry_run": {
+    "passed": 12,
+    "failed": 0,
+    "hosts_graceful": 12,
+    "checks": [
+      {
+        "check": "dry-normal",
+        "status": "DRY-PASS",
+        "seconds": 2.004
+      },
+      {
+        "check": "dry-effort",
+        "status": "DRY-PASS",
+        "seconds": 1.502
+      },
+      {
+        "check": "dry-pause",
+        "status": "DRY-PASS",
+        "seconds": 3.005
+      },
+      {
+        "check": "dry-disconnect",
+        "status": "DRY-PASS",
+        "seconds": 3.006
+      },
+      {
+        "check": "dry-lockout",
+        "status": "DRY-PASS",
+        "seconds": 1.001
+      },
+      {
+        "check": "dry-sign-in",
+        "status": "DRY-PASS",
+        "seconds": 1.503
+      },
+      {
+        "check": "dry-before",
+        "status": "DRY-PASS",
+        "seconds": 31.558
+      },
+      {
+        "check": "dry-after",
+        "status": "DRY-PASS",
+        "seconds": 31.554
+      },
+      {
+        "check": "dry-nonstream",
+        "status": "DRY-PASS",
+        "seconds": 33.564
+      },
+      {
+        "check": "dry-nonstream-disconnect",
+        "status": "DRY-PASS",
+        "seconds": 32.06
+      },
+      {
+        "check": "dry-subagent",
+        "status": "DRY-PASS",
+        "seconds": 32.061
+      },
+      {
+        "check": "09-openai-sdk",
+        "status": "DRY-PASS",
+        "seconds": 2.004
+      }
+    ]
+  },
+  "controls": {
+    "lever-controls": {
+      "passed": 9,
+      "failed": 0,
+      "file_limit_bytes": 4194304,
+      "checks": [
+        "home, user, plain email, encoded email, OAuth client_id redaction",
+        "log cap refuses overflow without a partial write",
+        "wall timeout kills and reaps the command",
+        "HTTP cap refuses request 2 before any upstream call",
+        "CONNECT receives 403 from the local refusal proxy",
+        "pty driver answers the terminal cursor query and drains output",
+        "RLIMIT_FSIZE stops a child-owned log at 4 MiB",
+        "scratch cap excludes symlink targets and still refuses an actual oversized copy",
+        "interactive follow-up needs no automatic resume text; print mode still requires it"
+      ]
+    },
+    "round3-controls": {
+      "passed": 3,
+      "failed": 0,
+      "checks": [
+        "parent completion cannot end the child check; a resumed child can",
+        "Responses input_text retains the measured Codex main request",
+        "effort confirmation completes before the next user prompt"
+      ]
+    },
+    "contract-controls": {
+      "passed": 17,
+      "failed": 0,
+      "checks": [
+        "one capability fallback receives two refusals without an ACP prompt",
+        "claude can stop after one state refusal",
+        "codex can stop after one state refusal",
+        "sign-in refusal permits the same capability fallback",
+        "state rule rejects third request",
+        "state rule rejects same capability",
+        "state rule rejects changed prompt",
+        "state rule rejects changed header",
+        "state rule rejects second success",
+        "state rule rejects other state",
+        "Codex still permits no second main request",
+        "a state refusal cannot start an ACP prompt",
+        "the API client must stop after the state refusal",
+        "the record preserves a replacement with status 200",
+        "the record preserves a replacement with status None",
+        "the record also accepts a completed original request",
+        "the native catalog has 17 variants without the retired item"
+      ]
+    }
+  },
+  "red_green": {
+    "expected_red": 3,
+    "green": 3
+  },
+  "rust": {
+    "product_tests_passed": 415,
+    "product_tests_failed": 0,
+    "checks": {
+      "build": 0,
+      "product-tests": 0,
+      "fmt": 0,
+      "clippy-native": 0,
+      "clippy-windows": 0
+    }
+  }
+}

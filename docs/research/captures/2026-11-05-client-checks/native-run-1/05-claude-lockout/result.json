@@ -6,14 +6,23 @@
   "request_cap": 32,
   "log_cap_bytes": 4194304,
   "pause_seconds": 0,
-  "status": "FAIL",
+  "status": "PASS",
   "dry_run": false,
-  "error": "2 main requests: unexpected retry",
   "client_exit": 1,
   "host_exit_before_cleanup": null,
   "host_graceful_exit": 0,
   "seconds": 1.038,
   "requests": 2,
   "proxy_refusals": 1,
-  "safety_failures": []
+  "safety_failures": [],
+  "recorded_status": "FAIL",
+  "recorded_error": "2 main requests: unexpected retry",
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "evaluation_kind": "behavior",
+  "evaluation_reason": "The retained observation satisfies the revised SC-003 rule.",
+  "details": {
+    "main_request_count": 2,
+    "acp_prompt_calls": 0,
+    "capability_removed": "thinking.display"
+  }
 }

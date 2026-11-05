@@ -2,210 +2,205 @@
   {
     "check": "01-attribution",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-1/01-attribution/result.json:9",
+    "source_run": 1,
     "runs": [
       "PASS",
       null,
       null
-    ],
-    "source": "native-run-1/01-attribution/result.json:9"
-  },
-  {
-    "check": "02-advisor",
-    "status": "FAIL",
-    "failure_class": "b",
-    "runs": [
-      "FAIL",
-      "FAIL",
-      null
-    ],
-    "source": "native-run-2/02-advisor/result.json:9"
+    ]
   },
   {
     "check": "03-claude-keep-alive",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-1/03-claude-keep-alive/result.json:9",
+    "source_run": 1,
     "runs": [
       "PASS",
       null,
       null
-    ],
-    "source": "native-run-1/03-claude-keep-alive/result.json:9"
+    ]
   },
   {
     "check": "03-codex-keep-alive",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/03-codex-keep-alive/result.json:9",
+    "source_run": 2,
     "runs": [
       "FAIL",
       "PASS",
       null
-    ],
-    "source": "native-run-2/03-codex-keep-alive/result.json:9"
+    ]
   },
   {
     "check": "04-effort",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-3/04-effort/result.json:9",
+    "source_run": 3,
     "runs": [
       "FAIL",
       "FAIL",
       "PASS"
-    ],
-    "source": "native-run-3/04-effort/result.json:9"
+    ]
   },
   {
     "check": "05-claude-lockout",
-    "status": "FAIL",
-    "failure_class": "b",
+    "status": "PASS",
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/05-claude-lockout/result.json:9",
+    "source_run": 2,
     "runs": [
-      "FAIL",
-      "FAIL",
+      "PASS",
+      "PASS",
       null
-    ],
-    "source": "native-run-2/05-claude-lockout/result.json:9"
+    ]
   },
   {
     "check": "05-codex-lockout",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/05-codex-lockout/result.json:9",
+    "source_run": 2,
     "runs": [
       "FAIL",
       "PASS",
       null
-    ],
-    "source": "native-run-2/05-codex-lockout/result.json:9"
+    ]
   },
   {
     "check": "05-claude-sign-in",
-    "status": "FAIL",
-    "failure_class": "b",
+    "status": "PASS",
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/05-claude-sign-in/result.json:9",
+    "source_run": 2,
     "runs": [
-      "FAIL",
-      "FAIL",
+      "PASS",
+      "PASS",
       null
-    ],
-    "source": "native-run-2/05-claude-sign-in/result.json:9"
+    ]
   },
   {
     "check": "05-codex-sign-in",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/05-codex-sign-in/result.json:9",
+    "source_run": 2,
     "runs": [
       "FAIL",
       "PASS",
       null
-    ],
-    "source": "native-run-2/05-codex-sign-in/result.json:9"
+    ]
   },
   {
     "check": "06-claude-retry",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-1/06-claude-retry/result.json:9",
+    "source_run": 1,
     "runs": [
       "PASS",
       null,
       null
-    ],
-    "source": "native-run-1/06-claude-retry/result.json:9"
+    ]
   },
   {
     "check": "06-codex-retry",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/06-codex-retry/result.json:9",
+    "source_run": 2,
     "runs": [
       "FAIL",
       "PASS",
       null
-    ],
-    "source": "native-run-2/06-codex-retry/result.json:9"
+    ]
   },
   {
     "check": "07-print-before",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-1/07-print-before/result.json:9",
+    "source_run": 1,
     "runs": [
       "PASS",
       null,
       null
-    ],
-    "source": "native-run-1/07-print-before/result.json:9"
+    ]
   },
   {
     "check": "07-print-after",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/07-print-after/result.json:9",
+    "source_run": 2,
     "runs": [
       "FAIL",
       "PASS",
       null
-    ],
-    "source": "native-run-2/07-print-after/result.json:9"
+    ]
   },
   {
     "check": "07-interactive-before",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/07-interactive-before/result.json:9",
+    "source_run": 2,
     "runs": [
       "FAIL",
       "PASS",
       null
-    ],
-    "source": "native-run-2/07-interactive-before/result.json:9"
+    ]
   },
   {
     "check": "07-interactive-after",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-2/07-interactive-after/result.json:9",
+    "source_run": 2,
     "runs": [
       "FAIL",
       "PASS",
       null
-    ],
-    "source": "native-run-2/07-interactive-after/result.json:9"
+    ]
   },
   {
     "check": "07-subagent",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-3/07-subagent/result.json:9",
+    "source_run": 3,
     "runs": [
       "FAIL",
       "FAIL",
       "PASS"
-    ],
-    "source": "native-run-3/07-subagent/result.json:9"
+    ]
   },
   {
     "check": "08-nonstream-310s",
-    "status": "FAIL",
-    "failure_class": "b",
+    "status": "PASS",
+    "evaluation_kind": "record",
+    "source": "native-run-2/08-nonstream-310s/result.json:9",
+    "source_run": 2,
     "runs": [
-      "FAIL",
-      "FAIL",
+      "PASS",
+      "PASS",
       null
-    ],
-    "source": "native-run-2/08-nonstream-310s/result.json:9"
+    ]
   },
   {
     "check": "09-openai-sdk",
     "status": "PASS",
-    "failure_class": null,
+    "evaluation_kind": "behavior",
+    "source": "native-run-1/09-openai-sdk/result.json:9",
+    "source_run": 1,
     "runs": [
       "PASS",
       null,
       null
-    ],
-    "source": "native-run-1/09-openai-sdk/result.json:9"
-  },
-  {
-    "check": "02-advisor-experimental",
-    "status": "PASS",
-    "failure_class": null,
-    "runs": [
-      null,
-      null,
-      "PASS"
-    ],
-    "source": "native-run-3/02-advisor-experimental/result.json:9"
+    ]
   }
 ]

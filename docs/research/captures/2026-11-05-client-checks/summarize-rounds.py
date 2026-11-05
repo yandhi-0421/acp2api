@@ -1,58 +1,95 @@
-"""Combine the two native runs and retain the evidence for the two new lever failures."""
-import json
+"""Re-evaluate retained native observations under the SC-003 decision of 2026-11-05."""
 import argparse
+import json
 from pathlib import Path
-from types import SimpleNamespace
 
-from runner import main_requests
-from safety import Log, save
+from runner import CHECKS, check_state, nonstream_record
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("first", type=Path)
-parser.add_argument("second", type=Path)
-parser.add_argument("output", type=Path)
-args = parser.parse_args()
-output = args.output
-output.mkdir(parents=True, exist_ok=False)
-runs = [json.loads((root / "results.json").read_text()) for root in [args.first, args.second]]
-first = {row["check"]: row for row in runs[0]}
-second = {row["check"]: row for row in runs[1]}
-assert len(first) == 18 and len(second) == 13 and second.keys() <= first.keys()
-classes = {"02-advisor": "b", "04-effort": "a", "05-claude-lockout": "b",
-           "05-claude-sign-in": "b", "07-subagent": "a", "08-nonstream-310s": "b"}
-latest = []
-for name, initial in first.items():
-    final = second.get(name, initial)
-    latest.append(dict(check=name, run_1=initial["status"], run_2=second[name]["status"] if name in second else None,
-                       status=final["status"], failure_class=classes.get(name),
-                       source=f"native-run-{2 if name in second else 1}/{name}/result.json:9"))
-save(output / "latest-results.json", latest)
-save(output / "counts.json", dict(run_1={status.lower(): sum(r["status"] == status for r in runs[0]) for status in ["PASS", "FAIL"]},
-                                  run_2={status.lower(): sum(r["status"] == status for r in runs[1]) for status in ["PASS", "FAIL"]},
-                                  latest=dict(passed=sum(r["status"] == "PASS" for r in latest),
-                                              failed=sum(r["status"] == "FAIL" for r in latest)),
-                                  failure_classes={c: sum(r["failure_class"] == c for r in latest) for c in ["a", "b", "c"]}))
-diagnosis = Log(output / "diagnosis.ndjson")
-for name in ["04-effort", "07-subagent"]:
-    root = args.second / name
-    requests = json.loads((root / "request-index.json").read_text())
-    recorder = SimpleNamespace(requests=requests)
-    if name == "04-effort":
-        diagnosis.event(check=name, main_requests=[dict(id=r["id"], effort=r["body"].get("output_config"),
-                                                        status=r.get("status")) for r in main_requests(recorder)],
-                        auxiliary_request_ids=[r["id"] for r in requests if r not in main_requests(recorder)],
-                        terminal_evidence=["client.log:73 confirmation dialog", "client.log:83 selected Yes",
-                                           "client.log:104 effort saved high; no second main request"],
-                        failure_class="a", cause="driver sent the second prompt into the effort confirmation dialog")
-    else:
-        wire = [json.loads(line) for line in (root / "wire.ndjson").read_text().splitlines()]
-        error = next(e for e in wire if e.get("event") == "error")
-        parent = main_requests(recorder, "SC239-MAIN")
-        child = main_requests(recorder, "SC239-SUBAGENT")
-        diagnosis.event(check=name, parent_request_ids=[r["id"] for r in parent], child_request_ids=[r["id"] for r in child],
-                        error_request_id=error["id"], error_at=error["at"],
-                        parent_success_end=next(r["ended"] for r in parent if r["id"] == 4),
-                        child_retry_status=child[-1]["status"], retry_after=child[-1]["response_headers"]["retry-after"],
-                        run_seconds=json.loads((root / "result.json").read_text())["seconds"],
-                        failure_class="a", cause="driver completed on the parent while the child was in its 30-second retry wait",
-                        child_after_30_seconds="not observed in this prematurely stopped run")
+HERE = Path(__file__).resolve().parent
+CONTRACT_HEAD = "f4df342d5a54022df1aeebc09c98f3ceb70ee295"
+
+
+def reviewed_results():
+    catalog = {check.name: check for check in CHECKS}
+    outputs = {}
+    runs = []
+    latest = {}
+    for number in [1, 2, 3]:
+        root = HERE / f"native-run-{number}"
+        evidence = {row["case"]: row for row in map(json.loads, (root / "evidence.ndjson").read_text().splitlines()[1:])}
+        reviewed = []
+        for original in json.loads((root / "results.json").read_text()):
+            name = original["check"]
+            if name not in catalog:
+                continue
+            check = catalog[name]
+            result = json.loads((root / name / "result.json").read_text())
+            result["recorded_status"] = result.get("recorded_status", result["status"])
+            result["recorded_error"] = result.get("recorded_error", result.get("error"))
+            result["status"] = result["recorded_status"]
+            result["evaluation_head"] = CONTRACT_HEAD
+            result["evaluation_kind"] = "record" if check.scenario == "nonstream" else "behavior"
+            result["evaluation_reason"] = "The behavior rule is unchanged; the original result applies."
+            if check.scenario in ["lockout", "sign-in", "nonstream"]:
+                case = evidence[name]
+                requests = [dict(request) for request in case["requests"] if request["body"].get("tools")
+                            and set(request["direct_user_markers"]) & {"SC239-MAIN", "SC239-SUBAGENT"}]
+                try:
+                    if check.scenario == "nonstream":
+                        details = nonstream_record(requests)
+                    else:
+                        for request in requests:
+                            data = next(event["data"] for event in case["wire"]
+                                        if event["id"] == request["id"] and "error" in event.get("data", {}))
+                            request["response"] = json.dumps(data)
+                        details = check_state(check, requests, case["acp_prompt_count"],
+                                              "\n".join(error["text"] for error in case["client_errors"]), case["client_exit"])
+                except AssertionError as error:
+                    result["status"] = "FAIL"
+                    result["evaluation_reason"] = str(error)
+                else:
+                    result["status"] = "PASS"
+                    result["details"] = details
+                    result["evaluation_reason"] = "The retained observation satisfies the revised SC-003 rule."
+            if result["status"] == "PASS":
+                for key in ["error", "error_type", "failure_line"]:
+                    result.pop(key, None)
+            outputs[root / name / "result.json"] = result
+            reviewed.append(result)
+            latest[name] = dict(check=name, status=result["status"], evaluation_kind=result["evaluation_kind"],
+                                source=f"native-run-{number}/{name}/result.json:9", source_run=number)
+        outputs[root / "results.json"] = reviewed
+        runs.append(reviewed)
+    rows = []
+    for check in CHECKS:
+        row = latest[check.name]
+        row["runs"] = [next((result["status"] for result in run if result["check"] == check.name), None) for run in runs]
+        rows.append(row)
+    counts = dict(evaluation_head=CONTRACT_HEAD,
+                  runs=[dict(run=n, total=len(run), passed=sum(r["status"] == "PASS" for r in run),
+                             failed=sum(r["status"] == "FAIL" for r in run)) for n, run in enumerate(runs, 1)],
+                  latest=dict(total=len(rows), passed=sum(r["status"] == "PASS" for r in rows),
+                              failed=sum(r["status"] == "FAIL" for r in rows),
+                              behavior_checks=sum(r["evaluation_kind"] == "behavior" for r in rows),
+                              records=sum(r["evaluation_kind"] == "record" for r in rows)))
+    outputs[HERE / "latest-results.json"] = rows
+    outputs[HERE / "counts.json"] = counts
+    return outputs, counts
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--write", action="store_true", help="update the reviewed results; default checks their bytes")
+    args = parser.parse_args()
+    outputs, counts = reviewed_results()
+    for path, value in outputs.items():
+        text = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+        if args.write:
+            path.write_text(text)
+        else:
+            assert path.read_text() == text, f"reviewed result differs: {path.relative_to(HERE)}"
+    print(json.dumps(counts, indent=2))
+
+
+if __name__ == "__main__":
+    main()

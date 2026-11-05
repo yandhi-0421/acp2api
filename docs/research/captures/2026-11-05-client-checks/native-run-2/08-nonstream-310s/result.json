@@ -6,16 +6,36 @@
   "request_cap": 32,
   "log_cap_bytes": 4194304,
   "pause_seconds": 310,
-  "status": "FAIL",
+  "status": "PASS",
   "dry_run": false,
-  "error": "original non-stream request 3 disconnected after 300.037s; client timeout header 300; replacement IDs [4]",
-  "error_type": "AssertionError",
-  "failure_line": "runner.py:550",
   "client_exit": 0,
   "host_exit_before_cleanup": null,
   "host_graceful_exit": 0,
   "seconds": 332.494,
   "requests": 4,
   "proxy_refusals": 15,
-  "safety_failures": []
+  "safety_failures": [],
+  "recorded_status": "FAIL",
+  "recorded_error": "original non-stream request 3 disconnected after 300.037s; client timeout header 300; replacement IDs [4]",
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "evaluation_kind": "record",
+  "evaluation_reason": "The retained observation satisfies the revised SC-003 rule.",
+  "details": {
+    "observation": "record",
+    "original_request_id": 3,
+    "started": 30.736419958993793,
+    "original_status": null,
+    "ended": null,
+    "disconnected_at": 330.77293066697894,
+    "duration_seconds": 300.03651070798514,
+    "timeout_header": "300",
+    "replacement_requests": [
+      {
+        "id": 4,
+        "at": 331.745892124949,
+        "status": 200,
+        "ended": 331.97700295899995
+      }
+    ]
+  }
 }

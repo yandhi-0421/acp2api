@@ -1,0 +1,30 @@
+{
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "runs": [
+    {
+      "run": 1,
+      "total": 17,
+      "passed": 8,
+      "failed": 9
+    },
+    {
+      "run": 2,
+      "total": 12,
+      "passed": 10,
+      "failed": 2
+    },
+    {
+      "run": 3,
+      "total": 2,
+      "passed": 2,
+      "failed": 0
+    }
+  ],
+  "latest": {
+    "total": 17,
+    "passed": 17,
+    "failed": 0,
+    "behavior_checks": 16,
+    "records": 1
+  }
+}

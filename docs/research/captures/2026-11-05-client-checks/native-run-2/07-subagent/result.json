@@ -17,5 +17,10 @@
   "seconds": 3.751,
   "requests": 5,
   "proxy_refusals": 3,
-  "safety_failures": []
+  "safety_failures": [],
+  "recorded_status": "FAIL",
+  "recorded_error": "no successful retry after the error",
+  "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+  "evaluation_kind": "behavior",
+  "evaluation_reason": "The behavior rule is unchanged; the original result applies."
 }

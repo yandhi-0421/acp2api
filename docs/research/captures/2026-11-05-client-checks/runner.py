@@ -1,5 +1,6 @@
 """SC-003 research checks. All real API clients require sandbox-exec."""
 import argparse
+import copy
 from dataclasses import dataclass
 import fcntl
 import hashlib
@@ -51,8 +52,6 @@ class Check:
 
 CHECKS = [
     Check("01-attribution", "claude"),
-    Check("02-advisor", "claude", mode="advisor"),
-    Check("02-advisor-experimental", "claude", mode="advisor-experimental"),
     Check("03-claude-keep-alive", "claude", "pause", seconds=390, pause=330),
     Check("03-codex-keep-alive", "codex", "pause", seconds=390, pause=330),
     Check("04-effort", "claude", mode="effort"),
@@ -423,25 +422,12 @@ def setup_client(check, work, port, claude, codex):
     if check.client == "claude":
         settings = dict(hasCompletedOnboarding=True, bypassPermissionsModeAccepted=True, theme="dark",
                         projects={str(work / "work"): dict(hasTrustDialogAccepted=True, hasCompletedProjectOnboarding=True)})
-        if check.mode.startswith("advisor"):
-            # Copy only this permitted leaf. Never copy account fields or the full config.
-            source = Path.home() / ".claude.json"
-            if source.stat().st_size > 8 * 1024 * 1024:
-                raise RuntimeError("cached Claude flags source cap")
-            flags = json.loads(source.read_text()).get("cachedGrowthBookFeatures")
-            if not flags:
-                raise RuntimeError("advisor cachedGrowthBookFeatures unavailable")
-            settings["cachedGrowthBookFeatures"] = flags
         (config / ".claude.json").write_text(json.dumps(settings))
         (work / "mcp.json").write_text('{"mcpServers":{}}')
         env.update(CLAUDE_CONFIG_DIR=str(config), ANTHROPIC_BASE_URL=f"http://127.0.0.1:{port}",
                    ANTHROPIC_AUTH_TOKEN=KEY, ENABLE_TOOL_SEARCH="false")
         argv = [claude, "--model", MODEL, "--dangerously-skip-permissions", "--mcp-config", str(work / "mcp.json"),
                 "--strict-mcp-config"]
-        if check.mode.startswith("advisor"):
-            argv += ["--advisor", MODEL]
-        if check.mode == "advisor-experimental":
-            env["CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL"] = "1"
         if check.mode == "effort":
             argv += ["--effort", "low"]
         if check.mode not in ["tui", "effort"]:
@@ -476,7 +462,7 @@ trust_level = "trusted"
     return argv, env
 
 
-def dry_request(port, stream=True, effort=None, advisor=False, marker="SC239-MAIN", agent=False, continued=False, disconnect=False, header_disconnect=False):
+def dry_request(port, stream=True, effort=None, marker="SC239-MAIN", agent=False, continued=False, disconnect=False, header_disconnect=False):
     body = dict(model=MODEL, max_tokens=128, stream=stream,
                 system=[{"type": "text", "text": "x-anthropic-billing-header: synthetic"},
                         {"type": "text", "text": "SC239 synthetic system prompt"}],
@@ -487,8 +473,6 @@ def dry_request(port, stream=True, effort=None, advisor=False, marker="SC239-MAI
     if continued:
         body["messages"] += [{"role": "assistant", "content": "SC239-OK"},
                              {"role": "user", "content": "SC239-MAIN second effort turn"}]
-    if advisor:
-        body["tools"].append({"type": "advisor_20260301", "name": "advisor", "model": MODEL})
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=40)
     conn.request("POST", "/v1/messages", json.dumps(body), {"x-api-key": KEY, "Content-Type": "application/json"})
     if header_disconnect:
@@ -516,6 +500,45 @@ def acp_calls(host_text):
     return calls
 
 
+def check_state(check, requests, prompt_calls, client_text, exit_code):
+    phrase = "lockout since" if check.scenario == "lockout" else "the official runtime is not signed in"
+    maximum = 2 if check.client == "claude" else 1
+    assert 1 <= len(requests) <= maximum, f"{len(requests)} main requests: invalid state request count"
+    assert prompt_calls == 0, "a state refusal started an ACP prompt"
+    for request in requests:
+        assert request.get("status") == 400 and request["response_headers"].get("x-should-retry") == "false"
+        error = json.loads(request["response"])["error"]
+        assert error["type"] == "invalid_request_error" and phrase in error["message"], "request did not get the state refusal"
+    if len(requests) == 2:
+        before, after = requests
+        body = copy.deepcopy(before["body"])
+        assert body["thinking"].pop("display", None) == "updates", "fallback removed no known capability"
+        assert body == after["body"], "fallback changed more than the capability"
+        headers = dict(before["headers"])
+        headers["anthropic-beta"] = ",".join(beta for beta in headers["anthropic-beta"].split(",")
+                                               if not beta.startswith("thinking-display-updates-"))
+        assert headers == after["headers"], "fallback changed unrelated headers"
+    assert phrase in client_text, "client did not show the state message"
+    assert exit_code is not None and exit_code >= 0, "client did not stop normally"
+    return dict(main_request_count=len(requests), acp_prompt_calls=prompt_calls,
+                capability_removed="thinking.display" if len(requests) == 2 else None)
+
+
+def nonstream_record(requests):
+    observed = [request for request in requests if request["body"].get("stream") is False
+                and (request.get("status") == 200 or "client_disconnected_at" in request)]
+    assert observed, "no accepted or disconnected non-stream request to record"
+    original = observed[0]
+    terminal = original.get("client_disconnected_at", original.get("ended"))
+    assert terminal is not None, "original non-stream request has no recorded end"
+    return dict(observation="record", original_request_id=original["id"], started=original["at"],
+                original_status=original.get("status"), ended=original.get("ended"),
+                disconnected_at=original.get("client_disconnected_at"), duration_seconds=terminal - original["at"],
+                timeout_header=original["headers"].get("x-stainless-timeout"),
+                replacement_requests=[dict(id=request["id"], at=request["at"], status=request.get("status"),
+                                           ended=request.get("ended")) for request in requests if request["at"] > original["at"]])
+
+
 def evaluate(check, recorder, host_text, client_text, exit_code, actions):
     calls = acp_calls(host_text)
     requests = main_requests(recorder)
@@ -530,25 +553,13 @@ def evaluate(check, recorder, host_text, client_text, exit_code, actions):
         assert exit_code == 0 and '"stream": "PASS"' in client_text
         return dict(sdk_requests=2)
     if check.scenario in ["lockout", "sign-in"]:
-        phrase = "lockout since" if check.scenario == "lockout" else "the official runtime is not signed in"
-        assert len(requests) == 1, f"{len(requests)} main requests: unexpected retry"
-        assert requests[0].get("status") == 400 and requests[0]["response_headers"].get("x-should-retry") == "false"
-        assert phrase in client_text, "client did not show the state message"
-        assert exit_code is not None and exit_code >= 0, "client did not stop normally"
+        return check_state(check, requests, sum(call.get("method") == "session/prompt" for call in calls), client_text, exit_code)
     elif check.name.startswith("01"):
         first = requests[0]["body"]["system"][0]["text"]
         assert first.startswith("x-anthropic-billing-header:"), "attribution prefix changed"
         assert "x-anthropic-billing-header:" not in host_text, "attribution reached ACP"
         assert "SC239-OK" in client_text and exit_code == 0
         return dict(first_attribution_text=first, removed_from_acp=True)
-    elif check.mode.startswith("advisor"):
-        advertised = [r for r in requests if any(t.get("type", "").startswith("advisor_") for t in r["body"].get("tools", []))]
-        assert advertised, "advisor was not advertised with the acp2api model name"
-        reject = advertised[0]
-        assert reject.get("status") == 400 and "Input tag 'advisor_" in reject.get("response", "")
-        later = [r for r in requests if r["at"] > reject["at"]]
-        assert later and all(not any(t.get("type", "").startswith("advisor_") for t in r["body"].get("tools", [])) for r in later)
-        assert "SC239-OK" in client_text and exit_code == 0
     elif check.mode == "effort":
         efforts = [r["body"].get("output_config", {}).get("effort") for r in requests]
         assert "low" in efforts and "high" in efforts and actions == ["/effort high"], efforts
@@ -568,20 +579,7 @@ def evaluate(check, recorder, host_text, client_text, exit_code, actions):
         return dict(duration=request["ended"] - request["at"], keep_alive_count=sum(e["event"] == keep for e in frames),
                     max_event_gap=max(b - a for a, b in zip(times, times[1:])))
     elif check.scenario == "nonstream":
-        later = [r for r in requests if r["body"].get("stream") is False
-                 and (r.get("status") == 200 or "client_disconnected_at" in r)]
-        assert later, "Claude Code sent no accepted or disconnected non-stream request"
-        long = later[0]
-        if "client_disconnected_at" in long:
-            duration = long["client_disconnected_at"] - long["at"]
-            retries = [r["id"] for r in requests if r["at"] > long["at"]]
-            raise AssertionError(f"original non-stream request {long['id']} disconnected after {duration:.3f}s; "
-                                 f"client timeout header {long['headers'].get('x-stainless-timeout')}; replacement IDs {retries}")
-        duration = long["ended"] - long["at"]
-        assert duration > 300, f"non-stream request ended after {duration:.3f}s"
-        assert len(later) == 1, "client replaced the original delayed non-stream request"
-        assert "SC239-OK" in client_text and exit_code == 0, "client disconnected or retried before the delayed reply"
-        return dict(nonstream_duration=duration)
+        return nonstream_record(requests)
     else:
         child = check.scenario == "subagent"
         measured = main_requests(recorder, "SC239-SUBAGENT") if child else requests
@@ -639,9 +637,6 @@ def run_check(check, output, scratch, clients, dry=False):
         wait_for(lambda: "management panel at http://127.0.0.1:" in host.tail,
                  min(deadline, time.monotonic() + 20), [host], recorder, work)
         if dry and check.client != "sdk":
-            if check.mode.startswith("advisor"):
-                rejected = dry_request(recorder.port, advisor=True)
-                assert rejected[0] == 400 and "Input tag 'advisor_" in rejected[2]
             if check.mode == "effort":
                 assert dry_request(recorder.port, effort="low")[0] == 200
                 assert dry_request(recorder.port, effort="high", continued=True)[0] == 200
@@ -683,6 +678,11 @@ def run_check(check, output, scratch, clients, dry=False):
                 else:
                     assert first[0] == 200 and "SC239-OK" in first[2]
             calls = acp_calls((output / "host.log").read_text())
+            if check.scenario in ["lockout", "sign-in"]:
+                result["details"] = check_state(check, main_requests(recorder),
+                    sum(call.get("method") == "session/prompt" for call in calls), first[2], 0)
+            if check.scenario == "nonstream":
+                result["details"] = nonstream_record(main_requests(recorder))
             if check.name == "dry-normal":
                 appended = [call["params"]["_meta"]["antigravity"].get("systemPrompt", {}).get("append")
                             for call in calls if call["method"] == "session/new"]
@@ -801,6 +801,9 @@ def prepare(output, deadline):
     result = command([sys.executable, "-B", str(HERE / "round3-controls.py"), str(output / "round3-controls")],
                      output / "round3-controls.log", 20)
     assert result["exit_code"] == 0 and not result["stopped_by"], "round-3 lever controls failed"
+    result = command([sys.executable, "-B", str(HERE / "contract-controls.py"), str(output / "contract-controls")],
+                     output / "contract-controls.log", 20)
+    assert result["exit_code"] == 0 and not result["stopped_by"], "SC-003 contract controls failed"
 
 
 def native_preflight(output, scratch, clients):
@@ -880,7 +883,7 @@ def main():
         if not args.dry_run:
             native_preflight(args.output, scratch, clients)
         else:
-            checks = [Check("dry-normal", "claude"), Check("dry-advisor", "claude", mode="advisor"),
+            checks = [Check("dry-normal", "claude"),
                       Check("dry-effort", "claude", mode="effort"), Check("dry-pause", "claude", "pause", pause=2),
                       Check("dry-disconnect", "claude", "pause", pause=2),
                       Check("dry-lockout", "claude", "lockout"), Check("dry-sign-in", "claude", "sign-in"),

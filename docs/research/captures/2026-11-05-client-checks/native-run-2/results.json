@@ -1,26 +1,5 @@
 [
   {
-    "check": "02-advisor",
-    "client": "claude",
-    "scenario": "normal",
-    "seconds_cap": 90,
-    "request_cap": 32,
-    "log_cap_bytes": 4194304,
-    "pause_seconds": 0,
-    "status": "FAIL",
-    "dry_run": false,
-    "error": "no main API request; client exit 1: Error: The model \"gemini-3.8-flash\" does not support the advisor tool.",
-    "error_type": "AssertionError",
-    "failure_line": "runner.py:497",
-    "client_exit": 1,
-    "host_exit_before_cleanup": null,
-    "host_graceful_exit": 0,
-    "seconds": 2.004,
-    "requests": 0,
-    "proxy_refusals": 0,
-    "safety_failures": []
-  },
-  {
     "check": "03-codex-keep-alive",
     "client": "codex",
     "scenario": "pause",
@@ -41,7 +20,12 @@
     "seconds": 331.928,
     "requests": 1,
     "proxy_refusals": 4,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
   },
   {
     "check": "04-effort",
@@ -62,7 +46,12 @@
     "seconds": 90.495,
     "requests": 2,
     "proxy_refusals": 19,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "FAIL",
+    "recorded_error": "run wall timeout",
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
   },
   {
     "check": "05-claude-lockout",
@@ -72,18 +61,25 @@
     "request_cap": 32,
     "log_cap_bytes": 4194304,
     "pause_seconds": 0,
-    "status": "FAIL",
+    "status": "PASS",
     "dry_run": false,
-    "error": "2 main requests: unexpected retry",
-    "error_type": "AssertionError",
-    "failure_line": "runner.py:506",
     "client_exit": 1,
     "host_exit_before_cleanup": null,
     "host_graceful_exit": 0,
     "seconds": 1.133,
     "requests": 2,
     "proxy_refusals": 1,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "FAIL",
+    "recorded_error": "2 main requests: unexpected retry",
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The retained observation satisfies the revised SC-003 rule.",
+    "details": {
+      "main_request_count": 2,
+      "acp_prompt_calls": 0,
+      "capability_removed": "thinking.display"
+    }
   },
   {
     "check": "05-codex-lockout",
@@ -96,7 +92,9 @@
     "status": "PASS",
     "dry_run": false,
     "details": {
-      "main_request_count": 1
+      "main_request_count": 1,
+      "acp_prompt_calls": 0,
+      "capability_removed": null
     },
     "client_exit": 1,
     "host_exit_before_cleanup": null,
@@ -104,7 +102,12 @@
     "seconds": 1.771,
     "requests": 1,
     "proxy_refusals": 4,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The retained observation satisfies the revised SC-003 rule."
   },
   {
     "check": "05-claude-sign-in",
@@ -114,18 +117,25 @@
     "request_cap": 32,
     "log_cap_bytes": 4194304,
     "pause_seconds": 0,
-    "status": "FAIL",
+    "status": "PASS",
     "dry_run": false,
-    "error": "2 main requests: unexpected retry",
-    "error_type": "AssertionError",
-    "failure_line": "runner.py:506",
     "client_exit": 1,
     "host_exit_before_cleanup": null,
     "host_graceful_exit": 0,
     "seconds": 1.283,
     "requests": 2,
     "proxy_refusals": 1,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "FAIL",
+    "recorded_error": "2 main requests: unexpected retry",
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The retained observation satisfies the revised SC-003 rule.",
+    "details": {
+      "main_request_count": 2,
+      "acp_prompt_calls": 0,
+      "capability_removed": "thinking.display"
+    }
   },
   {
     "check": "05-codex-sign-in",
@@ -138,7 +148,9 @@
     "status": "PASS",
     "dry_run": false,
     "details": {
-      "main_request_count": 1
+      "main_request_count": 1,
+      "acp_prompt_calls": 0,
+      "capability_removed": null
     },
     "client_exit": 1,
     "host_exit_before_cleanup": null,
@@ -146,7 +158,12 @@
     "seconds": 1.583,
     "requests": 1,
     "proxy_refusals": 2,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The retained observation satisfies the revised SC-003 rule."
   },
   {
     "check": "06-codex-retry",
@@ -169,7 +186,12 @@
     "seconds": 31.182,
     "requests": 2,
     "proxy_refusals": 4,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
   },
   {
     "check": "07-print-after",
@@ -192,7 +214,12 @@
     "seconds": 31.467,
     "requests": 3,
     "proxy_refusals": 6,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
   },
   {
     "check": "07-interactive-before",
@@ -215,7 +242,12 @@
     "seconds": 33.587,
     "requests": 4,
     "proxy_refusals": 12,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
   },
   {
     "check": "07-interactive-after",
@@ -240,7 +272,12 @@
     "seconds": 33.595,
     "requests": 5,
     "proxy_refusals": 12,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "PASS",
+    "recorded_error": null,
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
   },
   {
     "check": "07-subagent",
@@ -261,7 +298,12 @@
     "seconds": 3.751,
     "requests": 5,
     "proxy_refusals": 3,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "FAIL",
+    "recorded_error": "no successful retry after the error",
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "behavior",
+    "evaluation_reason": "The behavior rule is unchanged; the original result applies."
   },
   {
     "check": "08-nonstream-310s",
@@ -271,17 +313,37 @@
     "request_cap": 32,
     "log_cap_bytes": 4194304,
     "pause_seconds": 310,
-    "status": "FAIL",
+    "status": "PASS",
     "dry_run": false,
-    "error": "original non-stream request 3 disconnected after 300.037s; client timeout header 300; replacement IDs [4]",
-    "error_type": "AssertionError",
-    "failure_line": "runner.py:550",
     "client_exit": 0,
     "host_exit_before_cleanup": null,
     "host_graceful_exit": 0,
     "seconds": 332.494,
     "requests": 4,
     "proxy_refusals": 15,
-    "safety_failures": []
+    "safety_failures": [],
+    "recorded_status": "FAIL",
+    "recorded_error": "original non-stream request 3 disconnected after 300.037s; client timeout header 300; replacement IDs [4]",
+    "evaluation_head": "f4df342d5a54022df1aeebc09c98f3ceb70ee295",
+    "evaluation_kind": "record",
+    "evaluation_reason": "The retained observation satisfies the revised SC-003 rule.",
+    "details": {
+      "observation": "record",
+      "original_request_id": 3,
+      "started": 30.736419958993793,
+      "original_status": null,
+      "ended": null,
+      "disconnected_at": 330.77293066697894,
+      "duration_seconds": 300.03651070798514,
+      "timeout_header": "300",
+      "replacement_requests": [
+        {
+          "id": 4,
+          "at": 331.745892124949,
+          "status": 200,
+          "ended": 331.97700295899995
+        }
+      ]
+    }
   }
 ]
